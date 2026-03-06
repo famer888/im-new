@@ -1,0 +1,141 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+
+export type SidebarTab = 'chats' | 'contacts' | 'transfer'
+export type RightPanelType = 'none' | 'friend-info' | 'group-info' | 'channel-info' | 'group-members' | 'group-notice' | 'group-manage' | 'channel-notice' | 'channel-manage'
+export type DetailViewType = 'none' | 'chat' | 'friend-detail' | 'group-detail' | 'channel-detail' | 'add-contact' | 'friend-examine' | 'group-invitation' | 'channel-notice-list'
+
+export const useUIStore = defineStore('ui', () => {
+  const sidebarTab = ref<SidebarTab>('chats')
+  const rightPanel = ref<RightPanelType>('none')
+  const detailView = ref<DetailViewType>('none')
+
+  // Dialog visibility states
+  const settingsVisible = ref(false)
+  const searchVisible = ref(false)
+  const addContactVisible = ref(false)
+  const forwardDialogVisible = ref(false)
+  const forwardMessageId = ref<string | null>(null)
+  const accountDialogVisible = ref(false)
+  const fileImportVisible = ref(false)
+  const createGroupVisible = ref(false)
+  const groupQRCodeVisible = ref(false)
+  const groupQRCodeTarget = ref({ id: '', name: '' })
+  const inviteFriendVisible = ref(false)
+  const inviteFriendGroupId = ref('')
+  const upVersionVisible = ref(false)
+  const upVersionInfo = ref<{ version: string; title?: string; content?: string; url: string; flag?: number }>({
+    version: '', url: '',
+  })
+
+  // Context menu
+  const contextMenuVisible = ref(false)
+  const contextMenuPosition = ref({ x: 0, y: 0 })
+  const contextMenuData = ref<Record<string, unknown>>({})
+
+  function setSidebarTab(tab: SidebarTab) {
+    sidebarTab.value = tab
+  }
+
+  function setRightPanel(panel: RightPanelType) {
+    rightPanel.value = panel
+  }
+
+  function setDetailView(view: DetailViewType) {
+    detailView.value = view
+  }
+
+  function openSettings() { settingsVisible.value = true }
+  function closeSettings() { settingsVisible.value = false }
+
+  function openForwardDialog(messageId: string) {
+    forwardMessageId.value = messageId
+    forwardDialogVisible.value = true
+  }
+
+  function closeForwardDialog() {
+    forwardDialogVisible.value = false
+    forwardMessageId.value = null
+  }
+
+  function openAccountDialog() { accountDialogVisible.value = true }
+  function closeAccountDialog() { accountDialogVisible.value = false }
+
+  function openFileImport() { fileImportVisible.value = true }
+  function closeFileImport() { fileImportVisible.value = false }
+
+  function openCreateGroup() { createGroupVisible.value = true }
+  function closeCreateGroup() { createGroupVisible.value = false }
+
+  function openGroupQRCode(id: string, name: string) {
+    groupQRCodeTarget.value = { id, name }
+    groupQRCodeVisible.value = true
+  }
+  function closeGroupQRCode() { groupQRCodeVisible.value = false }
+
+  function openInviteFriend(groupId: string) {
+    inviteFriendGroupId.value = groupId
+    inviteFriendVisible.value = true
+  }
+  function closeInviteFriend() { inviteFriendVisible.value = false }
+
+  function openUpVersion(info: typeof upVersionInfo.value) {
+    upVersionInfo.value = info
+    upVersionVisible.value = true
+  }
+  function closeUpVersion() { upVersionVisible.value = false }
+
+  function showContextMenu(x: number, y: number, data: Record<string, unknown>) {
+    contextMenuPosition.value = { x, y }
+    contextMenuData.value = data
+    contextMenuVisible.value = true
+  }
+
+  function hideContextMenu() {
+    contextMenuVisible.value = false
+  }
+
+  return {
+    sidebarTab,
+    rightPanel,
+    detailView,
+    settingsVisible,
+    searchVisible,
+    addContactVisible,
+    forwardDialogVisible,
+    forwardMessageId,
+    accountDialogVisible,
+    fileImportVisible,
+    createGroupVisible,
+    groupQRCodeVisible,
+    groupQRCodeTarget,
+    inviteFriendVisible,
+    inviteFriendGroupId,
+    upVersionVisible,
+    upVersionInfo,
+    contextMenuVisible,
+    contextMenuPosition,
+    contextMenuData,
+    setSidebarTab,
+    setRightPanel,
+    setDetailView,
+    openSettings,
+    closeSettings,
+    openForwardDialog,
+    closeForwardDialog,
+    openAccountDialog,
+    closeAccountDialog,
+    openFileImport,
+    closeFileImport,
+    openCreateGroup,
+    closeCreateGroup,
+    openGroupQRCode,
+    closeGroupQRCode,
+    openInviteFriend,
+    closeInviteFriend,
+    openUpVersion,
+    closeUpVersion,
+    showContextMenu,
+    hideContextMenu,
+  }
+})
