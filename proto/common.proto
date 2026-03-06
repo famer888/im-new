@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package common;
+
+message ClientInfo {
+    string     session_id    = 1;
+    int32      app_ver       = 2;
+    int32      package_code  = 3;
+    Platform   plat          = 4;
+    int32      language      = 5;
+    string     sys_mac       = 6;
+    string     sys_model     = 7;
+}
+
+message CommonResult {
+    int32  code    = 1;
+    string message = 2;
+}
+
+enum Platform {
+    Unknown   = 0;
+    iOS       = 1;
+    Android   = 2;
+    Windows   = 3;
+    Mac       = 4;
+    Web       = 5;
+    Linux     = 6;
+}
+
+enum MessageType {
+    text              = 0;
+    image             = 1;
+    audio             = 2;
+    video             = 3;
+    location          = 4;
+    nameCard          = 5;
+    system            = 6;
+    file              = 7;
+    notice            = 8;
+    dynamicImage      = 9;
+    redPacket         = 10;
+    html              = 11;
+    setImage          = 12;
+    chatTransfer      = 13;
+    chatTransferResult = 14;
+    redPacketResult   = 15;
+    html2             = 16;
+    mediasCaption     = 17;
+    animatedGame      = 18;
+}

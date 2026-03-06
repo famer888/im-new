@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package imweb;
+
+import "common.proto";
+
+message LoginReq {
+    common.ClientInfo client_info  = 1;
+    string            install_code = 2;
+}
+
+message LoginResp {
+    common.CommonResult result     = 1;
+    string              session_id = 2;
+    string              uid        = 3;
+    string              nickname   = 4;
+    string              avatar     = 5;
+}
+
+message OneToOneMessage {
+    string               msg_id         = 1;
+    string               send_uid       = 2;
+    string               receive_uid    = 3;
+    common.MessageType   msg_type       = 4;
+    bytes                content        = 5;
+    int64                send_time      = 6;
+    int64                version        = 7;
+    string               content_md5    = 8;
+    string               attachment_key = 9;
+    UserInfo             send_user      = 10;
+    int32                snapchat_time  = 11;
+    SourceInfo           source         = 12;
+    string               app_content    = 13;
+    string               web_content    = 14;
+}
+
+message GroupMessage {
+    string               send_uid    = 1;
+    string               group_id    = 2;
+    common.MessageType   msg_type    = 3;
+    bytes                content     = 4;
+    repeated string      at_uids     = 5;
+    int64                send_time   = 6;
+    string               msg_id      = 7;
+    GroupMemberInfo      send_member = 8;
+    int64                version     = 9;
+    string               content_md5 = 10;
+    string               attachment_key = 11;
+    SourceInfo           source      = 12;
+}
+
+message ChannelMessage {
+    string               send_uid    = 1;
+    string               channel_id  = 2;
+    common.MessageType   msg_type    = 3;
+    bytes                content     = 4;
+    string               msg_id      = 5;
+    int32                read_total  = 6;
+    int64                msg_time    = 7;
+    int64                version     = 8;
+}
+
+message UserInfo {
+    string uid      = 1;
+    string nickname = 2;
+    string avatar   = 3;
+}
+
+message GroupMemberInfo {
+    string uid      = 1;
+    string nickname = 2;
+    int32  role     = 3;
+}
+
+message SourceInfo {
+    int32  source_type = 1;
+    string source_id   = 2;
+}
+
+// Content objects
+message TextObj {
+    string text = 1;
+}
+
+message ImageObj {
+    string url           = 1;
+    string thumbnail_url = 2;
+    int32  width         = 3;
+    int32  height        = 4;
+    int64  size          = 5;
+}
+
+message VideoObj {
+    string url           = 1;
+    string thumbnail_url = 2;
+    int32  duration      = 3;
+    int32  width         = 4;
+    int32  height        = 5;
+    int64  size          = 6;
+}
+
+message AudioObj {
+    string url      = 1;
+    int32  duration  = 2;
+    int64  size      = 3;
+}
+
+message FileObj {
+    string url  = 1;
+    string name = 2;
+    int64  size = 3;
+    string ext  = 4;
+}
+
+message NameCardObj {
+    string uid      = 1;
+    string nickname = 2;
+    string avatar   = 3;
+}

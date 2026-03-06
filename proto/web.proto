@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package web;
+
+import "common.proto";
+
+message GetTokenReq {
+    common.ClientInfo client_info = 1;
+}
+
+message GetTokenResp {
+    string token = 1;
+}
+
+message UpdateKeyPairReq {
+    string public_key  = 1;
+    string private_key = 2;
+}
+
+message GetKeyPairReq {
+    string target_uid = 1;
+}
+
+message GetKeyPairResp {
+    string public_key = 1;
+}
+
+message CheckVersionReq {
+    common.ClientInfo client_info = 1;
+}
+
+message CheckVersionResp {
+    bool   flag    = 1;
+    string title   = 2;
+    string content = 3;
+    string url     = 4;
+    string version = 5;
+}
+
+message UploadReq {
+    string file_name = 1;
+    string file_type = 2;
+    int64  file_size = 3;
+}
+
+message UploadResp {
+    string upload_url   = 1;
+    string download_url = 2;
+    string bucket       = 3;
+    string object_key   = 4;
+}

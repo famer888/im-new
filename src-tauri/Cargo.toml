@@ -1,0 +1,57 @@
+[package]
+name = "ocs-chat"
+version = "1.0.0"
+description = "OCS Chat - Rust + Vue3 + Tauri IM Application"
+authors = ["OCS Team"]
+edition = "2021"
+
+[lib]
+name = "ocs_chat_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+prost-build = "0.13"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+prost = "0.13"
+rusqlite = { version = "0.32", features = ["bundled"] }
+aes = "0.8"
+ecb = "0.1"
+pkcs7 = "0.4"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rsa = "0.9"
+sha2 = "0.10"
+md-5 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["stream", "native-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+thiserror = "2"
+parking_lot = "0.12"
+dashmap = "6"
+chrono = "0.4"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
