@@ -29,10 +29,13 @@ pub async fn upload_file(
     let path = PathBuf::from(&file_path);
     let file_key = crypto::file_crypto::generate_file_key();
 
-    let _encrypted =
-        crypto::file_crypto::encrypt_file(&path, file_key.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
+    let encrypted_path = path.with_extension("enc");
+    crypto::file_crypto::encrypt_file(
+        path.to_str().unwrap_or_default(),
+        encrypted_path.to_str().unwrap_or_default(),
+        &file_key,
+    )
+    .map_err(|e| e.to_string())?;
 
     // TODO: Upload encrypted data to OSS
     Ok(UploadResult {
@@ -56,11 +59,36 @@ pub async fn download_file(
     let msg_id_clone = msg_id.clone();
 
     tokio::spawn(async move {
-        let result =
-            crypto::file_crypto::download_and_decrypt(&url, file_key.as_bytes(), &path)
-                .await;
+        let download_result = async {
+            let response = reqwest::get(&url)
+                .await
+                .map_err(|e| format!("Download failed: {}", e))?;
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| format!("Read body failed: {}", e))?;
 
-        match result {
+            let enc_path = path.with_extension("enc");
+            tokio::fs::write(&enc_path, &bytes)
+                .await
+                .map_err(|e| format!("Write encrypted file failed: {}", e))?;
+
+            crypto::file_crypto::decrypt_file(
+                enc_path.to_str().unwrap_or_default(),
+                path.to_str().unwrap_or_default(),
+                &file_key,
+            )
+            .map_err(|e| format!("Decrypt failed: {}", e))?;
+
+            let _ = tokio::fs::remove_file(&enc_path).await;
+            let meta = tokio::fs::metadata(&path)
+                .await
+                .map_err(|e| format!("Stat failed: {}", e))?;
+            Ok::<u64, String>(meta.len())
+        }
+        .await;
+
+        match download_result {
             Ok(size) => {
                 let _ = app_clone.emit(
                     &format!("file:done:{}", msg_id_clone),
@@ -76,7 +104,7 @@ pub async fn download_file(
             Err(e) => {
                 let _ = app_clone.emit(
                     &format!("file:error:{}", msg_id_clone),
-                    serde_json::json!({ "error": e.to_string() }),
+                    serde_json::json!({ "error": e }),
                 );
             }
         }
