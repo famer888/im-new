@@ -48,7 +48,7 @@ function openGroupNotice() {
       </div>
     </div>
     <div class="config-section">
-      <div class="config-item clickable" @click="/* search in chat */">
+      <div class="config-item clickable">
         <span>查找聊天记录</span>
         <span class="arrow">›</span>
       </div>

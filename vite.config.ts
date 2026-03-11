@@ -1,45 +1,63 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
 const host = process.env.TAURI_DEV_HOST
 
-export default defineConfig({
-  plugins: [vue()],
-  resolve: {
-    alias: {
-      '@': resolve(__dirname, 'src'),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
+
+  return {
+    plugins: [vue()],
+    resolve: {
+      alias: {
+        '@': resolve(__dirname, 'src'),
+      },
     },
-  },
-  clearScreen: false,
-  server: {
-    port: 1420,
-    strictPort: true,
-    host: host || false,
-    hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
-    watch: { ignored: ['**/src-tauri/**'] },
-  },
-  build: {
-    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
-    minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
-    sourcemap: !!process.env.TAURI_ENV_DEBUG,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'vue-vendor': ['vue', 'vue-router', 'pinia'],
-          'i18n': ['vue-i18n'],
-          'proto': ['protobufjs'],
+    clearScreen: false,
+    server: {
+      port: 1420,
+      strictPort: true,
+      host: host || false,
+      hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
+      watch: { ignored: ['**/src-tauri/**'] },
+      proxy: {
+        '/api': {
+          target: env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api/, ''),
+          secure: false,
+        },
+        '/domain-api': {
+          target: env.VITE_APP_BASE_DOMAIN || 'http://test-domain-api.68chat.co',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/domain-api/, ''),
+          secure: false,
         },
       },
     },
-    chunkSizeWarningLimit: 600,
-  },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        additionalData: `@use "@/assets/styles/variables.scss" as *;`,
-        api: 'modern',
+    build: {
+      target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+      minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
+      sourcemap: !!process.env.TAURI_ENV_DEBUG,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vue-vendor': ['vue', 'vue-router', 'pinia'],
+            'i18n': ['vue-i18n'],
+            'proto': ['protobufjs'],
+          },
+        },
+      },
+      chunkSizeWarningLimit: 600,
+    },
+    css: {
+      preprocessorOptions: {
+        scss: {
+          additionalData: `@use "@/assets/styles/variables.scss" as *;`,
+          api: 'modern',
+        },
       },
     },
-  },
+  }
 })

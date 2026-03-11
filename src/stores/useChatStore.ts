@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface Conversation {
   id: string
@@ -36,9 +44,10 @@ export const useChatStore = defineStore('chat', () => {
   )
 
   async function loadConversations(uid: string) {
+    if (!isTauri()) return
     loading.value = true
     try {
-      const result = await invoke<Conversation[]>('get_conversations', {
+      const result = await tauriInvoke<Conversation[]>('get_conversations', {
         uid,
         limit: 50,
         offset: 0,
@@ -78,23 +87,27 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function pinConversation(uid: string, conversationId: string, pinned: boolean) {
-    await invoke('pin_conversation', { uid, conversationId, pinned })
+    if (!isTauri()) return
+    await tauriInvoke('pin_conversation', { uid, conversationId, pinned })
     updateConversation({ id: conversationId, isPinned: pinned })
     sortConversations()
   }
 
   async function muteConversation(uid: string, conversationId: string, muted: boolean) {
-    await invoke('mute_conversation', { uid, conversationId, muted })
+    if (!isTauri()) return
+    await tauriInvoke('mute_conversation', { uid, conversationId, muted })
     updateConversation({ id: conversationId, isMuted: muted })
   }
 
   async function markAsRead(uid: string, conversationId: string) {
-    await invoke('mark_as_read', { uid, conversationId })
+    if (!isTauri()) return
+    await tauriInvoke('mark_as_read', { uid, conversationId })
     updateConversation({ id: conversationId, unreadCount: 0, atMe: false })
   }
 
   async function archiveConversation(uid: string, conversationId: string, archived: boolean) {
-    await invoke('archive_conversation', { uid, conversationId, archived })
+    if (!isTauri()) return
+    await tauriInvoke('archive_conversation', { uid, conversationId, archived })
     updateConversation({ id: conversationId, isArchived: archived })
   }
 
@@ -103,11 +116,13 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function recallMessage(uid: string, messageId: string) {
-    await invoke('recall_message', { uid, messageId })
+    if (!isTauri()) return
+    await tauriInvoke('recall_message', { uid, messageId })
   }
 
   async function deleteConversation(uid: string, conversationId: string) {
-    await invoke('delete_conversation', { uid, conversationId })
+    if (!isTauri()) return
+    await tauriInvoke('delete_conversation', { uid, conversationId })
     conversations.value = conversations.value.filter(c => c.id !== conversationId)
     if (currentConversationId.value === conversationId) {
       currentConversationId.value = null

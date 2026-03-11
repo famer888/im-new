@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface AppSettings {
   language: string
@@ -27,8 +35,9 @@ export const useSettingStore = defineStore('setting', () => {
   const loaded = ref(false)
 
   async function loadSettings() {
+    if (!isTauri()) return
     try {
-      const result = await invoke<AppSettings>('get_settings')
+      const result = await tauriInvoke<AppSettings>('get_settings')
       settings.value = result
       loaded.value = true
       applyTheme(result.theme)
@@ -39,8 +48,9 @@ export const useSettingStore = defineStore('setting', () => {
   }
 
   async function updateSettings(partial: Partial<AppSettings>) {
+    if (!isTauri()) return
     const updated = { ...settings.value, ...partial }
-    await invoke('update_settings', { settings: updated })
+    await tauriInvoke('update_settings', { settings: updated })
     settings.value = updated
     if (partial.theme) applyTheme(partial.theme)
     if (partial.fontSize) applyFontSize(partial.fontSize)
