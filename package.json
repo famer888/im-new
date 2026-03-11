@@ -11,7 +11,12 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:uat": "tauri dev -- --mode uat",
     "tauri:build": "tauri build",
+    "tauri:build:mac": "tauri build --target universal-apple-darwin",
+    "tauri:build:mac:uat": "tauri build --target universal-apple-darwin -- --mode uat",
+    "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc",
+    "tauri:build:win:uat": "tauri build --target x86_64-pc-windows-msvc -- --mode uat",
     "proto:gen": "pbjs -t static-module --es6 -w es6 -o src/proto/generated.js proto/common.proto proto/web.proto && pbts -o src/proto/generated.d.ts src/proto/generated.js",
     "lint": "eslint src --ext .ts,.vue --fix",
     "type-check": "vue-tsc --noEmit"

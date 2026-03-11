@@ -9,7 +9,7 @@ mod updater;
 mod window;
 mod ws;
 
-use tauri::Manager;
+use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -61,6 +61,36 @@ pub fn run() {
 
             // Setup tray
             window::tray::setup_tray(app)?;
+
+            // Create login window with platform-specific settings
+            {
+                let mut builder = WebviewWindowBuilder::new(
+                    app,
+                    "login",
+                    WebviewUrl::App("/login".into()),
+                )
+                .title("OCS Chat")
+                .inner_size(380.0, 520.0)
+                .resizable(false)
+                .center()
+                .visible(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder
+                        .decorations(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true);
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    builder = builder.decorations(false).transparent(true);
+                }
+
+                builder.build()?;
+                info!("Login window created");
+            }
 
             // Listen for deep links
             #[cfg(desktop)]

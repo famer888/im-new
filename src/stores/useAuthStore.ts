@@ -64,31 +64,55 @@ export const useAuthStore = defineStore('auth', () => {
   async function initSession() {
     loadAccounts()
 
-    if (!isTauri()) return
+    // If session was already set (e.g. by login()), skip restore
+    if (session.value) return
 
-    try {
-      const stored = await tauriInvoke<SessionInfo | null>('get_session')
-      if (stored) {
-        session.value = stored
-        localStorage.setItem(CURRENT_UID_KEY, stored.uid)
-        return
+    if (isTauri()) {
+      try {
+        const stored = await tauriInvoke<SessionInfo | null>('get_session')
+        if (stored) {
+          session.value = stored
+          localStorage.setItem(CURRENT_UID_KEY, stored.uid)
+          return
+        }
+
+        if (autoLoginEnabled.value && accounts.value.length > 0) {
+          const lastUid = localStorage.getItem(CURRENT_UID_KEY)
+          const account = accounts.value.find(a => a.id === lastUid) || accounts.value[0]
+          if (account?.sessionId) {
+            try {
+              const result = await tauriInvoke<SessionInfo>('login', {
+                request: { session_id: account.sessionId },
+              })
+              session.value = result
+              localStorage.setItem(CURRENT_UID_KEY, result.uid)
+            } catch { /* auto-login failed */ }
+          }
+        }
+      } catch {
+        console.error('Failed to init session')
       }
-
-      if (autoLoginEnabled.value && accounts.value.length > 0) {
-        const lastUid = localStorage.getItem(CURRENT_UID_KEY)
-        const account = accounts.value.find(a => a.id === lastUid) || accounts.value[0]
-        if (account?.sessionId) {
+    } else {
+      // Browser mode: restore session from localStorage
+      const lastUid = localStorage.getItem(CURRENT_UID_KEY)
+      if (lastUid) {
+        const storedSession = localStorage.getItem('browser-session')
+        if (storedSession) {
           try {
-            const result = await tauriInvoke<SessionInfo>('login', {
-              request: { session_id: account.sessionId },
-            })
-            session.value = result
-            localStorage.setItem(CURRENT_UID_KEY, result.uid)
-          } catch { /* auto-login failed */ }
+            session.value = JSON.parse(storedSession)
+          } catch { /* corrupted */ }
+        } else {
+          const account = accounts.value.find(a => a.id === lastUid)
+          if (account) {
+            session.value = {
+              uid: account.id,
+              sessionId: account.sessionId || '',
+              nickname: account.name,
+              avatar: account.icon || '',
+            }
+          }
         }
       }
-    } catch {
-      console.error('Failed to init session')
     }
   }
 
@@ -131,6 +155,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
     session.value = browserSession
     localStorage.setItem(CURRENT_UID_KEY, browserSession.uid)
+    localStorage.setItem('browser-session', JSON.stringify(browserSession))
     return browserSession
   }
 
@@ -163,6 +188,7 @@ export const useAuthStore = defineStore('auth', () => {
     const currentUid = uid.value
     session.value = null
     localStorage.removeItem(CURRENT_UID_KEY)
+    localStorage.removeItem('browser-session')
     const idx = accounts.value.findIndex(a => a.id === currentUid)
     if (idx >= 0) {
       accounts.value[idx].sessionId = undefined

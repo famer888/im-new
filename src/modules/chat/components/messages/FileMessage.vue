@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
-import { invoke } from '@tauri-apps/api/core'
 
 const props = defineProps<{
   message: Message

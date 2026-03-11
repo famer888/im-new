@@ -214,7 +214,7 @@ pub async fn search_messages(
     limit: Option<i64>,
 ) -> Result<Vec<models::Message>, String> {
     db.with_connection(&uid, |conn| {
-        queries::search_messages(conn, &keyword, limit.unwrap_or(50))
+        queries::search_messages(conn, &keyword, None, limit.unwrap_or(50))
     })
     .map_err(|e| e.to_string())
 }

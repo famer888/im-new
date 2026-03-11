@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
 import FileImport from '../components/FileImport.vue'
+import top3Icon from '@/assets/images/system/top3.png'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -51,10 +52,10 @@ async function handleClose() {
 
 <template>
   <div class="loginRegistContainer">
-    <div class="drag"></div>
+    <div class="drag" data-tauri-drag-region></div>
     <img
       v-if="!isMac"
-      src="@/assets/images/system/top3.png"
+      :src="top3Icon"
       class="close"
       @click="handleClose"
     />
@@ -79,8 +80,9 @@ async function handleClose() {
 <style lang="scss" scoped>
 .loginRegistContainer {
   position: absolute;
-  left: 0;
-  top: 0;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   height: 400px;
   width: 300px;
 

@@ -67,3 +67,69 @@ export async function getUserInfo(
     data: { uid: data.uid },
   })
 }
+
+/**
+ * Get contacts (friends) list.
+ * POST /contacts/contactsList
+ */
+export async function getContactsList(
+  data: { pageNum: number; pageSize: number },
+  baseUrl?: string,
+): Promise<proto.ContactsListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/contactsList`,
+    reqType: proto.ContactsListReq,
+    respType: proto.ContactsListResp,
+    data,
+  })
+}
+
+/**
+ * Send friend request (add contact).
+ * POST /contacts/contactsRelation
+ */
+export async function contactsRelation(
+  data: { targetUid: number; msg: string; op: number; type?: number },
+  baseUrl?: string,
+): Promise<proto.ContactsRelationResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/contactsRelation`,
+    reqType: proto.ContactsRelationReq,
+    respType: proto.ContactsRelationResp,
+    data,
+  })
+}
+
+/**
+ * Search/find contacts by phone number or sign.
+ * POST /contacts/findContactsList
+ */
+export async function findContactsList(
+  data: { phoneNum?: string; findSign?: string; targetUid?: number; findType?: number },
+  baseUrl?: string,
+): Promise<proto.FindContactsListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/findContactsList`,
+    reqType: proto.FindContactsListReq,
+    respType: proto.FindContactsListResp,
+    data,
+  })
+}
+
+/**
+ * Get group list.
+ * POST /group/groupContactList
+ */
+export async function getGroupContactList(
+  baseUrl?: string,
+): Promise<proto.GroupContactListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupContactList`,
+    reqType: proto.GroupContactListReq,
+    respType: proto.GroupContactListResp,
+  })
+}

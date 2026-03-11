@@ -44,15 +44,19 @@ export const useChatStore = defineStore('chat', () => {
   )
 
   async function loadConversations(uid: string) {
-    if (!isTauri()) return
     loading.value = true
     try {
-      const result = await tauriInvoke<Conversation[]>('get_conversations', {
-        uid,
-        limit: 50,
-        offset: 0,
-      })
-      conversations.value = result
+      if (isTauri()) {
+        const result = await tauriInvoke<Conversation[]>('get_conversations', {
+          uid,
+          limit: 50,
+          offset: 0,
+        })
+        conversations.value = result
+      }
+      // In browser mode, conversations are populated via WebSocket message events
+    } catch (e) {
+      console.error('[ChatStore] loadConversations failed:', e)
     } finally {
       loading.value = false
     }

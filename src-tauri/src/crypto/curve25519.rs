@@ -1,4 +1,4 @@
-use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
+use x25519_dalek::{PublicKey, StaticSecret};
 use rand::rngs::OsRng;
 
 use super::CryptoError;

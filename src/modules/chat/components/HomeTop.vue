@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import top1Icon from '@/assets/images/system/top1.png'
+import top2Icon from '@/assets/images/system/top2.png'
+import top3Icon from '@/assets/images/system/top3.png'
 
 const isMac = ref(false)
 
@@ -12,94 +15,92 @@ async function getTauriWindow() {
   return getCurrentWindow()
 }
 
-async function handleMinimize() {
+async function minimize() {
   try { (await getTauriWindow()).minimize() } catch { /* browser */ }
 }
 
-async function handleMaximize() {
+async function maximize() {
   try {
     const win = await getTauriWindow()
-    if (await win.isMaximized()) await win.unmaximize()
-    else await win.maximize()
+    if (await win.isMaximized()) {
+      await win.unmaximize()
+      document.body.classList.remove('maximized')
+    } else {
+      await win.maximize()
+      document.body.classList.add('maximized')
+    }
   } catch { /* browser */ }
 }
 
-async function handleClose() {
-  try { (await getTauriWindow()).hide() } catch { /* browser */ }
+async function close() {
+  try {
+    const win = await getTauriWindow()
+    await win.minimize()
+    await win.hide()
+  } catch { /* browser */ }
 }
 </script>
 
 <template>
-  <div class="home-top">
-    <!-- Drag region: OCS uses width: calc(100% - 120px) -->
-    <div class="drag-region" data-tauri-drag-region />
-    <!-- Window controls: right side (non-Mac) -->
-    <div v-if="!isMac" class="window-controls">
-      <button class="ctrl-btn" @click="handleMinimize">
-        <svg viewBox="0 0 16 16" width="16" height="16"><line x1="4" y1="8" x2="12" y2="8" stroke="currentColor" stroke-width="1"/></svg>
-      </button>
-      <button class="ctrl-btn" @click="handleMaximize">
-        <svg viewBox="0 0 16 16" width="16" height="16"><rect x="3" y="3" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1"/></svg>
-      </button>
-      <button class="ctrl-btn close" @click="handleClose">
-        <svg viewBox="0 0 16 16" width="16" height="16"><line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" stroke-width="1"/><line x1="12" y1="4" x2="4" y2="12" stroke="currentColor" stroke-width="1"/></svg>
-      </button>
-    </div>
+  <div class="manage">
+    <div class="max-box" :class="['drag', isMac && 'mac']" data-tauri-drag-region></div>
+    <template v-if="!isMac">
+      <div class="box" @click="minimize">
+        <img :src="top1Icon" />
+      </div>
+      <div class="box maximize" @click="maximize">
+        <img :src="top2Icon" />
+      </div>
+      <div class="box" @click="close">
+        <img :src="top3Icon" />
+      </div>
+    </template>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.home-top {
-  height: 32px;
-  width: 100%;
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 9999;
+.manage {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-}
-
-.drag-region {
-  width: calc(100% - 120px);
+  width: 100%;
   height: 32px;
-  line-height: 32px;
   position: absolute;
-  left: 0;
+  z-index: 9999;
   top: 0;
-  -webkit-app-region: drag;
-}
+  right: 0;
 
-.window-controls {
-  display: flex;
-  padding: 0 12px;
-  -webkit-app-region: no-drag;
-  z-index: 1;
-
-  .ctrl-btn {
-    width: 32px;
+  .max-box {
+    left: 0;
+    top: 0;
+    position: absolute;
+    width: calc(100% - 120px);
     height: 32px;
+    line-height: 32px;
+    z-index: 1;
+    -webkit-app-region: drag;
+
+    &.mac {
+      width: 100%;
+    }
+  }
+
+  .box {
+    padding: 0 12px;
+    height: 100%;
     display: flex;
     align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
+    justify-items: center;
     cursor: pointer;
-    color: #666;
-
-    img, svg {
-      width: 16px;
-      height: 16px;
-    }
+    -webkit-app-region: no-drag;
 
     &:hover {
       background: #f0f0f0;
     }
 
-    &.close:hover {
-      background: #e81123;
-      color: #fff;
+    img {
+      width: 16px;
+      height: 16px;
     }
   }
 }
