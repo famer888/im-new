@@ -1,10 +1,18 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import type { Contact } from './useContactStore'
 import type { Group } from './useGroupStore'
 import type { Channel } from './useChannelStore'
 import type { Message } from './useMessageStore'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface SearchResults {
   contacts: Contact[]
@@ -33,12 +41,13 @@ export const useSearchStore = defineStore('search', () => {
       clearResults()
       return
     }
+    if (!isTauri()) return
     isSearching.value = true
     try {
       const [contacts, groups, channels] = await Promise.all([
-        invoke<Contact[]>('search_contacts', { uid, keyword: query }),
-        invoke<Group[]>('get_groups', { uid }),
-        invoke<Channel[]>('get_channels', { uid }),
+        tauriInvoke<Contact[]>('search_contacts', { uid, keyword: query }),
+        tauriInvoke<Group[]>('get_groups', { uid }),
+        tauriInvoke<Channel[]>('get_channels', { uid }),
       ])
       results.value = {
         contacts,
