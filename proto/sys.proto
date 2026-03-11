@@ -1,0 +1,651 @@
+syntax = "proto3";
+option java_package="com.im.domain.pb";
+option java_outer_classname="SysProto";
+
+import "common.proto";
+
+//************* 系统模块接口列表 ********************
+// 获取手机短信验证码请求[loginUrl/sys/getSmsCode]
+// 获取极验并发送code码接口  [loginUrl/sys/getSmsCodeByGt4] v1.6.2
+// 获取上传图片的token请求[loginUrl/sys/getToken]
+// 获取系统相关链接地址请求[loginUrl/sys/getSysRelatedLink]
+// 系统相关地址url请求实体 [loginUrl/sys/sysDependentAddrLink]
+// 校验短信验证码请求 [loginUrl/sys/checkSmsCode]
+// 意见反馈请求 [bizUrl/sys/feedback]
+// 检测新版本 [loginUrl/sys/checkVersion]
+
+// 获取密钥对req [bizUrl/sys/getKeyPair]
+// 更新用户密钥对req [bizUrl/sys/updateUserKeyPair]
+
+// 地理位置列表req [bizUrl/sys/placeList] add V1.1.0
+// 获取谷歌地理位置链接req [bizUrl/sys/googleUrl] add v1.1.0 -- 废弃
+
+// 携带参数安装req [bizUrl/sys/openInstall] add v1.2.0 --携带参数安装
+
+// 根据版本号获取用户密钥对req [bizUrl/sys/getKeyPairOfVer] v1.2.0
+// 获取oss上传token req[loginUrl/sys/getUploadToken] v1.2.0
+// 获取上传文件路径req[loginUrl/sys/getUploadUrl] v1.2.0
+
+// 设置账号清除时间req[loginUrl/sys/setClearTime] v1.3.0
+
+// 获取邀请链接req [bizUrl/sys/getInviteLink] add v1.4.0
+// 更新邀请链接req [bizUrl/sys/updateInviteLink] add v1.4.0
+// 账号注销 [bizUrl/sys/disableAccount] add v2.0
+
+//谷歌验证器二维码req [bizUrl/sys/googleAuthQrCode]
+//绑定谷歌验证器req [bizUrl/sys/bindGoogleAuth]
+//解绑谷歌验证器req [bizUrl/sys/disBindGoogleAuth]
+// 验证谷歌请求 [bizUrl/sys/googleValidate]
+
+//发红包req [bizUrl/sys/sendRedPacket]
+//查询红包req [bizUrl/sys/queryRedPacket]
+//打开红包req [bizUrl/sys/openRedPacket]
+//红包领取明细req [bizUrl/sys/redPacketOpenRecord]
+//红包收发记录req [bizUrl/sys/redPacketRecord]
+
+// 安全验证 req[bizUrl/sys/secureCheck]
+// 更改安全验证检查 req[bizUrl/sys/updateSecureCheck]
+// 更改安全验证 req[bizUrl/sys/updateSecure]
+// 国际区号集合请求类 req[bizUrl/sys/countryCode] 1.4.0
+
+// 获取配置（限制金额小数位等配置） [loginUrl/bizUrl/sys/config]
+
+// 获取轮播图片集合 req[loginUrl/sys/getAdvertising]
+//************************************
+
+// 地理位置信息
+message PlaceBean {
+    string  id   = 1; // ID
+    string  name = 2; // 名称
+    string  address = 3; // 地址
+	int32   lat = 4; // lat
+    int32   lng = 5; // lng
+}
+
+// 红包基本信息
+message RedPacketBase {
+    int64  redPacketId  = 1;
+    CoinTypeBase coinTypeBase  = 2;
+    string coin         = 3; // 虚拟币（普通红包时，表示单个红包币值）
+    string  desc        = 4; // 描述
+    int32   type        = 5; // 1.普通，2.拼手气，3.专属
+    int32   count       = 6; // 个数
+    int64 expiredTime   = 7; // 过期时间 单位毫秒
+    UserBase    userBase        = 8; // 发出红包用户基本信息
+    int32   status      = 9; // 0.待审核，1.审核通过，2.审核拒绝
+    int64   groupId     = 10; // 群红包
+}
+
+// 红包领取明细
+message RedPacketOpenRecord {
+    UserBase    userBase        = 1; // 用户基本信息
+    string      coin            = 2; // 领取币值
+    int64       createTime      = 3; // 领取时间
+}
+
+// 收发红包记录基本信息
+message RedPacketRecordBase {
+    RedPacketBase       redPacketBase   = 1;
+    string      coin            = 2; // 领取币值或者发出去的币值
+    int64       createTime      = 3; // 领取时间
+    int32       openCount       = 4; // 已领取数量
+}
+
+// 获取手机短信验证码请求[loginUrl/sys/getSmsCode]
+message GetSmsCodeReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         countryCode    = 2; // 国家码
+    string         phone           = 3; // 手机号
+    GetValidateCodeType type = 4; // 获取验证码类型
+    int32          flag            = 5; // 用于切换短信通道标记 v1.3.0
+}
+
+// 获取手机短信验证码响应
+message GetSmsCodeResp {
+    CommonResult       commonResult = 1;  // 结果信息
+}
+
+// 获取手机短信验证码请求[loginUrl/sys/getSmsCode]
+message GetEmailCodeReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         email           = 2; // 邮箱
+    GetValidateCodeType type = 3; // 获取验证码类型
+    int32          flag            = 4; // 用于切换短信通道标记 v1.3.0
+}
+
+// 获取手机短信验证码响应
+message GetEmailCodeResp {
+    CommonResult       commonResult = 1;  // 结果信息
+}
+
+// 获取上传图片的token请求[loginUrl/sys/getToken]
+message GetTokenReq {
+    ClientInfo          clientInfo             = 1; // 客户端信息
+    AttachWorkSpaceType attachWorkspaceType   = 2; // 附件存储空间类型
+    AttachType          attachType             = 3; // 附件类型
+}
+
+// 获取上传图片的token响应
+message GetTokenResp {
+    CommonResult       commonResult = 1; // 结果信息
+    string             token         = 2; // token
+    string             fileId       = 3; // 文件相对路径
+    string             url           = 4; // 文件完整路径
+}
+
+// 校验短信验证码请求 [loginUrl/sys/checkSmsCode]
+message CheckSmsCodeReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         countryCode    = 2; // 国家码
+    string         phone           = 3; // 手机号
+    GetValidateCodeType type = 4; // 获取验证码类型
+    string         smsCode        = 5; // 短信验证码
+}
+
+// 校验短信验证码响应
+message CheckSmsCodeResp {
+    CommonResult   commonResult = 1; // 结果信息
+}
+
+// 意见反馈请求 [bizUrl/sys/feedback]
+message FeedbackReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    FeedbackType   type           = 2; // 反馈类型
+    string         msg            = 3; // 反馈内容
+    string         picUrls        = 4; // 上传的图片地址列表[多张按逗号","分隔] v1.5.0
+}
+
+// 意见反馈响应
+message FeedbackResp {
+    CommonResult   commonResult = 1; // 结果信息
+}
+
+// 检测新版本请求 [loginUrl/sys/checkVersion]
+message CheckVersionReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+}
+
+// 检测新版本响应
+message CheckVersionResp {
+    CommonResult   commonResult = 1; // 结果信息
+    CheckVersionFlag    flag = 2; // 检测版本标识
+    string      title   = 3; // 标题
+    string      content = 4; // 内容
+    string      url     = 5; // 最新下载链接
+    int32       version = 6; // 最新版本号
+}
+
+message CoinConfig {
+    string coinName = 1; // 币种名称
+    int32 readScale = 2; // 限制位数（显示的小数位）
+    int32 writeScale = 3; // 限制位数（在对应输入框输入时需要限制位数）
+    string primaryTradeDay = 4; // 初级每日交易额度
+    string advancedTradeDay = 5; // 高级每日交易额度
+}
+
+// 配置请求（限制小数位、限额等配置） [loginUrl/sys/config]
+message ConfigReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    repeated string coinNames =2; // 币种
+}
+
+// 配置请求
+message ConfigResp {
+    CommonResult   commonResult = 1; // 结果信息
+    repeated CoinConfig CoinConfigs = 2; // 币种相关配置
+    int32  bankLimit = 5; // 绑卡数量上限
+}
+
+
+// 获取密钥对req [bizUrl/sys/getKeyPair]
+message GetKeyPairReq {
+    ClientInfo     clientInfo   = 1; // 客户端信息
+    KeyPairType    flag         = 2; // 用户or群
+    int64          targetId     = 3; // 目标id（用户/群）
+}
+
+// 获取密钥对resp
+message GetKeyPairResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    KeyPairBase    keyPair        = 2; // 密钥对
+}
+
+// 根据版本号获取用户密钥对req [bizUrl/sys/getKeyPairOfVer] v1.2.0
+message GetKeyPairOfVerReq {
+    ClientInfo     clientInfo   = 1; // 客户端信息
+    int64          uid          = 2; // 用户id
+    int32          appVer       = 3; // app密钥版本(不传则下发最新)
+    int32          webVer       = 4; // web密钥版本(不传则下发最新)
+}
+
+// 根据版本号获取用户密钥对resp
+message GetKeyPairOfVerResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    KeyPairBase    appKeyPair        = 2; // app密钥对
+    KeyPairBase    webKeyPair        = 3; // web密钥对
+}
+
+// 更新用户密钥对req [bizUrl/sys/updateUserKeyPair]
+message UpdateKeyPairReq {
+    ClientInfo     clientInfo   = 1; // 客户端信息
+    string         publicKey    = 2; // 公钥
+}
+
+// 更新用户密钥对resp
+message UpdateKeyPairResp {
+    CommonResult commonResult = 1; // 结果信息
+    int32        keyVersion   = 2; // 密钥对版本号
+}
+
+// 地理位置列表请求 [bizUrl/sys/placeList]
+message PlaceListReq {
+    ClientInfo  clientInfo   = 1; // 客户端信息
+    int32       lat = 2; // lat
+    int32       lng = 3; // lng
+    string      keyword = 4; // 关键词
+    int32       pageNum = 5; // 页码
+    int32       pageSize = 6; // 每页大小
+    SearchMapType type  = 7 ;// 使用地图类型
+}
+
+// 地理位置列表响应
+message PlaceListResp {
+    CommonResult commonResult = 1; // 结果信息
+    int32   count   = 2; // 数量
+    repeated PlaceBean   places  = 3; // 位置列表
+}
+
+// 获取谷歌地理位置链接请求 [bizUrl/sys/googleUrl] -- 废弃
+message GoogleUrlReq {
+    ClientInfo  clientInfo   = 1; // 客户端信息
+    int32       lat = 2; // lat
+    int32       lng = 3; // lng
+}
+
+// 系统相关地址 请求实体
+message SysRelatedLinkReq {
+    ClientInfo  clientInfo   = 1; // 客户端信息
+}
+
+
+// 系统相关地址 请求实体
+message SysRelatedLinkResp {
+    CommonResult commonResult               = 1; // 结果信息
+    string  androidDownloadValidatorUrl     = 2; // 安卓下载验证器app地址
+    string  iosDownloadValidatorUrl         = 3; // ios下载下载验证器app地址
+    string  vectoringPageUrl                = 4; // 验证器引导地址
+    string  agreement_url                   = 5; // 用户协议链接
+    string  paymentProofExampleUrl          = 6; // 银行卡付款凭证示例图片url
+    string  appealVideoExampleUrl           = 7; // 申诉视频示例图片url
+    string  appealPictureExampleUrl         = 8; // 申诉图片示例图片url
+}
+
+// 系统相关地址url请求实体 [loginUrl/sys/sysDependentAddrLink]
+message SysDependentAddrLinkReq {
+    ClientInfo  clientInfo   = 1; // 客户端信息
+}
+message SysDependentAddrLinkResp {
+    CommonResult commonResult               = 1; // 结果信息
+    string  androidDownloadValidatorUrl     = 2; // 安卓下载验证器app地址
+    string  iosDownloadValidatorUrl         = 3; // ios下载下载验证器app地址
+    string  vectoringPageUrl                = 4; // 验证器引导地址
+    string  agreement_url                   = 5; // 用户协议链接
+    PayExampleUrl bankCardExampleUrl        = 6; // 银行相关示例url
+    PayExampleUrl weChatExampleUrl          = 7; // 微信相关示例url
+    PayExampleUrl aliExampleUrl             = 8; // 支付宝相关示例url
+}
+// 支付相关示例对象实体
+message PayExampleUrl {
+    string      uploadPayVoucher          = 1; // 付款凭证示例
+    string      appealImage               = 2; // 申诉图片示例
+    string      appealVideo               = 3; // 申诉视频示例
+}
+
+// 获取谷歌地理位置链接响应
+message GoogleUrlResp {
+    CommonResult commonResult = 1; // 结果信息
+    string      url    = 2; // Google链接
+}
+
+// 携带参数安装请求 v1.2.0
+message OpenInstallReq {
+    ClientInfo  clientInfo   = 1; // 客户端信息
+    string params = 2; // 参数json串
+    int32 type = 3; // 0.Install, 1.WakeUp
+    string channelCode = 4; //
+}
+
+// 携带参数安装响应 v1.2.0
+message OpenInstallResp {
+    CommonResult commonResult = 1; // 结果信息
+}
+
+// 获取oss上传token req[loginUrl/sys/getUploadToken] v1.2.0
+message GetUploadTokenReq {
+    ClientInfo          clientInfo             = 1; // 客户端信息
+}
+
+// 获取oss上传token resp
+message GetUploadTokenResp {
+    CommonResult        commonResult        = 1; // 结果信息
+    string              securityToken       = 2; // token
+    string              accessKeyId         = 3; // 临时访问key
+    string              accessKeySecret     = 4; // 临时访问key
+    int64               expiration          = 5; // 过期时间戳
+    string              ossEndpoint         = 6; // oss_upload接入地址
+    string              ossBucket           = 7; // oss 存储空间
+}
+
+// 获取上传文件路径req[loginUrl/sys/getUploadUrl] v1.2.0
+message GetUploadUrlReq {
+    ClientInfo          clientInfo              = 1; // 客户端信息
+    AttachWorkSpaceType attachWorkspaceType     = 2; // 附件存储空间类型
+    AttachType          attachType              = 3; // 附件类型
+    string              suffix                  = 4; // 后缀名，后缀不包含.  如: jpg, png...
+    int64               fileSize                = 5; // 文件大小  单位B
+}
+
+// 获取上传文件路径resp
+message GetUploadUrlResp {
+    CommonResult       commonResult = 1; // 结果信息
+    string             fileId       = 2; // 文件相对路径
+    string             url          = 3; // 文件完整路径
+}
+
+// 获取邀请链接req [bizUrl/sys/getInviteLink] add v1.4.0
+message GetInviteLinkReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    InviteLinkType  type           = 2; // 链接类型
+    int64           targetId       = 3; // 目标id
+}
+
+// 获取邀请链接resp add v1.4.0
+message GetInviteLinkResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    string         inviteLink      = 2; // 邀请链接
+}
+
+// 更新邀请链接req [bizUrl/sys/updateInviteLink] add v1.4.0
+message UpdateInviteLinkReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    InviteLinkType  type           = 2; // 链接类型
+    int64           targetId       = 3; // 目标id
+}
+
+// 更新邀请链接resp add v1.4.0
+message UpdateInviteLinkResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    string         inviteLink      = 2; // 邀请链接
+}
+
+// 账号注销 [bizUrl/sys/disableAccount] add v2.0
+message DisableAccountReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+}
+
+// 账号注销resp
+message DisableAccountResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+//谷歌验证器二维码  [bizUrl/sys/googleAuthQrCode]
+message GoogleAuthQrCodeReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+}
+
+// 谷歌验证器二维码resp
+message GoogleAuthQrCodeResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    string      qrCodeLink       = 2;
+    string      secret             = 3;
+}
+
+//绑定谷歌验证器  [bizUrl/sys/bindGoogleAuth]
+message BindGoogleAuthReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+//    string         secureCode        = 2; // 安全验证通过返回的code
+    string           code          = 2; // 谷歌验证码
+    string          secret         = 3; // 谷歌密钥
+    repeated ValidateCode validateCodes =4; //所有的验证码
+}
+
+// 绑定谷歌验证器二维码resp
+message BindGoogleAuthResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+//解绑谷歌验证器  [bizUrl/sys/disBindGoogleAuth]
+message DisBindGoogleAuthReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+//    string         secureCode        = 2; // 安全验证通过返回的code
+    string         code        = 2; // 安全验证通过返回的code  这个已无用
+    repeated ValidateCode validateCodes =3; //所有的验证码
+}
+
+// 解绑谷歌验证器二维码resp
+message DisBindGoogleAuthResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+// 验证密码请求 [bizUrl/sys/googleValidate]
+message GoogleValidateReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    bool         isOpenGoogleAuth       = 2; // 是否谷歌验证
+    repeated ValidateCode validateCodes =3; //所有的验证码
+}
+
+// 验证密码响应
+message GoogleValidateResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 发红包 [bizUrl/sys/sendRedPacket]
+message SendRedPacketReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    string coin         = 2; // 虚拟币（普通红包时，表示单个红包币值）
+    string  desc        = 3; // 描述
+    int32   type        = 4; // 1.普通，2.拼手气，3.专属
+    int32   coinId      = 5; // 币种id
+    int32   count       = 6; // 个数
+    int64   targetUid   = 7; // 私聊或者群专属红包
+    int64   groupId     = 8; // 群id
+    string   code       = 9; // 谷歌验证码
+}
+
+// 发红包resp
+message SendRedPacketResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    int64      redPacketId         = 2; // 红包id
+}
+
+// 查询红包状态 [bizUrl/sys/queryRedPacket]
+message QueryRedPacketReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    int64      redPacketId         = 2; // 红包id
+}
+
+// 查询红包resp
+message QueryRedPacketResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    int32           status         = 2; // 1.可以领红包，2.红包已派完，3.红包已过期，4.自己已领取
+}
+
+// 打开红包 [bizUrl/sys/openRedPacket]
+message OpenRedPacketReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    int64      redPacketId         = 2; // 红包id
+}
+
+// 打开红包resp
+message OpenRedPacketResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    int32           status         = 2; // 1.领到红包，2.红包已派完，3.红包已过期，4.自己已领取
+    string          coin           = 3; // 领到币值
+}
+
+// 红包明细 [bizUrl/sys/redPacketOpenRecord]
+message RedPacketOpenRecordReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    int64      redPacketId         = 2; // 红包id
+}
+
+// 红包明细resp
+message RedPacketOpenRecordResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    int32           costTime    = 2; // 花费时间，单位秒
+    RedPacketBase   redPacketBase  = 3; // 红包基本信息
+    repeated        RedPacketOpenRecord  redPacketRecord = 4; // 领取明细
+    string          totalCoin       = 5; // 红包总额
+    string          openCoin        = 6; // 已打开总额
+}
+
+// 红包收发记录 [bizUrl/sys/redPacketRecord]
+message RedPacketRecordReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    int32      type         = 2; // 1.发出的，2.收到的
+    int32      pageNum      = 3;
+    int32      pageSize     = 4;
+}
+
+// 红包收发记录resp
+message RedPacketRecordResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    int32       count       = 2;
+    int32       pageNum     = 3;
+    repeated    RedPacketRecordBase redPacketRecordBase = 4; // 收发记录
+}
+
+// 安全验证req
+message SecureCheckReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    GetValidateCodeType codeType    = 2; // 业务类型
+    string          smsCode        = 3; // 手机验证码
+    string          emailCode      = 4; // 邮箱验证码
+    string           code          = 5; // 谷歌验证码
+    string          tradePassword         = 6; // 安全密码
+}
+
+// 安全验证resp
+message SecureCheckResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    string         secureCode        = 2; // 安全验证通过下发code
+}
+
+// 更改安全验证校验req
+message UpdateSecureCheckReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    GetValidateCodeType codeType    = 2; // 业务类型
+    string          smsCode        = 3; // 手机验证码
+    string          emailCode      = 4; // 邮箱验证码
+    string           code          = 5; // 谷歌验证码
+    string          tradePassword         = 6; // 安全密码
+    string          updateType      = 7; // 1.手机不可用，2.邮箱不可用，3.谷歌验证不可用，4.安全密码不可用，多个使用逗号分隔
+}
+
+// 更改安全验证校验resp
+message UpdateSecureCheckResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    string         secureCode        = 2; // 安全验证通过下发code
+}
+
+// 更改安全验证提交req
+message UpdateSecureReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    string          account        = 2; // 手机或者邮箱
+    string           code          = 3; // 验证码
+    string          idPhoto1         = 4; // 身份证正面照
+    string          idPhoto2         = 5; // 身份证反面照
+    string          updateType      = 6; // 1.手机不可用，2.邮箱不可用，3.谷歌验证不可用，4.安全密码不可用，多个使用逗号分隔
+    string          secureCode        = 7; // 安全验证通过下发code
+}
+
+// 更改安全验证提交resp
+message UpdateSecureResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+// 获取上传文件路径req[loginUrl/sys/getUploadUrl] v1.2.0
+message GetGoogleDownloadUrlReq {
+    ClientInfo          clientInfo             = 1; // 客户端信息
+}
+
+// 获取上传文件路径resp
+message GetGoogleDownloadUrlResp {
+    CommonResult       commonResult = 1; // 结果信息
+    string             url          = 2; // 文件完整路径
+}
+
+message RedisCacheKeyReq {
+    ClientInfo      clientInfo  = 1; // 客户端信息
+    string          cacheName   = 2; // cacheName
+    string          key         = 3; // redisKey
+}
+
+message RedisCacheKeyResp {
+    CommonResult    commonResult    = 1; // 结果信息
+    string          data            = 2; // 结果数据
+}
+// 日志文本上传请求实体
+message UploadLogReq {
+    ClientInfo      clientInfo  = 1; // 客户端信息
+    string          content     = 2; // 文本内容
+}
+
+// 日志文本上传响应实体
+message UploadLogResp {
+    CommonResult    commonResult    = 1; // 结果信息
+}
+// 国际区号集合请求类 [loginUrl/sys/countryCode] 1.4.0
+message CountryCodeReq{
+    ClientInfo      clientInfo  = 1; // 客户端信息
+}
+// 国际区号集合响应类
+message CountryCodeResp {
+    repeated CountryCodeDto countryCodeList = 1; // countryCode集合
+    CommonResult    commonResult            = 2; // 结果信息
+}
+// 国际区号实体
+message CountryCodeDto {
+    int32 countryCodeId     = 1; // 区号id
+    int32 countryCode       = 2; // 国家区号码
+    string countryName      = 3; // 国家名称
+    string countryNameUs    = 4; // 国家名英文简称
+    string countryNameTw    = 5; // 国家名中文繁体
+    string pinyinHead       = 6; // 国家名中文首字母
+    string englishHead      = 7; // 国家名英文首字母
+    int32 strokeCount       = 8; // 笔划数
+}
+//获取极验并发送code码接口  [sys/getSmsCodeByGt4]v1.6
+message GetSmsCodeByGt4Req {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    string          countryCode     = 2; // 国家码
+    string          account         = 3; // 手机号或者邮箱
+    GetValidateCodeType type        = 4; // 获取验证码类型
+    string          lotNumber       = 6; // gt4 验证流水号
+    string          captchaOutput   = 7; // gt4 验证输出信息
+    string          passToken       = 8; // gt4 验证通过标识
+    string          genTime         = 9; // gt4 验证通过时间戳
+}
+
+message GetSmsCodeByGt4Resp {
+    CommonResult       commonResult = 1;  // 结果信息
+}
+
+// 获取轮播图片集合 请求实体 [sys/getAdvertising]
+message GetAdvertisingReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32           placeType       = 2; // 首页0， 购买1，出售2，我的3 所有-1
+}
+// 轮播图片集合 响应实体
+message GetAdvertisingResp {
+    CommonResult    commonResult    = 1;  // 结果信息
+    repeated Advertising  list      = 2; // 轮播图片信息集合
+}
+// 轮播图对象
+message Advertising {
+    string          title           = 1; // 标题
+    string          imageUrl        = 2; // 图片url地址
+    string          redirectUrl     = 3; // 跳转地址
+    int32           sort            = 4; // 排序
+    int32           placeType       = 5; // 首页0， 购买1，出售2，我的3
+}

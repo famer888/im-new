@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option java_package = "com.ochat.channel.message.pojo.proto";
+option java_outer_classname = "ChannelApiProto";
+
+import "common.proto";
+import "im.proto";
+
+// 范围查找缺失的消息请求 /channel/message/list
+message MessageListReq {
+  ChatMessageType   bizType               = 1;  // 私聊 群聊 频道。 表：bizType
+  int64             bizId                 = 2;  // 业务id :  频道id，群id
+  MsgType           msgType               = 3;  // 消息类型: 聊天消息/事件消息/撤回消息/回执消息等
+  int32             eventType             = 4;  // 当消息为事件消息时，传具体事件类型值
+  int64             latestMsgId           = 5;  // 最近消息id
+  int32             latestSize            = 6;  // 拉去最近消息数量
+  repeated  int64   msgIdList             = 7;  // 根据丢失的id去找, msgIdList 与 latestMsgId 互斥
+}
+
+// 范围查找缺失的消息响应 /channel/message/list
+message MessageListResp {
+  CommonResult          commonResult     = 1;
+  repeated    bytes     messageBytes     = 2;  // 客户端针对不同业务（单聊 群聊 频道） 和 具体消息 （聊天/事件。。）进行反序列化
+}

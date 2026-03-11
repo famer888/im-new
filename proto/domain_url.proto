@@ -1,0 +1,204 @@
+syntax = "proto3";
+option java_package = "com.im.domain.pb";
+option java_outer_classname = "DomainUrlProto";
+
+import "common.proto";
+
+//************* 动态域名接口列表 ********************
+// loginUrl = http://
+// URL上报 [domain/urlReport]
+// URL上报V2 [domain/urlReportV2]
+// url列表请求 [domain/queryUrlList]
+// 检查URL请求 [domain/checkUrl]
+
+//************************************
+
+// URL上报 请求[domain/urlReport]
+// URL上报V2 请求[domain/urlReportV2]
+message UrlReportReq {
+  ClientInfo      clientInfo = 1; // 客户端信息 与其它接口一样传参
+  string  domainUrl = 2; // 域名url 必填
+  string  errorDesc = 3; // 错误描述 选填
+  string  sysModel = 4; // 手机型号或PC系统型号
+  string  sysMac = 5; // 手机或PC设备串号 选填
+  ModuleCodeEnum   moduleCode = 6; // 模块编码 选填 不填查全部
+  ErrorTypeEnum   errorType = 7; // 错误类型 不填默认为不可用类型 选填
+  ResponseTypeEnum   responseType = 8; // 返回内容类型 不填默认无返回数据 选填
+  string   errorPath = 9; // 错误路径 选填
+  DomainSourceEnum   domainSource = 10; // 域名来源 选填
+  int32   httpStatus = 11; // HTTP状态码 选填 报错的请求返回的状态码
+}
+//url URL上报 响应[domain/urlReport]
+//url URL上报V2 响应[domain/urlReportV2]
+message UrlReportResp {
+  CommonResult   commonResult = 1; // 结果信息
+  repeated DomainUrl urlList = 2; //域名列表
+}
+/**
+其中模块 对应的ID
+1	业务
+2	聊天
+3	好友
+4	群组
+5	静态地图
+6	下载链接
+7	最新可用的登录主域名
+8	域名配置文件下载地址
+9	session wss url
+10	socket协议
+11	上传服务器
+12	上传服务器地址
+13	钱包地址
+14	资讯地址
+15	otc地址
+16	红包地址
+17	买卖币地址
+18  验证码接口地址
+19  验证码静态资源地址
+20  访问动态域名domain-api服务的地址
+21  访问动态域名domain-api服务的OSS文件地址
+ */
+//url列表  请求[domain/queryUrlList]
+message ListUrlReq {
+  ClientInfo      clientInfo = 1; // 客户端信息 与其它接口一样传参
+  ModuleCodeEnum   moduleCode = 2; // 模块编码 不填查全部
+  string  sysMac = 3; // 手机或PC设备串号
+}
+
+
+//url列表 响应url列表请求 [domain/queryUrlList]
+message ListUrlResp {
+  CommonResult   commonResult = 1; // 结果信息
+  repeated DomainUrl urlList = 2; //域名列表
+}
+
+/**
+响应的域名
+ */
+message DomainUrl{
+  //1.华东地区;2.华南地区;3.华北地区;4.华中地区;5.西南地区;6.西北地区;7.东北地区;8.其他地区;
+  AreaIdEnum areaId = 1;//区域id
+  ModuleCodeEnum  moduleCode = 2;//模块编码
+  string domainUrl = 3;//域名url
+  //0:业务域名;1:oss域名(对像存储);2:oss域名库;3:socket域名
+  DomainTypeEnum domainType = 4;//域名类型
+  //参数类型 0:字符串;1:数字;2:json;
+  ParamTypeEnum  paramType = 5;//参数类型
+}
+
+
+// 检查URL请求 [domain/checkUrl]
+message CheckUrlReq {
+  ClientInfo      clientInfo = 1; // 客户端信息 与其它接口一样传参
+  DomainSourceEnum   domainSource = 2; //域名来源
+  ModuleCodeEnum  moduleCode = 3;//模块编码
+  string domainUrl = 4; //域名url
+}
+// 检查URL响应 [domain/checkUrl]
+message CheckUrlResp {
+  CommonResult   commonResult = 1; // 结果信息
+  DomainSourceEnum   domainSource = 2; //域名来源
+  ModuleCodeEnum  moduleCode = 3;//模块编码
+  string domainUrl = 4; //域名url
+  YesNoEnum validUrl = 5; //URL是否有效
+}
+
+
+
+enum ParamTypeEnum{
+  STR = 0;//字符串
+  NUM = 1;//数字
+  JSON = 2;//JSON
+}
+
+enum DomainTypeEnum{
+  BUSINESS = 0;//业务域名
+  OSS_DOMAIN = 1;//OSS域名(对像存储)
+  OSS_LIBRARY = 2;//OSS域名库
+  SOCKET_DOMAIN = 3;//socket域名
+  OTHER_DOMAIN = 4;//其它域名
+}
+
+// URL定义信息
+enum ModuleCodeEnum {
+  all=0;
+  biz = 1; // 业务
+  session = 2; // 聊天
+  friend = 3; // 好友
+  group = 4; // 群组
+  staticMap =5; // 静态地图
+  download = 6; // 下载链接
+  login = 7; // 最新可用的登录主域名 ADD V1.1.0
+  config = 8; // 域名配置文件下载地址 ADD V1.1.0
+  wss = 9; // SESSION WSS URL ADD V1.6.2
+  socketProtocol = 10; // SOCKET协议:1.TCP，2.WSS ADD V1.6.2
+  uploadServer = 11; // 上传服务器 V1.7  0:OSS  1:IM
+  uploadUrl = 12; // 上传服务器地址 V1.7
+  walletUrl = 13; // 钱包地址
+  newsUrl = 14; // 资讯地址
+  otcUrl = 15; // 资讯地址
+  redPacketUrl = 16; // 红包地址
+  paymentUrl = 17; // 买卖币地址
+  captchaApi = 18; // 验证码接口地址
+  captchaStatic = 19; // 验证码静态资源地址
+  domain = 20; // 访问动态域名domain-api服务的地址
+  domainConfig = 21; // 访问动态域名domain-api服务的OSS文件地址
+}
+
+enum AreaIdEnum{
+  //1.华东地区;2.华南地区;3.华北地区;4.华中地区;5.西南地区;6.西北地区;7.东北地区;8.其他地区;
+  ALL_AREA=0;//所有地区
+  EASTERN_AREA = 1;//华东地区
+  SOUTHERN_AREA = 2;//华南地区
+  NORTH_AREA = 3;//华北地区
+  CENTRAL_AREA = 4;//华中地区
+  SOUTHWEST_AREA = 5;//西南地区
+  NORTHWEST_AREA = 6;//西北地区
+  NORTHEAST_AREA = 7;//东北地区
+  OTHER_AREA = 8;//其他地区
+}
+
+enum ErrorTypeEnum{
+  //0.请求超时;1.客户端异常;2.服务端异常;3.网关异常;4.其它;
+  TIME_OUT=0;//请求超时，只有此值用来判断域名不可用
+  CLIENT_ERROR = 1;//客户端异常，APP或PC前端异常
+  SERVER_ERROR = 2;//服务端异常,后端返回的异常
+  GATEWAY_ERROR = 3;//网关异常,HTTP状态码是502(Bad Gateway)
+  OTHER_ERROR = 4;//其它，未分类的其它非超时异常
+}
+
+enum ResponseTypeEnum{
+  //0.不返回数据;1.可用域名列表;
+  NO_DATA=0;//不返回数据
+  DOMAIN_LIST = 1;//可用域名列表
+}
+
+enum DomainSourceEnum{
+  //0.动态域名;1.APP内置域名;2.登录接口获取域名;3.getUrls接口获取的域名;4.OSS获取的域名;
+  DYNAMIC_URLS = 0;//动态域名，queryUrlList或urlReport接口获取
+  APP_INNER = 1;//APP内置域名
+  LOGIN_URLS = 2;//登录接口获取域名
+  GET_URLS = 3;//getUrls接口获取的域名
+  OSS_FILE = 4;//OSS获取的域名
+}
+
+
+enum YesNoEnum{
+  NO = 0;//否
+  YES = 1;//是
+  UNKNOWN = 2;//未知
+}
+
+// 客户端访问令牌请求 [domain/clientToken]
+message ClientTokenReq {
+  ClientInfo clientInfo = 1; // 客户端信息
+}
+
+// 客户端访问令牌响应 [domain/clientToken]
+message ClientTokenResp {
+  CommonResult commonResult = 1; // 结果信息
+  string accessToken = 2; // 访问令牌
+  string secretKey = 3; // 秘钥，临时的，一天有效
+  int64 expirationMillis = 4; // 过期时间戳
+  int32 mchId = 5; // 商户ID
+}

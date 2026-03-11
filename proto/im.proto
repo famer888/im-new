@@ -1,0 +1,931 @@
+syntax = "proto3";
+
+option java_package="com.im.pb";
+//option java_package = "com.ochat.channel.pojo.proto";
+option java_outer_classname="IMPB";
+//protoc.exe  -I=. --java_out=../src im.proto
+
+
+import "common.proto";
+import "friend_message.proto";
+import "group_message.proto";
+import "channel_event.proto";
+
+
+
+//////----------common message--------------------///
+
+// 消息类型
+enum MessageType {
+    text = 0; //文本
+    image = 1;//图片
+    audio = 2; //音频
+    video = 3; //视频
+    location = 4; //位置
+    nameCard = 5; //名片
+    system = 6;//系统
+    file    = 7; // 文件
+    notice  = 8; // 群简介
+    dynamicImage = 9; // 动图
+    redPacket = 10; // 红包
+    html      = 11; // 机器人消息占用
+    setImage = 12; // 功能型动图
+    chatTransfer = 13; // 聊天转账
+    chatTransferResult = 14; // 聊天转账结果（领取、主动退回）
+    redPacketResult = 15; // 红包结果消息类型（领取、退款）
+    html2      = 16; // html
+    mediasCaption      = 17; // 多视频图片和文字描述
+    animatedGame  = 18; // 游戏消息
+}
+
+// 消息业务类型
+enum MsgType {
+    CHAT_MSG      = 0; // 聊天消息
+    EVENT_MSG     = 1; // 事件消息
+    RECALL_MSG    = 2; // 撤回消息
+    RECEIPT_MSG   = 3; // 回执消息
+}
+
+//流媒体类型
+enum StreamType {
+    streamAudio = 0; //音频
+    streamVideo = 1; //视频
+}
+
+//流媒体操作
+enum StreamOperateType{
+    confirm = 0; //确认
+    agree=1;//同意
+    refuse  = 2; //拒绝
+    cancel  = 3; //取消请求
+    calling  = 4; //正在通话中
+    over =5;//通话结束
+}
+
+// 私聊消息来源
+enum MessageSource {
+    APP     = 0; // APP端
+    WEB     = 1; // web端
+}
+
+//one to one message
+message OneToOneMessage{
+    int64		        msgId = 1;//消息ID
+    int64		        sendUid=2;//发送人uid
+    int64		        receiveUid=3;// 接收人uid
+    MessageType     msgType=4;//消息类型
+    bytes		        content = 5;//消息内容
+    int64		        sendTime = 6;//发送时间
+    int32           version = 7; // 加密版本号
+    string          contentMd5 = 8; //消息内容md5值
+    string          attachmentKey = 9; //附件加解密key
+    UserBase        sendUser    = 10; // 发送者信息
+    int32           snapchatTime = 11; // 阅后即焚设置时间 5秒， 10秒
+    MessageSource   source = 12; // 消息来源
+    MessageContent  appContent = 13; // app端消息体
+    MessageContent  webContent = 14; // web端消息体
+    MessageContent  myselfAppContent = 15; // 己方app端消息体
+    MessageContent  myselfWebContent = 16; // 己方web端消息体
+    bool            groupSend = 17;   // 是否是 群发消息
+    UploadChannelType channelType = 18; // OSS上传通道类型
+    int32 msgFrom = 19; // 消息来源 0-68,1-机器人
+    int32 edit    = 20; // 消息是否编辑 0未编辑，1已编辑
+    repeated LinkObj links = 21; // links 文本消息中带的链接数组
+    int64 sentOverTime = 22; // 转发对应的原发送完成时间 只有转发时才传值
+    int32           channel = 23; // 消息所属渠道 1-68，2-4E，3-97
+}
+
+// message content
+message MessageContent {
+    bytes	  content = 1;//消息内容
+    string  attachmentKey = 2; //附件加解密key
+    int32   version = 3; // 密钥版本号
+}
+
+// 群消息
+message  GroupMessage{
+    int64		sendUid=1;//发送人uid
+    int64		groupId=2;// 接收群ID
+    MessageType         msgType=3;//消息类型
+    bytes		content = 4;//消息内容
+    repeated int64	atUids = 6;//atuids at人列表 如果at ALL  uid传-1
+    int64		sendTime = 7;//发送时间
+    int64		msgId = 8; // 群聊消息ID
+    GroupMemberBase sendMember = 9; // 发送成员信息
+    int32       version = 10; // 加密版本号
+    string      contentMd5 = 11; //消息内容md5值
+    string      attachmentKey = 12; //附件加解密key
+    string      groupName = 13;   //群昵称
+    int32       snapchatTime = 14; // 阅后即焚设置时间 5秒， 10秒
+    repeated AtUser atUsers = 15; // at人员列表对象集合
+    UploadChannelType channelType = 16; // OSS上传通道类型
+    int32 msgFrom = 17; // 消息来源 0-68,1-机器人
+    int32 edit = 18; // 消息是否编辑 0未编辑，1已编辑
+    repeated LinkObj links = 19; // links 文本消息中带的链接数组
+    int64 sentOverTime = 20; // 转发对应的原发送完成时间 只有转发时才传值
+}
+
+
+// 频道消息
+message  ChannelMessage {
+    int64		        sendUid       = 1;        // 发送人uid
+    int64		        channelId     = 2;        // 接收频道id
+    MessageType     msgType       = 3;        // 消息类型
+    bytes		        content       = 4;        // 消息内容  contentSize 为 0 表示消息已撤回
+    int64		        msgId         = 5;        // 频道消息ID
+    int32           readTotal     = 6;        // 已读总数
+    int64		        msgTime       = 7;        // 消息时间
+    int32           version       = 8;        // 加密版本号
+    string          contentMd5    = 9;        // 消息内容md5值
+    string          attachmentKey = 10;       // 附件加解密key
+    repeated int64	atUids        = 11;       // atUids at人列表 如果at ALL  uid传-1
+    UploadChannelType channelType = 12;       // OSS上传通道类型
+    int32                 msgFrom = 13;       // 消息来源 0-68,1-机器人
+    repeated LinkObj  links       = 14;       // links 文本消息中带的链接数组
+}
+
+message AtUser {
+    int64      uid          = 1;    // 用户ID
+    string     nickName     = 2;    // 昵称
+    FriendRelation  friendRelation  = 5; // 好友关系
+}
+
+// 撤回的消息
+message RecallMessage {
+    int64   msgId          = 1; // 消息ID 当为 clear为0 或者 channelName 不为空时， msgID 设置为-1
+    int64   msgTargetId    = 2; // 群ID、接收者ID、发送者ID、频道ID
+    string  channelName    = 3; // 流媒体
+    int32   clear          = 4; // 0: 默认删单条消息 1： 清空所有消息 2： 清空所有消息和会话记录
+    int64   clearTime      = 5; // 清空时间
+    MessageType    msgType = 6; // 消息类型 (增加消息类型，服务端 普通消息、红包消息、转账消息存储的位置不同)
+}
+
+
+// 已读消息
+message ReadMessage {
+    int64       msgId           = 1; // 已读消息id
+    int32       total           = 2; // 已读数
+}
+
+// 踢人消息说明
+message KickUserTip {
+    string  tip = 1; // 提示语
+    int32   kickType = 2; // 踢人类型：1.用户在其他地方登录强制下线，2.管理员强制下线，3.账号信息修改，4.检测版本强制升级
+}
+
+// 聊天消息类型
+enum ChatMessageType {
+    ONE_TO_ONE    = 0;  // 私聊
+    GROUP         = 1;  // 群聊
+    CHANNEL       = 2;  // 频道
+}
+
+// 回执消息
+message ReceiptMessage {
+    int64   msgId   = 1; // 消息ID
+    ChatMessageType type    = 2; // 聊天消息类型
+    int64   sendUid = 3; // 发送者UID
+    int64   groupId = 4; // 群ID(群聊消息才会值)
+    MsgReceiptStatusBase    receiptStatus   = 5; // 回执状态
+    MessageType messageType = 6; // 消息类型
+    int32   snapchatTime = 7;   //消息设置的阅后即焚时间
+    int32   duration     = 8; //音频 视频的时长
+    int64   targetId     = 9; //目标id
+    MessageSource    source    = 10; //消息来源
+}
+
+// 红包消息
+message RedPacketMessage {
+    string      redPacketId         = 1; // 红包id
+    int32       status              = 2; // 0未打开，1已打开，2已领完，3已过期
+    UserBase    userBase            = 3; // 领取人基本信息
+    int64       groupId             = 4; // 如果是群聊的红包，则回传
+    int64       msgId               = 5; // 红包id
+    int64       receiverId          = 6; // 领取人id
+    string      receiverName        = 7; // 领取人昵称
+    int64       issuerUid           = 8; // 发红包人的id
+    string      issuerName          = 9; // 发红包人的昵称
+    int32       plusOneWithhold     = 10; // 1: t+1捐款方式  0: t+0 余额捐款方式
+}
+
+// 聊天转账消息对象
+message ChatTransferObj {
+    string  transferNo          = 1; // 转账订单
+    string  count               = 2; // 个数
+    string  coinName            = 3; // 币名称
+    int32   status              = 4; // 0发送转账，1领取，3主动退还，4过期退还
+    int64   expiredTime         = 5; // 过期时间 单位毫秒
+    int64   receiverId          = 6; // 领取人id
+    string  receiverName        = 7; // 领取人昵称
+    int64   issuerUid           = 8; // 转账发起人的uid
+    string  issuerName          = 9; // 转账发起人的昵称
+    string  issuerIcon          = 10; // 转账发起人的头像
+    string  remark              = 11; // 转账备注
+    int32   plusOneWithhold     = 12; // 1: t+1扣款方式  0: t+0 余额捐款方式
+}
+
+message CoinUpdateMessage {
+    int32    updateType    = 1; // 1. 收款, 2. 出款成功
+    int32    currencyType  = 2; // 货币类型: 1: trc20usdt 2: eth20usdt
+    string   amount        = 3; //数量
+
+}
+
+message PayDetailMessage {
+    string   orderNo        = 1; //订单号
+    string   totalAmount    = 2; //总额
+    string   rate           = 3; //汇率
+    string   payName        = 4; //付款人
+    string   last4Number    = 5; //后四位订单号
+    int64    createTime     = 6; //创建时间
+    int64    payTime        = 7; //付款时间
+    int64    endTime        = 8; //完成时间
+    int32    orderStatus    = 9; //订单状态
+    int32    orderType      = 10; //订单类型
+    int32    payChannel     = 11; //付款方式
+    int32    depositChannel = 12; //收款方式
+    int32    userBankCardId = 13; //银行卡id
+    string   accountName    = 14; //账号名
+    int32    bankTypeCode   = 15; //银行code
+    string   accountNo      = 16; //账号
+    string   openBankName   = 17; //支行
+    string   bankName       = 18; //银行名称
+    string   sellAmount     = 19;
+    string   buyAmount      = 20;
+    string   sellSymbol     = 21;
+    string   buySymbol      = 22;
+    string   expireTime     = 23;
+    string   mainOrder      = 24;
+    string   remark         = 25; // 备注
+    int64    appealTime     = 26; // 申诉时间
+    string   appealRemark   = 27; // 申诉备注(失败，成功原因)
+    string   appealReason   = 28; // 申诉原因
+    int32    appealAudit    = 29; // 申诉结果:申诉状态，1表示申诉中、2表示取消申诉、3表示申诉无效、4表示申诉成功
+    int32    appealTradeStatus=30; // 申诉的状态
+    string   appealImgUrl   =31; // 申诉的图片url
+    string   appealVideoUrl =32; // 申诉的视频url
+}
+
+
+
+//////----------client to  server--------------------///
+
+// 心跳 1000
+
+// 登录 1100
+message  LoginSessionMessage {
+    ClientInfo		clinetInfo      = 1;// 客户端信息
+    int64   		latestLoginTime = 2;// 上次登录时间
+    string          installCode     = 3; // 安装码，卸载/更换设备时需要客户端重新生成
+}
+
+// 退出 1101
+
+// 发送私聊消息 1102
+message SendOneToOneMessage{
+    OneToOneMessage	oneToOneMsg =1;//私聊消息内容
+    int64		flag = 2;//标志
+}
+
+// 发送已接收私聊消息((使用1215)) 1103
+message ReceiveOneToOneMessage{
+    repeated  int64		msgId = 1;//消息ID
+}
+
+// ios离线消息 1104
+
+// 发起一对一的流媒体消息 1105
+message SendOneToOneStreamReq {
+    int64		receiveUid = 1; // 接收人uid
+    StreamType	streamType = 2; // 流媒体类型
+    string      secretKey  = 3; // 客户端定义的secretKey
+}
+
+// 发起一对一的流媒体操作消息1106
+message SendOneToOneStreamOperateMessage{
+    int64		sendUid=1;// 发起人uid
+    int64		receiveUid=2;// 接收人uid
+    StreamType		streamType=3;//流媒体类型
+    StreamOperateType		operate=4;//操作类型
+    string		channelName=5;//频道ID
+}
+
+// 刷新token 1107
+message  RenewStreamToken{
+    string		channelName=1;//频道ID
+}
+
+// 发送撤回消息  1108
+message SendRecallOneToOneMessage{
+    RecallMessage   recallOneToOneMessage = 1; // 撤回的消息
+}
+
+// 发送已接收撤回消息 1109
+message ReceiveRecallOneToOneMessage {
+    repeated  RecallMessage  recallOneToOneMessages = 1; // 撤回的消息列表
+}
+
+// 发送回执消息 1110
+message SendReceiptMessage {
+    repeated  ReceiptMessage	receipts = 1; // 回执消息列表
+}
+
+// 发送已接收回执消息 1111
+message ReceiveReceiptMessage {
+    repeated  ReceiptMessage receipts  = 1; // 已接收回执消息
+}
+
+// 发送已接收用户密钥变化信息 1112
+message ReceiveKeyPairMessage {
+    int32   version = 1; // 版本号
+    int64   sendUid  = 2; // 发送用户ID
+    int32   webVersion  = 3; // web密钥版本号
+}
+
+// 发送截屏通知消息 1113
+message SendScreenHotsMessage {
+    FriendRecordMsgDto  freindMsg = 1;  // 消息体
+    string  confirmNo   = 2; // 需要确认响应序列号
+}
+
+// 发送已接收好友处理消息 1114
+message SendReceiveFriendRecordMessage {
+    repeated FriendRecordMsgDto friendRecordmsg = 1;//好友处理列表
+}
+
+// 发送正在输入状态 1115
+message SendOneToOneInputMessage {
+    int64   receiveUid = 1;// 接收人uid
+}
+
+
+
+//-----------------------------group message---///
+
+// 发送群聊消息 2101
+message SendGroupMessage {
+    GroupMessage	groupMsg =1;//群消息
+    int64		flag = 2;//标志
+}
+
+// 发送已接收的群消息(使用1215) 2102
+message ReceiveGroupMessage {
+    repeated  int64	 msgId = 1; // 群消息ID
+    int64		groupId=2;// 群ID
+}
+
+// 发送撤回群消息  2103
+message SendRecallGroupMessage {
+    RecallMessage  recallGroupMessage  = 1; // 撤回的群消息
+}
+
+// 发送已接收撤回的群消息 2104
+message ReceiveRecallGroupMessage {
+    repeated  RecallMessage  recallGroupMessages  = 1; // 撤回的群消息列表
+}
+
+// 发送已接收群请求与处理消息 2105
+message ReceiveGroupReqMessage {
+    repeated    string  rIds = 1; // 记录ID列表
+}
+
+// 发送已接收群回执消息 2106
+message ReceiveGroupMsgReceiptMessage {
+    repeated   ReceiptMessage receiptMessage = 1; // 群回执消息内容
+}
+
+// 客户端收到群事件的回执消息 2110
+message ReceiveGroupEventReceiptMessage {
+    int64                       groupId         = 1;  // 群ID
+    MsgReceiptStatus            receiptStatus   = 2;  // 回执状态   DELIVERED 已送达   PROCESSED 已处理
+    GroupMsgType                msgType         = 3;  // 群事件消息类型
+    repeated        int64       msgId           = 4;  // 群事件消息ID列表
+}
+
+
+
+
+//-----------------------------channel message---///
+
+// 发送频道消息 3101
+message SendChannelMessage {
+    ChannelMessage	channelMessage = 1; //频道消息
+    int64		        flag           = 2; //标志
+}
+
+// 发送撤回频道消息  3102
+message SendRecallChannelMessage {
+    RecallMessage  recallChannelMessage  = 1; // 撤回的频道消息
+}
+
+// 发送已读频道消息  3103
+message SendReadChannelMessage {
+    int64               channelId       = 1;    // 频道id
+    repeated    int64   msgId           = 2;    // 已读频道消息id
+}
+
+//////----------server to  client--------------------//
+
+// 推送心跳成功 1200
+
+// 推送登录成功 1201
+message  PushLoginSuccessMessage{
+    int64   	 loginTime = 1; // 当前登录时间
+    KeyPairBase  userKeyPair   = 2; // 用户密钥信息
+    KeyPairBase  webKeyPair    = 3; // web端最新密钥
+    bool         bfWebOnline   = 4; //web端是否在线（true-在线，false-不在线）
+}
+
+// 推送消息发送成功1202
+message  PushSendMessageSuccess{
+    int64		flag = 1;//标志
+    int64		msgId = 2;//消息ID
+    int64		receiveUid=3;//接收UID
+    int32   snapchatTime = 4; // 阅后即焚设置时间 5秒， 10秒
+    int64   sentOverTime = 5; // 发送完时间
+}
+
+// 推送私聊消息1203
+message  PushOneToOneMessage{
+    repeated OneToOneMessage  oneToOneMsg=1; //私聊消息列表
+}
+
+// 推送踢人下线（客户端原因导致多条socket）1204
+
+// 推送一对一的流媒体操作消息1206
+message PushOneToOneStreamOperateMessage {
+    int64       sendUid = 1; //发送人uid
+    int64       revceiveUid = 2; //发送人uid
+    StreamType  streamType = 3; //流媒体类型
+    StreamOperateType operate = 4; //操作类型
+    string      channelName = 5; //频道ID
+    int64		sendTime = 6;//发送时间
+}
+
+// 推送一对一的流媒体消息1207
+message PushOneToOneStreamSuccess {
+    int64       sendUid = 1; //发送人uid
+    int64       receiveUid = 2; // 接收人uid
+    StreamType  streamType = 3; //流媒体类型
+    string      token = 4; //token
+    string      channelName = 5; //频道ID
+    string      secretKey = 6; // 客户端定义的secretKey
+}
+
+// 推送一对一的流媒体消息1208
+message PushSendOneToOneStreamReqSuccess {
+    int64       receiveUid = 1; // 接收人uid
+    StreamType  streamType = 2; // 流媒体类型
+    string      channelName = 3; // 频道ID
+}
+
+// 推送新token 1209
+message  PushStreamNewToken{
+    string		token=1;//token
+    string		channelName=2;//频道ID
+}
+
+// 推送好友处理消息 1210
+message  PushFriendRecordMessage{
+    repeated FriendRecordMsgDto friendRecordmsg = 1;//好友处理列表
+}
+
+// 推送好友请求数量  1211
+message  PushFriendReqNum{
+    int64 friendReqNum = 1;//未读好友请求数量
+}
+
+// 推送用户归档修改消息 1227
+message PushUserArchiveChangeResp {
+    repeated  ArchiveInfo   ArchiveInfo  = 1; // 归档信息列表
+}
+
+// 推送撤回消息1212
+message  PushRecallOneToOneMessage{
+    repeated  RecallMessage  recallOneToOneMessages = 1; // 撤回的消息列表
+}
+
+// 推送用户上下线 1213
+message PushUserOnOrOffLineMessage {
+    repeated    UserOnOrOffLine users = 1; // 上下线用户列表
+}
+
+// 推送踢人消息（不需要重登）1214
+message PushKickUserMessage {
+    KickUserTip kickUserTip = 1; // 提示语
+}
+
+// 推送回执消息 1215
+message PushReceiptMessage {
+    repeated  ReceiptMessage	receipts = 1; // 回执消息列表
+}
+
+// 推送发送回执消息成功 1216
+message PushSendReceiptMessageSuccess {
+    repeated  ReceiptMessage	receipts = 1; // 回执消息列表
+}
+
+// 推送用户密钥信息变化 1217
+message PushKeyPairChangeMessage {
+    int64   uid     = 1; // 更改用户ID
+    KeyPairBase keyPair = 2; // app最新密钥信息
+    KeyPairBase webKeyPair = 3; // web最新密钥信息
+}
+
+// 推送发送撤回私聊消息成功消息 1218
+message PushOneToOneRecallMessageSuccess {
+    RecallMessage   recallMessage   = 1; // 发送撤回的消息内容
+}
+
+// 推送截屏消息 1219
+message PushScreenHotsMessage {
+    string  confirmNo   = 1; // 需要确认响应序列号
+    repeated FriendRecordMsgDto  freindMsgs = 2;  // 消息体列表
+}
+
+// 推送对方正在输入状态 1220
+message PushOneToOneInputMessage {
+    int64   sendUid = 1;// 发送人uid
+    int64   receiveUid = 2;// 接收人uid
+}
+
+// 推送web端登录状态 1221
+message PushWebOnlineMessage {
+    bool    online  = 1; // 上下线：true-上线，false-下线
+    KeyPairBase webKeyPair = 2; // web端最新密钥
+}
+
+// 推送红包消息 1222
+message PushRedPacketMessage {
+    RedPacketMessage    redPacketMessage    = 1;
+    int64           targetUid       = 2; // 消息提示用户id
+}
+
+message PushCoinUpdateMessage {
+    CoinUpdateMessage    coinUpdateMessage    = 1;
+}
+
+message PushPayDetailMessage {
+    PayDetailMessage    payDetailMessage    = 1;
+}
+
+// 推送动图消息 1500
+message PushSetImageMessage {
+    SetImageObj    setImageObj    = 1;
+}
+
+//-----------------------------group message---///
+
+// 推送群聊消息发送成功2201
+message PushGroupMessageSendSuccess {
+    int64		flag = 1;//标志
+    int64		msgId = 2;//消息ID
+    int64   groupId = 3; // 群聊ID
+    int32   memberCount = 4; // 群成员数量
+    int32   snapchatTime = 5; // 阅后即焚设置时间 5秒， 10秒
+    int64   sentOverTime = 6; // 发送完成时间
+}
+
+// 推送群聊消息2202
+message PushGroupMessage{
+    repeated GroupMessage groupMsg=1; //群消息列表
+}
+
+// 推送群请求数量 2203
+message PushGroupReqNum {
+    GroupReqMsgDto groupReqMsg   = 1; // 未读群请求数量与消息体
+}
+
+// 推送群请求与处理消息 2204
+message PushGroupReqMessage {
+    repeated    GroupReqMsgDto groupReqMsg = 1; // 群请求与处理消息
+}
+
+// 推送群事件消息 2210
+message PushGroupEventMessage {
+    repeated     GroupReqEventMsgDto           groupReqEventMsgDto     = 1; // 群请求与处理事件消息集合
+    repeated     GroupUpdateEventMsgDto        groupUpdateEventMsgDto  = 2; // 群更新事件消息集合
+}
+
+// 推送撤回的群消息 2205
+message  PushRecallGroupMessage{
+    repeated  RecallMessage  recallGroupMessages  = 1; // 撤回的群消息列表
+}
+
+// 推送发送撤回群聊消息成功消息 2206
+message PushGroupRecallMessageSuccess {
+    RecallMessage   recallMessage   = 1; // 发送撤回的消息内容
+}
+
+// 推送群消息回执状态 2207
+message PushGroupMsgReceiptMessage {
+    repeated   ReceiptMessage receiptMessage = 1; // 群回执消息内容
+}
+
+// 推送群红包消息 2208
+message PushGroupRedPacketMessage {
+    RedPacketMessage    redPacketMessage    = 1;
+    int64       groupId     = 2;
+}
+
+// 推送群动图消息 2500
+message PushGroupSetImageMessage {
+    SetImageObj    setImageObj    = 1;
+    int64          groupId        = 2;
+}
+
+
+// 推送发送频道消息成功消息 3201
+message PushSendChannelMessageSuccessMessage {
+    int64		    flag            = 1;    // 标志
+    int64		    msgId           = 2;    // 消息id
+    int64       channelId       = 3;    // 频道id
+}
+
+// 推送发送撤回频道消息成功消息 3202
+message PushSendRecallChannelMessageSuccessMessage {
+    int64           msgId           = 1; // 撤回消息自身消息id
+    RecallMessage   recallMessage   = 2; // 发送撤回的消息内容
+}
+
+//  推送频道消息         3203
+message PushChannelMessage {
+    // 最新频道消息 暂时推送1条
+    ChannelMessage  latestChannelMessage = 1;
+}
+
+// 推送频道事件消息      3204
+message PushChannelEventMessage {
+    // 最新频道事件 暂时推送1条
+    ChannelEventMessage  latestChannelEventMessage = 1;
+}
+
+// 推送撤回频道消息   3205
+message  PushRecallChannelMessage {
+    // 撤回频道消息 暂时推送1条
+    // 当前消息id , 推送的recallMessage 中的 msgId 为撤回的具体消息id
+    int64          msgId                       = 1;
+    RecallMessage  latestRecallChannelMessage  = 2;
+}
+
+// 推送已读频道消息   3206
+message  PushReadChannelMessage {
+    int64                  channelId            = 1;    // 频道id
+    repeated  ReadMessage  readChannelMessages  = 2;    // 已读频道消息
+}
+
+// 响应确认消息 7777
+message ConfirmMessage {
+    string  confirmNo   = 1; // 确认响应序列号
+    int32   messageProtocolId = 2; // 协议消息ID
+}
+
+
+//提示消息 8888
+message  TipsMessage{
+    int64		tipsId=1;//提示消息ID
+    string		tipsMsg=2;//提示消息内容
+    int32		tipsType=3;//提示类型
+}
+
+//错误消息 9999
+message  ErrrMessage{
+    int64		errorMsgCode=1;//错误消息ID
+    string		errorMsg=2;//错误消息内容
+    int64       flag = 3; // 私聊消息的flag
+    int64       targetId = 4; // 目标ID
+    int32       messageProtocolId = 5; // 消息协议ID，如私聊为1102
+}
+
+
+
+//clinet message content obj /// 客户端自行协商协议
+
+
+//文本消息
+message TextObj {
+    string          content     = 1; // 文本消息 文本内容
+    ReferenceObj    ref         = 2; // 引用消息
+}
+
+//图片消息
+message ImageObj {
+    int32		        width  			= 1;	// 宽
+    int32		        height			= 2;	// 高
+    int64		        fileSize   	= 3; 	// 文件大小
+    string 		      url				  = 4;	// url地址
+    string          thumbUrl    = 5;  // 缩略图片URL
+    ReferenceObj    ref         = 6;  // 引用消息
+    int32           sizeType    = 7;  // 图片大小类型 0=默认小图;1=大图片
+}
+
+//音频消息
+message AudioObj {
+    int32 		      duration		= 1;	// 音频长度
+    int64		        fileSize    = 2; 	// 音频文件大小
+    string		      url				  = 3;	// 音频文件url
+    ReferenceObj    ref         = 4;  // 引用消息
+    bytes	          waveData	  = 5;	// 音频数据(Int8代表一个音量数据)
+}
+
+//视频消息
+message VideoObj {
+    int32		        width  			= 1;	// 宽
+    int32		        height			= 2;	// 高
+    int64		        fileSize   	= 3; 	// 文件大小
+    string 		      url				  = 4;	// 视频文件URL
+    string 		      thumbUrl		= 5;	// 视频第一帧缩略图片URL
+    ReferenceObj    ref         = 6;  // 引用消息
+    int32           duration    = 7;  // 视频的时长
+}
+
+enum CaptionMediaType {
+    Image            = 0; // 图片
+    Video            = 1; // 视频
+    DynamicImage     = 3; // 动态图片如gif等
+}
+
+//视频消息
+message MediaObj {
+
+    CaptionMediaType		type  			= 1;	//类型
+    bytes		content			= 2;	// 内容，放视频ImageObj的字节或图片VideoObj或DynamicImageObj的字节
+}
+
+message MediaTextListObj {
+    repeated MediaObj		objs			= 1;	//内容
+    string      caption                    = 2; // 描述文章
+    ReferenceObj    ref         = 3;    // 引用消息
+}
+
+
+//名片消息
+message NameCardObj {
+    int64           uid         = 1; // 用户ID
+    string          nickName	  = 2; // 昵称
+    string          icon        = 3; // 头像
+    ReferenceObj    ref         = 4; // 引用消息
+    string          identify    = 5; // ID
+}
+
+//位置消息
+message LocationObj {
+    int64           lat         = 1; // 纬度
+    int64           lng         = 2; // 经度
+    string          address			= 3; // 地址
+    ReferenceObj    ref         = 5; // 引用消息
+}
+
+//文件消息
+message FileObj {
+    int64           size        = 1; // 文件大小--
+    string          fileUrl			= 2; // 文件地址
+    string          name        = 3; // 文件名
+    string          mimeType    = 4; // 文件类型
+    ReferenceObj    ref         = 5; // 引用消息
+}
+
+//系统消息
+message SystemObj {
+    string 		content  		= 1; //系统消息文本内容
+}
+
+//群简介消息
+message GroupNoticeObj {
+    string       content     = 1; // 公告内容
+    int64        noticeId    = 2; //公告ID
+    bool         showNotify  = 3;// 是否显示推送通知
+}
+
+//引用消息
+message ReferenceObj {
+    int64 		  msgId  		  = 1; //引用消息id
+    string 		  content  		= 2; //引用消息内容
+    MessageType type  			= 3; //引用消息类型
+    int64       uid         = 4; //引用消息发送者的uid
+    string      nickname    = 5; //引用消息发送者的nickname
+}
+
+//动态图片消息
+message DynamicImageObj {
+    int32		        width  			= 1;	// 宽
+    int32		        height			= 2;	// 高
+    int64		        fileSize   	= 3; 	// 文件大小
+    string 		      url				  = 4;	// url地址
+    string          thumbUrl    = 5;  // 缩略图片URL
+    ReferenceObj    ref         = 6;  // 引用消息
+    int64		        emoticonId  = 7; 	// 自定义表情id
+}
+
+//红包消息
+message RedPacketObj {
+    string  redPacketId         = 1; // 红包id
+    int32   status              = 2; // 0未打开，1已打开，2已领完，3已过期
+    //    int32   isFullClaimed       = 2; // 0 未领完，1 已领完
+    //    int32   claimedStatus       = 3; // 领取状态 0：未领取 1已领取
+    int64   expiredTime         = 4; // 过期时间 单位毫秒
+    int32   type                = 5; // 0:未知，1:专属红包，2: 拼手气红包，3:普通红包
+    int32   count               = 6; // 个数
+    int64   receiverId          = 7; // 领取人id
+    string  receiverName        = 8; // 领取人昵称
+    int64   issuerUid           = 9; // 发红包人的id
+    string  issuerName          = 10; // 发红包人的昵称
+    string  issuerIcon          = 11; // 发红包人的头像
+    string  luckyWord           = 12; // 红包祝福语
+    string  luckyImageUrl       = 13; // 红包祝福语图片url
+    string  openedCoverUrl      = 14; // 红包打开的封面url
+    string  unOpenedCoverUrl    = 15; // 红包未打开的封面url
+    int64   coverExpireTime     = 16; // 封面过期时间
+    int32   plusOneWithhold     = 17; // 1: t+1扣款方式  0: t+0 余额捐款方式
+}
+
+// html 消息
+message HtmlObj {
+    string htmlContent = 1; // html 内容
+    ReferenceObj   ref = 2; // 引用消息
+    string contentType   = 3; // 表示是哪个类别
+    string atUserName   = 4; // 表示at,@,哪些用户
+    string gameName   = 5; // 游戏名称
+    string superUid   = 6; //上级uid，用于机器人绑定会员关系
+    repeated UserBase parentList=7; //上级批量，用于机器人绑定会员关系
+    repeated BotGameInfo gameInfoList = 8; //bot游戏列表  当contentType=choiceGame 此列表不为空
+    repeated BotAgentInfo agentInfoList = 9; //bot代理人列表 当 contentType=choiceAgent 此列表不为空
+    int32 agentId=10; //当 contentType=choiceGame 此值不会为空，并且此回在选择完游戏列表后回传给服务端
+    string tableContent=11;//表格JOSN 字符串
+}
+
+// html2 消息
+message Html2Obj {
+    string htmlContent = 1; // html 内容
+}
+
+//功能型动图消息
+message SetImageObj {
+    int64		setImageId   	 = 1; // 套图ID (用来区别是哪个套图，Ex: dice or 猜拳)
+    int32   imageSize      = 2; // 套图总张数 (ex: 骰子 应该至少要有 7张图)
+    int32   currentImage   = 3; // 目前的套图中的第几个图 (Ex: dice 滚动中(0), 1点 (1), 2点 (2), 3点 (3), 4点 (4), 5点 (5), 6点 (6))
+    ReferenceObj    ref    = 4; // 如果是结果，则会回传此变数，使用户可以知道是针对哪个 msgId 的回复
+}
+
+// 游戏消息
+message AnimatedGameObj {
+    int32	 gameId        = 1; // 游戏id
+    string currentImage  = 2; // 图片名
+    ReferenceObj    ref  = 3; // 如果是结果，则会回传此变数，使用户可以知道是针对哪个 msgId 的回复
+}
+
+// 推送用户通知消息 3000
+message PushUserNotifyMsg {
+    string  businessId          = 1; // 业务id
+    NotifyMsgGroup  group       = 2; // 通知分组
+    OrderTipsMessage tipsObj    = 3; // tips对象存在，则需要展示tips通知 前端根据tipsObj进行判断是否展示tips内容，且tipsTitle、tipsContext都不为空
+    int64 adId                  = 4; // 挂单广告id
+    int32 busMsgType            = 5; // 业务类型 12:订单取消（adId不为空为自选，否则为快捷买卖单） 61:自选区广告自动下架 70：兑换成功 71：上架成功 72：下架成功
+    int32 sendMemberType        = 6; // 发送人身份类型,1买家，2卖家，3系统
+
+}
+// 订单tips对象
+message OrderTipsMessage {
+    string  tipsTitle           = 1; // tips标题
+    string  tipsContext         = 2; // tips内容
+}
+
+enum NotifyMsgGroup {
+    TRANSFER            = 0; // 转账
+    RECEIVER            = 1; // 收款
+    RED_PACKAGE         = 2; // 红包
+    RED_PACKAGE_CHANGE  = 3; // 红包账变
+    BUY_AND_SELL        = 4; // 购买及出售
+    SELL_MASTER         = 5; // 主单组
+    OTHER_GROUP         = 6; // 其它
+    AD_ORDER            = 7; // 自选区广告订单
+    EXCHANGE            = 8; // 汇兑区订单
+    TRADING_AREA_TRADE  = 10; // 交易区子订单
+    TRADING_AREA_ORDER  = 11; // 交易区主订单
+}
+// 用户信息变更通知消息实体
+message UserInfoChangeMsg {
+    ChangeMsgType type    = 1; // 根据枚举返回对应的类型
+    enum ChangeMsgType { // 变更消息类型
+        NONE                    = 0; // 空枚举类型，不计入业务类型
+        SAFE_AUDIT_SUCCESS      = 1; // 审核成功
+        SAFE_AUDIT_FAIL         = 2; // 审核失败
+        EXPERIENCE_AUTH_CHANGE  = 3; // 体验权限变更
+        USER_PHONE_CHANGE       = 4; // 用户手机号变更
+        USER_LOGIN_PWD_CHANGE   = 5; // 用户登录密码变更
+        USER_TRADE_PWD_CHANGE   = 6; // 用户安全密码变更
+    }
+}
+// App敏感词推送实体
+message ChatSensitivePushMsg {
+    repeated string addSensitives       = 1; // 新增集合
+    repeated string delSensitives       = 2; // 删除集合
+    int64           version             = 3; // 当前更新版本
+}
+
+// app白名单翻译推送实体  7002  (配置有变动，重新拉去userDetail详情)
+message ChatTranslationPushMsg {
+    int32        autoTranslateStatus             = 1; // 是否开启自动翻译 0关闭  1开启    -2表示无白名单翻译权限
+    int32        receiveLanguage                 = 2; // 接收消息翻译语种 -1无 1英文 2简体中文 3繁体中文 4.越南语 5.巴西葡萄牙语
+    int32        sendLanguage                    = 3; // 发送消息翻译语种 -1无 1英文 2简体中文 3繁体中文 4.越南语 5.巴西葡萄牙语
+}

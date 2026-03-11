@@ -1,0 +1,962 @@
+syntax = "proto3";
+option java_package="com.im.domain.pb";
+option java_outer_classname="UserProto";
+
+import "common.proto";
+
+//************* 用户模块接口列表 ********************
+// 更新用户资料请求 [bizUrl/user/update]
+// 获取baiduToken请求 [baidu/baiduToke]
+// 用户人脸认证回调请求 [user/faceRecognitionCallback]
+// 初级、高级认证请求 [user/kycCertified]
+// 用户资料详情 [bizUrl/user/detail]
+// 更新设备码请求 [bizUrl/user/updateToken]
+// 验证密码请求 [bizUrl/user/validatePassword]
+// 设置密码请求 [bizUrl/user/password]
+// 更换手机号请求 [bizUrl/user/updatePhone]
+// 修改密码(检验旧密码)请求 [bizUrl/user/updatePassword]
+// 修改密码(校验验证码)请求 [bizUrl/user/updatePasswordFromSmsCode]
+// 用户消息通知统计列表请求实体 [bizUrl/user/notifyMsgStatistics]
+// 用户消息通知列表 [bizUrl/user/notifyMsgList]
+// 用户消息通知更新读取状态 [bizUrl/user/notifyMsgRead]
+// 用户通知消息未读查询 [bizUrl/user/getUnreadNotifyMsgCount]
+// 用户全局开关 [bizUrl/user/userGlobalSwitch]
+// 获取敏感词数据集合 [bizUrl/user/getChatSensitive]
+// 用户公告分页列表查询请求实体 [bizUrl/user/userNoticeList]
+// 用户指定公告读取状态更新请求实体 [bizUrl/user/updateUserNoticeStatusById]
+// 用户所有公告读取状态更新请求实体 [bizUrl/user/updateUserNoticeStatusAll]
+// 用户删除指定公告请求实体 [bizUrl/user/delUserNoticeById]
+
+// 上线时间不可见名单列表req [bizUrl/user/invisibleList]
+// 更新不可见名单列表req [bizUrl/user/updateInvisibleList]
+// 更新用户位置信息req [bizUrl/user/updateLocation] add V1.1.0（未使用）
+
+// 获取表情包列表 [bizUrl/user/getEmoticon] add v1.5.0
+// 添加表情包 [bizUrl/user/addEmoticon] add v1.5.0
+// 移除表情包 [bizUrl/user/delEmoticon] add v1.5.0
+
+// 绑定手机号 [bizUrl/user/bindPhone]
+// 改绑手机号请求 [bizUrl/user/rebindPhone]
+// 手机验证开关 [bizUrl/user/phoneValidate]
+// 绑定邮箱 [bizUrl/user/bindEmail]
+// 改绑邮箱请求 [bizUrl/user/rebindEmail]
+// 邮箱验证开关 [bizUrl/user/emailValidate]
+
+// 设置安全密码[bizUrl/user/tradePassword]
+// 设置安全密码[bizUrl/user/updateTradePassword]
+// 设置邮箱[bizUrl/user/setEmail]
+// 设备列表[bizUrl/user/deviceList]
+// 设备详情[bizUrl/user/deviceInfo]
+// 删除设备[bizUrl/user/removeDevice]
+
+// 创建批量归档[bizUrl/user/createArchive]
+// 批量移除归档[bizUrl/user/removeArchive]
+// 归档列表查询[bizUrl/user/queryArchive]
+
+// TODO 废弃 实人认证初始化[bizUrl/user/initFaceVerify]
+// TODO 废弃 查询实人认证结果[bizUrl/user/describeFaceVerify]
+
+// 添加收款方式[bizUrl/user/addPayment]
+// 我的收款方式[bizUrl/user/paymentList]
+// 删除收款方式[bizUrl/user/removePayment]
+// 修改收款方式[bizUrl/user/updatePayment]
+// 身份认证[bizUrl/user/userAuthenticate]
+// 身份认证查询[bizUrl/user/getUserAuthenticate]
+// 用户安全验证列表[bizUrl/user/getUserSafeSwitchList]
+// 用户修改翻译语种[bizUrl/user/userTranslationUpdate]
+// 绑定快捷登录 谷歌或者苹果 [bizUrl/user/bindQuickLogin]
+//************************************
+
+// 操作类型
+enum UserOperator {
+    IGNORE              = 0; // 忽略更新
+    ALL                 = 1; // 用户详情所有属性更新
+    NICK_NAME           = 2; // 昵称
+    ICON                = 3; // 头像
+    PRIVACY             = 4; // 隐私设置值
+    GENDER              = 5; // 性别
+    SIGNATURE           = 6; // 个性签名
+    VIEW_ONLINE_TIME    = 7; // 最后上线时间可见设置
+    ADD_INVISIBLE       = 8; // 新增上线时间不可见名单
+    DEL_INVISIBLE       = 9; // 移除上线时间不可见名单
+    SET_LANG            = 10; // 多语言设置  add v1.2.0
+    CLEAR_TIME          = 11; // 账号清除时间设置 v1.3.0
+    IDENTIFY            = 12; // 68号
+}
+
+// 用户更新请求参数体
+message UserParam {
+    string          nickName       = 1; // 昵称
+    string          icon           = 2; // 头像
+    int32           privacy        = 3; // 隐私设置值
+    Gender          gender         = 4; // 性别
+    string          signature      = 5; // 个性签名
+    LastOnlineTimeViewType  viewType   = 6; // 上线时间可见设置值
+    int32           language       = 7; //多语言设置值    add v1.2.0
+    ClearTimeType   clearTime      = 8; // 清楚账号时间设置值 v1.3.0
+    string          identify       = 9; // 68号
+}
+
+// 创建批量归档请求 [bizUrl/user/createArchive]
+message CreateArchiveReq {
+    ClientInfo     clientInfo = 1; // 客户端信息
+    repeated  ArchiveInfo   ArchiveInfo  = 2; // 操作类型列表
+}
+
+// 创建批量归档响应
+message CreateArchiveResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 删除批量归档请求 [bizUrl/user/removeArchive]
+message RemoveArchiveReq {
+    ClientInfo     clientInfo = 1; // 客户端信息
+    repeated  ArchiveInfo   ArchiveInfo  = 2; // 操作类型列表
+}
+
+// 删除批量归档响应
+message RemoveArchiveResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 查询归档请求 [bizUrl/user/queryArchive]
+message QueryArchiveReq {
+    ClientInfo     clientInfo = 1; // 客户端信息
+}
+
+// 查询批量归档响应
+message QueryArchiveResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    repeated  ArchiveInfo   ArchiveInfo  = 2; // 操作类型列表
+}
+
+// 更新用户资料请求 [bizUrl/user/update]
+message UpdateReq {
+    ClientInfo     clientInfo = 1; // 客户端信息
+    repeated  UserOperator   ops  = 2; // 操作类型列表
+    UserParam      userParam  = 3; // 用户更新数据体
+}
+
+// 更新用户资料响应
+message UpdateResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// baiduToken请求实体
+message BaiduTokenReq {
+    ClientInfo clientInfo   =   1; // 客户端信息
+}
+// baiduToken 返回实体
+message BaiduTokenResp {
+    CommonResult   commonResult     = 1; // 结果信息
+    int64   expiresIn               = 3; // 过期时间 秒
+    string  accessToken             = 6; // token
+
+}
+
+// 人脸认证callback 请求实体
+message FaceRecognitionReq {
+    ClientInfo clientInfo   =   1; // 客户端信息
+    int32 similarity        =   2; // 人脸比较相似度
+    int32 status            =   3; // 状通过态 1:认证通过 2:认证失败
+
+}
+// 人脸认证callback 返回实体
+message FaceRecognitionResp {
+    CommonResult   commonResult     = 1; // 结果信息
+
+}
+// 用户消息通知统计列表请求实体 [bizUrl/user/notifyMsgStatistics]
+message UserNotifyMsgStatisticsReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+}
+// 用户通知消息类型统计列表响应
+message UserNotifyMsgStatisticsResp {
+    CommonResult   commonResult     = 1; // 结果信息
+    repeated UserNotifyMsgByTypeStatistics byTypeStatistics     = 2; // 消息通知类型统计对象
+}
+// 用户通知消息类型统计对象
+message UserNotifyMsgByTypeStatistics {
+    string notifyMsgType        = 1; // 通知类型
+    string notifyMsgTypeDesc    = 2; // 通知描述
+    int32  unreadMsgCount       = 3; // 未读消息总条数
+    UserNotifyMsg userNotifyMsg = 4; // 一条最新的数据
+}
+
+// 用户消息通知 请求实体 [bizUrl/user/notifyMsgList]
+message UserNotifyListReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+    string      readState   = 2; // 0未读，1已读
+    int32       pageNum     = 3; // 当前页
+    int32       pageSize    = 4; // 页面大小
+    string      notifyMsgType   = 5; // 通知消息类型
+}
+// 用户消息通知 响应实体
+message UserNotifyListResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    repeated UserNotifyMsg userNotifyList  = 2;
+    int32 unreadCount    = 3; // 未读条数
+
+}
+// 用户通知消息
+message UserNotifyMsg {
+    int64   msgId             = 1; // 消息id
+    string  notifyTypeName    = 2; // 通知类型名称
+    // 业务类型 1:转账成功 2:转账失败 3:收款成功 4:单发红包成功 5:群发红包成功 6:红包退款成功 7:单收红包成功 8:群收红包成功 9:匹配失败 10:买方交易取消
+    // 11:资金安全审核失败 12:资金安全待审核 13:买方发起申诉 14:申诉失败 15:待付款 16:买方申诉成功 17:卖方待放币 18:卖方放币 19:卖方发起申诉 20:买方待付款
+    // 21:卖方申诉成功 22:卖方交易取消 23:您有新的交易订单通知 24:已售罄通知 25:已取消通知
+    int32   businessType      = 3;
+    string  context           = 4; // 通知内容
+    int32   readState         = 5; // 读取状态 0-未读，1-已读
+    string  detail            = 6; // 通知详情内容
+    int64   notifyTime        = 9; // 通知时间
+    string  businessId        = 11; // 业务id
+    string  extra             = 13; // 扩展字段
+    NotifyMsgGroup  group     = 14; // 通知分组
+    enum NotifyMsgGroup {
+        TRANSFER            = 0; // 转账
+        RECEIVER            = 1; // 收款
+        RED_PACKAGE         = 2; // 红包
+        RED_PACKAGE_CHANGE  = 3; // 红包账变
+        BUY_AND_SELL        = 4; // 购买及出售
+        SELL_MASTER         = 5; // 主单组
+        OTHER               = 6; // 其它
+        CHAT_TRANSFER       = 7; // 聊天转账
+        AD_ORDER            = 8; // 广告自选区
+        EXCHANGE            = 9; // 汇兑
+    }
+}
+
+// 用户消息通知 请求实体 [bizUrl/user/notifyMsgRead]
+message UserNotifyReadReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    string          notifyMsgType   = 2; // 通知类型
+    repeated int64  msgIds          = 3; // 通知消息id
+
+}
+// 用户消息通知 请求实体 [bizUrl/user/notifyMsgRead]
+message UserNotifyReadResp {
+    CommonResult    commonResult    = 1; // 结果信息
+    bool            flag            = 2; // 更改读取操作 flag=true 操作更新成功
+}
+
+
+// 用户通知消息未读查询请求对象 [bizUrl/user/getUnreadNotifyMsgCount]
+message UserNotifyUnReadCountReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+}
+// 用户通知消息未读查询响应对象 [bizUrl/user/getUnreadNotifyMsgCount]
+message UserNotifyUnReadCountResp {
+    CommonResult    commonResult    = 1; // 结果信息
+    int32  unreadCount  = 2; // 未读数量
+}
+
+// 用户资料详情 [bizUrl/user/detail]
+message DetailReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          uid             = 2; // 用户ID
+}
+
+// 用户详情响应
+message DetailResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    UserBase       userBase       = 2; // 用户基本信息
+    bool           bfPassword     = 3; // 是否设置密码
+    int32          privacy        = 4; // 设置值
+    string         signature      = 5; // 个性签名
+    int32          viewType       = 6; // 可见设置值
+    string         phone          = 7; // 手机号   add v1.1.0
+    ClearTimeType  clearTime      = 8; // 清楚账号时间设置值 v1.3.0
+    string         qrCode         = 9; // 二维码标识 v1.7.0
+    string         email          = 10; // 邮箱
+    bool           isBindGoogle          = 11; // 是否绑定谷歌
+    bool           bfTradePassword       = 12; // 是否设置安全密码
+    bool           bfRealAuth            = 13; // 是否真人认证 （视频认证）
+    bool           isOpenSmsAuth         = 14; // 是否开启短信验证
+    bool           isOpenEmailAuth       = 15; // 是否开启邮箱验证
+    bool           isOpenGoogleAuth      = 16; // 是否开启谷歌验证
+    bool           isBindBank            = 17; // 是否绑定银行卡
+    bool           isVerifyRealName      = 18; // 是否验证真实姓名（名称+身份证号）
+    bool           isVerifyId            = 19; // 是否验证身份证（上传了身份证图片）
+    int32          authLevel             = 20; // 认证级别 0：未认证 1：初级认证 2：高级认证
+    AuthTradeLimit authTradeLimit        = 21; // 授权限额
+    TranslationInfo translationInfo      = 22; // 翻译语种为空则没有翻译白名单
+    bool           isBindGoogleQuickLogin= 23; // 是否绑定google快捷登录
+    bool           isBindAppleQuickLogin = 24; // 是否绑定apple快捷登录
+    int64          authPassTime          = 25; // 认证通过时间
+}
+// 授权交易限额
+message AuthTradeLimit {
+    string primaryOneDayByUSDT   = 1; // 初级usdt单日限额
+    string primaryOneDayBy68     = 2; // 初级68币单日限额
+    string advancedOneDayByUSDT  = 3; // 高级usdt单日限额
+    string advancedOneDayBy68    = 4; // 高级68币单日限额
+}
+// 初级认证、高级认证 实体
+message KycCertifiedReq {
+    ClientInfo     clientInfo   = 1;    // 客户端信息
+    string  country             = 2;    // 国家编码
+    string  idNumber            = 3;    // 身份证号码
+    string  realName            = 4;    // 真实姓名
+    string  idCardPositiveUrl   = 5;    // 身份证正面地址
+    string  idCardNegativeUrl   = 6;    // 身份证反面地址
+    string  similarity          = 7;    // 高级认证人脸比较相似度
+    string  advanceStatus       = 8;    // 2通过，3失败
+    string  procedure           = 9;    // 1初级，2高级，3初级与高级
+    string  faceImage           = 10;   // 人脸图片 base64 -> V1.6.2
+    string  awsSessionId        = 11;   // aws会话sessionId -> V2.1.0
+}
+
+// 初级认证、高级认证 响应
+message KycCertifiedResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 更新设备码请求 [bizUrl/user/updateToken]
+message UpdateTokenReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         token           = 2; // 设备码
+    string         hwToken           = 3; // 华为设备码
+}
+
+// 更新设备码响应
+message UpdateTokenResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 验证密码请求 [bizUrl/user/validatePassword]
+message ValidatePasswordReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         password       = 2; // 密码
+}
+
+// 验证密码响应
+message ValidatePasswordResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 验证密码请求 [bizUrl/user/phoneValidate]
+message PhoneValidateReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    bool         isOpenSmsAuth       = 2; // 是否开启短信验证
+    repeated ValidateCode validateCodes =3; //所有的验证码
+}
+
+// 验证密码响应
+message PhoneValidateResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 验证密码请求 [bizUrl/user/emailValidate]
+message EmailValidateReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    bool         isOpenEmailAuth  = 2; // 是否开启邮箱验证
+    repeated ValidateCode validateCodes =3; //所有的验证码
+}
+// 验证密码响应
+message EmailValidateResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 设置密码请求 [bizUrl/user/password]
+message PasswordReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         password       = 2; // 密码
+}
+
+// 设置密码响应
+message PasswordResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 更换手机号请求 [bizUrl/user/updatePhone]
+message UpdatePhoneReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         countryCode    = 2; // 国家码
+    string         phone          = 3; // 手机号
+    string         oldPhone          = 4; // 旧手机号
+    repeated ValidateCode validateCodes =5; //所有的验证码
+}
+// 更换手机号响应
+message UpdatePhoneResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+// 更换手机号请求 [bizUrl/user/updateEmail]
+message UpdateEmailReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         email    = 2; // 邮箱
+    repeated ValidateCode validateCodes =3; //所有的验证码
+}
+// 更换邮箱响应
+message UpdateEmailResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 修改密码(校验旧密码)请求 [bizUrl/user/updatePassword]
+message UpdatePasswordReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         oldPassword    = 2; // 旧密码
+    string         password       = 3; // 新密码
+}
+
+// 修改密码(校验旧密码)响应
+message UpdatePasswordResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 修改密码(校验验证码)请求 [bizUrl/user/updatePasswordFromSmsCode]
+message UpdatePasswordFromSmsCodeReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         countryCode    = 2; // 国家码
+    string         phone          = 3; // 手机号
+    string         smsCode        = 4; // 验证码
+    string         password       = 5; // 密码
+}
+
+// 修改密码(校验验证码)响应
+message UpdatePasswordFromSmsCodeResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+//=================================================================
+
+// 上线时间不可见名单列表req [bizUrl/user/invisibleList]
+message InvisibleListReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int32       pageNum        = 2; // 页码
+    int32       pageSize       = 3; // 每页数量
+}
+
+// 上线时间不可见名单列表resp
+message InvisibleListResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    repeated  UserBase  invisibleList  = 2; // 名单列表
+    int32           pageNum        = 3; // 页码
+    int32           count          = 4; // 数量
+}
+
+// 更新不可见名单列表req [bizUrl/user/updateInvisibleList]--新增/移除
+message UpdateInvisibleListReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    repeated int64 targetUids     = 2; // uid列表
+    UserOperator    op            = 3; // 新增/移除操作
+}
+
+// 更新不可见名单列表resp
+message UpdateInvisibleListResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 更新用户位置信息请求 [bizUrl/user/updateLocation]--（未使用）
+message UpdateLocationReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int32   lat = 2; // LAT
+    int32   lng = 3; // LNG
+    string  address = 4; // 地址
+}
+
+// 更新用户位置信息响应
+message UpdateLocationResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 获取表情包列表 [bizUrl/user/getEmoticon] add v1.5.0
+message GetEmoticonReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+}
+
+// 获取表情包列表resp
+message GetEmoticonResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    repeated  EmoticonBase   emoticons   = 2; // 表情图列表
+    int32     count                = 3; // 数量
+}
+
+// 添加表情包 [bizUrl/user/addEmoticon] add v1.5.0
+message AddEmoticonReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    EmoticonBase    emoticon   = 2; // 表情图base（id、url、尺寸）
+}
+
+// 添加表情包resp
+message AddEmoticonResp {
+    CommonResult commonResult = 1; // 结果信息
+    int64          emoticonId = 2; // id
+}
+
+// 移除表情包 [bizUrl/user/delEmoticon] add v1.5.0
+message DelEmoticonReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    repeated  int64  emoticonIds   = 3; // 表情图id
+}
+
+// 移除表情包resp
+message DelEmoticonResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+// 绑定手机号 [bizUrl/user/bindPhone]
+message BindPhoneReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         countryCode    = 2; // 国家码
+    string         phone          = 3; // 手机号
+    string         smsCode        = 4; // 手机验证码
+    repeated ValidateCode validateCodes =5; //所有的验证码
+}
+
+// 绑定手机号
+message BindPhoneResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 改绑手机号请求 [bizUrl/user/rebindPhone]
+//message RebindPhoneReq {
+//    ClientInfo     clientInfo     = 1; // 客户端信息
+//    string         countryCode    = 2; // 国家码
+//    string         phone          = 3; // 新手机号
+//    string         smsCode        = 4; // 手机验证码
+//    string         secureCode       = 5; // 安全验证通过返回的code
+//}
+//
+//// 改绑手机号响应
+//message RebindPhoneResp {
+//    CommonResult   commonResult   = 1; // 结果信息
+//}
+
+// 绑定邮箱 [bizUrl/user/bindEmail]
+message BindEmailReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         email          = 2; // 邮箱
+    string         code           = 3; // 验证码
+    repeated ValidateCode validateCodes =4; //所有的验证码
+}
+
+// 绑定邮箱
+message BindEmailResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 改绑邮箱请求 [bizUrl/user/rebindEmail]
+//message RebindEmailReq {
+//    ClientInfo     clientInfo     = 1; // 客户端信息
+//    string         email          = 2; // 新邮箱
+//    string         code           = 3; // 验证码
+//    string         secureCode       = 4; // 安全验证通过返回的code
+//}
+//
+//// 改绑邮箱响应
+//message RebindEmailResp {
+//    CommonResult   commonResult   = 1; // 结果信息
+//}
+
+// 设置安全密码 [bizUrl/user/tradePassword]
+message TradePasswordReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    string          password       = 2; // 密码md5
+    repeated ValidateCode validateCodes =3;//所有的验证码
+}
+
+
+// 设置安全密码 resp
+message TradePasswordResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+// 修改安全密码 [bizUrl/user/updateTradePassword]
+message UpdateTradePasswordReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    string          password       = 2; // 密码md5
+    repeated ValidateCode validateCodes = 3;//所有的验证项
+}
+
+// 修改安全密码 resp
+message UpdateTradePasswordResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+// 设置邮箱 [bizUrl/user/setEmail]
+message SetEmailReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    string          smsCode        = 2; // 手机验证码
+    string          emial          = 3; // 邮箱
+    string          emailCode      = 4; // 邮箱验证码
+    string          tradePassword      = 5; // 安全密码
+}
+
+// 设置邮箱 resp
+message SetEmailResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+message DeviceBase {
+    int64       deviceId         = 1;
+    string      name             = 2;
+    int64       lastLoginTime    = 3;
+    string      location         = 4;
+    string      ip               = 5;
+    string      sysMac           = 6;
+    int32      platform          = 7; // 平台 0-ANDROID 1-IPHONE 2-UNKOWN 3-MAC 4-WIN
+}
+
+message DeviceLoginBase {
+    int64       loginTime        = 1;
+    string      location         = 2;
+    string      ip               = 3;
+}
+
+// 设备列表 [bizUrl/user/deviceList]
+message DeviceListReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+}
+
+// 设备列表resp
+message DeviceListResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    repeated  DeviceBase   deviceBases   = 2; // 设备列表
+}
+
+// 设备详情 [bizUrl/user/deviceInfo]
+message DeviceInfoReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    int64           deviceId       = 2; // 设备id
+}
+
+// 设备详情resp
+message DeviceInfoResp {
+    CommonResult   commonResult    = 1; // 结果信息
+    DeviceBase     deviceBase      = 2; // 设备详情
+    repeated  DeviceLoginBase   deviceLoginBases   = 3; // 登录列表
+}
+
+// 删除设备 [bizUrl/user/removeDevice]
+message RemoveDeviceReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+    int64           deviceId       = 2; // 设备id
+}
+
+// 删除设备resp
+message RemoveDeviceResp {
+    CommonResult   commonResult    = 1; // 结果信息
+}
+
+// TODO 废弃： 实人认证初始化请求[bizUrl/user/initFaceVerify]
+message InitFaceVerifyReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    string          certName        = 2; // 终端用户的真实姓名
+    string          certNo          = 3; // 终端用户的证件号码
+    string          metaInfo        = 4; // MetaInfo环境参数，需要通过客户端SDK获取
+    string          model           = 5; // LIVENESS:眨眼动作活体检测；PHOTINUS_LIVENESS：眨眼动作活体+炫彩活体双重检测。；MULTI_ACTION：多动作活体检测。当前为眨眼+任意摇头检测。
+}
+
+// 实人认证初始化响应
+message InitFaceVerifyResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    string          certifyId        = 2; // 实人认证唯一标识
+}
+
+// 查询实人认证结果请求[bizUrl/user/describeFaceVerify]
+message DescribeFaceVerifyReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    string          certifyId       = 2; // 实人认证唯一标识
+}
+
+// 查询实人认证结果响应
+message DescribeFaceVerifyResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    bool            isPassed         = 2; // true.通过，2.不通过
+}
+
+// 添加收款方式[bizUrl/user/addPayment]
+message AddPaymentReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32           paymentType     = 2; // 1.银行卡，2.微信，3.支付宝
+    string          accountName     = 3; // 户名
+    string          cardNo          = 4; // 卡号
+    string          bankName        = 5; // 银行
+    string          subBankName     = 6; // 支行
+}
+
+// 添加收款方式
+message AddPaymentResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+
+// 我的收款方式[bizUrl/user/paymentList]
+message PaymentListReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+}
+
+// 我的收款方式
+message PaymentListResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    repeated        PaymentBase     paymentBases     = 2;
+}
+
+// 删除收款方式[bizUrl/user/removePayment]
+message RemovePaymentReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32           paymentId       = 2; // 自增id
+}
+
+// 删除收款方式
+message RemovePaymentResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+
+// 修改收款方式[bizUrl/user/updatePayment]
+message UpdatePaymentReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32           paymentId       = 2; // 自增id
+    string          accountName     = 3; // 户名
+    string          cardNo          = 4; // 卡号
+    string          bankName        = 5; // 银行
+    string          subBankName     = 6; // 支行
+}
+
+// 修改收款方式
+message UpdatePaymentResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+
+// 身份认证[bizUrl/user/userAuthenticate]
+message UserAuthenticateReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    string          region          = 2; // 地区
+    string          realName        = 3; // 真实姓名
+    string          idNumber        = 4; // 号码
+    string          idFrontUrl      = 5; // 身份证正面url
+    string          idBackUrl       = 6; // 身份证反面url
+    int32           authLevel       = 7; // 认证级别
+    string          facePicUrl      = 8; // 人脸图片
+}
+
+// 身份认证
+message UserAuthenticateResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    bool            flag             = 2; //成功，失败
+    string          remark           = 3; //备注
+}
+
+// 身份认证查询[bizUrl/user/getUserAuthenticate]
+message GetUserAuthenticateReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+}
+
+// 获取用户安全开关认证审核提交[bizUrl/user/getAllUserSafeSwitch]
+message GetAllUserSafeSwitchReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+}
+
+// 获取未完成的用户安全开关[bizUrl/user/getUnfinishedUserSafeSwitch]
+message GetUnfinishedUserSafeSwitchReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+}
+
+// 获取未完成的用户安全开关
+message GetUnfinishedUserSafeSwitchResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    repeated GetValidateCodeType getValidateCodeTypes = 2;// 未完成审核的
+}
+
+// 用户安全开关认证审核提交
+message GetAllUserSafeSwitchResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    string            safeContent             = 2; // 安全审核
+}
+// 用户安全验证提交[bizUrl/user/userSafeCheckReq]
+message UserSafeCheckReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    repeated ValidateCode changeValidate = 2;// 要更改的安全项 VERIFY_EMAIL=邮箱，VERIFY_PHONE=手机，VERIFY_TRADE_PASSWORD=安全密码，VERIFY_GOOGLE_CODE=谷歌验证
+    repeated ValidateCode validateCodes = 3;//所有的安全验证项
+}
+// 用户安全验证提交
+message UserSafeCheckResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+// 用户安全开关认证审核提交[bizUrl/user/userSafeSwitchAuditReq]
+message UserSafeSwitchAuditReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    repeated ValidateCode validateCodes = 2;//所有的安全验证项
+}
+
+// 用户安全开关认证审核提交
+message UserSafeSwitchAuditResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+// 用户安全开关认证身份提交[bizUrl/user/userSafeSwitchAuthReq]
+message UserSafeSwitchAuthReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    string idFrontUrl=2; // 身份证正面
+    string idBackUrl=3; // 身份证反面
+}
+
+// 用户安全开关认证审核提交
+message UserSafeSwitchAuthResp {
+    CommonResult    commonResult     = 1; // 结果信息
+    bool            flag             = 2; //成功，失败
+}
+
+// 身份认证
+message GetUserAuthenticateResp {
+    CommonResult    commonResult    = 1; // 结果信息
+    string          region          = 2; // 地区
+    string          realName        = 3; // 真实姓名
+    string          idNumber        = 4; // 号码
+    string          idFrontUrl      = 5; // 身份证正面url
+    string          idBackUrl       = 6; // 身份证反面url
+    int32           authLevel       = 7; // 认证级别
+    string          remark          = 8; // 备注
+    string           idStatus        = 9; // 身份证验证状态 0:未审核；1：审核中；2：已审核; 3:驳回
+    string           faceVerifyStatus=10; // 人脸识别状态 0:未审核；1：审核中；2：已审核; 3:驳回
+    string           nameVerifyStatus=11; // 基础信息验证状态 0:未审核；1：审核中；2：已审核; 3:驳回
+}
+
+// 请求用户安全验证列表
+message UserSafeSwitchReq {
+    ClientInfo      clientInfo     = 1; // 客户端信息
+}
+
+// 用户安全验证列表响应
+message UserSafeSwitchResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    repeated SafeSwitchType bindings = 2; // 用户目前绑定列表
+}
+
+// 安全验证详情
+message UserSafeSwitchDetail {
+    int64 id = 1;           // 安全验证详情 ID
+    int64 safeType = 2;     // 安全验证类型 0:邮箱验证；1：手机验证；2：谷歌验证;3:安全密码
+    int64 parentId = 3;     // 安全验证表单 ID
+    int32 status =4;        // 审核状态(0：订单建立，1：待审核，2:审核中，3：成功，4：失败)
+}
+
+// 安全验证表单
+message SafeSwitchInfo {
+    int64 id = 1;   // 订单号
+    int32 status = 2; // "审核状态(0：订单建立，1：待审核，2:审核中，3：成功，4：失败
+    string auditContent = 3;
+    string account = 4;  // 账号
+    repeated UserSafeSwitchDetail sonAuditList = 5; // 子审核
+}
+// 用户全局开关请求对象 /user/userGlobalSwitch
+message UserGlobalSwitchReq{
+    ClientInfo      clientInfo     = 1; // 客户端信息
+}
+// 用户全局开关响应对象
+message UserGlobalSwitchResp {
+    CommonResult    commonResult            = 1; // 结果信息
+    bool            buyFunSwitch            = 2; // 购买功能开关
+    bool            sellFunSwitch           = 3; // 出售功能开关
+    bool            transferFunSwitch       = 4; // 转账功能开关
+    bool            proceedsFunSwitch       = 5; // 收款功能开关
+    bool            redPacketFunSwitch      = 6; // 红包功能开关
+    bool            experienceAuthSwitch    = 7; // 内测体验权限开关
+    bool            chatTransferGroupSwitch = 8; // 群聊天转账开关
+    bool            chatTransferSingleSwitch = 9; // 单聊天转账开关
+    bool            chatTransferGroupReceiveSwitch = 10; // 群聊天转账领取开关
+    bool            chatTransferSingleReceiveSwitch = 11; // 单聊天转账领取开关
+    bool            chatTransferGroupSendSwitch = 12; // 群聊天转账发送开关
+    bool            chatTransferSingleSendSwitch = 13; // 单聊天转账发送开关
+    UserSwitchResp  globalShortcut = 14; // 全局快捷区信息
+    UserSwitchResp  globalOptional = 15; // 全局自选区信息
+    UserSwitchResp  globalExchange = 16; // 全局汇兑区信息
+}
+
+message UserSwitchResp{
+    bool  totalSwitch = 1; // 开关状态及时间说明  1、开：  1.1 时间在维护范围内容: 展示维护中 1.2 当前时间不在时间范围内容，展示正常买卖页面 2、 关 展示敬请期待
+    int64 maintenanceTimeStart  = 2; // 维护时间起始
+    int64 maintenanceTimeEnd   = 3; // 维护时间终止
+    bool  buyFunSwitch  = 4; // 购买功能开关
+    bool  sellFunSwitch = 5; // 出售功能开关
+}
+
+// 获取敏感词数据集合 请求实体 [bizUrl/user/getChatSensitive]
+message GetChatSensitiveReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int64           version         = 2; // 查询时间 时间戳毫秒数 可为0
+}
+// 获取敏感词数据集合 响应实体
+message GetChatSensitiveResp {
+    CommonResult    commonResult        = 1; // 结果信息
+    repeated string addSensitives       = 2; // 需要更新的敏感词
+    repeated string delSensitives       = 3; // 需要删除数据
+    int64           version             = 4; // 当前查询版本 当前查询的时间戳
+}
+// 用户公告分页列表查询请求实体 【bizUrl/user/userNoticeList】
+message UserNoticeListReq{
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32       pageNum             = 2; // 当前页
+    int32       pageSize            = 3; // 显示数
+    int32       count               = 4; // 总数据量
+    int32       noReadCount         = 5; // 未读公告总数
+}
+message UserNoticeListResp {
+    CommonResult    commonResult      = 1; // 结果信息
+    repeated  UserNotice userNotices  = 2; // 用户公告集合
+    int32     pageNum                 = 3; // 当前页
+    int32     pageSize                = 4; // 当前展示数
+    int32     count                   = 5; // 总条数
+    int32     noReadCount             = 6; // 未读总数
+}
+// 公告实体
+message UserNotice {
+    int64       noticeId            = 1; // 公告id
+    string      title               = 2; // 标题
+    string      content             = 3; // 内容
+    string      remindType          = 4; // 提醒方式 1:常规提醒 2:弹窗 3:置顶
+    int32       readFlag            = 5; // 读取状态 0未读，1已读
+    int64       updateTime          = 6; // 更新时间
+}
+
+
+// 用户指定公告读取状态更新请求实体 [bizUrl/user/updateUserNoticeStatusById]
+// 用户所有公告读取状态更新请求实体 [bizUrl/user/updateUserNoticeStatusAll]
+message UpdateNoticeReadStatusReq{
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32           noticeId        = 2; // 公告id
+}
+message UpdateNoticeReadStatusResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+
+// 用户删除指定公告请求实体 [bizUrl/user/delUserNoticeById]
+message DelNoticeByIdReq{
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int32           noticeId        = 2; // 公告id
+}
+message DelNoticeByIdResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+
+// 用户修改翻译语种[bizUrl/user/userTranslationUpdate]
+message TranslationUpdateReq{
+    ClientInfo   clientInfo         = 1; // 客户端信息
+    int32        autoTranslateStatus             = 2; // 是否开启自动翻译 0关闭  1开启
+    int32        receiveLanguage                 = 3; // 接收消息翻译语种 -1无 1英文 2简体中文 3繁体中文 4.越南语 5.巴西葡萄牙语
+    int32        sendLanguage                    = 4; // 发送消息翻译语种 -1无 1英文 2简体中文 3繁体中文 4.越南语 5.巴西葡萄牙语
+}
+message TranslationUpdateResp {
+    CommonResult    commonResult     = 1; // 结果信息
+}
+
+// 绑定快捷登录 谷歌或者苹果 [bizUrl/user/bindQuickLogin]
+message BindQuickLoginReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    string         idToken        = 2; // 谷歌/苹果登录的idToken
+    LoginType      loginType      = 3; // 登录类型    3.苹果 4.谷歌
+}
+
+// 绑定邮箱
+message BindQuickLoginResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+
+// V2.1.0  亚马逊相关配置信息 [bizUrl/aws/awsConfig]
+message AwsConfigReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+}
+message AwsConfigResp {
+    CommonResult    commonResult    = 1; // 结果信息
+    AwsConfig       awsConfig       = 2; // aws配置数据对象
+}
+

@@ -88,7 +88,7 @@ impl MessageBatcher {
         let _length = u32::from_be_bytes([frame[4], frame[5], frame[6], frame[7]]);
         let payload = &frame[16..];
 
-        let decrypted = crypto::aes::decrypt_ecb(payload, self.aes_key.as_bytes())
+        let decrypted = crypto::aes::decrypt_transport(payload, &self.aes_key)
             .map_err(|e| format!("AES decrypt failed: {}", e))?;
 
         decode_by_cmd(cmd, &decrypted)

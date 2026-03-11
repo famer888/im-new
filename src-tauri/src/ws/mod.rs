@@ -1,4 +1,6 @@
 mod batcher;
+pub mod codec;
+pub mod commands;
 mod connection;
 mod handler;
 
@@ -150,13 +152,13 @@ impl WsManager {
 }
 
 fn build_heartbeat_packet() -> Vec<u8> {
-    let cmd: u16 = 19901;
+    let cmd = commands::HEARTBEAT;
     let mut packet = Vec::with_capacity(16);
     packet.push(0x01); // isJM
     packet.push(0x00); // isZip
     packet.extend_from_slice(&cmd.to_be_bytes());
-    packet.extend_from_slice(&0u32.to_be_bytes()); // length
-    packet.extend_from_slice(&(cmd as u64).to_be_bytes()); // cmd id
+    packet.extend_from_slice(&0u32.to_be_bytes());
+    packet.extend_from_slice(&(cmd as u64).to_be_bytes());
     packet
 }
 
@@ -170,6 +172,10 @@ pub enum WsError {
     SendFailed,
     #[error("Reconnecting")]
     Reconnecting,
+    #[error("Packet decode error: {0}")]
+    DecodeError(String),
+    #[error("Encryption error: {0}")]
+    EncryptionError(String),
 }
 
 impl serde::Serialize for WsError {

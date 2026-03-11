@@ -1,0 +1,27 @@
+syntax = "proto3";
+option java_package="com.im.domain.pb";
+option java_outer_classname="FriendMessageProto";
+
+import "common.proto";
+
+// 好友操作类型
+enum FriendDoType {
+    AGREE_JOIN_FRIEND       = 0; // 同意加好友
+    REFUSE_JOIN_FRIEND      = 1; // 拒绝加好友
+    READ_CANCEL             = 2; // 阅后即焚 add v1.1.0
+    SCREENSHOT              = 3; // 截屏通知 add v1.1.0
+    READ_RECEIPT            = 4; // 已读回执开关 add v1.2.0
+    RELIEVE_FRIEND          = 5; // 解除好友关系 v1.6.0 web
+}
+
+// 好友请求处理消息
+message FriendRecordMsgDto {
+    int64           sendUid        = 1; // 发送者ID
+    int64           receiveUid     = 2; // 接收者ID
+    FriendDoType    doType         = 3; // 操作类型
+    int64           createTime     = 4; // 创建时间
+    ContactsDetailBase    contactsDetail = 5; // 联系人基本信息(同意/阅后即焚/截屏通知时下发)
+    bool            bfReadReceipt   = 6; // 是否开启已读回执(隐私开关设置时下发) add v1.2.0
+    int64           targetUid       = 7; // 目标用户id v1.6.0（如，解除好友类型则为接收者的好友id，0-4类型暂不改动）
+    string          applyMsg        = 8; // 申请时的信息
+}

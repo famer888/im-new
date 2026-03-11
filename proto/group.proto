@@ -1,0 +1,705 @@
+syntax = "proto3";
+option java_package="com.im.domain.pb";
+option java_outer_classname="GroupProto";
+
+//protoc.exe  -I=. --java_out=../src group.proto
+
+import "common.proto";
+
+//************* 群模块接口列表 ********************
+// 创建群请求 [groupUrl/group/groupCreate]
+// 群成员更新(加减成员)请求 [groupUrl/group/groupMember]
+// 群成员列表请求 [groupUrl/group/groupMemberList]
+// 群成员列表V2请求 [groupUrl/group/groupMemberListV2]
+// 申请加入群请求 [groupUrl/group/groupJoin]
+// 群主审核群申请请求 [groupUrl/group/groupCheckJoin]
+// 更新群设置请求 [groupUrl/group/groupUpdate]
+// 群详情请求 [groupUrl/group/groupDetail]
+// 获取群二维码链接请求 [groupUrl/group/groupQrCode]
+// 转让群请求 [groupUrl/group/groupTransfer]
+// 我的群聊（保存至通讯录的）请求 [groupUrl/group/groupContactList]
+// 删除与退出群请求 [groupUrl/group/groupExit]
+// 从二维码获取群基本信息请求 [groupUrl/group/groupDetailFromQrCode]
+// 群消息列表请求 [groupUrl/group/groupReqList]
+// 群消息列表请求 [groupUrl/group/groupReqListV2]  新增状态已失效,为了兼容旧版本
+// 用户审核群邀请请求 [groupUrl/group/groupUserCheckJoin]
+// 群成员详情请求 [groupUrl/group/groupMemberDetail]
+// 删除群请求消息记录 [groupUrl/group/delGroupReqRecord]
+// 群聊消息回执详情req [groupUrl/group/groupMsgReceipt]
+
+// 群管理员列表 [groupUrl/group/groupAdminList]   add v1.1.0
+// 编辑管理员权限 [groupUrl/group/groupEditAdminRight] add v1.1.0
+// 移除管理员 [groupUrl/group/groupRemoveAdmin]  add v1.1.0
+// 获取群简介列表req [groupUrl/group/groupNoticeList] add v1.1.0
+// 获取群简介详情req [groupUrl/group/groupNoticeDetail] add v1.1.0
+
+// 好友共同群聊列表req [groupUrl/group/friendCommonGroupList] add v1.2.0
+// 群举报 [groupUrl/group/groupReport] v1.4.0
+// 群成员禁言 [groupUrl/group/groupMemberShutup] v1.4.0
+// 清空群通知 [groupUrl/group/clearGroupReq] v1.5.0
+
+// 解散群 [groupUrl/group/disableGroup] v1.6.2
+
+// 群通知消息已读 [groupUrl/group/groupReqRead] v1.7.0
+// 查找群成员 [groupUrl/group/searchGroupMember] v1.7.0
+
+// 群聊助手发送请求 [groupUrl/group/groupSendAssistant]
+// 绑定机器人请求体 [groupUrl/group/groupBindBot]
+// 绑定机器人游戏关系 [groupUrl/group/groupGameBindBot]
+// 绑定机器人代理关系 [groupUrl/group/groupAgentBindBot]
+
+// 通过群别名查群详情或68号查用户详情 [groupUrl/group/groupOrUserDetail]
+
+// 查找群操作事件列表 [groupUrl/group/groupEventList]
+// 获取最新群操作事件消息ID [groupUrl/group/groupEventLatest]
+
+// 群成员标签列表查询（抢包号）[groupUrl/group/groupMemberLabelList] v2.5.0
+// 群成员标签用户新增（抢包号）[groupUrl/group/addGroupMemberLabel] v2.5.0
+// 群成员标签用户移除（抢包号）[groupUrl/group/delGroupMemberLabel] v2.5.0
+
+// 群成员在线状态列表请求 [groupUrl/group/groupMemberOnLineStatusList] v2.6.0
+
+//************************************
+
+// 操作类型
+enum GroupOperator {
+    ADD                 = 0; // 新增成员 UpdateMemberReq
+    DEL                 = 1; // 删除成员 UpdateMemberReq
+    TOP                 = 2; // 置顶  UpdateReq
+    STAR                = 3; // 星标  UpdateReq
+    DISTURB             = 4; // 免打扰 UpdateReq
+    ADDRESS             = 5; // 保存通讯录 UpdateReq
+    JOIN_CHECK          = 6; // 进群审核 UpdateReq
+    UPDATE_GROUP_NAME   = 7; // 更新群名称 UpdateReq
+    UPDATE_NICK_NAME    = 8; // 更新在群昵称 UpdateReq
+    UPDATE_GROUP_PIC    = 9; // 更新群头像 UpdateReq
+    JOIN_FRIEND         = 10; // 更新禁止加好友
+    SHUTUP              = 11; // 禁言 add v1.1.0
+    NOTICE              = 12; // 群简介[发布]  add v1.1.0
+    CLEAR_NOTICE        = 13; // 群简介[清除]  add v1.1.0
+    ADD_ADMIN           = 14; // 新增管理员  add v1.1.0
+    EDIT_ADMIN          = 15; // 编辑管理员  add v1.1.0
+    GROUP_READ_CANCEL_OP       = 16;// 群阅后即焚 v1.3.0
+    GROUP_READ_CANCEL_TIME_OP  = 17;// 群阅后即焚销毁时间设置 v1.3.0
+}
+
+// 更新群设置参数体
+message GroupParam {
+    int64           groupId    = 1; // 群ID（必须）
+    bool            top         = 2; // 是否置顶
+    bool            star        = 3; // 是否星标
+    bool            disturb     = 4; // 是否免打扰
+    bool            address     = 5; // 是否保存至通讯录
+    bool            joinCheck  = 6; // 是否进群审核
+    string          groupName  = 7; // 群名称
+    string          groupNickName   = 8; // 在群昵称
+    string          pic             = 9; // 群图标
+    bool            joinFriend      = 10; // 是否禁止加好友
+    bool            shutup          = 11; // 是否禁言   add v1.1.0
+    string          notice          = 12; // 群简介内容  add v1.1.0
+    bool            bfAll     = 13; // 群简介是否通知所有人  add v1.1.0
+    bool            bfGroupReadCancel    = 14;  //群阅后即焚 add v1.3.0
+    int32           groupMsgCancelTime   = 15;  //群消息销毁时间[秒] add v1.3.0
+}
+
+// 群基本信息
+message GroupBase {
+    int64       groupId         = 1; // 群ID
+    int64       hostId          = 2; // 群主UID
+    string      name            = 3; // 群名称
+    string      pic             = 4; // 群图标URL
+    bool        bfJoinCheck     = 5; // 进群是否需审核
+    int64       createTime      = 6; // 建群时间戳
+    int64       memberCount     = 7; // 群成员数量
+    bool        bfJoinFriend    = 8; // 是否禁止加好友
+    bool        bfShutup        = 9; // 是否禁言 add v1.1.0
+    bool        bfGroupReadCancel    = 10; //群是否阅后即焚 v1.3.0
+    int32       groupMsgCancelTime   = 11; //群消息销毁时间[秒] v1.3.0
+    bool        bfBanned   = 12;  //群是否未被限制 0未 1是 v1.4.0
+    string      groupAliasName = 13; //群别名
+}
+
+// 群请求记录信息体
+message GroupReqInfo {
+    int64       groupReqId          = 1;  // 记录ID
+    int64       groupId             = 2;  // 群ID
+    string      groupName           = 3;  // 群名称
+    string      msg                 = 4;  // 请求消息
+    GroupReqType groupReqType       = 5;  // 群消息来源
+    GroupReqStatus groupReqStatus   = 6;  // 群申请处理状态
+    int64       createTime          = 7;  // 申请时间戳
+    string      pic                 = 8; // 群图标URL
+    bool        bfJoinCheck         = 9; // 进群是否需审核
+    UserBase    targetUser          = 10;  // 目标用户信息(被邀请人/被转让人/被删除人)
+    UserBase    checkUser           = 11; // 审核用户信息
+    UserBase    fromUser            = 12;  // 来源用户信息(邀请人/转让人/发起人)
+    int64       updateTime          = 13; // 更新时间戳
+    int64       groupHostUid        = 14; // 群主UID
+    GroupMemberType checkUserType   = 21; // 审核人（审核时）群身份类型 add V1.1.0(暂未使用)
+}
+
+// 群发助手消息发送体
+message GroupSendReqInfo {
+    int64		msgId = 1;//消息ID
+    int64		sendUid=2;//发送人uid
+    repeated int64		receiveUids=3;// 接收人uid集合
+    int32       messageType = 4; // 消息类型  传MessageType的value 因为IM项目中已经定义，但是在IM-BIZ无法引用。
+    bytes		    content = 5;//消息内容
+    int64		    sendTime = 6;//发送时间
+    int32       version = 7; // 加密版本号
+    string      contentMd5 = 8; //消息内容md5值
+    string      attachmentKey = 9; //附件加解密key
+    UserBase    sendUser    = 10; // 发送者信息
+    int32       snapchatTime = 11; // 阅后即焚设置时间 5秒， 10秒
+    int32       source = 12; // 消息来源 add v1.2.0 传MessageSource的value 因为IM项目中已经定义，但是在IM-BIZ无法引用。
+    GroupAssistantMessageContent appContent = 13; // app端消息体 add v1.2.0
+    GroupAssistantMessageContent webContent = 14; // web端消息体 add v1.2.0
+    GroupAssistantMessageContent myselfAppContent = 15; // 己方app端消息体 add v1.2.0
+    GroupAssistantMessageContent myselfWebContent = 16; // 己方web端消息体 add v1.2.0
+}
+
+
+//  ********************************** Http API **********************************
+
+// 创建群请求 [groupUrl/group/groupCreate]
+message GroupCreateReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    repeated int64 members        = 2; // 群成员UID列表（不包含群主）
+    string          groupName     = 3; // 群名称(必需) v1.2.0
+    string          pic           = 4; // 群头像 v.1.2.0
+}
+
+// 创建群响应
+message GroupCreateResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    GroupBase      groupBase      = 2; // 群基本信息
+    repeated    int64   notFriendUids = 3; // 不是好友UID列表
+    bool           bfSuccess      = 4; // 是否成功创建群
+    repeated    int64   memberUids = 5; // 成功入群的用户UID列表
+    repeated    int64   needCheckUids = 6; // 开启审核的用户UID列表
+}
+
+// 群成员更新(加减成员)请求 [groupUrl/group/groupMember]
+message GroupMemberReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    GroupOperator  op             = 2; // 新增或删除
+    int64          groupId        = 3; // 群ID
+    repeated int64 members        = 4; // 群成员UID列表（不包含群主）
+}
+
+//  群成员更新(加减成员)响应
+message GroupMemberResp {
+    CommonResult   commonResult         = 1; // 结果信息
+    repeated    int64   notFriendUids   = 2; // 邀请失败的UID列表(邀请成员时才有)
+    repeated    int64   needCheckUids   = 3; // 需要审核的用户UID列表(邀请成员时才有)
+}
+
+// 群成员列表请求 [groupUrl/group/groupMemberList]
+// 群成员列表V2请求 [groupUrl/group/groupMemberListV2]
+message GroupMemberListReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+    int32          pageNum        = 3; // 页码
+    int32          pageSize       = 4; // 每页大小
+    int64          time           = 5; // 请求更新时间戳
+}
+
+// 群成员列表响应
+message GroupMemberListResp {
+    CommonResult                commonResult    = 1; // 结果信息
+    repeated GroupMemberBase    members         = 2; // 群成员列表
+    int64                       count           = 3; // 成员数量[仅第一页下发]
+    int64                       lastUpdateTime  = 4; // 最后更新时间戳[仅第一页下发]
+}
+
+
+// 群是否包含该成员请求 [group/groupIsIncludeMember]
+message GroupIsIncludeMemberReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+}
+
+// 群是否包含该成员响应
+message GroupIsIncludeMemberResp {
+    CommonResult            commonResult    = 1; // 结果信息
+}
+
+// 申请加入群请求 [groupUrl/group/groupJoin]
+message GroupJoinReq {
+    ClientInfo     clientInfo       = 1; // 客户端信息
+    int64          groupId          = 2; // 群ID
+    string         msg              = 3; // 留言消息
+    GroupReqType   reqType          = 4; // 申请来源类型
+    string         addToken         = 5; // 进群令牌，扫描二维码申请进群时需要
+    int64          fromUid          = 6; // 推荐id 传urcode 中的fromUid
+}
+
+// 申请加入群响应
+message GroupJoinResp {
+    CommonResult        commonResult   = 1; // 结果信息
+}
+
+// 群主审核群申请请求 [groupUrl/group/groupCheckJoin]
+message GroupCheckJoinReq {
+    ClientInfo     clientInfo       = 1; // 客户端信息
+    int64          groupReqId       = 2; // 群申请记录ID
+    bool           flag             = 3; // 同意(true)/拒绝(false)
+}
+
+// 群主审核群申请响应
+message GroupCheckJoinResp {
+    CommonResult        commonResult   = 1; // 结果信息
+}
+
+// 用户审核群邀请请求 [groupUrl/group/groupUserCheckJoin]
+message GroupUserCheckJoinReq {
+    ClientInfo     clientInfo       = 1; // 客户端信息
+    int64          groupReqId       = 2; // 群申请记录ID
+    bool           flag             = 3; // 同意(true)/拒绝(false)
+    string         msg              = 4; // 验证信息
+}
+
+// 用户审核群邀请响应
+message GroupUserCheckJoinResp {
+    CommonResult        commonResult   = 1; // 结果信息
+}
+
+// 更新群设置请求 [groupUrl/group/groupUpdate]
+message GroupUpdateReq {
+    ClientInfo     clientInfo       = 1; // 客户端信息
+    GroupOperator  op               = 2; // 设置类型
+    GroupParam     groupParam       = 3; // 群设置参数体
+}
+
+// 更新群设置响应
+message GroupUpdateResp {
+    CommonResult        commonResult   = 1; // 结果信息
+    int64   noticeId    = 2;//op为发布群简介时下发
+}
+
+// 群详情请求 [groupUrl/group/groupDetail]
+message GroupDetailReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+}
+
+// 群详情响应
+message GroupDetailResp {
+    CommonResult        commonResult    = 1; // 结果信息
+    GroupBase           group           = 2; // 群基本信息
+    string              groupNickName   = 3; // 用户群昵称
+    bool                bfTop           = 4; // 当前用户置顶
+    bool                bfStar          = 5; // 当前用户星标
+    bool                bfDisturb       = 6; // 当前用户免打扰
+    bool                bfAddress       = 7; // 当前用户保存通讯录
+    AdminRightBase      right           = 8; // 当前用户管理员权限   add v1.1.0
+    GroupNoticeBase     groupNotice     = 9; // 群简介 add v1.1.0
+    GroupMemberType     memberType      = 10; // 当前用户群身份类型 add v1.1.0
+    bool                bfMember        = 11; // 当前用户是否是群成员 add v1.2.0
+    string              qrUrl           = 12; // 生成二维码相对URL
+    int64               qrExpire        = 13; // 二级码URL过期时间戳
+    bool                bfResetQrcode   = 14; // 二维码刷新权限
+}
+
+// 获取群二维码链接请求 [groupUrl/group/groupQrCode]
+message GroupQrCodeReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+    bool           force          = 3; // 是否强制刷新
+}
+
+// 获取群二维码链接响应
+message GroupQrCodeResp {
+    CommonResult        commonResult   = 1; // 结果信息
+    string              qrUrl          = 2; // 生成二维码相对URL
+    int64               qrExpire       = 3; // 二级码URL过期时间戳
+    bool                bfResetQrcode  = 4; // 二维码刷新权限
+}
+
+// 转让群请求 [groupUrl/group/groupTransfer]
+message GroupTransferReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+    int64          transferUid    = 3; // 转让用户ID
+}
+
+// 转让群响应
+message GroupTransferResp {
+    CommonResult        commonResult   = 1; // 结果信息
+}
+
+// 我的群聊（保存至通讯录的）请求 [groupUrl/group/groupContactList]
+message GroupContactListReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+}
+
+// 我的群聊（保存至通讯录的）响应
+message GroupContactListResp {
+    CommonResult            commonResult   = 1; // 结果信息
+    int32                   groupCount     = 2; // 群聊个数
+    repeated    GroupBase   groups          = 3; // 群聊列表
+}
+
+// 删除与退出群请求 [groupUrl/group/groupExit]
+message GroupExitReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+}
+
+// 删除与退出群响应
+message GroupExitResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 从二维码获取群基本信息请求 [groupUrl/group/groupDetailFromQrCode]
+message GroupDetailFromQrCodeReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          groupId        = 2; // 群ID
+    string         qrCode         = 3; // 群二维码有效标识
+    string         IdCode         = 4; // 群ID标识
+}
+
+// 从二维码获取群基本信息响应
+message GroupDetailFromQrCodeResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    GroupBase      groupBase      = 2; // 群基本信息
+    int64          expireTime     = 3; // 二维码过滤时间戳
+    bool           bfMember       = 4; // 扫码用户是否为群成员
+    string         addToken       = 5; // 申请进群时需要
+}
+
+// 群消息列表请求 [groupUrl/group/groupReqList]
+// 群消息列表请求 [groupUrl/group/groupReqListV2]
+message GroupReqListReq {
+    ClientInfo  clientInfo     = 1; // 客户端信息
+    int32       pageNum        = 2; // 页码
+    int32       pageSize       = 3; // 每页大小
+}
+
+// 群消息列表响应
+message GroupReqListResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    int64          count          = 2; // 总数量
+    repeated  GroupReqInfo groupReqs = 3; // 群消息列表
+}
+
+// 群成员详情请求 [groupUrl/group/groupMemberDetail]
+message GroupMemberDetailReq {
+    ClientInfo  clientInfo     = 1; // 客户端信息
+    int64       groupId        = 2; // 群ID
+    repeated  int64   memberUids  = 3; // 群成员UID列表
+}
+
+// 群成员详情响应
+message GroupMemberDetailResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    repeated  GroupMemberBase groupMembers = 2; // 群成员基本信息列表
+}
+
+// 删除群请求消息记录 [groupUrl/group/delGroupReqRecord]
+message DelGroupReqRecordReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+    int64       groupReqId  = 2; // 群请求记录ID
+}
+
+// 删除群请求消息记录响应
+message DelGroupReqRecordResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+//群聊消息回执详情req [groupUrl/group/groupMsgReceipt]
+message GroupMsgReceiptReq {
+    ClientInfo clientInfo           = 1; // 客户端信息
+    int64     msgId     = 2; // 消息id
+    int64     groupId   = 3; // 群组id
+    int64     lastTime      = 4; // 分页时间戳（首次传0）
+    int32     pageSize  = 5; // 每页大小
+}
+
+//群聊消息回执详情resp
+message GroupMsgReceiptResp {
+    CommonResult    commonResult   = 1; // 结果信息
+    repeated MsgReceiptBase receipts = 2;// 已读用户的消息回执状态列表
+    int64          count          = 3; // 总数量
+    int64          lastTime      = 4; // 最后一条分页时间戳
+}
+
+//群管理员列表req [groupUrl/group/groupAdminList]
+message GroupAdminListReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+    int64     groupId       = 2; // 群组id
+}
+
+//群管理员列表resp
+message GroupAdminListResp {
+    CommonResult    commonResult   = 1; // 结果信息
+    GroupMemberBase hostUser       = 2; // 群主信息
+    repeated        GroupMemberBase  adminList     = 3 ;//管理员列表
+    AdminRightBase  currUserRight          = 4;// 当前用户的权限集
+    int32    adminNumMax     = 5; // 当前群管理员最大数量
+}
+
+//移除管理员req [groupUrl/group/groupRemoveAdmin]
+message GroupRemoveAdminReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+    int64     groupId       = 2; // 群组id
+    int64     adminUid      = 3; // 管理员Uid
+}
+
+//移除管理员resp
+message GroupRemoveAdminResp {
+    CommonResult    commonResult   = 1; // 结果信息
+}
+
+//编辑管理员权限req [groupUrl/group/groupEditAdminRight]
+message GroupEditAdminRightReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+    int64     groupId       = 2; // 群组id
+    int64     targetUid     = 3; // 目标用户id
+    AdminRightBase rightParam = 4; // 权限集
+    GroupOperator  op         = 5; // 新增/编辑管理员
+}
+
+//编辑管理员权限resp
+message GroupEditAdminRightResp {
+    CommonResult    commonResult   = 1; // 结果信息
+}
+
+//获取群简介列表req [groupUrl/group/groupNoticeList]
+message GroupNoticeListReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+    int64     groupId       = 2; // 群组id
+}
+
+//获取群简介列表resp
+message GroupNoticeListResp {
+    CommonResult    commonResult   = 1; // 结果信息
+    repeated GroupNoticeBase noticeList = 2; // 群简介列表
+}
+
+//获取群简介详情req [groupUrl/group/groupNoticeDetail]
+message GroupNoticeDetailReq {
+    ClientInfo clientInfo   = 1; // 客户端信息
+    int64     groupId       = 2; // 群组id
+    int64     noticeId      = 3; // 公告id
+}
+
+//获取群简介详情resp
+message GroupNoticeDetailResp {
+    CommonResult    commonResult   = 1; // 结果信息
+    GroupNoticeBase notice = 2; // 群简介
+}
+
+// 好友共同群聊列表req [groupUrl/group/friendCommonGroupList] add v1.2.0
+message FriendCommonGroupListReq {
+    ClientInfo     clientInfo     = 1; // 客户端信息
+    int64          contactsId     = 2; // 好友id
+    int32          pageNum        = 4;
+    int32          pageSize       = 5;
+}
+
+// 好友共同群聊列表resp
+message FriendCommonGroupListResp {
+    CommonResult            commonResult    = 1; // 结果信息
+    repeated    GroupBase   groups          = 2; // 群聊列表
+    int32                   count           = 3; // 群聊数量
+}
+
+//群举报req  v1.4.0
+message GroupReportReq {
+    ClientInfo clientInfo           = 1; // 客户端信息
+    int64           groupId         = 2; // 群id
+    string          content         = 3; // 投诉内容
+    int32           type            = 4; // 投诉类型 1:色情/违法 2:欺诈行为 3:骚扰信息 4:赌博行为 5:其他
+    string   picUrls    = 5; // 上传的图片地址列表[多张按逗号","分隔]
+}
+
+//群举报resp  v1.4.0
+message GroupReportResp {
+    CommonResult                         commonResult   = 1; // 结果信息
+}
+
+//群成员禁言req  v1.4.0
+message GroupMemberShutupReq {
+    ClientInfo clientInfo           = 1; // 客户端信息
+    int64           groupId         = 2; // 群id
+    int64           targetUid       = 3; // 群成员uid
+    int32           shutupTime      = 4; // 禁言时间[秒]，关闭-1，永久-2， v1.4.0 如：1小时：3600
+}
+
+//群成员禁言resp  v1.4.0
+message GroupMemberShutupResp {
+    CommonResult                         commonResult   = 1; // 结果信息
+}
+
+// 清空群通知 [groupUrl/group/clearGroupReq] v1.5.0
+message ClearGroupReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+}
+
+// 清空群通知响应
+message ClearGroupResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 解散群 [groupUrl/group/disableGroup] v1.6.2
+message DisableGroupReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+    int64       groupId     = 2; // 群id
+}
+
+// 解散群
+message DisableGroupResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 群通知消息已读 [groupUrl/group/groupReqRead] v1.7.0
+message GroupReqReadReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+}
+
+// 群通知消息已读
+message GroupReqReadResp {
+    CommonResult   commonResult   = 1; // 结果信息
+}
+
+// 查找群成员 [groupUrl/group/searchGroupMember] v1.7.0
+message SearchGroupMemberReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+    int64   groupId = 2; // 群id
+    string  keyword = 3; // 关键字
+    int32   pageNum = 4;
+    int32   pageSize = 5;
+    int32   filterType = 6; //过滤类型(可选参数FilterType)
+}
+
+// 查找群成员
+message SearchGroupMemberResp {
+    CommonResult   commonResult   = 1; // 结果信息
+    repeated        GroupMemberBase  memberList     = 2 ;//列表
+    int32   count = 3;//数量
+}
+
+// 群聊助手发送请求 [groupUrl/group/groupSendAssistant]
+message GroupSendAssistantReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+    GroupSendReqInfo    groupSendReqInfo = 2; // 群发消息体
+    int64               flag = 3;//标志
+}
+
+// 群聊助手发送响应
+message GroupSendAssistantResp {
+    CommonResult    commonResult = 1; // 结果信息
+}
+
+// 绑定机器人请求体 [groupUrl/group/groupBindBot]
+message GroupBindBotReq {
+    ClientInfo  clientInfo  = 1; // 客户端信息
+    int64   groupId = 2; // 群id
+    string  superUid = 3; // 需要绑定的上级uid
+}
+
+// 绑定机器人响应体
+message GroupBindBotResp {
+    CommonResult    commonResult = 1; // 结果信息
+}
+
+// 绑定机器人游戏关系 [groupUrl/group/groupGameBindBot]
+message GroupGameBindBotReq {
+    ClientInfo  clientInfo = 1; // 客户端信息
+    int64   groupId = 2; // 群id
+    BotGameInfo gameInfo=3;//游戏信息
+    int32 agentId=4;//代理id 此值为上一步选择的代理人从下推中的接消息体中获取
+}
+
+// 绑定机器人游戏关系返回
+message GroupGameBindBotResp {
+    CommonResult    commonResult = 1; // 结果信息
+}
+
+
+// 绑定机器人代理关系 [groupUrl/group/groupAgentBindBot]
+message GroupAgentBindBotReq {
+    ClientInfo  clientInfo = 1; // 客户端信息
+    int64   groupId = 2; // 群id
+    BotAgentInfo agentInfo=3;//代理信息
+}
+
+// 绑定机器人代理关系返回
+message GroupAgentBindBotResp {
+    CommonResult    commonResult = 1; // 结果信息
+}
+
+
+// 通过群别名查群详情或68号查用户详情请求体 [groupUrl/group/groupOrUserDetail]
+message GroupOrUserReq {
+    ClientInfo          clientInfo       = 1; // 客户端信息
+    int64               fromUid          = 2; // 来源用户
+    string              context          = 3; // 群别名或68号
+}
+
+// 通过群别名查群详情或68号查用户详情响应体
+message GroupOrUserResp {
+    CommonResult        commonResult     = 1; // 公共结果信息  MSG传输字符串
+    GroupDetailBase     groupDetail      = 2; // 现有的群详情响应对象
+    ContactsDetailBase  targetUser       = 3; // 现有的用户详情响应对象
+    GroupOrUserType     groupOrUserType  = 4; // 0、群, 1、用户
+}
+// 通过群别名查群详情或68号查用户详情响应体
+enum GroupOrUserType {
+    GROUP = 0;
+    USER  = 1;
+}
+message GroupDetailBase {
+    GroupBase           groupBase        = 1; // 现有的用户详情响应对象
+    string              addToken         = 2; // 进群令牌，扫描二维码申请进群时需要
+}
+
+
+// 群成员标签列表查询（抢包号）[groupUrl/group/groupMemberLabelList] v2.5.0
+message GroupMemberLabelListReq {
+  ClientInfo     clientInfo     = 1; // 客户端信息
+  int64           groupId       = 2; // 群id
+}
+
+message GroupMemberLabelListResp {
+  CommonResult            commonResult    = 1; // 结果信息
+  repeated GroupMemberBase    members     = 2; // 群成员列表
+}
+
+// 群成员标签用户新增（抢包号）[groupUrl/group/addGroupMemberLabel] v2.5.0
+message AddGroupMemberLabelReq {
+  ClientInfo     clientInfo     = 1; // 客户端信息
+  int64           groupId       = 2; // 群id
+  repeated int64  uids       = 3; // uid集合
+}
+
+message AddGroupMemberLabelResp {
+  CommonResult            commonResult    = 1; // 结果信息
+}
+
+// 群成员标签用户移除（抢包号）[groupUrl/group/delGroupMemberLabel] v2.5.0
+message DelGroupMemberLabelReq {
+  ClientInfo     clientInfo     = 1; // 客户端信息
+  int64           groupId       = 2; // 群id
+  repeated int64  uids       = 3; // uid集合
+}
+
+message DelGroupMemberLabelResp {
+  CommonResult            commonResult    = 1; // 结果信息
+}
+
+
+// 群成员在线状态列表请求 [groupUrl/group/groupMemberOnLineStatusList]
+//限流：同一个uid在3秒不能重复请求
+message GroupMemberOnLineStatusListReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    int64           groupId         = 2; // 群ID
+    repeated int64  uids         = 3; // uid集合,限制最多40个uid
+}
+
+// 群成员在线状态列表响应
+message GroupMemberOnLineStatusListResp {
+    CommonResult                commonResult            = 1; // 结果信息
+    repeated UserOnOrOffLine    userOnLineStatusList    = 2; // 群成员在线状态列表
+}

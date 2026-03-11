@@ -1,0 +1,159 @@
+syntax = "proto3";
+option java_package="com.im.domain.pb";
+option java_outer_classname="GroupMessageProto";
+
+import "common.proto";
+
+// 查找群操作事件列表 [groupUrl/group/groupEventList]
+// 获取最新群操作事件消息ID [groupUrl/group/groupEventLatest]
+// 发起强制初始化群事件请求体 [groupUrl/group/groupEventForceInit]
+
+// 群处理消息
+message GroupReqMsgDto {
+    int64    sendUid        = 1; // 发送者ID
+    int64    receiveUid     = 2; // 接收者ID
+    int64    groupReqId     = 3;  // 记录ID
+    int64    groupId        = 4;  // 群ID
+    string   groupName      = 5;  // 群名称
+    string   pic            = 6; // 群图标URL
+    string   msg            = 7;  // 请求消息
+    GroupReqType groupReqType  = 8;  // 群消息来源类型
+    GroupReqStatus groupReqStatus   = 9;  // 群申请处理状态
+    int64       updateTime          = 10;  // 更新时间戳
+    bool        bfJoinCheck         = 11; // 进群是否需审核
+    UserBase    targetUser          = 12;  // 目标用户信息(被邀请人/被转让人)
+    UserBase    checkUser           = 13; // 审核用户信息
+    UserBase    fromUser            = 14;  // 来源用户信息(邀请人/转让人/发起人)
+    GroupMemberBase groupMember = 15; // 群成员基本信息[仅成功入群、群成员修改的昵称会有值、编辑群管理员权限]
+    int64       unReadNum       = 16; // 未读数量
+    GroupHandleType handleType  = 17; // 群处理消息类型
+    string      rId     = 18; // 记录ID，用于已接收响应
+    bool        groupShutup    = 19; // 群禁言 add v1.1.0
+    GroupNoticeBase    groupNotice  = 20; // 群简介 add v1.1.0
+    GroupMemberType checkUserType   = 21; // 审核人群身份类型 add V1.1.0
+    bool        bfGroupReadCancel    = 22; // 群阅后即焚设置值 add v1.3.0
+    int32       groupMsgCancelTime   = 23;  //群消息销毁时间[秒] add v1.3.0
+    bool        bfAll    = 24; // 是否通知所有人(服务器使用) v1.8.0
+}
+
+// 群事件消息类型
+enum GroupMsgType {
+    GROUP_REQ_FORCE_INITIATE    = 0; // 群请求强制初始化事件
+    GROUP_REQ_CREATE            = 1; // 群请求创建群事件
+    GROUP_REQ_INITIATE          = 2; // 群请求初始化事件（相对于本客户端来说是初始化，其他端还是广播消息中的入群事件）
+    GROUP_REQ_DESTROY           = 3; // 群请求销毁事件（相对于本客户端来说是销毁，其他端还是广播消息中的退群事件）
+    GROUP_REQ_BROADCAST         = 4; // 群请求广播事件（注意：创建群、初始化、销毁事件和广播消息在同一序列）
+    GROUP_REQ_UNICAST           = 5; // 群请求单播事件
+    GROUP_UPDATE                = 6; // 群更新事件
+}
+
+// 群事件类型
+enum GroupEventType {
+    GROUP_EVENT_FORCE_INITIATE    = 0; // 群请求强制初始化事件
+    GROUP_EVENT_BROADCAST         = 1; // 群请求广播事件（注意：创建群、初始化、销毁事件和广播消息在同一序列）
+    GROUP_EVENT_UNICAST           = 2; // 群请求单播事件
+    GROUP_EVENT_UPDATE            = 3; // 群更新事件
+}
+
+// 公共信息
+message CommonMsgDto {
+    int64              msgId               = 1;  // 事件消息ID
+    GroupEventType     evenType            = 2;  // 事件类型
+    GroupMsgType       msgType             = 3;  // 事件消息类型
+    string             msg                 = 4;  // 请求消息
+    GroupBaseInfo      groupBaseInfo       = 5;  // 群基本信息
+    int64              updateTime          = 6;  // 更新时间戳
+}
+
+// 群基本信息
+message GroupBaseInfo {
+    int64              groupId             = 1;  // 群ID
+    string             groupName           = 2;  // 群名称
+    string             pic                 = 3;  // 群图标URL
+    bool               groupReadCancel     = 4;  // 群阅后即焚设置值
+    int32              groupMsgCancelTime  = 5;  // 群消息销毁时间[秒]
+    bool               groupShutup         = 6;  // 群禁言
+}
+
+// 群更新消息
+message GroupUpdateEventMsgDto {
+    CommonMsgDto               commonMsgDto        = 1; // 公共信息
+    int64                      fromUid             = 2; // 来源用户
+    GroupHandleType            handleType          = 3; // 群处理消息类型
+    repeated  GroupMemberBase  groupMember         = 4; // 群成员基本信息【群成员属于targetUser一种情况】
+}
+
+// 群请求消息
+message GroupReqEventMsgDto {
+    CommonMsgDto               commonMsgDto        = 1; // 公共信息
+    int64                      receiveUid          = 2; // 接收者ID
+    int64                      fromUid             = 3; // 来源用户
+    int64                      checkUid            = 4; // 审核用户
+    GroupNoticeMsgDto          groupNoticeMsgDto   = 5; // 通知消息
+    GroupReqType               groupReqType        = 6; // 群消息来源类型
+    GroupReqStatus             groupReqStatus      = 7; // 群申请处理状态
+    repeated  GroupMemberBase  groupMember         = 8; // 群成员基本信息【群成员属于targetUser一种情况】
+}
+
+// 群通知消息
+message GroupNoticeMsgDto {
+    bool               isNotice            = 1; // 是否通知类型消息;
+    string             noticeMsg           = 2; // 通知消息内容;
+    int64              unReadNum           = 3; // 未读数量
+}
+
+// 群强制初始化消息
+message GroupForceEventMsgDto {
+    CommonMsgDto       commonMsgDto        = 1; // 公共信息
+}
+
+// 查找群操作事件列表请求体 [groupUrl/group/groupEventList]
+message GroupEventReq {
+    ClientInfo      clientInfo          = 1; // 客户端信息
+    int64           groupId             = 2; // 群组id
+    GroupEventType  eventType           = 3; // 事件消息类型
+    int64           minMsgId            = 4; // 最小事件消息ID(开区间,不包括该ID)
+    int64           maxMsgId            = 5; // 最大事件消息ID(开区间,不包括该ID)
+}
+
+// 查找群操作事件列表返回体
+message GroupEventResp {
+    CommonResult  commonResult                                        = 1; // 公共结果信息
+    repeated      GroupUpdateEventMsgDto    groupUpdateEventMsgDto    = 2; // 群更新消息
+    repeated      GroupReqEventMsgDto       groupReqEventMsgDto       = 3; // 群请求最终消息
+}
+
+// 获取最新群操作事件消息ID请求体 [groupUrl/group/groupEventLatest]
+message GroupEventLatestReq {
+    ClientInfo    clientInfo          = 1; // 客户端信息
+    int64         groupId             = 2; // 群组id
+}
+
+// 获取最新群操作事件消息ID返回体
+message GroupEventLatestResp {
+    CommonResult  commonResult        = 1; // 公共结果信息
+    int64         broadcastMaxMsgId   = 2; // 广播消息最大事件消息ID
+    int64         unicastMaxMsgId     = 3; // 单播消息最大事件消息ID
+    int64         updateMaxMsgId      = 4; // 更新消息最大事件消息ID
+}
+
+// 发起强制初始化群事件请求体 [groupUrl/group/groupEventForceInit]
+message GroupEventForceInitReq {
+    ClientInfo      clientInfo      = 1; // 客户端信息
+    repeated int64  groupIds        = 2; // 群组id集合
+}
+
+// 发起强制初始化群事件返回体
+message GroupEventForceInitResp {
+    CommonResult  commonResult      = 1; // 公共结果信息
+}
+
+
+
+
+
+
+
+
+
+

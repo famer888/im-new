@@ -1,84 +1,55 @@
-// Generated protobuf modules will be included here after prost-build runs.
-// For now, define placeholder types matching the OCS protocol.
-
-pub mod common {
-    #[derive(Clone, Debug)]
-    pub struct ClientInfo {
-        pub session_id: String,
-        pub app_ver: i32,
-        pub package_code: i32,
-        pub plat: i32,
-        pub language: i32,
-        pub sys_mac: String,
-        pub sys_model: String,
-    }
+/// Primary WebSocket protocol types from imweb-web.proto.
+/// Includes all types transitively imported from: common.proto,
+/// group_message.proto, and channel_event.proto.
+#[allow(clippy::all, warnings)]
+pub mod imweb {
+    include!("generated/_.rs");
 }
 
-pub mod messages {
-    #[derive(Clone, Debug)]
-    pub struct LoginReq {
-        pub client_info: Option<super::common::ClientInfo>,
-        pub install_code: String,
-    }
+/// Native IM protocol types from im.proto.
+#[allow(clippy::all, warnings)]
+pub mod im {
+    include!("generated/im/_.rs");
+}
 
-    #[derive(Clone, Debug)]
-    pub struct OneToOneMessage {
-        pub msg_id: String,
-        pub send_uid: String,
-        pub receive_uid: String,
-        pub msg_type: i32,
-        pub content: Vec<u8>,
-        pub send_time: i64,
-        pub version: i64,
-        pub content_md5: String,
-        pub attachment_key: String,
-    }
+/// Web HTTP API types from web.proto.
+#[allow(clippy::all, warnings)]
+pub mod web {
+    include!("generated/web/_.rs");
+}
 
-    #[derive(Clone, Debug)]
-    pub struct GroupMessage {
-        pub send_uid: String,
-        pub group_id: String,
-        pub msg_type: i32,
-        pub content: Vec<u8>,
-        pub at_uids: Vec<String>,
-        pub send_time: i64,
-        pub msg_id: String,
-        pub version: i64,
-    }
+/// User module types from user.proto.
+#[allow(clippy::all, warnings)]
+pub mod user {
+    include!("generated/user/_.rs");
+}
 
-    #[derive(Clone, Debug)]
-    pub struct ChannelMessage {
-        pub send_uid: String,
-        pub channel_id: String,
-        pub msg_type: i32,
-        pub content: Vec<u8>,
-        pub msg_id: String,
-        pub read_total: i32,
-        pub msg_time: i64,
-        pub version: i64,
-    }
+/// Group module types from group.proto.
+#[allow(clippy::all, warnings)]
+pub mod group {
+    include!("generated/group/_.rs");
+}
 
-    #[derive(Clone, Debug, Copy)]
-    #[repr(i32)]
-    pub enum MessageType {
-        Text = 0,
-        Image = 1,
-        Audio = 2,
-        Video = 3,
-        Location = 4,
-        NameCard = 5,
-        System = 6,
-        File = 7,
-        Notice = 8,
-        DynamicImage = 9,
-        RedPacket = 10,
-        Html = 11,
-        SetImage = 12,
-        ChatTransfer = 13,
-        ChatTransferResult = 14,
-        RedPacketResult = 15,
-        Html2 = 16,
-        MediasCaption = 17,
-        AnimatedGame = 18,
-    }
+/// System module types from sys.proto.
+#[allow(clippy::all, warnings)]
+pub mod sys {
+    include!("generated/sys/_.rs");
+}
+
+/// Domain URL types from domain_url.proto.
+#[allow(clippy::all, warnings)]
+pub mod domain_url {
+    include!("generated/domain_url/_.rs");
+}
+
+/// Channel API types from channel_api.proto.
+#[allow(clippy::all, warnings)]
+pub mod channel_api {
+    include!("generated/channel_api/_.rs");
+}
+
+/// Friend message types from friend_message.proto.
+#[allow(clippy::all, warnings)]
+pub mod friend_message {
+    include!("generated/friend_message/_.rs");
 }

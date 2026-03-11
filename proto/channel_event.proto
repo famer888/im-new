@@ -1,0 +1,100 @@
+syntax = "proto3";
+//option java_package = "com.ochat.channel.message.pojo.proto";
+option java_package = "com.im.pb";
+option java_outer_classname = "ChannelEventProto";
+
+
+//protoc.exe  --java_out=. channel_event.proto
+//protoc.exe  -I=. --python_out=. channel_event.proto
+
+//自增 id 设计
+//channel_id = senderId
+//uid = receiverId
+//msg_id 生成规则
+// channel_event => channel:event:{channel_id}:{uid}
+// channel_subscriber_event => channel:subscriber:event:{channel_id}:{uid}
+
+// 频道事件类型
+enum ChannelEventType {
+  FORCE_INIT                  = 0; // 强制初始化
+  CHANNEL_EVENT               = 1; // 频道事件
+  CHANNEL_SUBSCRIBER_EVENT    = 2; // 频道订阅者事件
+}
+
+//频道操作类型
+enum ChannelOperateType {
+  CHANNEL_CREATE   = 0; // 首次创建频道
+  CHANNEL_NAME     = 1; // 修改名称
+  CHANNEL_ICON     = 2; // 修改图片
+  CHANNEL_CONTENT  = 3; // bool值，是否限制保存内容
+  CHANNEL_REMOVE   = 4; // 移除频道
+  CHANNEL_ENABLE   = 5; // 启用频道
+  CHANNEL_DISABLE  = 6; // 禁用频道
+  CHANNEL_DISMISS  = 7; // 注销频道
+}
+
+
+
+//订阅者操作类型
+enum SubscriberOperateType {
+  SUBSCRIBER_JOIN                   = 0; // 加入通道
+  SUBSCRIBER_PRIVILEGE_UPDATE       = 1; // 订阅者权限变更
+  SUBSCRIBER_REMOVE                 = 2; // 频道主/管理员移除订阅者
+  SUBSCRIBER_INVITE                 = 3; // 频道主/管理员邀请订阅者
+}
+
+//管理员操作类型
+enum AdminOperateType {
+  ADMIN_ADD                         = 0; // 添加管理员
+  ADMIN_DELETE                      = 1; // 删除管理员
+}
+
+message ChannelInfo {
+  ChannelOperateType operateType  = 1;
+  string channelName              = 2; // 频道名称
+  string icon                     = 3; // 频道头像
+  bool   contentLimit             = 4; // 是否限制保存内容
+}
+
+enum SubscriberRole {
+  OWNER    = 0; //频道主
+  ADMIN    = 1; //管理员
+  NONE     = 2; //普通成员
+}
+
+message SubscriberInfo {
+  SubscriberOperateType operateType = 1;
+  SubscriberRole role               = 2; //权限枚举
+  //还差个权限字段，比如管理员有哪些字段，需体现出来
+  int32 privilege                   = 3; //权限值，按位存储
+  ChannelReqStatus reqStatus        = 4; //频道申请处理状态
+  AdminOperateType adminOperateType = 5;
+}
+
+
+//事件消息的结构体
+message ChannelEventMessage {
+  int64 msgId                         = 1; // 消息id
+  ChannelEventType eventType          = 2; // 事件类型 FORCE_INIT/CHANNEL_EVENT/CHANNEL_SUBSCRIBER_EVENT
+  int64 channelId                     = 3; // 频道id
+  ChannelInfo channelInfo             = 4; // 频道基础消息
+  SubscriberInfo    subscriberInfo    = 5; // 频道订阅者消息 只在频道订阅者
+  int64             msgTime           = 6; // 消息时间
+  string            msg               = 7; // 消息  国际化消息
+  ChannelNoticeMsg  channelNoticeMsg  = 8; // 频道通知消息
+}
+
+// 频道通知消息
+message ChannelNoticeMsg {
+  bool              isNotice          = 1; // 是否通知类型消息;
+  string            noticeMsg         = 2; // 通知消息内容;
+  int64             unReadNum         = 3; // 未读数量
+}
+
+// 频道申请处理状态
+enum ChannelReqStatus {
+  CHANNEL_CHECKING        = 0; // 待审
+  CHANNEL_AGREE           = 1; // 同意
+  CHANNEL_REFUSE          = 2; // 拒绝
+}
+
