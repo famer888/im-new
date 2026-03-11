@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface Message {
   id: string
@@ -38,11 +46,12 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   async function loadMessages(uid: string, conversationId: string) {
+    if (!isTauri()) return
     if (isLoading(conversationId)) return
 
     loadingMap.value.set(conversationId, true)
     try {
-      const result = await invoke<Message[]>('get_messages', {
+      const result = await tauriInvoke<Message[]>('get_messages', {
         uid,
         conversationId,
         limit: PAGE_SIZE,
@@ -55,6 +64,7 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   async function loadOlderMessages(uid: string, conversationId: string) {
+    if (!isTauri()) return
     if (isLoading(conversationId) || !hasMore(conversationId)) return
 
     const existing = getMessages(conversationId)
@@ -62,7 +72,7 @@ export const useMessageStore = defineStore('message', () => {
 
     loadingMap.value.set(conversationId, true)
     try {
-      const result = await invoke<Message[]>('get_messages', {
+      const result = await tauriInvoke<Message[]>('get_messages', {
         uid,
         conversationId,
         beforeTime,
@@ -88,7 +98,8 @@ export const useMessageStore = defineStore('message', () => {
     content: string,
     extra?: Record<string, unknown>,
   ) {
-    const result = await invoke<Message>('send_message', {
+    if (!isTauri()) return null as any
+    const result = await tauriInvoke<Message>('send_message', {
       uid,
       request: {
         conversation_id: conversationId,

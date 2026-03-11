@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface SessionInfo {
   uid: string
@@ -55,26 +63,28 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function initSession() {
     loadAccounts()
+
+    if (!isTauri()) return
+
     try {
-      const stored = await invoke<SessionInfo | null>('get_session')
+      const stored = await tauriInvoke<SessionInfo | null>('get_session')
       if (stored) {
         session.value = stored
         localStorage.setItem(CURRENT_UID_KEY, stored.uid)
         return
       }
 
-      // Auto-login: try last account if enabled
       if (autoLoginEnabled.value && accounts.value.length > 0) {
         const lastUid = localStorage.getItem(CURRENT_UID_KEY)
         const account = accounts.value.find(a => a.id === lastUid) || accounts.value[0]
         if (account?.sessionId) {
           try {
-            const result = await invoke<SessionInfo>('login', {
+            const result = await tauriInvoke<SessionInfo>('login', {
               request: { session_id: account.sessionId },
             })
             session.value = result
             localStorage.setItem(CURRENT_UID_KEY, result.uid)
-          } catch { /* auto-login failed, show login page */ }
+          } catch { /* auto-login failed */ }
         }
       }
     } catch {
@@ -87,42 +97,72 @@ export const useAuthStore = defineStore('auth', () => {
     wsUrl: string
     aesKey: string
     installCode: string
+    uid?: string
+    nickname?: string
+    avatar?: string
+    sessionId?: string
   }) {
-    const result = await invoke<SessionInfo>('login', {
-      request: {
-        session_url: request.sessionUrl,
-        ws_url: request.wsUrl,
-        aes_key: request.aesKey,
-        install_code: request.installCode,
-      },
-    })
-    session.value = result
-    localStorage.setItem(CURRENT_UID_KEY, result.uid)
-    addOrUpdateAccount({
-      id: result.uid,
-      name: result.nickname,
-      icon: result.avatar,
-      sessionId: result.sessionId,
-      sourceId: result.sourceId,
-    })
-    return result
+    if (isTauri()) {
+      const result = await tauriInvoke<SessionInfo>('login', {
+        request: {
+          session_url: request.sessionUrl,
+          ws_url: request.wsUrl,
+          aes_key: request.aesKey,
+          install_code: request.installCode,
+        },
+      })
+      session.value = result
+      localStorage.setItem(CURRENT_UID_KEY, result.uid)
+      addOrUpdateAccount({
+        id: result.uid,
+        name: result.nickname,
+        icon: result.avatar,
+        sessionId: result.sessionId,
+        sourceId: result.sourceId,
+      })
+      return result
+    }
+
+    const browserSession: SessionInfo = {
+      uid: request.uid || '',
+      sessionId: request.sessionId || '',
+      nickname: request.nickname || '',
+      avatar: request.avatar || '',
+    }
+    session.value = browserSession
+    localStorage.setItem(CURRENT_UID_KEY, browserSession.uid)
+    return browserSession
   }
 
   async function switchAccount(account: AccountInfo) {
     if (!account.sessionId) return
-    const result = await invoke<SessionInfo>('login', {
-      request: { session_id: account.sessionId },
-    })
-    session.value = result
-    localStorage.setItem(CURRENT_UID_KEY, result.uid)
+
+    if (isTauri()) {
+      const result = await tauriInvoke<SessionInfo>('login', {
+        request: { session_id: account.sessionId },
+      })
+      session.value = result
+      localStorage.setItem(CURRENT_UID_KEY, result.uid)
+    } else {
+      session.value = {
+        uid: account.id,
+        sessionId: account.sessionId,
+        nickname: account.name,
+        avatar: account.icon || '',
+      }
+      localStorage.setItem(CURRENT_UID_KEY, account.id)
+    }
   }
 
   async function logout() {
-    await invoke('logout')
+    if (isTauri()) {
+      try {
+        await tauriInvoke('logout')
+      } catch { /* ignore in browser */ }
+    }
     const currentUid = uid.value
     session.value = null
     localStorage.removeItem(CURRENT_UID_KEY)
-    // Clear sessionId but keep account in list
     const idx = accounts.value.findIndex(a => a.id === currentUid)
     if (idx >= 0) {
       accounts.value[idx].sessionId = undefined

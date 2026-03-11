@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface Group {
   id: string
@@ -17,7 +25,7 @@ export interface GroupMember {
   groupId: string
   userId: string
   nickname: string | null
-  role: number // 0: member, 1: admin, 2: owner
+  role: number
 }
 
 export const useGroupStore = defineStore('group', () => {
@@ -26,16 +34,18 @@ export const useGroupStore = defineStore('group', () => {
   const loading = ref(false)
 
   async function loadGroups(uid: string) {
+    if (!isTauri()) return
     loading.value = true
     try {
-      groups.value = await invoke<Group[]>('get_groups', { uid })
+      groups.value = await tauriInvoke<Group[]>('get_groups', { uid })
     } finally {
       loading.value = false
     }
   }
 
   async function loadMembers(uid: string, groupId: string) {
-    const members = await invoke<GroupMember[]>('get_group_members', { uid, groupId })
+    if (!isTauri()) return []
+    const members = await tauriInvoke<GroupMember[]>('get_group_members', { uid, groupId })
     memberMap.value.set(groupId, members)
     return members
   }

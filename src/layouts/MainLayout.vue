@@ -64,7 +64,7 @@ onMounted(async () => {
 const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?? '')
 
 const inviteExistingMemberIds = computed(() => {
-  const members = groupStore.getGroupMembers(uiStore.inviteFriendGroupId)
+  const members = groupStore.getMembers(uiStore.inviteFriendGroupId)
   return new Set(members.map(m => m.uid))
 })
 

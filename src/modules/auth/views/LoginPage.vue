@@ -23,6 +23,10 @@ async function handleLoginSuccess(session: {
   wsUrl: string
   aesKey: string
   installCode: string
+  uid?: string
+  nickname?: string
+  avatar?: string
+  sessionId?: string
 }) {
   isLoading.value = true
   try {
