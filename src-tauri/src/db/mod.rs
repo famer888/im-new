@@ -6,11 +6,12 @@ use parking_lot::RwLock;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use std::sync::Mutex;
+use tracing::info;
 
 pub struct DbManager {
     app_data_dir: PathBuf,
-    connections: RwLock<HashMap<String, Connection>>,
+    connections: RwLock<HashMap<String, Mutex<Connection>>>,
 }
 
 impl DbManager {
@@ -35,12 +36,11 @@ impl DbManager {
         let conn = Connection::open(&db_path)
             .map_err(|e| DbError::SqliteError(e.to_string()))?;
 
-        // WAL mode for better concurrent read performance
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=10000; PRAGMA temp_store=MEMORY;")
             .map_err(|e| DbError::SqliteError(e.to_string()))?;
 
         migrations::run_migrations(&conn)?;
-        conns.insert(uid.to_string(), conn);
+        conns.insert(uid.to_string(), Mutex::new(conn));
         info!("Database initialized for user: {}", uid);
         Ok(())
     }
@@ -50,16 +50,18 @@ impl DbManager {
         F: FnOnce(&Connection) -> Result<R, DbError>,
     {
         let conns = self.connections.read();
-        let conn = conns
+        let mtx = conns
             .get(uid)
             .ok_or_else(|| DbError::NotInitialized(uid.to_string()))?;
-        f(conn)
+        let conn = mtx
+            .lock()
+            .map_err(|e| DbError::SqliteError(format!("Mutex poisoned: {}", e)))?;
+        f(&conn)
     }
 
     pub fn close(&self, uid: &str) {
         let mut conns = self.connections.write();
-        if let Some(conn) = conns.remove(uid) {
-            drop(conn);
+        if conns.remove(uid).is_some() {
             info!("Database closed for user: {}", uid);
         }
     }

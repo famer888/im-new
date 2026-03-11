@@ -8,7 +8,6 @@ import { useChannelStore } from '@/stores/useChannelStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useNetworkStore } from '@/stores/useNetworkStore'
-import { invoke } from '@tauri-apps/api/core'
 
 import HomeTop from '@/modules/chat/components/HomeTop.vue'
 import HomeSidebar from '@/modules/chat/components/HomeSidebar.vue'
@@ -55,8 +54,11 @@ onMounted(async () => {
       settingStore.loadSettings(),
     ])
     try {
-      await invoke('connect_ws', { url: '', aesKey: '' })
-    } catch { /* WS URL from config */ }
+      if ((window as any).__TAURI_INTERNALS__) {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('connect_ws', { url: '', aesKey: '' })
+      }
+    } catch { /* WS not available in browser */ }
   }
   isInitialized.value = true
 })

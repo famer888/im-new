@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::crypto;
 
@@ -11,7 +11,7 @@ pub struct UploadResult {
     pub file_size: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadProgress {
     pub msg_id: String,
     pub progress: f64, // 0.0 - 1.0

@@ -7,10 +7,8 @@ mod handler;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
-
-use crate::crypto::CryptoEngine;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionStatus {

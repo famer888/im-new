@@ -125,6 +125,9 @@ export async function requestProto<TReq, TResp>(opts: {
   const decrypted = decodePacket(respBuffer, aesKey)
   const message = respType.decode(decrypted)
 
+  const urlPath = url.replace(/^https?:\/\/[^/]+/, '').replace(/^\/api/, '')
+  console.log(`[API] ${urlPath}`, message)
+
   return message
 }
 

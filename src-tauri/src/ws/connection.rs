@@ -1,9 +1,9 @@
-use super::{batcher::MessageBatcher, handler, ConnectionStatus, PendingMessage, WsError};
+use super::{batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsError};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};

@@ -43,7 +43,7 @@ pub fn encode_packet(
     aes_key: &str,
     mac_address: Option<&str>,
 ) -> Result<Vec<u8>, WsError> {
-    let encrypted = aes::encrypt_ecb(protobuf_payload, aes_key.as_bytes())
+    let encrypted = aes::encrypt_ecb_128(protobuf_payload, aes_key.as_bytes())
         .map_err(|e| WsError::EncryptionError(e.to_string()))?;
 
     let (mac_section_len, mac_bytes) = match mac_address {
@@ -108,7 +108,7 @@ pub fn decode_packet(data: &[u8], aes_key: &str) -> Result<WsPacket, WsError> {
         });
     }
 
-    let payload = aes::decrypt_ecb(encrypted, aes_key.as_bytes())
+    let payload = aes::decrypt_ecb_128(encrypted, aes_key.as_bytes())
         .map_err(|e| WsError::EncryptionError(e.to_string()))?;
 
     Ok(WsPacket {

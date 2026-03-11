@@ -4,25 +4,14 @@
   "version": "1.0.0",
   "identifier": "cn.55.chat",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "login",
-        "title": "OCS Chat",
-        "width": 380,
-        "height": 520,
-        "resizable": false,
-        "center": true,
-        "decorations": false,
-        "transparent": true,
-        "visible": true
-      }
-    ],
+    "macOSPrivateApi": true,
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; img-src 'self' https: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: https:; worker-src 'self' blob:"
     },

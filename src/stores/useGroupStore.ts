@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { getGroupContactList } from '@/api/imBase'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -34,12 +35,37 @@ export const useGroupStore = defineStore('group', () => {
   const loading = ref(false)
 
   async function loadGroups(uid: string) {
-    if (!isTauri()) return
     loading.value = true
     try {
-      groups.value = await tauriInvoke<Group[]>('get_groups', { uid })
+      if (isTauri()) {
+        groups.value = await tauriInvoke<Group[]>('get_groups', { uid })
+      } else {
+        await loadGroupsViaApi()
+      }
+    } catch (e) {
+      console.error('[GroupStore] loadGroups failed:', e)
     } finally {
       loading.value = false
+    }
+  }
+
+  async function loadGroupsViaApi() {
+    try {
+      const resp = await getGroupContactList()
+      const list = resp.groups || []
+      groups.value = list.map((g: any) => ({
+        id: String(g.groupId || ''),
+        name: g.name || null,
+        avatar: g.pic || null,
+        ownerId: g.hostId ? String(g.hostId) : null,
+        memberCount: Number(g.memberCount || 0),
+        notice: null,
+        isMuted: !!g.bfShutup,
+        updatedAt: Number(g.createTime || 0),
+      }))
+      console.log(`[GroupStore] Loaded ${groups.value.length} groups via API`)
+    } catch (e) {
+      console.error('[GroupStore] API loadGroups failed:', e)
     }
   }
 

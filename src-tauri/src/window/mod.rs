@@ -4,8 +4,8 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
-use tracing::{error, info};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowConfig {
@@ -52,13 +52,26 @@ impl WindowManager {
         let label = format!("chat_{}", conversation_id.replace(['-', '.'], "_"));
         let url = format!("/chat?id={}", conversation_id);
 
-        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
             .title(title)
             .inner_size(600.0, 500.0)
             .min_inner_size(400.0, 300.0)
-            .center()
-            .decorations(false)
-            .transparent(true)
+            .center();
+
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder
+                .decorations(true)
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            builder = builder.decorations(false);
+        }
+
+        let window = builder
             .build()
             .map_err(|e| WindowError::TauriError(e.to_string()))?;
 
@@ -104,13 +117,30 @@ impl WindowManager {
                 w
             }
             None => {
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/home".into()))
-                    .title("OCS Chat")
-                    .inner_size(1000.0, 680.0)
-                    .min_inner_size(800.0, 600.0)
-                    .center()
-                    .decorations(false)
-                    .transparent(true)
+                let mut builder = WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    WebviewUrl::App("/home".into()),
+                )
+                .title("OCS Chat")
+                .inner_size(1000.0, 680.0)
+                .min_inner_size(800.0, 600.0)
+                .center();
+
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder
+                        .decorations(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true);
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    builder = builder.decorations(false);
+                }
+
+                builder
                     .build()
                     .map_err(|e| WindowError::TauriError(e.to_string()))?
             }
@@ -139,13 +169,30 @@ impl WindowManager {
                 login.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
             None => {
-                WebviewWindowBuilder::new(app, "login", WebviewUrl::App("/login".into()))
-                    .title("OCS Chat")
-                    .inner_size(380.0, 520.0)
-                    .resizable(false)
-                    .center()
-                    .decorations(false)
-                    .transparent(true)
+                let mut builder = WebviewWindowBuilder::new(
+                    app,
+                    "login",
+                    WebviewUrl::App("/login".into()),
+                )
+                .title("OCS Chat")
+                .inner_size(380.0, 520.0)
+                .resizable(false)
+                .center();
+
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder
+                        .decorations(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true);
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    builder = builder.decorations(false);
+                }
+
+                builder
                     .build()
                     .map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
@@ -185,8 +232,6 @@ impl WindowManager {
         .resizable(false)
         .decorations(false)
         .always_on_top(true)
-        .transparent(true)
-        .skip_taskbar(true)
         .build()
         .map_err(|e| WindowError::TauriError(e.to_string()))?;
 

@@ -1,4 +1,4 @@
-use tracing::{error, warn};
+use tracing::error;
 
 #[tauri::command]
 pub fn report_error(

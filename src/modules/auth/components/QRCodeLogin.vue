@@ -148,8 +148,6 @@ async function handleIsLoginGet() {
         avatar: res.icon || '',
         sessionId: res.sessionId || '',
       })
-
-      router.push('/home?loginId=' + loginId)
     } else {
       loginPollingTimer = setTimeout(() => {
         if (isOutTime.value || qrCodeUrlError.value) return

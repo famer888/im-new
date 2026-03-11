@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { getContactsList } from '@/api/imBase'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -26,13 +27,55 @@ export const useContactStore = defineStore('contact', () => {
   const loading = ref(false)
 
   async function loadContacts(uid: string) {
-    if (!isTauri()) return
     loading.value = true
     try {
-      contacts.value = await tauriInvoke<Contact[]>('get_contacts', { uid })
+      if (isTauri()) {
+        contacts.value = await tauriInvoke<Contact[]>('get_contacts', { uid })
+      } else {
+        await loadContactsViaApi()
+      }
+    } catch (e) {
+      console.error('[ContactStore] loadContacts failed:', e)
     } finally {
       loading.value = false
     }
+  }
+
+  async function loadContactsViaApi() {
+    const allContacts: Contact[] = []
+    let pageNum = 1
+    const pageSize = 100
+    let hasMore = true
+
+    while (hasMore) {
+      try {
+        const resp = await getContactsList({ pageNum, pageSize })
+        const list = resp.contactsList || []
+        for (const item of list) {
+          const u = (item as any).userInfo || item
+          allContacts.push({
+            id: String(u.uid || ''),
+            nickname: u.nickName || u.nickname || null,
+            avatar: u.icon || u.avatar || null,
+            pinyin: (item as any).pinyin || null,
+            remark: (item as any).depict || null,
+            status: Number(u.uid) > 0 ? 1 : 0,
+            updatedAt: Number((item as any).updateTime || 0),
+          })
+        }
+        const totalCount = resp.count || 0
+        hasMore = totalCount > 0
+          ? allContacts.length < totalCount
+          : list.length >= pageSize
+        pageNum++
+      } catch (e) {
+        console.error('[ContactStore] API page', pageNum, 'failed:', e)
+        hasMore = false
+      }
+    }
+
+    contacts.value = allContacts
+    console.log(`[ContactStore] Loaded ${allContacts.length} contacts via API`)
   }
 
   async function searchContacts(uid: string, keyword: string) {
@@ -40,8 +83,16 @@ export const useContactStore = defineStore('contact', () => {
       searchResults.value = []
       return
     }
-    if (!isTauri()) return
-    searchResults.value = await tauriInvoke<Contact[]>('search_contacts', { uid, keyword })
+    if (isTauri()) {
+      searchResults.value = await tauriInvoke<Contact[]>('search_contacts', { uid, keyword })
+    } else {
+      searchResults.value = contacts.value.filter(
+        (c) =>
+          c.nickname?.includes(keyword) ||
+          c.remark?.includes(keyword) ||
+          c.id.includes(keyword),
+      )
+    }
   }
 
   function getContact(id: string): Contact | undefined {

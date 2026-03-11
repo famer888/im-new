@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 prost-build = "0.13"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-notification = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-updater = "2"
@@ -48,6 +48,7 @@ dashmap = "6"
 chrono = "0.4"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+dirs = "5"
 
 [profile.release]
 panic = "abort"
