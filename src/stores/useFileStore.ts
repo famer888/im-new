@@ -1,7 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface FileTask {
   id: string
@@ -22,6 +29,7 @@ export const useFileStore = defineStore('file', () => {
   }
 
   async function uploadFile(uid: string, filePath: string, fileName: string): Promise<{ url: string; fileKey: string }> {
+    if (!isTauri()) return { url: '', fileKey: '' }
     const taskId = crypto.randomUUID()
     tasks.value.set(taskId, {
       id: taskId,
@@ -33,7 +41,7 @@ export const useFileStore = defineStore('file', () => {
     })
 
     try {
-      const result = await invoke<{ url: string; fileKey: string; fileSize: number }>('upload_file', {
+      const result = await tauriInvoke<{ url: string; fileKey: string; fileSize: number }>('upload_file', {
         filePath,
         uid,
       })
@@ -54,6 +62,7 @@ export const useFileStore = defineStore('file', () => {
   }
 
   async function downloadFile(msgId: string, url: string, fileKey: string, savePath: string, fileName: string) {
+    if (!isTauri()) return
     tasks.value.set(msgId, {
       id: msgId,
       msgId,
@@ -64,6 +73,7 @@ export const useFileStore = defineStore('file', () => {
       localPath: savePath,
     })
 
+    const { listen } = await import('@tauri-apps/api/event')
     const unlisten = await listen<{ progress: number; status: string }>(`file:done:${msgId}`, (event) => {
       const task = tasks.value.get(msgId)
       if (task) {
@@ -73,7 +83,7 @@ export const useFileStore = defineStore('file', () => {
     })
 
     try {
-      await invoke('download_file', { url, fileKey, savePath, msgId })
+      await tauriInvoke('download_file', { url, fileKey, savePath, msgId })
     } catch (e) {
       const task = tasks.value.get(msgId)
       if (task) {

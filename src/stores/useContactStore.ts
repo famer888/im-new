@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface Contact {
   id: string
@@ -18,9 +26,10 @@ export const useContactStore = defineStore('contact', () => {
   const loading = ref(false)
 
   async function loadContacts(uid: string) {
+    if (!isTauri()) return
     loading.value = true
     try {
-      contacts.value = await invoke<Contact[]>('get_contacts', { uid })
+      contacts.value = await tauriInvoke<Contact[]>('get_contacts', { uid })
     } finally {
       loading.value = false
     }
@@ -31,7 +40,8 @@ export const useContactStore = defineStore('contact', () => {
       searchResults.value = []
       return
     }
-    searchResults.value = await invoke<Contact[]>('search_contacts', { uid, keyword })
+    if (!isTauri()) return
+    searchResults.value = await tauriInvoke<Contact[]>('search_contacts', { uid, keyword })
   }
 
   function getContact(id: string): Contact | undefined {

@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<T>(cmd, args)
+}
 
 export interface Channel {
   id: string
@@ -16,9 +24,10 @@ export const useChannelStore = defineStore('channel', () => {
   const loading = ref(false)
 
   async function loadChannels(uid: string) {
+    if (!isTauri()) return
     loading.value = true
     try {
-      channels.value = await invoke<Channel[]>('get_channels', { uid })
+      channels.value = await tauriInvoke<Channel[]>('get_channels', { uid })
     } finally {
       loading.value = false
     }
