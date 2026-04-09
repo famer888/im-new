@@ -5,11 +5,11 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import SearchInput from '@/components/SearchInput.vue'
-import TextAvatar from '@/components/TextAvatar.vue'
 import ConversationList from './ConversationList.vue'
 import SearchResults from './SearchResults.vue'
 import SendHelper from './SendHelper.vue'
 import AddressBook from '@/modules/contacts/views/AddressBook.vue'
+import accountIcon from '@/assets/images/headNav/message/logo-icon.png'
 import messageIcon from '@/assets/images/headNav/message/message-icon.png'
 import messageActiveIcon from '@/assets/images/headNav/message/message-active-icon.png'
 import contactsIcon from '@/assets/images/headNav/message/contacts-icon.png'
@@ -51,7 +51,9 @@ function openFileHelper() {
     <!-- OCS Nav: 72px width, vertical icons -->
     <div class="nav-bar">
       <div class="nav-avatar" @click="uiStore.openAccountDialog()">
-        <TextAvatar :name="authStore.nickname || 'U'" :size="35" />
+        <picture>
+          <img class="account-avatar" :src="accountIcon" alt="account" />
+        </picture>
       </div>
 
       <ul class="nav-list">
@@ -121,8 +123,36 @@ function openFileHelper() {
 }
 
 .nav-avatar {
-  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  height: 50px;
   margin-bottom: 10px;
+
+  > picture {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 50px;
+    height: 50px;
+    border: 2px solid rgb(227, 227, 227);
+    box-sizing: border-box;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #fff;
+    cursor: pointer;
+
+    &:hover {
+      opacity: 0.8;
+    }
+  }
+
+  .account-avatar {
+    display: block;
+    object-fit: cover;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+  }
 }
 
 .nav-list {
