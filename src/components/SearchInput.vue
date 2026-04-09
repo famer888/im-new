@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
+import searchIcon from '@/assets/images/headNav/search-icon.png'
+import searchCloseIcon from '@/assets/images/headNav/search-close-icon.png'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -42,14 +44,20 @@ defineExpose({ focus })
 
 <template>
   <div class="search-input">
-    <span class="search-icon">🔍</span>
+    <img class="search-icon" :src="searchIcon" alt="search" />
     <input
       ref="inputRef"
       :value="modelValue"
       :placeholder="placeholder"
       @input="handleInput"
     />
-    <button v-if="modelValue" class="clear-btn" @click="handleClear">×</button>
+    <img
+      v-if="modelValue"
+      class="clear-btn"
+      :src="searchCloseIcon"
+      alt="clear"
+      @click="handleClear"
+    />
   </div>
 </template>
 
@@ -57,34 +65,45 @@ defineExpose({ focus })
 .search-input {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
-  background: #e0e0e0;
+  flex: 1;
+  width: 100%;
+  height: 26px;
+  line-height: 26px;
+  background-color: rgb(243, 243, 243);
   border-radius: 4px;
   padding: 0 8px;
-  margin: 0 12px;
+  position: relative;
+  font-size: 12px;
 
-  .search-icon { font-size: 12px; opacity: 0.5; }
+  .search-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
 
   input {
     flex: 1;
-    background: transparent;
+    padding: 0 5px;
+    height: 26px;
+    line-height: 26px;
+    background-color: #f3f3f3 !important;
     border: none;
     outline: none;
     font-size: 12px;
     color: #333;
-    &::placeholder { color: #999; }
+    &::placeholder {
+      color: #999;
+      font-size: 12px;
+    }
   }
 
   .clear-btn {
-    background: none;
-    border: none;
-    font-size: 14px;
-    color: #999;
+    position: absolute;
+    right: 4px;
+    width: 16px;
+    height: 16px;
     cursor: pointer;
-    padding: 0;
-    line-height: 1;
-    &:hover { color: #666; }
+    &:hover { opacity: 0.85; }
   }
 }
 </style>
