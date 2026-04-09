@@ -143,7 +143,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
     </div>
 
     <div v-if="displayList.length === 0" class="empty-tip">
-      {{ showArchive ? $t('暂无归档会话') : $t('暂无会话') }}
+      {{ showArchive ? $t('暂无归档会话') : '暂时没有新的聊天会话' }}
     </div>
   </div>
 </template>
@@ -151,9 +151,15 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 <style lang="scss" scoped>
 .conversation-list {
   flex: 1;
+  position: relative;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #999 transparent;
+}
+
+.list {
+  position: relative;
+  min-height: 100%;
 }
 
 .archive-entry {
@@ -315,9 +321,14 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 }
 
 .empty-tip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  // width: 100%;
+  transform: translate(-50%);
   text-align: center;
-  padding: 40px 0;
-  color: #ccc;
+  color: #333;
+  font-weight: 500;
   font-size: 13px;
 }
 </style>
