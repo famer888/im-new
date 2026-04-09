@@ -93,7 +93,7 @@ function openFileHelper() {
       </div>
 
       <div class="sidebar-content">
-        <SearchResults v-if="searchKeyword" />
+        <SearchResults v-if="searchKeyword" :keyword="searchKeyword" />
         <template v-else>
           <ConversationList v-if="uiStore.sidebarTab === 'chats'" />
           <AddressBook v-else-if="uiStore.sidebarTab === 'contacts'" />

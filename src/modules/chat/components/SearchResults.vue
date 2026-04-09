@@ -4,10 +4,16 @@ import { useSearchStore } from '@/stores/useSearchStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import emptyIcon from '@/assets/images/common/empty-icon.png'
+
+const props = defineProps<{
+  keyword: string
+}>()
 
 const searchStore = useSearchStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
+const hasInputKeyword = computed(() => props.keyword.trim().length > 0)
 
 function selectContact(id: string) {
   chatStore.setCurrentConversation(`0_${id}`)
@@ -72,15 +78,51 @@ function selectChannel(id: string) {
         </div>
       </div>
     </template>
-    <div v-else-if="searchStore.keyword" class="no-results">无搜索结果</div>
+    <div v-else-if="hasInputKeyword" class="no-results">
+      <img :src="emptyIcon" alt="empty" />
+      <span>暂无数据</span>
+    </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.search-results { flex: 1; overflow-y: auto; }
+.search-results {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
 
-.searching, .no-results {
-  text-align: center; padding: 32px; color: #ccc; font-size: 13px;
+.searching {
+  text-align: center;
+  padding: 32px;
+  color: #333;
+  font-size: 13px;
+}
+
+.no-results {
+  position: absolute;
+  top: 30%;
+  left: 0px;
+  transform: translateY(-50%);
+  color: #333;
+  text-align: left;
+  width: 100%;
+
+  > img {
+    display: block;
+    width: 30%;
+    margin: 0 auto 0;
+  }
+
+  > span {
+    display: block;
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 18px;
+    width: 100%;
+    text-align: center;
+    font-weight: 500;
+  }
 }
 
 .result-section { margin-bottom: 4px; }
