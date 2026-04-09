@@ -10,6 +10,12 @@ import ConversationList from './ConversationList.vue'
 import SearchResults from './SearchResults.vue'
 import SendHelper from './SendHelper.vue'
 import AddressBook from '@/modules/contacts/views/AddressBook.vue'
+import messageIcon from '@/assets/images/headNav/message/message-icon.png'
+import messageActiveIcon from '@/assets/images/headNav/message/message-active-icon.png'
+import contactsIcon from '@/assets/images/headNav/message/contacts-icon.png'
+import contactsActiveIcon from '@/assets/images/headNav/message/contacts-active-icon.png'
+import transferIcon from '@/assets/images/headNav/message/cszs-icon.png'
+import transferActiveIcon from '@/assets/images/headNav/message/cszs-active-icon.png'
 
 const uiStore = useUIStore()
 const searchStore = useSearchStore()
@@ -30,7 +36,7 @@ function handleClearSearch() {
 }
 
 function openFileHelper() {
-  uiStore.setSidebarTab('chats')
+  uiStore.setSidebarTab('transfer')
   // Select or create file helper conversation (id: 9901)
   const conv = chatStore.conversations.find(c => c.targetId === '9901')
   if (conv) {
@@ -50,16 +56,16 @@ function openFileHelper() {
 
       <ul class="nav-list">
         <li :class="{ active: uiStore.sidebarTab === 'chats' }" @click="uiStore.setSidebarTab('chats')">
-          <svg viewBox="0 0 24 24" width="24" height="24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <img :src="uiStore.sidebarTab === 'chats' ? messageActiveIcon : messageIcon" alt="chat" />
           <span v-if="chatStore.totalUnread > 0" class="nav-badge">
             {{ chatStore.totalUnread > 99 ? '99+' : chatStore.totalUnread }}
           </span>
         </li>
         <li :class="{ active: uiStore.sidebarTab === 'contacts' }" @click="uiStore.setSidebarTab('contacts')">
-          <svg viewBox="0 0 24 24" width="24" height="24"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <img :src="uiStore.sidebarTab === 'contacts' ? contactsActiveIcon : contactsIcon" alt="contacts" />
         </li>
-        <li @click="openFileHelper">
-          <svg viewBox="0 0 24 24" width="24" height="24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M14 2v6h6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        <li :class="{ active: uiStore.sidebarTab === 'transfer' }" @click="openFileHelper">
+          <img :src="uiStore.sidebarTab === 'transfer' ? transferActiveIcon : transferIcon" alt="transfer" />
         </li>
       </ul>
 
@@ -137,11 +143,21 @@ function openFileHelper() {
     margin: 0 auto 35px;
     border-radius: 4px;
     cursor: pointer;
-    color: #666;
     position: relative;
 
-    &:hover { color: #333; }
-    &.active { color: #3369fe; }
+    > img {
+      display: block;
+      width: 35px;
+      cursor: pointer;
+
+      &:hover { opacity: 0.85; }
+    }
+
+    &:last-child {
+      > img {
+        border-radius: 50%;
+      }
+    }
   }
 }
 
@@ -173,10 +189,9 @@ function openFileHelper() {
     margin: 0 auto;
     border-radius: 4px;
     cursor: pointer;
-    color: #666;
     list-style: none;
 
-    &:hover { color: #333; }
+    &:hover { opacity: 0.85; }
   }
 }
 
