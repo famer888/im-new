@@ -201,6 +201,28 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem(AUTO_LOGIN_KEY, String(enabled))
   }
 
+  function updateProfile(payload: { nickname?: string; avatar?: string }) {
+    if (!session.value) return
+
+    session.value = {
+      ...session.value,
+      nickname: payload.nickname ?? session.value.nickname,
+      avatar: payload.avatar ?? session.value.avatar,
+    }
+
+    const currentUid = session.value.uid
+    const account = accounts.value.find(item => item.id === currentUid)
+    if (account) {
+      account.name = session.value.nickname
+      account.icon = session.value.avatar
+      saveAccounts()
+    }
+
+    if (!isTauri()) {
+      localStorage.setItem('browser-session', JSON.stringify(session.value))
+    }
+  }
+
   return {
     session,
     isLoggedIn,
@@ -215,5 +237,6 @@ export const useAuthStore = defineStore('auth', () => {
     switchAccount,
     addOrUpdateAccount,
     setAutoLogin,
+    updateProfile,
   }
 })

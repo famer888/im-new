@@ -1,5 +1,5 @@
 <template>
-  <div class="account-dialog" @click.stop>
+  <div ref="accountDialogRef" class="account-dialog" @click.stop>
     <div class="dialog-head">
       <TextAvatar
         :name="displayName"
@@ -10,9 +10,32 @@
       <h2 class="dialog-title ellipsis">{{ displayName }}</h2>
     </div>
 
-    <p class="dialog-row">
+    <p
+      :class="['dialog-row', 'nickname-row', { editing: isNicknameEditing }]"
+      @mousedown="handleNicknameRowMouseDown"
+    >
       <span>{{ $t('昵称') }}:</span>
-      <i class="ellipsis">{{ authStore.nickname || '-' }}</i>
+      <input
+        v-if="isNicknameEditing"
+        ref="nicknameInputRef"
+        v-model.trim="nicknameDraft"
+        class="nickname-input"
+        type="text"
+        :placeholder="$t('请输入内容')"
+        @blur="handleNicknameSave"
+        @keydown.enter.prevent="handleNicknameSave"
+        @keydown.esc.prevent="handleNicknameCancel"
+      />
+      <i v-else class="ellipsis nickname-text">{{ authStore.nickname || '-' }}</i>
+      <button
+        v-if="!isNicknameEditing"
+        class="edit-btn"
+        type="button"
+        :aria-label="$t('编辑昵称')"
+        @mousedown.stop.prevent="handleNicknameEdit"
+      >
+        <img :src="editIcon" alt="" />
+      </button>
     </p>
     <p class="dialog-row">
       <span>{{ $t('性别') }}:</span>
@@ -44,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -57,12 +80,74 @@ defineEmits<{
 }>()
 
 const password = ref('')
+const isNicknameEditing = ref(false)
+const nicknameDraft = ref('')
+const nicknameInputRef = ref<HTMLInputElement | null>(null)
+const accountDialogRef = ref<HTMLElement | null>(null)
+const editIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwBAMAAAClLOS0AAAAJFBMVEUAAAAyMjIzMzMyMjIzMzMzMzMyMjIzMzMxMTE0NDQ1NTUzMzM8TXAkAAAAC3RSTlMAf5xb79mZc0M7Ikz8ah8AAAC7SURBVDjL1ZQxCsJAEAAXD4vYWduktwlYprexsbW38wOCD7CwsbH3CxpRYT8nWYOzYQVBEMw0R26Yg5DbyK+ZNOt2+KKon3tqixwUqnpj/BSZemHB2YK+Tt1RFuQmdpejAIFsrgIukNEpBogYIAgQQIAgQAABgiAViFZQVggCdhBNEEWy4K3Ig+CTBmF0RSTuT1uU3LgPIh71Ty8YBWMAqxuD4xnM7oyaZ6lzE5kG9sI4exbCD8Czlq94AETJjYyDbpR3AAAAAElFTkSuQmCC'
 
 const displayName = computed(() => authStore.nickname || authStore.uid || 'User')
 
 function handleExport() {
   if (password.value.length !== 4) return
 }
+
+function handleNicknameEdit() {
+  if (isNicknameEditing.value) return
+  nicknameDraft.value = authStore.nickname || ''
+  isNicknameEditing.value = true
+  nextTick(() => {
+    nicknameInputRef.value?.focus()
+    nicknameInputRef.value?.select()
+  })
+}
+
+function handleNicknameRowMouseDown(event: MouseEvent) {
+  if (isNicknameEditing.value) {
+    return
+  }
+
+  event.preventDefault()
+  handleNicknameEdit()
+}
+
+function handleDocumentMouseDown(event: MouseEvent) {
+  if (!isNicknameEditing.value) return
+
+  const target = event.target as Node | null
+  if (nicknameInputRef.value?.contains(target)) return
+  if (accountDialogRef.value && target && accountDialogRef.value.contains(target)) {
+    handleNicknameSave()
+  }
+}
+
+function handleNicknameCancel() {
+  nicknameDraft.value = authStore.nickname || ''
+  isNicknameEditing.value = false
+}
+
+function handleNicknameSave() {
+  const nextName = nicknameDraft.value.trim()
+  if (!nextName) {
+    nicknameDraft.value = authStore.nickname || ''
+    isNicknameEditing.value = false
+    return
+  }
+
+  if (nextName !== authStore.nickname) {
+    authStore.updateProfile({ nickname: nextName })
+  }
+
+  isNicknameEditing.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('mousedown', handleDocumentMouseDown, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('mousedown', handleDocumentMouseDown, true)
+})
 </script>
 
 <style lang="scss" scoped>
@@ -113,6 +198,54 @@ function handleExport() {
   > i {
     font-style: normal;
     max-width: 220px;
+  }
+}
+
+.nickname-row {
+  cursor: pointer;
+  user-select: none;
+
+  &.editing {
+    cursor: text;
+    user-select: text;
+  }
+}
+
+.nickname-text {
+  max-width: 200px;
+}
+
+.nickname-input {
+  width: 200px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 14px;
+  color: #333;
+}
+
+.edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.8;
+  }
+
+  > img {
+    display: block;
+    width: 15px;
+    height: 15px;
   }
 }
 
