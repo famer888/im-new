@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue'
 import FriendList from '../components/FriendList.vue'
 import GroupList from '../components/GroupList.vue'
 import ChannelList from '../components/ChannelList.vue'
+import { useUIStore } from '@/stores/useUIStore'
+import addNewIcon from '@/assets/images/headNav/add-new-icon.png'
 
-type Tab = 'friends' | 'groups' | 'channels'
-const activeTab = ref<Tab>('friends')
+const uiStore = useUIStore()
 </script>
 
 <template>
   <div class="address-book">
+    <!-- Old tabs UI (kept for rollback)
     <div class="book-tabs">
       <button :class="['tab', { active: activeTab === 'friends' }]" @click="activeTab = 'friends'">好友</button>
       <button :class="['tab', { active: activeTab === 'groups' }]" @click="activeTab = 'groups'">群组</button>
@@ -20,10 +21,23 @@ const activeTab = ref<Tab>('friends')
       <GroupList v-else-if="activeTab === 'groups'" />
       <ChannelList v-else />
     </div>
+    -->
+
+    <div class="new-friend" @click="uiStore.setDetailView('friend-examine')">
+      <img class="new-friend-icon" :src="addNewIcon" alt="new-friend" />
+      <span class="new-friend-title">新的好友</span>
+    </div>
+
+    <div class="book-content">
+      <GroupList />
+      <ChannelList />
+      <FriendList />
+    </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
+/* Old tabs styles (kept for rollback)
 .address-book { display: flex; flex-direction: column; height: 100%; }
 
 .book-tabs {
@@ -37,4 +51,36 @@ const activeTab = ref<Tab>('friends')
 }
 
 .book-content { flex: 1; overflow-y: auto; }
+*/
+
+.address-book {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.new-friend {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px 14px;
+  cursor: pointer;
+}
+
+.new-friend-icon {
+  width: 35px;
+  height: 35px;
+  flex-shrink: 0;
+}
+
+.new-friend-title {
+  margin-left: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #000;
+}
+
+.book-content {
+  flex: 1;
+  overflow-y: auto;
+}
 </style>
