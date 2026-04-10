@@ -178,6 +178,12 @@ export const useMessageStore = defineStore('message', () => {
     hasMoreMap.value.delete(conversationId)
   }
 
+  function clearAllMessageCaches() {
+    messageMap.value = new Map()
+    loadingMap.value = new Map()
+    hasMoreMap.value = new Map()
+  }
+
   return {
     messageMap,
     getMessages,
@@ -192,5 +198,6 @@ export const useMessageStore = defineStore('message', () => {
     updateMessage,
     deleteMessage,
     clearConversationMessages,
+    clearAllMessageCaches,
   }
 })

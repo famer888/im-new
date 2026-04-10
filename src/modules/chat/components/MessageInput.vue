@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessageType, ConversationType } from '@/types'
 import { useChatStore } from '@/stores/useChatStore'
+import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
 import EmojiPicker from './send/EmojiPicker.vue'
@@ -15,6 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const chatStore = useChatStore()
+const settingStore = useSettingStore()
 const uiStore = useUIStore()
 const content = ref('')
 const editorRef = ref<HTMLDivElement | null>(null)
@@ -55,7 +57,14 @@ function handleSend() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  const mode = settingStore.settings.sendShortcutKey
+  if (mode === 'Ctrl+Enter') {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+  else if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSend()
   }

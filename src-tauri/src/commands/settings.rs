@@ -3,6 +3,14 @@ use tauri::State;
 
 use crate::config::ConfigManager;
 
+fn default_keep_history_on_logout() -> bool {
+    true
+}
+
+fn default_send_shortcut_key() -> String {
+    "Enter".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub language: String,
@@ -12,6 +20,12 @@ pub struct AppSettings {
     pub close_to_tray: bool,
     pub font_size: i32,
     pub theme: String,
+    /// 与 im「账户退出，保留聊天记录」一致：为 true 时退出登录保留本地记录
+    #[serde(default = "default_keep_history_on_logout")]
+    pub keep_history_on_logout: bool,
+    /// 发送快捷键：`Enter` 或 `Ctrl+Enter`
+    #[serde(default = "default_send_shortcut_key")]
+    pub send_shortcut_key: String,
 }
 
 impl Default for AppSettings {
@@ -24,6 +38,8 @@ impl Default for AppSettings {
             close_to_tray: true,
             font_size: 14,
             theme: "light".to_string(),
+            keep_history_on_logout: default_keep_history_on_logout(),
+            send_shortcut_key: default_send_shortcut_key(),
         }
     }
 }

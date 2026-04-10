@@ -120,6 +120,7 @@ pub fn run() {
             commands::chat::recall_message,
             commands::chat::delete_conversation,
             commands::chat::search_messages,
+            commands::chat::clear_all_local_chat_history,
             commands::contacts::get_contacts,
             commands::contacts::search_contacts,
             commands::contacts::add_contact,

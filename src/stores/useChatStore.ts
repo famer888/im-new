@@ -133,6 +133,17 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function clearAllLocalChatHistory(uid: string) {
+    if (!isTauri()) {
+      conversations.value = []
+      currentConversationId.value = null
+      return
+    }
+    await tauriInvoke('clear_all_local_chat_history', { uid })
+    conversations.value = []
+    currentConversationId.value = null
+  }
+
   return {
     conversations,
     currentConversationId,
@@ -150,5 +161,6 @@ export const useChatStore = defineStore('chat', () => {
     setDraft,
     recallMessage,
     deleteConversation,
+    clearAllLocalChatHistory,
   }
 })
