@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
@@ -24,11 +25,27 @@ const uiStore = useUIStore()
 const searchStore = useSearchStore()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
+const router = useRouter()
 
 const searchKeyword = ref('')
 const addAction = ref(false)
 const avatarWrapRef = ref<HTMLElement | null>(null)
 const accountDialogPosition = ref({ x: 74, y: 56 })
+const SETTINGS_MENU_WIDTH = 102
+const SETTINGS_MENU_GAP = 4
+/** 两行 + padding，与 .settings-menu-item 大致一致 */
+const SETTINGS_MENU_APPROX_HEIGHT = 80
+const VIEWPORT_MENU_PAD = 8
+
+const settingsMenuVisible = ref(false)
+const settingsMenuStyle = ref<Record<string, string>>({
+  left: '0px',
+  top: '0px',
+  transform: 'translateX(-50%)',
+})
+const settingsWrapRef = ref<HTMLElement | null>(null)
+const settingsMenuRef = ref<HTMLElement | null>(null)
+const navBarRef = ref<HTMLElement | null>(null)
 const searchPlaceholder = computed(() =>
   addAction.value && uiStore.sidebarTab === 'contacts' ? '搜索手机号/ID/群别名' : '搜索',
 )
@@ -79,10 +96,55 @@ function handleAvatarClick(event: MouseEvent) {
 }
 
 function handleClickOutside(event: MouseEvent) {
-  if (!uiStore.accountDialogVisible) return
   const target = event.target as Node | null
-  if (avatarWrapRef.value && target && !avatarWrapRef.value.contains(target)) {
+  if (uiStore.accountDialogVisible && avatarWrapRef.value && target && !avatarWrapRef.value.contains(target)) {
     uiStore.closeAccountDialog()
+  }
+  if (settingsMenuVisible.value && target) {
+    const inWrap = settingsWrapRef.value?.contains(target)
+    const inMenu = settingsMenuRef.value?.contains(target)
+    if (!inWrap && !inMenu) {
+      settingsMenuVisible.value = false
+    }
+  }
+}
+
+function handleSettingsClick(event: MouseEvent) {
+  if (settingsMenuVisible.value) {
+    settingsMenuVisible.value = false
+    return
+  }
+
+  const nav = navBarRef.value?.getBoundingClientRect()
+  const trigger = event.currentTarget as HTMLElement
+  const tr = trigger.getBoundingClientRect()
+  const cx = nav ? nav.left + nav.width / 2 : tr.left + tr.width / 2
+  const half = SETTINGS_MENU_WIDTH / 2
+  const clampedCx = Math.min(
+    Math.max(cx, VIEWPORT_MENU_PAD + half),
+    window.innerWidth - VIEWPORT_MENU_PAD - half,
+  )
+  settingsMenuStyle.value = {
+    left: `${clampedCx}px`,
+    top: `${tr.top - SETTINGS_MENU_APPROX_HEIGHT - SETTINGS_MENU_GAP}px`,
+    transform: 'translateX(-50%)',
+  }
+  settingsMenuVisible.value = true
+}
+
+function handleOpenSettings() {
+  settingsMenuVisible.value = false
+  uiStore.openSettings()
+}
+
+async function handleLogout() {
+  settingsMenuVisible.value = false
+  const confirmed = window.confirm('退出后将无法收到新的消息，确认退出？')
+  if (!confirmed) return
+
+  await authStore.logout()
+  if (!(window as any).__TAURI_INTERNALS__) {
+    router.push('/login')
   }
 }
 
@@ -108,7 +170,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="home-sidebar">
     <!-- OCS Nav: 72px width, vertical icons -->
-    <div class="nav-bar">
+    <div ref="navBarRef" class="nav-bar">
       <div ref="avatarWrapRef" class="nav-avatar-wrap">
         <div class="nav-avatar">
           <picture @click="handleAvatarClick">
@@ -141,12 +203,23 @@ onBeforeUnmount(() => {
         </li>
       </ul>
 
-      <div class="nav-bottom">
-        <li @click="uiStore.openSettings()">
-          <svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9c.2.65.77 1.09 1.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-        </li>
+      <div ref="settingsWrapRef" class="nav-bottom">
+        <span class="setting-trigger" @click="handleSettingsClick">设置</span>
       </div>
     </div>
+
+    <!-- Teleport：避免 .main-content overflow:hidden 裁掉宽于侧栏的菜单左侧 -->
+    <Teleport to="body">
+      <div
+        v-if="settingsMenuVisible"
+        ref="settingsMenuRef"
+        class="settings-menu"
+        :style="settingsMenuStyle"
+      >
+        <div class="settings-menu-item" @click="handleOpenSettings">系统设置</div>
+        <div class="settings-menu-item" @click="handleLogout">退出登录</div>
+      </div>
+    </Teleport>
 
     <!-- Chat list area: min-width 261px -->
     <div class="list-area">
@@ -302,19 +375,46 @@ onBeforeUnmount(() => {
 .nav-bottom {
   margin-top: auto;
   padding-bottom: 20px;
+  position: relative;
+  width: 100%;
+  align-self: stretch;
+  text-align: center;
+}
 
-  li {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 35px;
-    height: 35px;
-    margin: 0 auto;
-    border-radius: 4px;
-    cursor: pointer;
-    list-style: none;
+.setting-trigger {
+  font-size: 14px;
+  color: #333;
+  cursor: pointer;
+  user-select: none;
 
-    &:hover { opacity: 0.85; }
+  &:hover {
+    opacity: 0.8;
+  }
+}
+
+/* fixed + Teleport：水平以 72px 导航条中心为锚（与 im 一致），不被父级 overflow 裁切 */
+.settings-menu {
+  position: fixed;
+  z-index: 9800;
+  width: 102px;
+  min-width: 102px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.settings-menu-item {
+  padding: 10px 5px;
+  background: #1b233b;
+  color: #fff;
+  font-size: 14px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.9);
   }
 }
 
