@@ -218,3 +218,23 @@ pub async fn search_messages(
     })
     .map_err(|e| e.to_string())
 }
+
+/// 清空当前账号本地全部聊天消息与会话摘要（与 im「清空全部聊天记录」本地侧一致）
+#[tauri::command]
+pub async fn clear_all_local_chat_history(
+    db: State<'_, DbManager>,
+    uid: String,
+) -> Result<(), String> {
+    db.with_connection(&uid, |conn| {
+        conn.execute("DELETE FROM messages", [])
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        conn.execute(
+            "UPDATE conversations SET last_msg_id = NULL, last_msg_time = 0, \
+             last_msg_digest = NULL, unread_count = 0, draft = NULL, at_me = 0",
+            [],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
