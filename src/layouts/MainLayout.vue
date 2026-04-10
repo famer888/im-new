@@ -21,7 +21,6 @@ import RightPanel from '@/modules/chat/components/panels/RightPanel.vue'
 import SettingsDialog from '@/modules/settings/views/SettingsDialog.vue'
 import AddContactDialog from '@/modules/contacts/components/AddContactDialog.vue'
 import ForwardSelectDialog from '@/modules/chat/components/ForwardSelectDialog.vue'
-import AccountDialog from '@/modules/auth/components/AccountDialog.vue'
 import FileImport from '@/modules/auth/components/FileImport.vue'
 import CreateGroupDialog from '@/modules/groups/components/CreateGroupDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
@@ -194,10 +193,6 @@ async function handleContextMenuSelect(key: string) {
     <ForwardSelectDialog
       v-model:visible="uiStore.forwardDialogVisible"
       :message-id="uiStore.forwardMessageId"
-    />
-    <AccountDialog
-      :visible="uiStore.accountDialogVisible"
-      @close="uiStore.closeAccountDialog()"
     />
     <FileImport
       :visible="uiStore.fileImportVisible"
