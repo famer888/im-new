@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
@@ -10,6 +10,7 @@ import SearchResults from './SearchResults.vue'
 import SendHelper from './SendHelper.vue'
 import AddressBook from '@/modules/contacts/views/AddressBook.vue'
 import SearchAddContacts from '@/modules/contacts/components/SearchAddContacts.vue'
+import AccountDialog from '@/modules/auth/components/AccountDialog.vue'
 import accountIcon from '@/assets/images/headNav/message/logo-icon.png'
 import messageIcon from '@/assets/images/headNav/message/message-icon.png'
 import messageActiveIcon from '@/assets/images/headNav/message/message-active-icon.png'
@@ -26,6 +27,8 @@ const chatStore = useChatStore()
 
 const searchKeyword = ref('')
 const addAction = ref(false)
+const avatarWrapRef = ref<HTMLElement | null>(null)
+const accountDialogPosition = ref({ x: 74, y: 56 })
 const searchPlaceholder = computed(() =>
   addAction.value && uiStore.sidebarTab === 'contacts' ? '搜索手机号/ID/群别名' : '搜索',
 )
@@ -62,6 +65,27 @@ function handleCancelAddAction() {
   searchStore.clearResults()
 }
 
+function handleAvatarClick(event: MouseEvent) {
+  if (uiStore.accountDialogVisible) {
+    uiStore.closeAccountDialog()
+    return
+  }
+
+  accountDialogPosition.value = {
+    x: event.clientX + 12,
+    y: event.clientY - 8,
+  }
+  uiStore.openAccountDialog()
+}
+
+function handleClickOutside(event: MouseEvent) {
+  if (!uiStore.accountDialogVisible) return
+  const target = event.target as Node | null
+  if (avatarWrapRef.value && target && !avatarWrapRef.value.contains(target)) {
+    uiStore.closeAccountDialog()
+  }
+}
+
 function openFileHelper() {
   uiStore.setSidebarTab('transfer')
   // Select or create file helper conversation (id: 9901)
@@ -71,16 +95,35 @@ function openFileHelper() {
     uiStore.setDetailView('chat')
   }
 }
+
+onMounted(() => {
+  window.addEventListener('mousedown', handleClickOutside)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('mousedown', handleClickOutside)
+})
 </script>
 
 <template>
   <div class="home-sidebar">
     <!-- OCS Nav: 72px width, vertical icons -->
     <div class="nav-bar">
-      <div class="nav-avatar" @click="uiStore.openAccountDialog()">
-        <picture>
-          <img class="account-avatar" :src="accountIcon" alt="account" />
-        </picture>
+      <div ref="avatarWrapRef" class="nav-avatar-wrap">
+        <div class="nav-avatar">
+          <picture @click="handleAvatarClick">
+            <img class="account-avatar" :src="accountIcon" alt="account" />
+          </picture>
+        </div>
+        <AccountDialog
+          v-if="uiStore.accountDialogVisible"
+          class="account-pop"
+          :style="{
+            left: `${accountDialogPosition.x}px`,
+            top: `${accountDialogPosition.y}px`,
+          }"
+          @close="uiStore.closeAccountDialog()"
+        />
       </div>
 
       <ul class="nav-list">
@@ -194,6 +237,15 @@ function openFileHelper() {
     height: 40px;
     border-radius: 50%;
   }
+}
+
+.nav-avatar-wrap {
+  position: static;
+}
+
+.account-pop {
+  position: fixed;
+  z-index: 1000;
 }
 
 .nav-list {
