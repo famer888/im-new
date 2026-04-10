@@ -42,6 +42,7 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
 
 <template>
   <div class="friend-list">
+    <!-- Old friend actions UI (kept for rollback)
     <div class="friend-actions">
       <button class="action-btn" @click="uiStore.addContactVisible = true">
         <span>➕</span> 添加好友
@@ -50,6 +51,9 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
         <span>📋</span> 好友验证
       </button>
     </div>
+    -->
+
+    <h2 class="section-title">联系人</h2>
     <div v-for="group in grouped" :key="group.letter" class="friend-group">
       <div class="group-letter">{{ group.letter }}</div>
       <div
@@ -64,40 +68,34 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
         </div>
       </div>
     </div>
-    <div v-if="contactStore.contacts.length === 0" class="empty">暂无好友</div>
+    <div v-if="contactStore.contacts.length > 0" class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
   </div>
 </template>
 
 <style lang="scss" scoped>
+/* Old friend list styles (kept for rollback)
 .friend-list { padding: 4px 0; }
+*/
 
-.friend-actions {
-  padding: 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+.friend-list { padding: 0; }
 
-.action-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 12px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  font-size: 13px;
+.section-title {
+  margin: 0;
+  padding-left: 20px;
+  height: 26px;
+  line-height: 26px;
+  font-size: 14px;
   color: #333;
-  cursor: pointer;
-  &:hover { background: #e0e0e0; }
+  font-weight: 600;
 }
 
 .group-letter {
-  padding: 4px 16px;
-  font-size: 12px;
-  color: #999;
-  background: #f2f2f2;
+  padding: 0 16px 0 20px;
+  height: 40px;
+  line-height: 40px;
+  font-size: 14px;
+  color: #333;
+  border-top: 1px solid #eee;
 }
 
 .friend-item {
@@ -114,5 +112,12 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
   color: #333;
 }
 
-.empty { text-align: center; padding: 40px; color: #ccc; font-size: 13px; }
+.contact-count {
+  line-height: 38px;
+  text-align: center;
+  font-size: 14px;
+  color: #333;
+  border-top: 1px solid #eee;
+  margin-bottom: 50px;
+}
 </style>
