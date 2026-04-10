@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
@@ -9,6 +9,7 @@ import ConversationList from './ConversationList.vue'
 import SearchResults from './SearchResults.vue'
 import SendHelper from './SendHelper.vue'
 import AddressBook from '@/modules/contacts/views/AddressBook.vue'
+import SearchAddContacts from '@/modules/contacts/components/SearchAddContacts.vue'
 import accountIcon from '@/assets/images/headNav/message/logo-icon.png'
 import messageIcon from '@/assets/images/headNav/message/message-icon.png'
 import messageActiveIcon from '@/assets/images/headNav/message/message-active-icon.png'
@@ -24,14 +25,39 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 
 const searchKeyword = ref('')
+const addAction = ref(false)
+const searchPlaceholder = computed(() =>
+  addAction.value && uiStore.sidebarTab === 'contacts' ? '搜索手机号/ID/群别名' : '搜索',
+)
+
+watch(() => uiStore.sidebarTab, (tab) => {
+  if (tab !== 'contacts') {
+    addAction.value = false
+  }
+})
 
 function handleSearch(query: string) {
+  if (uiStore.sidebarTab === 'contacts' && addAction.value) {
+    return
+  }
   if (authStore.uid) {
     searchStore.search(authStore.uid, query)
   }
 }
 
 function handleClearSearch() {
+  searchKeyword.value = ''
+  searchStore.clearResults()
+}
+
+function handleAddAction() {
+  addAction.value = true
+  searchKeyword.value = ''
+  searchStore.clearResults()
+}
+
+function handleCancelAddAction() {
+  addAction.value = false
   searchKeyword.value = ''
   searchStore.clearResults()
 }
@@ -84,14 +110,19 @@ function openFileHelper() {
       <div class="sidebar-search">
         <SearchInput
           v-model="searchKeyword"
-          :placeholder="$t('搜索')"
+          :placeholder="searchPlaceholder"
           @search="handleSearch"
           @clear="handleClearSearch"
         />
+        <span
+          v-if="uiStore.sidebarTab === 'contacts' && addAction"
+          class="add-cancel"
+          @click="handleCancelAddAction"
+        >取消</span>
         <button
-          v-if="uiStore.sidebarTab === 'contacts'"
+          v-else-if="uiStore.sidebarTab === 'contacts'"
           class="add-btn"
-          @click="uiStore.addContactVisible = true"
+          @click="handleAddAction"
           :title="$t('添加')"
         >
           <img :src="addBlueIcon" alt="add" />
@@ -99,7 +130,11 @@ function openFileHelper() {
       </div>
 
       <div class="sidebar-content">
-        <SearchResults v-if="searchKeyword" :keyword="searchKeyword" />
+        <SearchAddContacts
+          v-if="uiStore.sidebarTab === 'contacts' && addAction && searchKeyword"
+          :search-text="searchKeyword"
+        />
+        <SearchResults v-else-if="searchKeyword" :keyword="searchKeyword" />
         <template v-else>
           <ConversationList v-if="uiStore.sidebarTab === 'chats'" />
           <AddressBook v-else-if="uiStore.sidebarTab === 'contacts'" />
@@ -267,6 +302,16 @@ function openFileHelper() {
     height: 24px;
     display: block;
   }
+}
+
+.add-cancel {
+  font-size: 12px;
+  color: #000;
+  margin-left: 10px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .sidebar-content {
