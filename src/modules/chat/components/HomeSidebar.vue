@@ -87,7 +87,12 @@ function openFileHelper() {
           @search="handleSearch"
           @clear="handleClearSearch"
         />
-        <button class="add-btn" @click="uiStore.addContactVisible = true" :title="$t('添加')">
+        <button
+          v-if="uiStore.sidebarTab === 'contacts'"
+          class="add-btn"
+          @click="uiStore.addContactVisible = true"
+          :title="$t('添加')"
+        >
           <svg viewBox="0 0 24 24" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19" stroke="#666" stroke-width="2" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="#666" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
       </div>
