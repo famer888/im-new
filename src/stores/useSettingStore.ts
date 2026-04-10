@@ -23,6 +23,8 @@ export interface AppSettings {
   keepHistoryOnLogout: boolean
   /** `Enter` 或 `Ctrl+Enter` */
   sendShortcutKey: string
+  /** 与 im：加我为朋友时需要验证 */
+  friendVerifyRequired: boolean
 }
 
 const defaultSettings: AppSettings = {
@@ -35,6 +37,7 @@ const defaultSettings: AppSettings = {
   theme: 'light',
   keepHistoryOnLogout: true,
   sendShortcutKey: 'Enter',
+  friendVerifyRequired: true,
 }
 
 function fromRustRaw(raw: Record<string, unknown>): AppSettings {
@@ -68,6 +71,10 @@ function fromRustRaw(raw: Record<string, unknown>): AppSettings {
       r.send_shortcut_key ?? r.sendShortcutKey,
       defaultSettings.sendShortcutKey,
     ),
+    friendVerifyRequired: bool(
+      r.friend_verify_required ?? r.friendVerifyRequired,
+      defaultSettings.friendVerifyRequired,
+    ),
   }
 }
 
@@ -82,6 +89,7 @@ function toRustPayload(s: AppSettings): Record<string, unknown> {
     theme: s.theme,
     keep_history_on_logout: s.keepHistoryOnLogout,
     send_shortcut_key: s.sendShortcutKey,
+    friend_verify_required: s.friendVerifyRequired,
   }
 }
 

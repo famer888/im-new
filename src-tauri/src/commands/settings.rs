@@ -11,6 +11,10 @@ fn default_send_shortcut_key() -> String {
     "Enter".to_string()
 }
 
+fn default_friend_verify_required() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub language: String,
@@ -26,6 +30,9 @@ pub struct AppSettings {
     /// 发送快捷键：`Enter` 或 `Ctrl+Enter`
     #[serde(default = "default_send_shortcut_key")]
     pub send_shortcut_key: String,
+    /// 与 im「加我为朋友时需要验证」一致
+    #[serde(default = "default_friend_verify_required")]
+    pub friend_verify_required: bool,
 }
 
 impl Default for AppSettings {
@@ -40,6 +47,7 @@ impl Default for AppSettings {
             theme: "light".to_string(),
             keep_history_on_logout: default_keep_history_on_logout(),
             send_shortcut_key: default_send_shortcut_key(),
+            friend_verify_required: default_friend_verify_required(),
         }
     }
 }
