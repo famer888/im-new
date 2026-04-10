@@ -68,7 +68,7 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
         </div>
       </div>
     </div>
-    <div v-if="contactStore.contacts.length > 0" class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
+    <div class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
   </div>
 </template>
 
@@ -117,6 +117,7 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
   text-align: center;
   font-size: 14px;
   color: #333;
+  font-weight: 500;
   border-top: 1px solid #eee;
   margin-bottom: 50px;
 }
