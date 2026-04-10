@@ -16,6 +16,7 @@ import contactsIcon from '@/assets/images/headNav/message/contacts-icon.png'
 import contactsActiveIcon from '@/assets/images/headNav/message/contacts-active-icon.png'
 import transferIcon from '@/assets/images/headNav/message/cszs-icon.png'
 import transferActiveIcon from '@/assets/images/headNav/message/cszs-active-icon.png'
+import addBlueIcon from '@/assets/images/headNav/add_blue.png'
 
 const uiStore = useUIStore()
 const searchStore = useSearchStore()
@@ -93,7 +94,7 @@ function openFileHelper() {
           @click="uiStore.addContactVisible = true"
           :title="$t('添加')"
         >
-          <svg viewBox="0 0 24 24" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19" stroke="#666" stroke-width="2" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="#666" stroke-width="2" stroke-linecap="round"/></svg>
+          <img :src="addBlueIcon" alt="add" />
         </button>
       </div>
 
@@ -260,6 +261,12 @@ function openFileHelper() {
   flex-shrink: 0;
 
   &:hover { background: #e8e8e8; }
+
+  > img {
+    width: 24px;
+    height: 24px;
+    display: block;
+  }
 }
 
 .sidebar-content {
