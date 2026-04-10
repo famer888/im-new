@@ -12,6 +12,7 @@ import SendHelper from './SendHelper.vue'
 import AddressBook from '@/modules/contacts/views/AddressBook.vue'
 import SearchAddContacts from '@/modules/contacts/components/SearchAddContacts.vue'
 import AccountDialog from '@/modules/auth/components/AccountDialog.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import accountIcon from '@/assets/images/headNav/message/logo-icon.png'
 import messageIcon from '@/assets/images/headNav/message/message-icon.png'
 import messageActiveIcon from '@/assets/images/headNav/message/message-active-icon.png'
@@ -46,6 +47,7 @@ const settingsMenuStyle = ref<Record<string, string>>({
 const settingsWrapRef = ref<HTMLElement | null>(null)
 const settingsMenuRef = ref<HTMLElement | null>(null)
 const navBarRef = ref<HTMLElement | null>(null)
+const logoutConfirmVisible = ref(false)
 const searchPlaceholder = computed(() =>
   addAction.value && uiStore.sidebarTab === 'contacts' ? '搜索手机号/ID/群别名' : '搜索',
 )
@@ -137,11 +139,12 @@ function handleOpenSettings() {
   uiStore.openSettings()
 }
 
-async function handleLogout() {
+function handleLogout() {
   settingsMenuVisible.value = false
-  const confirmed = window.confirm('退出后将无法收到新的消息，确认退出？')
-  if (!confirmed) return
+  logoutConfirmVisible.value = true
+}
 
+async function confirmLogout() {
   await authStore.logout()
   if (!(window as any).__TAURI_INTERNALS__) {
     router.push('/login')
@@ -258,6 +261,13 @@ onBeforeUnmount(() => {
         </template>
       </div>
     </div>
+
+    <ConfirmDialog
+      v-model:visible="logoutConfirmVisible"
+      variant="im"
+      content="退出后将无法收到新的消息，确认退出？"
+      @confirm="confirmLogout"
+    />
   </div>
 </template>
 
