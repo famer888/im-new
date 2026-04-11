@@ -3,6 +3,22 @@ use rusqlite::{params, Connection};
 use super::models::*;
 use super::DbError;
 
+/// 与前端单聊会话 id 规则一致：`0_{targetId}`；与旧 im「文件传输助手」占位用户 id 对齐
+pub const FILE_HELPER_TARGET_ID: &str = "9901";
+
+/// 保证本地存在「文件传输助手」会话行（服务端未必下发）
+pub fn ensure_file_helper_conversation(conn: &Connection) -> Result<(), DbError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let id = format!("0_{FILE_HELPER_TARGET_ID}");
+    conn.execute(
+        "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at, is_pinned)
+         VALUES (?1, 0, ?2, ?3, 1)",
+        params![id, FILE_HELPER_TARGET_ID, now],
+    )
+    .map_err(|e| DbError::SqliteError(e.to_string()))?;
+    Ok(())
+}
+
 // ─── Conversations ───
 
 pub fn get_conversations(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<Conversation>, DbError> {

@@ -10,6 +10,11 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
+/** 与旧 im 一致：系统占位好友 id，会话 id 为 `0_9901` */
+export const FILE_HELPER_TARGET_ID = '9901'
+/** 列表/侧栏展示名（与参考 UI「传输助手」一致） */
+export const FILE_HELPER_DISPLAY_NAME = '传输助手'
+
 export interface Conversation {
   id: string
   type: number // 0: friend, 1: group, 2: channel
@@ -43,6 +48,32 @@ export const useChatStore = defineStore('chat', () => {
       .reduce((sum, c) => sum + c.unreadCount, 0),
   )
 
+  /** 浏览器模式或无 DB 下发时，保证列表中有「文件传输助手」 */
+  function ensureFileHelperConversationInMemory() {
+    if (conversations.value.some((c) => c.targetId === FILE_HELPER_TARGET_ID))
+      return
+    const now = Date.now()
+    const id = `0_${FILE_HELPER_TARGET_ID}`
+    conversations.value.push({
+      id,
+      type: 0,
+      targetId: FILE_HELPER_TARGET_ID,
+      lastMsgId: null,
+      lastMsgTime: 0,
+      lastMsgDigest: null,
+      unreadCount: 0,
+      isPinned: true,
+      isMuted: false,
+      isArchived: false,
+      draft: null,
+      senderName: null,
+      atMe: false,
+      scheduleDeletion: 0,
+      updatedAt: now,
+    })
+    sortConversations()
+  }
+
   async function loadConversations(uid: string) {
     loading.value = true
     try {
@@ -58,6 +89,7 @@ export const useChatStore = defineStore('chat', () => {
     } catch (e) {
       console.error('[ChatStore] loadConversations failed:', e)
     } finally {
+      ensureFileHelperConversationInMemory()
       loading.value = false
     }
   }
@@ -137,11 +169,12 @@ export const useChatStore = defineStore('chat', () => {
     if (!isTauri()) {
       conversations.value = []
       currentConversationId.value = null
+      ensureFileHelperConversationInMemory()
       return
     }
     await tauriInvoke('clear_all_local_chat_history', { uid })
-    conversations.value = []
     currentConversationId.value = null
+    await loadConversations(uid)
   }
 
   return {
@@ -162,5 +195,6 @@ export const useChatStore = defineStore('chat', () => {
     recallMessage,
     deleteConversation,
     clearAllLocalChatHistory,
+    ensureFileHelperConversationInMemory,
   }
 })
