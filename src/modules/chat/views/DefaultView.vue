@@ -1,11 +1,11 @@
 <script setup lang="ts">
+import emptyBrandImg from '@/assets/images/login/dock.png'
 </script>
 
 <template>
   <div class="default-view">
     <div class="empty-state">
-      <img src="@/assets/images/logo/logo.png" alt="OCS Chat" class="logo" />
-      <p>OCS Chat</p>
+      <img :src="emptyBrandImg" alt="" class="empty-brand-icon" />
     </div>
   </div>
 </template>
@@ -21,17 +21,15 @@
 
 .empty-state {
   text-align: center;
-  color: #ccc;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 
-  .logo {
-    width: 80px;
-    height: 80px;
-    opacity: 0.3;
-  }
-
-  p {
-    margin-top: 12px;
-    font-size: 14px;
-  }
+.empty-brand-icon {
+  width: 160px;
+  height: auto;
+  display: block;
+  border-radius: 8px;
 }
 </style>
