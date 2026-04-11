@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-import { useChatStore } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -55,6 +55,16 @@ const searchPlaceholder = computed(() =>
 watch(() => uiStore.sidebarTab, (tab) => {
   if (tab !== 'contacts') {
     addAction.value = false
+  }
+  // 传输助手聊天仅在「传输」Tab 下展示；切到消息/通讯录时关闭右侧会话（与 im 一致）
+  if (tab !== 'transfer') {
+    const conv = chatStore.currentConversation
+    if (conv?.targetId === FILE_HELPER_TARGET_ID) {
+      chatStore.setCurrentConversation(null)
+      if (uiStore.detailView === 'chat') {
+        uiStore.setDetailView('none')
+      }
+    }
   }
 })
 
@@ -151,14 +161,14 @@ async function confirmLogout() {
   }
 }
 
-function openFileHelper() {
+async function openFileHelper() {
   uiStore.setSidebarTab('transfer')
-  // Select or create file helper conversation (id: 9901)
-  const conv = chatStore.conversations.find(c => c.targetId === '9901')
-  if (conv) {
-    chatStore.setCurrentConversation(conv.id)
-    uiStore.setDetailView('chat')
+  if (authStore.uid && !chatStore.conversations.some(c => c.targetId === FILE_HELPER_TARGET_ID)) {
+    await chatStore.loadConversations(authStore.uid)
   }
+  const conv = chatStore.conversations.find(c => c.targetId === FILE_HELPER_TARGET_ID)
+  chatStore.setCurrentConversation(conv?.id ?? `0_${FILE_HELPER_TARGET_ID}`)
+  uiStore.setDetailView('chat')
 }
 
 onMounted(() => {
@@ -250,14 +260,15 @@ onBeforeUnmount(() => {
 
       <div class="sidebar-content">
         <SearchAddContacts
-          v-if="uiStore.sidebarTab === 'contacts' && addAction && searchKeyword"
+          v-if="uiStore.sidebarTab === 'contacts' && addAction && searchKeyword.trim()"
           :search-text="searchKeyword"
         />
-        <SearchResults v-else-if="searchKeyword" :keyword="searchKeyword" />
+        <!-- 传输 Tab 始终显示 SendHelper（含「传输助手」行）；避免搜索框残留关键字时把整个侧栏换成搜索结果 -->
+        <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
+        <SearchResults v-else-if="searchKeyword.trim()" :keyword="searchKeyword" />
         <template v-else>
           <ConversationList v-if="uiStore.sidebarTab === 'chats'" />
           <AddressBook v-else-if="uiStore.sidebarTab === 'contacts'" />
-          <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
         </template>
       </div>
     </div>

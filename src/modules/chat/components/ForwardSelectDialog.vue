@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useChatStore } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID, FILE_HELPER_DISPLAY_NAME } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
@@ -28,6 +28,7 @@ const filteredConversations = computed(() => {
 })
 
 function getName(conv: { type: number; targetId: string }): string {
+  if (conv.targetId === FILE_HELPER_TARGET_ID) return FILE_HELPER_DISPLAY_NAME
   if (conv.type === ConversationType.Friend) return contactStore.getDisplayName(conv.targetId)
   if (conv.type === ConversationType.Group) return groupStore.getGroup(conv.targetId)?.name ?? conv.targetId
   return conv.targetId

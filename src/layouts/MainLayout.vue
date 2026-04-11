@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -64,14 +64,25 @@ onMounted(async () => {
       }
     } catch { /* WS not available in browser */ }
   }
+  // 未登录或 load 未走 finally 时，仍保证会话列表里有传输助手（与「传输」侧栏入口一致）
+  chatStore.ensureFileHelperConversationInMemory()
   isInitialized.value = true
 })
 
 const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?? '')
 
+/** 传输助手会话仅在侧栏「传输」选中时显示聊天窗，防止通讯录/消息下误显 */
+const showChatWindow = computed(() => {
+  if (uiStore.detailView !== 'chat' || !chatStore.currentConversationId) return false
+  const isFileHelper =
+    chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID
+  if (isFileHelper && uiStore.sidebarTab !== 'transfer') return false
+  return true
+})
+
 const inviteExistingMemberIds = computed(() => {
   const members = groupStore.getMembers(uiStore.inviteFriendGroupId)
-  return new Set(members.map(m => m.uid))
+  return new Set(members.map(m => m.userId))
 })
 
 const contextMenuItems = computed((): MenuItem[] => {
@@ -155,7 +166,7 @@ async function handleContextMenuSelect(key: string) {
       <HomeSidebar />
 
       <div class="content-area">
-        <template v-if="uiStore.detailView === 'chat' && chatStore.currentConversationId">
+        <template v-if="showChatWindow">
           <ChatWindow />
         </template>
         <template v-else-if="uiStore.detailView === 'friend-detail'">

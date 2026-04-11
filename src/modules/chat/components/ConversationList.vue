@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useChatStore, type Conversation } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -17,12 +17,17 @@ const uiStore = useUIStore()
 
 const showArchive = ref(false)
 
+/** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
+function isNotFileHelper(c: Conversation): boolean {
+  return c.targetId !== FILE_HELPER_TARGET_ID
+}
+
 const normalConversations = computed(() =>
-  chatStore.conversations.filter(c => !c.isArchived),
+  chatStore.conversations.filter(c => !c.isArchived && isNotFileHelper(c)),
 )
 
 const archivedConversations = computed(() =>
-  chatStore.conversations.filter(c => c.isArchived),
+  chatStore.conversations.filter(c => c.isArchived && isNotFileHelper(c)),
 )
 
 const displayList = computed(() =>
@@ -30,7 +35,6 @@ const displayList = computed(() =>
 )
 
 function getName(conv: Conversation): string {
-  if (conv.targetId === '9901') return '文件传输助手'
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conv.targetId)
@@ -115,7 +119,12 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
         @contextmenu="handleContextMenu($event, conv)"
       >
         <div class="conv-avatar-wrap">
-          <TextAvatar :name="getName(conv)" :src="getAvatar(conv)" :size="35" />
+          <TextAvatar
+            :name="getName(conv)"
+            :src="getAvatar(conv)"
+            :size="35"
+            :rounded="!!getAvatar(conv)"
+          />
           <span v-if="conv.unreadCount > 0 && !conv.isMuted" class="badge">
             {{ conv.unreadCount > 99 ? '99+' : conv.unreadCount }}
           </span>

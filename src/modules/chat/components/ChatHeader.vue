@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useChatStore } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID, FILE_HELPER_DISPLAY_NAME } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
@@ -19,6 +19,7 @@ const conversation = computed(() =>
 
 const title = computed(() => {
   if (!conversation.value) return ''
+  if (conversation.value.targetId === FILE_HELPER_TARGET_ID) return FILE_HELPER_DISPLAY_NAME
   switch (conversation.value.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conversation.value.targetId)
@@ -35,7 +36,15 @@ const title = computed(() => {
 <template>
   <div class="chat-header">
     <div class="header-left">
-      <span class="title">{{ title }}</span>
+      <span
+        class="title"
+        :class="{ 'is-file-helper': conversation?.targetId === FILE_HELPER_TARGET_ID }"
+      >{{ title }}</span>
+      <span
+        v-if="conversation?.targetId === FILE_HELPER_TARGET_ID"
+        class="title-verified"
+        aria-hidden="true"
+      >V</span>
     </div>
     <div class="header-right">
       <!-- Group info, search, etc. -->
@@ -55,9 +64,43 @@ const title = computed(() => {
   flex-shrink: 0;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .title {
   font-size: 15px;
   font-weight: 500;
   color: #333;
+}
+
+.title.is-file-helper {
+  font-weight: 600;
+}
+
+.title-verified {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: #3369fe;
+  clip-path: polygon(
+    30% 0%,
+    70% 0%,
+    100% 30%,
+    100% 70%,
+    70% 100%,
+    30% 100%,
+    0% 70%,
+    0% 30%
+  );
 }
 </style>
