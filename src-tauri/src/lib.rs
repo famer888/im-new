@@ -138,6 +138,8 @@ pub fn run() {
             commands::window::close_chat_window,
             commands::settings::get_settings,
             commands::settings::update_settings,
+            commands::repair::repair_clear_crypto_keys,
+            commands::repair::repair_reset_user_local_data,
             commands::ws::connect_ws,
             commands::ws::disconnect_ws,
             commands::ws::get_ws_status,
