@@ -32,6 +32,8 @@ import ContextMenu from '@/components/ContextMenu.vue'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import type { MenuItem } from '@/components/ContextMenu.vue'
 
+import emptyBrandImg from '@/assets/images/login/dock.png'
+
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
@@ -171,7 +173,7 @@ async function handleContextMenuSelect(key: string) {
         <template v-else>
           <div class="default-content">
             <div class="empty-state">
-              <p>OCS Chat</p>
+              <img :src="emptyBrandImg" alt="" class="empty-brand-icon" />
             </div>
           </div>
         </template>
@@ -266,8 +268,16 @@ async function handleContextMenuSelect(key: string) {
 
 .empty-state {
   text-align: center;
-  color: #ccc;
-  font-size: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.empty-brand-icon {
+  width: 160px;
+  height: auto;
+  display: block;
+  border-radius: 8px;
 }
 
 .network-bar {
