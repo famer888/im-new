@@ -104,7 +104,7 @@ function handleItemResize(key: string, height: number) {
   overflow-x: hidden;
   position: relative;
   contain: strict;
-  background: #fff;
+  background: #f6f6f6;
 }
 
 .loading-indicator {
