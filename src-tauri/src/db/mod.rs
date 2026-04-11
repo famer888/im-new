@@ -71,6 +71,20 @@ impl DbManager {
         conns.clear();
         info!("All databases closed");
     }
+
+    /// 关闭并删除当前账号本地库（异常修复「重置缓存数据」）
+    pub fn delete_user_database(&self, uid: &str) -> Result<(), DbError> {
+        self.close(uid);
+        let db_path = self.app_data_dir.join(format!("{uid}.db"));
+        if db_path.exists() {
+            std::fs::remove_file(&db_path)
+                .map_err(|e| DbError::IoError(e.to_string()))?;
+        }
+        let _ = std::fs::remove_file(self.app_data_dir.join(format!("{uid}.db-wal")));
+        let _ = std::fs::remove_file(self.app_data_dir.join(format!("{uid}.db-shm")));
+        info!("User database removed: {}", uid);
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

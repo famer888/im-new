@@ -7,6 +7,7 @@ pub mod file;
 pub mod groups;
 pub mod ntp;
 pub mod platform;
+pub mod repair;
 pub mod sentry;
 pub mod settings;
 pub mod window;
