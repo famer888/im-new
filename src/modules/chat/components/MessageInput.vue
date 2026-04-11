@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessageType, ConversationType } from '@/types'
-import { useChatStore } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
@@ -10,6 +10,8 @@ import AtListDialog from './send/AtListDialog.vue'
 import CreateLinkDialog from './send/CreateLinkDialog.vue'
 import ScheduleDeletionDialog from './send/ScheduleDeletionDialog.vue'
 import FileUploadPreview from './FileUploadPreview.vue'
+import iconSmallActive from '@/assets/images/activeIcon/small-active.png'
+import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 
 const emit = defineEmits<{
   (e: 'send', content: string, msgType: number): void
@@ -29,6 +31,10 @@ const showFilePreview = ref(false)
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const groupId = computed(() => chatStore.currentConversation?.targetId ?? '')
+/** 与 im 传输助手一致：工具栏仅表情 + 文件 */
+const isFileHelperChat = computed(
+  () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+)
 const isMuted = computed(() => chatStore.currentConversation?.isMuted ?? false)
 const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
@@ -68,7 +74,7 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault()
     handleSend()
   }
-  if (e.key === '@' && isGroup.value) {
+  if (e.key === '@' && isGroup.value && !isFileHelperChat.value) {
     showAtList.value = true
   }
 }
@@ -198,23 +204,26 @@ eventBus.on('editor:insert-at', handleAtSelect)
     <template v-else>
       <div class="toolbar">
         <div class="toolbar-left">
-          <button class="tool-btn" :title="$t('表情')" @click="showEmoji = !showEmoji">
-            <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="none" stroke="#666" stroke-width="1.5"/><circle cx="9" cy="10" r="1" fill="#666"/><circle cx="15" cy="10" r="1" fill="#666"/><path d="M8 14s1.5 2 4 2 4-2 4-2" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <!-- 与 im components/active-icon.vue 一致：activeIcon/*.png + 灰度 / hover 彩色 -->
+          <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('表情')" @click="showEmoji = !showEmoji">
+            <img class="im-active-icon" :src="iconSmallActive" alt="" width="20" height="20" />
           </button>
-          <button class="tool-btn" :title="$t('文件')" @click="handleFileSelect">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" fill="none" stroke="#666" stroke-width="1.5"/><path d="M14 2v6h6" fill="none" stroke="#666" stroke-width="1.5"/></svg>
+          <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('文件')" @click="handleFileSelect">
+            <img class="im-active-icon" :src="iconFileActive" alt="" width="20" height="20" />
           </button>
-          <button class="tool-btn" :title="$t('截图')" @click="handleGlobalKeydown({ ctrlKey: true, shiftKey: true, key: 'a', preventDefault: () => {} } as any)">
-            <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="#666" stroke-width="1.5"/><path d="M9 3v18M3 9h18" fill="none" stroke="#666" stroke-width="1.5" opacity="0.4"/></svg>
-          </button>
-          <button v-if="isGroup" class="tool-btn" :title="$t('@提及')" @click="showAtList = !showAtList">@</button>
-          <button class="tool-btn" :title="$t('创建链接')" @click="showCreateLink = true">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-          <button class="tool-btn" :title="$t('阅后即焚')" @click="showScheduleDeletion = true">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="#666"/><path d="M12.5 7H11v6l5.25 3.15.75-1.23-4.5-2.67V7z" fill="#666"/></svg>
-            <span v-if="scheduleDeletionTime > 0" class="burn-indicator" />
-          </button>
+          <template v-if="!isFileHelperChat">
+            <button class="tool-btn" type="button" :title="$t('截图')" @click="handleGlobalKeydown({ ctrlKey: true, shiftKey: true, key: 'a', preventDefault: () => {} } as any)">
+              <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="#666" stroke-width="1.5"/><path d="M9 3v18M3 9h18" fill="none" stroke="#666" stroke-width="1.5" opacity="0.4"/></svg>
+            </button>
+            <button v-if="isGroup" class="tool-btn" :title="$t('@提及')" @click="showAtList = !showAtList">@</button>
+            <button class="tool-btn" :title="$t('创建链接')" @click="showCreateLink = true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <button class="tool-btn" :title="$t('阅后即焚')" @click="showScheduleDeletion = true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="#666"/><path d="M12.5 7H11v6l5.25 3.15.75-1.23-4.5-2.67V7z" fill="#666"/></svg>
+              <span v-if="scheduleDeletionTime > 0" class="burn-indicator" />
+            </button>
+          </template>
         </div>
       </div>
 
@@ -244,7 +253,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
 
       <div class="send-area">
         <div class="send-left">
-          <span v-if="scheduleDeletionTime > 0" class="burn-time-tip">
+          <span v-if="scheduleDeletionTime > 0 && !isFileHelperChat" class="burn-time-tip">
             <svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 1C4.13 1 1 4.13 1 8s3.13 7 7 7 7-3.13 7-7-3.13-7-7-7z" fill="none" stroke="#da2e2e" stroke-width="1.2"/><path d="M8.5 4H7v5l3.5 2.1.5-.82L8.5 8.5V4z" fill="#da2e2e"/></svg>
             {{ $t('阅后即焚已开启') }}
           </span>
@@ -322,6 +331,10 @@ eventBus.on('editor:insert-at', handleAtSelect)
 
   &:hover { background: #f0f0f0; }
 
+  &.tool-btn-im-icon:hover {
+    background: transparent;
+  }
+
   .burn-indicator {
     position: absolute;
     top: 4px;
@@ -331,6 +344,19 @@ eventBus.on('editor:insert-at', handleAtSelect)
     border-radius: 50%;
     background: #da2e2e;
   }
+}
+
+/* im .comActiveIcon */
+.im-active-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  filter: brightness(1) grayscale(1);
+  pointer-events: none;
+}
+
+.tool-btn-im-icon:hover .im-active-icon {
+  filter: unset;
 }
 
 .editor-wrapper {
