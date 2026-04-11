@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
@@ -37,6 +38,7 @@ const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const settingStore = useSettingStore()
+const { locale: appLocale } = useI18n()
 const uiStore = useUIStore()
 const networkStore = useNetworkStore()
 
@@ -52,6 +54,7 @@ onMounted(async () => {
       channelStore.loadChannels(authStore.uid),
       settingStore.loadSettings(),
     ])
+    appLocale.value = settingStore.settings.language
     try {
       if ((window as any).__TAURI_INTERNALS__) {
         const { invoke } = await import('@tauri-apps/api/core')
