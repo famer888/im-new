@@ -393,6 +393,7 @@ onBeforeUnmount(() => {
 
 .setting-trigger {
   font-size: 14px;
+  font-weight: 600;
   color: #333;
   cursor: pointer;
   user-select: none;
