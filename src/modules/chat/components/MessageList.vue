@@ -28,11 +28,27 @@ const { visibleItems, totalHeight, offsetTop, scrollToBottom, updateItemHeight }
   })
 
 const isAtBottom = ref(true)
+const lastMessageId = ref<string>('')
 
 const unreadDividerIndex = computed(() => {
   if (!props.unreadCount || props.unreadCount <= 0) return -1
   return props.messages.length - props.unreadCount
 })
+
+async function pinToLatest() {
+  await nextTick()
+  // 第一阶段：走虚拟列表内置滚动
+  scrollToBottom(true)
+  // 第二阶段：等待高度回流后再强制兜底一次，避免最后一条被输入区遮住
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const el = containerRef.value
+      if (!el) return
+      el.scrollTop = el.scrollHeight
+      isAtBottom.value = true
+    })
+  })
+}
 
 function handleScroll() {
   if (!containerRef.value) return
@@ -47,19 +63,31 @@ function handleScroll() {
 watch(
   () => props.messages.length,
   async () => {
-    if (isAtBottom.value) {
-      await nextTick()
-      scrollToBottom()
+    const list = props.messages
+    const latestId = list.length > 0 ? list[list.length - 1].id : ''
+    const prevLatestId = lastMessageId.value
+    lastMessageId.value = latestId
+
+    // 仅在“新增尾部消息”时强制置底，避免上滑加载历史时被拉回底部
+    const appendedNewMessage = !!latestId && latestId !== prevLatestId
+    if (appendedNewMessage) {
+      await pinToLatest()
     }
   },
 )
 
 onMounted(() => {
+  const list = props.messages
+  lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
   scrollToBottom()
 })
 
 function handleItemResize(key: string, height: number) {
   updateItemHeight(key, height)
+  // 新消息高度变化（文本换行、状态文案出现）后，保持底部对齐
+  if (isAtBottom.value) {
+    void pinToLatest()
+  }
 }
 </script>
 
