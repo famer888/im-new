@@ -34,8 +34,8 @@ const grouped = computed((): GroupedContacts[] => {
 })
 
 function handleSelect(contact: typeof contactStore.contacts[0]) {
-  const convId = `0_${contact.id}`
-  chatStore.setCurrentConversation(convId)
+  const conv = chatStore.ensureConversation(0, contact.id)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('friend-detail')
 }
 </script>

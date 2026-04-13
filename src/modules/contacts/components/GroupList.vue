@@ -18,8 +18,8 @@ onMounted(() => {
 })
 
 function handleSelect(group: typeof groupStore.groups[0]) {
-  const convId = `1_${group.id}`
-  chatStore.setCurrentConversation(convId)
+  const conv = chatStore.ensureConversation(1, group.id)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('group-detail')
 }
 </script>

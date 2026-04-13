@@ -16,21 +16,24 @@ const uiStore = useUIStore()
 const hasInputKeyword = computed(() => props.keyword.trim().length > 0)
 
 function selectContact(id: string) {
-  chatStore.setCurrentConversation(`0_${id}`)
+  const conv = chatStore.ensureConversation(0, id)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('chat')
   searchStore.clearResults()
   uiStore.searchVisible = false
 }
 
 function selectGroup(id: string) {
-  chatStore.setCurrentConversation(`1_${id}`)
+  const conv = chatStore.ensureConversation(1, id)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('chat')
   searchStore.clearResults()
   uiStore.searchVisible = false
 }
 
 function selectChannel(id: string) {
-  chatStore.setCurrentConversation(`2_${id}`)
+  const conv = chatStore.ensureConversation(2, id)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('chat')
   searchStore.clearResults()
   uiStore.searchVisible = false
