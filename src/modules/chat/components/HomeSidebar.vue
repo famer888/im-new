@@ -156,8 +156,9 @@ function handleLogout() {
 
 async function confirmLogout() {
   await authStore.logout()
-  if (!(window as any).__TAURI_INTERNALS__) {
-    router.push('/login')
+  await router.replace('/login')
+  if (window.location.hash !== '#/login') {
+    window.location.hash = '#/login'
   }
 }
 
