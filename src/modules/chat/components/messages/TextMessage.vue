@@ -14,7 +14,11 @@ const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
+const isFriendChat = computed(
+  () => chatStore.currentConversation?.type === 0,
+)
 const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
+const useImBubbleStyle = computed(() => isFriendChat.value || isFileHelperChat.value)
 
 const formattedContent = computed(() => {
   const content = props.message.content ?? ''
@@ -26,7 +30,7 @@ const formattedContent = computed(() => {
 </script>
 
 <template>
-  <div :class="['text-message', { self: displayAsSelf, 'file-helper-style': isFileHelperChat }]">
+  <div :class="['text-message', { self: displayAsSelf, 'im-bubble-style': useImBubbleStyle }]">
     <div class="bubble" v-html="formattedContent" />
   </div>
 </template>
@@ -48,7 +52,7 @@ const formattedContent = computed(() => {
     background: #95ec69;
   }
 
-  &.file-helper-style {
+  &.im-bubble-style {
     .bubble {
       max-width: 450px;
       min-width: 130px;
