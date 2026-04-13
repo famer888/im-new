@@ -11,6 +11,10 @@ export const API_CONFIG = {
   headAesKey: import.meta.env.VITE_APP_HEAD_AES_KEY || 'f58c15f54e8f7826',
   secretName: import.meta.env.VITE_APP_SECRET_NAME || '158d1eaa13de7f141eaa6241fd40d5b2',
   secretKey: import.meta.env.VITE_APP_SECRET_KEY || '74ec5eb2c5f86c04',
+  appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 167),
+  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 7100),
+  language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
+  plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
   rawDomainUrl: RAW_DOMAIN_URL,
   env: import.meta.env.VITE_APP_ENV || 'test',
 }

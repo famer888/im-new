@@ -26,6 +26,10 @@ interface ImportMetaEnv {
   readonly VITE_APP_AES_KEY: string
   readonly VITE_APP_PACKNAME: string
   readonly VITE_APP_BASE_DOMAIN: string
+  readonly VITE_APP_VERSION_CODE: string
+  readonly VITE_APP_PACKAGE_CODE: string
+  readonly VITE_APP_LANGUAGE: string
+  readonly VITE_APP_PLATFORM: string
   readonly VITE_APP_SENTRY_DSN: string
   readonly VITE_APP_SECRET_NAME: string
   readonly VITE_APP_SECRET_KEY: string

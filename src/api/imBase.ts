@@ -133,3 +133,25 @@ export async function getGroupContactList(
     respType: proto.GroupContactListResp,
   })
 }
+
+/**
+ * Get group member list.
+ * POST /group/groupMemberList
+ */
+export async function getGroupMemberList(
+  data: { groupId: number; pageNum: number; pageSize: number; time?: number },
+  baseUrl?: string,
+): Promise<proto.GroupMemberListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupMemberList`,
+    reqType: proto.GroupMemberListReq,
+    respType: proto.GroupMemberListResp,
+    data: {
+      groupId: data.groupId,
+      pageNum: data.pageNum,
+      pageSize: data.pageSize,
+      time: data.time ?? 0,
+    },
+  })
+}
