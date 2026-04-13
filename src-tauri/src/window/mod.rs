@@ -120,7 +120,7 @@ impl WindowManager {
                 let mut builder = WebviewWindowBuilder::new(
                     app,
                     "main",
-                    WebviewUrl::App("/home".into()),
+                    WebviewUrl::App("/#/home".into()),
                 )
                 .title("OCS Chat")
                 .inner_size(1000.0, 680.0)
@@ -172,7 +172,7 @@ impl WindowManager {
                 let mut builder = WebviewWindowBuilder::new(
                     app,
                     "login",
-                    WebviewUrl::App("/login".into()),
+                    WebviewUrl::App("/#/login".into()),
                 )
                 .title("OCS Chat")
                 .inner_size(380.0, 520.0)

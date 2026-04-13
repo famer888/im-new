@@ -67,7 +67,7 @@ pub fn run() {
                 let mut builder = WebviewWindowBuilder::new(
                     app,
                     "login",
-                    WebviewUrl::App("/login".into()),
+                    WebviewUrl::App("/#/login".into()),
                 )
                 .title("OCS Chat")
                 .inner_size(380.0, 520.0)
