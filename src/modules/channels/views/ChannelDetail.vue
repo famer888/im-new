@@ -13,7 +13,8 @@ const uiStore = useUIStore()
 const channel = computed(() => channelStore.getChannel(props.channelId))
 
 function startChat() {
-  chatStore.setCurrentConversation(`2_${props.channelId}`)
+  const conv = chatStore.ensureConversation(2, props.channelId)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setSidebarTab('chats')
   uiStore.setDetailView('chat')
 }

@@ -115,6 +115,33 @@ export const useChatStore = defineStore('chat', () => {
     sortConversations()
   }
 
+  function ensureConversation(type: number, targetId: string): Conversation {
+    const id = `${type}_${targetId}`
+    const existing = conversations.value.find((c) => c.id === id)
+    if (existing) return existing
+
+    const conv: Conversation = {
+      id,
+      type,
+      targetId,
+      lastMsgId: null,
+      lastMsgTime: 0,
+      lastMsgDigest: null,
+      unreadCount: 0,
+      isPinned: false,
+      isMuted: false,
+      isArchived: false,
+      draft: null,
+      senderName: null,
+      atMe: false,
+      scheduleDeletion: 0,
+      updatedAt: Date.now(),
+    }
+    conversations.value.unshift(conv)
+    sortConversations()
+    return conv
+  }
+
   function sortConversations() {
     conversations.value.sort((a, b) => {
       if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
@@ -187,6 +214,7 @@ export const useChatStore = defineStore('chat', () => {
     setCurrentConversation,
     updateConversation,
     addOrUpdateConversation,
+    ensureConversation,
     pinConversation,
     muteConversation,
     markAsRead,

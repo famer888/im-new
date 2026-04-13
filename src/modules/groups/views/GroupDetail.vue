@@ -20,7 +20,8 @@ onMounted(() => {
 })
 
 function startChat() {
-  chatStore.setCurrentConversation(`1_${props.groupId}`)
+  const conv = chatStore.ensureConversation(1, props.groupId)
+  chatStore.setCurrentConversation(conv.id)
   uiStore.setSidebarTab('chats')
   uiStore.setDetailView('chat')
 }
