@@ -38,6 +38,26 @@ export const useChatStore = defineStore('chat', () => {
   const currentConversationId = ref<string | null>(null)
   const loading = ref(false)
 
+  function normalizeConversation(raw: any): Conversation {
+    return {
+      id: String(raw.id ?? ''),
+      type: Number(raw.type ?? raw.conv_type ?? 0),
+      targetId: String(raw.targetId ?? raw.target_id ?? ''),
+      lastMsgId: raw.lastMsgId ?? raw.last_msg_id ?? null,
+      lastMsgTime: Number(raw.lastMsgTime ?? raw.last_msg_time ?? 0),
+      lastMsgDigest: raw.lastMsgDigest ?? raw.last_msg_digest ?? null,
+      unreadCount: Number(raw.unreadCount ?? raw.unread_count ?? 0),
+      isPinned: Boolean(raw.isPinned ?? raw.is_pinned ?? false),
+      isMuted: Boolean(raw.isMuted ?? raw.is_muted ?? false),
+      isArchived: Boolean(raw.isArchived ?? raw.is_archived ?? false),
+      draft: raw.draft ?? null,
+      senderName: raw.senderName ?? raw.sender_name ?? null,
+      atMe: Boolean(raw.atMe ?? raw.at_me ?? false),
+      scheduleDeletion: Number(raw.scheduleDeletion ?? raw.schedule_deletion ?? 0),
+      updatedAt: Number(raw.updatedAt ?? raw.updated_at ?? Date.now()),
+    }
+  }
+
   const currentConversation = computed(() =>
     conversations.value.find((c) => c.id === currentConversationId.value) ?? null,
   )
@@ -78,12 +98,12 @@ export const useChatStore = defineStore('chat', () => {
     loading.value = true
     try {
       if (isTauri()) {
-        const result = await tauriInvoke<Conversation[]>('get_conversations', {
+        const result = await tauriInvoke<any[]>('get_conversations', {
           uid,
           limit: 50,
           offset: 0,
         })
-        conversations.value = result
+        conversations.value = Array.isArray(result) ? result.map(normalizeConversation) : []
       }
       // In browser mode, conversations are populated via WebSocket message events
     } catch (e) {
@@ -106,11 +126,12 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function addOrUpdateConversation(conv: Conversation) {
-    const index = conversations.value.findIndex((c) => c.id === conv.id)
+    const normalized = normalizeConversation(conv as any)
+    const index = conversations.value.findIndex((c) => c.id === normalized.id)
     if (index >= 0) {
-      conversations.value[index] = conv
+      conversations.value[index] = normalized
     } else {
-      conversations.value.unshift(conv)
+      conversations.value.unshift(normalized)
     }
     sortConversations()
   }
