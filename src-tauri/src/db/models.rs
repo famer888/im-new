@@ -60,7 +60,8 @@ pub struct GroupMember {
     pub group_id: String,
     pub user_id: String,
     pub nickname: Option<String>,
-    pub role: i32,             // 0: member, 1: admin, 2: owner
+    pub avatar: Option<String>,
+    pub role: i32, // 与 proto GroupMemberType 一致：0 群主 1 管理员 2 成员
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

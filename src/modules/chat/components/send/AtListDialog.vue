@@ -49,9 +49,13 @@ function handleSelect(member: GroupMember) {
           class="at-item"
           @click="handleSelect(member)"
         >
-          <TextAvatar :name="member.nickname || member.userId" :size="32" />
+          <TextAvatar
+            :name="member.nickname || member.userId"
+            :src="member.avatar"
+            :size="32"
+          />
           <span>{{ member.nickname || member.userId }}</span>
-          <span v-if="member.role === 2" class="role-tag owner">群主</span>
+          <span v-if="member.role === 0" class="role-tag owner">群主</span>
           <span v-else-if="member.role === 1" class="role-tag admin">管理员</span>
         </div>
       </div>

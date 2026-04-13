@@ -35,9 +35,13 @@ const totalCount = computed(() => group.value?.memberCount ?? groupStore.getMemb
     </div>
     <div class="member-items">
       <div v-for="member in members" :key="member.userId" class="member-item">
-        <TextAvatar :name="member.nickname || member.userId" :size="32" />
+        <TextAvatar
+          :name="member.nickname || member.userId"
+          :src="member.avatar"
+          :size="32"
+        />
         <span class="member-name">{{ member.nickname || member.userId }}</span>
-        <span v-if="member.role === 2" class="role-tag owner">群主</span>
+        <span v-if="member.role === 0" class="role-tag owner">群主</span>
         <span v-else-if="member.role === 1" class="role-tag admin">管理</span>
       </div>
     </div>
