@@ -71,6 +71,13 @@ const isSystemMsg = computed(() =>
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
+const isGroupChat = computed(
+  () => chatStore.currentConversation?.type === 1,
+)
+const showAvatar = computed(
+  // 对齐 im：仅群聊的他人消息显示头像；单聊/传输助手不显示头像
+  () => isGroupChat.value && !displayAsSelf.value,
+)
 
 function handleContextMenu(e: MouseEvent) {
   e.preventDefault()
@@ -108,13 +115,13 @@ onMounted(() => {
     </div>
     <div v-else class="message-bubble-wrapper">
       <TextAvatar
-        v-if="!isFileHelperChat"
+        v-if="showAvatar"
         :name="senderName"
         :size="36"
         class="msg-avatar"
       />
       <div class="bubble-area">
-        <span v-if="!displayAsSelf && !isFileHelperChat" class="sender-name">{{ senderName }}</span>
+        <span v-if="showAvatar" class="sender-name">{{ senderName }}</span>
         <component :is="messageComponent" :message="message" />
         <div class="message-meta">
           <span v-if="message.status === 0" class="status sending">发送中</span>

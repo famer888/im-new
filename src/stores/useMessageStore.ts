@@ -33,6 +33,23 @@ export const useMessageStore = defineStore('message', () => {
   const loadingMap = ref<Map<string, boolean>>(new Map())
   const hasMoreMap = ref<Map<string, boolean>>(new Map())
 
+  function normalizeMessage(raw: any): Message {
+    return {
+      id: String(raw.id ?? ''),
+      customMsgId: raw.customMsgId ?? raw.custom_msg_id ?? null,
+      conversationId: String(raw.conversationId ?? raw.conversation_id ?? ''),
+      senderId: String(raw.senderId ?? raw.sender_id ?? ''),
+      msgType: Number(raw.msgType ?? raw.msg_type ?? 0),
+      content: raw.content ?? null,
+      sendTime: Number(raw.sendTime ?? raw.send_time ?? Date.now()),
+      status: Number(raw.status ?? 0),
+      readStatus: Number(raw.readStatus ?? raw.read_status ?? 0),
+      version: Number(raw.version ?? 0),
+      isDeleted: Boolean(raw.isDeleted ?? raw.is_deleted ?? false),
+      extra: raw.extra ?? null,
+    }
+  }
+
   function getMessages(conversationId: string): Message[] {
     return messageMap.value.get(conversationId) ?? []
   }
@@ -51,13 +68,14 @@ export const useMessageStore = defineStore('message', () => {
 
     loadingMap.value.set(conversationId, true)
     try {
-      const result = await tauriInvoke<Message[]>('get_messages', {
+      const result = await tauriInvoke<any[]>('get_messages', {
         uid,
         conversationId,
         limit: PAGE_SIZE,
       })
-      messageMap.value.set(conversationId, result)
-      hasMoreMap.value.set(conversationId, result.length >= PAGE_SIZE)
+      const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
+      messageMap.value.set(conversationId, normalized)
+      hasMoreMap.value.set(conversationId, normalized.length >= PAGE_SIZE)
     } finally {
       loadingMap.value.set(conversationId, false)
     }
@@ -72,20 +90,21 @@ export const useMessageStore = defineStore('message', () => {
 
     loadingMap.value.set(conversationId, true)
     try {
-      const result = await tauriInvoke<Message[]>('get_messages', {
+      const result = await tauriInvoke<any[]>('get_messages', {
         uid,
         conversationId,
         beforeTime,
         limit: PAGE_SIZE,
       })
-      if (result.length > 0) {
-        const merged = [...result, ...existing]
+      const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
+      if (normalized.length > 0) {
+        const merged = [...normalized, ...existing]
         if (merged.length > MAX_CACHED_MESSAGES) {
           merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
         }
         messageMap.value.set(conversationId, merged)
       }
-      hasMoreMap.value.set(conversationId, result.length >= PAGE_SIZE)
+      hasMoreMap.value.set(conversationId, normalized.length >= PAGE_SIZE)
     } finally {
       loadingMap.value.set(conversationId, false)
     }
@@ -99,7 +118,7 @@ export const useMessageStore = defineStore('message', () => {
     extra?: Record<string, unknown>,
   ) {
     if (!isTauri()) return null as any
-    const result = await tauriInvoke<Message>('send_message', {
+    const result = await tauriInvoke<any>('send_message', {
       uid,
       request: {
         conversation_id: conversationId,
@@ -108,8 +127,9 @@ export const useMessageStore = defineStore('message', () => {
         extra,
       },
     })
-    appendMessage(conversationId, result)
-    return result
+    const normalized = normalizeMessage(result)
+    appendMessage(conversationId, normalized)
+    return normalized
   }
 
   function appendMessage(conversationId: string, message: Message) {
