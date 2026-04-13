@@ -59,7 +59,9 @@ pub async fn send_message(
         msg_type: request.msg_type,
         content: Some(request.content.clone()),
         send_time: now,
-        status: 0, // sending
+        // 当前 send -> WS 回执链路尚未接入（下方 TODO），否则会永久“发送中”。
+        // 先与旧版体验对齐：本地入库即视为“已发送”。
+        status: 1,
         read_status: 0,
         version: 0,
         is_deleted: false,
