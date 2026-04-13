@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getGroupContactList } from '@/api/imBase'
+import { getGroupContactList, getGroupMemberList } from '@/api/imBase'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -38,7 +38,12 @@ export const useGroupStore = defineStore('group', () => {
     loading.value = true
     try {
       if (isTauri()) {
-        groups.value = await tauriInvoke<Group[]>('get_groups', { uid })
+        const localGroups = await tauriInvoke<Group[]>('get_groups', { uid })
+        if (Array.isArray(localGroups) && localGroups.length > 0) {
+          groups.value = localGroups
+        } else {
+          await loadGroupsViaApi()
+        }
       } else {
         await loadGroupsViaApi()
       }
@@ -70,10 +75,64 @@ export const useGroupStore = defineStore('group', () => {
   }
 
   async function loadMembers(uid: string, groupId: string) {
-    if (!isTauri()) return []
-    const members = await tauriInvoke<GroupMember[]>('get_group_members', { uid, groupId })
+    if (isTauri()) {
+      try {
+        const localMembers = await tauriInvoke<GroupMember[]>('get_group_members', { uid, groupId })
+        if (Array.isArray(localMembers) && localMembers.length > 0) {
+          memberMap.value.set(groupId, localMembers)
+          return localMembers
+        }
+      } catch (e) {
+        console.error('[GroupStore] local loadMembers failed:', e)
+      }
+    }
+
+    const members = await loadMembersViaApi(groupId)
     memberMap.value.set(groupId, members)
     return members
+  }
+
+  async function loadMembersViaApi(groupId: string): Promise<GroupMember[]> {
+    const allMembers: GroupMember[] = []
+    const pageSize = 200
+    let pageNum = 1
+    let hasMore = true
+    const gid = Number(groupId)
+    if (!Number.isFinite(gid) || gid <= 0) {
+      return []
+    }
+
+    while (hasMore) {
+      try {
+        const resp = await getGroupMemberList({
+          groupId: gid,
+          pageNum,
+          pageSize,
+          time: 0,
+        })
+        const list = resp.members || []
+        for (const item of list as any[]) {
+          const user = item.user || {}
+          allMembers.push({
+            groupId: String(item.groupId || groupId),
+            userId: String(user.uid || ''),
+            nickname: user.nickName || null,
+            role: Number(item.type || 0),
+          })
+        }
+
+        const totalCount = Number(resp.count || 0)
+        hasMore = totalCount > 0
+          ? allMembers.length < totalCount
+          : list.length >= pageSize
+        pageNum++
+      } catch (e) {
+        console.error('[GroupStore] API loadMembers page failed:', e)
+        hasMore = false
+      }
+    }
+
+    return allMembers
   }
 
   function getGroup(id: string): Group | undefined {
