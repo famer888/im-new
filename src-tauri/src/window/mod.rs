@@ -165,6 +165,11 @@ impl WindowManager {
 
         match app.get_webview_window("login") {
             Some(login) => {
+                // Login window stays alive while hidden; force it back to QR-login route
+                // and reload to reset in-memory frontend state before showing it.
+                let _ = login.eval(
+                    "window.location.hash = '#/login'; window.location.reload();",
+                );
                 login.show().map_err(|e| WindowError::TauriError(e.to_string()))?;
                 login.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
