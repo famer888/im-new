@@ -102,7 +102,7 @@ function saveRemark() {
         <picture class="file-helper-picture">
           <img :src="fileHelperIcon" alt="" />
         </picture>
-        <span class="title title-file-helper">{{ FILE_HELPER_DISPLAY_NAME }}</span>
+        <span class="file-helper-title">{{ FILE_HELPER_DISPLAY_NAME }}</span>
         <img class="file-helper-v" :src="userIconV" alt="" />
       </template>
       <template v-else>
@@ -148,6 +148,8 @@ function saveRemark() {
   border-bottom: 1px solid #e8e8e8;
   background: #fff;
   flex-shrink: 0;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .header-left {
@@ -178,6 +180,13 @@ function saveRemark() {
     border-radius: 50%;
     object-fit: cover;
   }
+}
+
+.file-helper-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+  line-height: 1;
 }
 
 .title {

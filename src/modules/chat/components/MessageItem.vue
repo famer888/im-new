@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { MessageType } from '@/types'
@@ -27,10 +28,12 @@ const props = defineProps<{ message: Message }>()
 const emit = defineEmits<{ (e: 'resize', height: number): void }>()
 
 const authStore = useAuthStore()
+const chatStore = useChatStore()
 const contactStore = useContactStore()
 const uiStore = useUIStore()
 const itemRef = ref<HTMLElement | null>(null)
 const isSelf = computed(() => props.message.senderId === authStore.uid)
+const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
 
 const senderName = computed(() => {
   if (isSelf.value) return '我'
@@ -65,6 +68,10 @@ const isSystemMsg = computed(() =>
   props.message.msgType === MessageType.Notice,
 )
 
+const isFileHelperChat = computed(
+  () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+)
+
 function handleContextMenu(e: MouseEvent) {
   e.preventDefault()
   uiStore.showContextMenu(e.clientX, e.clientY, {
@@ -93,7 +100,7 @@ onMounted(() => {
   <div
     ref="itemRef"
     v-memo="[message.status, message.readStatus]"
-    :class="['message-item', { 'is-self': isSelf }]"
+    :class="['message-item', { 'is-self': displayAsSelf }]"
     @contextmenu="handleContextMenu"
   >
     <div v-if="isSystemMsg" class="system-message">
@@ -101,12 +108,13 @@ onMounted(() => {
     </div>
     <div v-else class="message-bubble-wrapper">
       <TextAvatar
+        v-if="!isFileHelperChat"
         :name="senderName"
         :size="36"
         class="msg-avatar"
       />
       <div class="bubble-area">
-        <span v-if="!isSelf" class="sender-name">{{ senderName }}</span>
+        <span v-if="!displayAsSelf && !isFileHelperChat" class="sender-name">{{ senderName }}</span>
         <component :is="messageComponent" :message="message" />
         <div class="message-meta">
           <span v-if="message.status === 0" class="status sending">发送中</span>
