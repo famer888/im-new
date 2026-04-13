@@ -139,7 +139,7 @@ export async function getGroupContactList(
  * POST /group/groupMemberList
  */
 export async function getGroupMemberList(
-  data: { groupId: number; pageNum: number; pageSize: number; time?: number },
+  data: { groupId: number | string; pageNum: number; pageSize: number; time?: number },
   baseUrl?: string,
 ): Promise<proto.GroupMemberListResp> {
   const base = baseUrl || getBaseUrl()

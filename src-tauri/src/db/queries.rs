@@ -300,6 +300,7 @@ pub fn get_group_members(conn: &Connection, group_id: &str) -> Result<Vec<GroupM
                 group_id: row.get(0)?,
                 user_id: row.get(1)?,
                 nickname: row.get(2)?,
+                avatar: None,
                 role: row.get(3)?,
             })
         })

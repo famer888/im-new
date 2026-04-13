@@ -26,6 +26,8 @@ export interface GroupMember {
   groupId: string
   userId: string
   nickname: string | null
+  /** 头像 URL，与 proto UserBase.icon 一致 */
+  avatar?: string | null
   role: number
 }
 
@@ -34,13 +36,26 @@ export const useGroupStore = defineStore('group', () => {
   const memberMap = ref<Map<string, GroupMember[]>>(new Map())
   const loading = ref(false)
 
+  function normalizeGroup(item: any): Group {
+    return {
+      id: String(item.id ?? item.groupId ?? item.group_id ?? ''),
+      name: item.name ?? null,
+      avatar: item.avatar ?? item.pic ?? null,
+      ownerId: item.ownerId ?? item.owner_id ?? (item.hostId ? String(item.hostId) : null) ?? null,
+      memberCount: Number(item.memberCount ?? item.member_count ?? 0),
+      notice: item.notice ?? null,
+      isMuted: Boolean(item.isMuted ?? item.is_muted ?? item.bfShutup ?? false),
+      updatedAt: Number(item.updatedAt ?? item.updated_at ?? item.createTime ?? 0),
+    }
+  }
+
   async function loadGroups(uid: string) {
     loading.value = true
     try {
       if (isTauri()) {
         const localGroups = await tauriInvoke<Group[]>('get_groups', { uid })
         if (Array.isArray(localGroups) && localGroups.length > 0) {
-          groups.value = localGroups
+          groups.value = localGroups.map((g: any) => normalizeGroup(g))
         } else {
           await loadGroupsViaApi()
         }
@@ -58,16 +73,7 @@ export const useGroupStore = defineStore('group', () => {
     try {
       const resp = await getGroupContactList()
       const list = resp.groups || []
-      groups.value = list.map((g: any) => ({
-        id: String(g.groupId || ''),
-        name: g.name || null,
-        avatar: g.pic || null,
-        ownerId: g.hostId ? String(g.hostId) : null,
-        memberCount: Number(g.memberCount || 0),
-        notice: null,
-        isMuted: !!g.bfShutup,
-        updatedAt: Number(g.createTime || 0),
-      }))
+      groups.value = list.map((g: any) => normalizeGroup(g))
       console.log(`[GroupStore] Loaded ${groups.value.length} groups via API`)
     } catch (e) {
       console.error('[GroupStore] API loadGroups failed:', e)
@@ -77,10 +83,18 @@ export const useGroupStore = defineStore('group', () => {
   async function loadMembers(uid: string, groupId: string) {
     if (isTauri()) {
       try {
-        const localMembers = await tauriInvoke<GroupMember[]>('get_group_members', { uid, groupId })
+        const localMembers = await tauriInvoke<any[]>('get_group_members', { uid, groupId })
         if (Array.isArray(localMembers) && localMembers.length > 0) {
-          memberMap.value.set(groupId, localMembers)
-          return localMembers
+          const normalizedMembers = localMembers.map((item: any) => ({
+            // 兼容 tauri 侧 snake_case 与前端 camelCase
+            groupId: String(item.groupId ?? item.group_id ?? groupId),
+            userId: String(item.userId ?? item.user_id ?? ''),
+            nickname: item.nickname ?? null,
+            avatar: item.avatar ?? item.icon ?? null,
+            role: Number(item.role ?? item.type ?? 0),
+          }))
+          memberMap.value.set(groupId, normalizedMembers)
+          return normalizedMembers
         }
       } catch (e) {
         console.error('[GroupStore] local loadMembers failed:', e)
@@ -97,15 +111,12 @@ export const useGroupStore = defineStore('group', () => {
     const pageSize = 200
     let pageNum = 1
     let hasMore = true
-    const gid = Number(groupId)
-    if (!Number.isFinite(gid) || gid <= 0) {
-      return []
-    }
 
     while (hasMore) {
       try {
         const resp = await getGroupMemberList({
-          groupId: gid,
+          // 保持字符串 ID，避免大整数群 ID 被 Number 截断后查不到成员
+          groupId,
           pageNum,
           pageSize,
           time: 0,
@@ -117,14 +128,12 @@ export const useGroupStore = defineStore('group', () => {
             groupId: String(item.groupId || groupId),
             userId: String(user.uid || ''),
             nickname: user.nickName || null,
-            role: Number(item.type || 0),
+            avatar: user.icon || null,
+            role: Number(item.type ?? 0),
           })
         }
 
-        const totalCount = Number(resp.count || 0)
-        hasMore = totalCount > 0
-          ? allMembers.length < totalCount
-          : list.length >= pageSize
+        hasMore = list.length >= pageSize
         pageNum++
       } catch (e) {
         console.error('[GroupStore] API loadMembers page failed:', e)
