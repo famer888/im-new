@@ -35,6 +35,34 @@ export function getDeviceConfig() {
   return cachedDeviceConfig
 }
 
+function getSessionIdFromStorage(): string {
+  try {
+    const currentUid = localStorage.getItem('current-uid') || ''
+    const accountListText = localStorage.getItem('login-account-list')
+    const accountList = accountListText ? JSON.parse(accountListText) : []
+    if (currentUid) {
+      if (Array.isArray(accountList)) {
+        const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
+        if (current?.sessionId) return String(current.sessionId)
+      }
+    }
+    if (Array.isArray(accountList) && accountList.length > 0) {
+      const lastWithSession = [...accountList].reverse().find((item: any) => item?.sessionId)
+      if (lastWithSession?.sessionId) {
+        return String(lastWithSession.sessionId)
+      }
+    }
+    const browserSessionText = localStorage.getItem('browser-session')
+    if (browserSessionText) {
+      const browserSession = JSON.parse(browserSessionText)
+      if (browserSession?.sessionId) return String(browserSession.sessionId)
+    }
+  } catch {
+    // ignore parse errors and fallback to empty session
+  }
+  return ''
+}
+
 function getUint32Bytes(num: number): Uint8Array {
   const buf = new ArrayBuffer(4)
   const view = new DataView(buf)
@@ -55,11 +83,15 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
 
 function getClientInfo(): proto.IClientInfo {
   const device = getDeviceConfig()
+  const sessionId = getSessionIdFromStorage()
   return {
+    sessionId,
+    appVer: 167,
     sysMac: device.sysMac,
     sysModel: device.sysModel,
-    packageCode: 6000,
+    packageCode: 7100,
     plat: proto.Platform.WIN,
+    language: 2,
   }
 }
 

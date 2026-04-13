@@ -30,7 +30,13 @@ export const useContactStore = defineStore('contact', () => {
     loading.value = true
     try {
       if (isTauri()) {
-        contacts.value = await tauriInvoke<Contact[]>('get_contacts', { uid })
+        const localContacts = await tauriInvoke<Contact[]>('get_contacts', { uid })
+        if (Array.isArray(localContacts) && localContacts.length > 0) {
+          contacts.value = localContacts
+        } else {
+          // Fallback to HTTP API when local DB has not been initialized yet.
+          await loadContactsViaApi()
+        }
       } else {
         await loadContactsViaApi()
       }
@@ -44,7 +50,7 @@ export const useContactStore = defineStore('contact', () => {
   async function loadContactsViaApi() {
     const allContacts: Contact[] = []
     let pageNum = 1
-    const pageSize = 100
+    const pageSize = 200
     let hasMore = true
 
     while (hasMore) {
