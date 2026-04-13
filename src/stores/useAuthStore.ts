@@ -127,7 +127,7 @@ export const useAuthStore = defineStore('auth', () => {
     sessionId?: string
   }) {
     if (isTauri()) {
-      const result = await tauriInvoke<SessionInfo>('login', {
+      const tauriSession = await tauriInvoke<SessionInfo>('login', {
         request: {
           session_url: request.sessionUrl,
           ws_url: request.wsUrl,
@@ -135,6 +135,13 @@ export const useAuthStore = defineStore('auth', () => {
           install_code: request.installCode,
         },
       })
+      const tauriSessionExt = tauriSession as SessionInfo & { session_id?: string }
+      const result: SessionInfo = {
+        uid: tauriSession.uid || request.uid || '',
+        sessionId: tauriSessionExt.session_id || tauriSession.sessionId || request.sessionId || '',
+        nickname: tauriSession.nickname || request.nickname || '',
+        avatar: tauriSession.avatar || request.avatar || '',
+      }
       session.value = result
       localStorage.setItem(CURRENT_UID_KEY, result.uid)
       addOrUpdateAccount({

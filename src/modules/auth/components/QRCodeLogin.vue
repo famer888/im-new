@@ -50,6 +50,7 @@ const currentBaseUrl = computed(() => {
 })
 
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
+const LOGIN_STATUS_ALREADY_LOGIN = 2
 
 function loadLastLoginInfo() {
   try {
@@ -64,8 +65,10 @@ function loadLastLoginInfo() {
 }
 
 async function handleGetQrCodeUrl() {
+  clearTimers()
   isLoading.value = true
   qrCodeUrlError.value = false
+  isOutTime.value = false
 
   try {
     const res = await getQrCodeUrl(currentBaseUrl.value)
@@ -128,8 +131,10 @@ async function handleIsLoginGet() {
       sysModel: device.sysModel,
     }, currentBaseUrl.value)
 
-    if (res && res.uid && Number(res.uid) > 0) {
+    const isLoginReady = Number(res?.loginStatus) === LOGIN_STATUS_ALREADY_LOGIN
+    if (res && res.uid && Number(res.uid) > 0 && isLoginReady) {
       const loginId = String(res.uid)
+      clearTimers()
 
       authStore.addOrUpdateAccount({
         id: loginId,
