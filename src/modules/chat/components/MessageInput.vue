@@ -30,10 +30,15 @@ const pendingFiles = ref<File[]>([])
 const showFilePreview = ref(false)
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
+const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
 const groupId = computed(() => chatStore.currentConversation?.targetId ?? '')
 /** 与 im 传输助手一致：工具栏仅表情 + 文件 */
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+)
+/** 单聊与传输助手：仅保留表情+文件；群/频道显示扩展工具 */
+const showAdvancedTools = computed(
+  () => !isFileHelperChat.value && !isFriend.value,
 )
 const isMuted = computed(() => chatStore.currentConversation?.isMuted ?? false)
 const convId = computed(() => chatStore.currentConversationId)
@@ -211,7 +216,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
           <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('文件')" @click="handleFileSelect">
             <img class="im-active-icon" :src="iconFileActive" alt="" width="20" height="20" />
           </button>
-          <template v-if="!isFileHelperChat">
+          <template v-if="showAdvancedTools">
             <button class="tool-btn" type="button" :title="$t('截图')" @click="handleGlobalKeydown({ ctrlKey: true, shiftKey: true, key: 'a', preventDefault: () => {} } as any)">
               <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="#666" stroke-width="1.5"/><path d="M9 3v18M3 9h18" fill="none" stroke="#666" stroke-width="1.5" opacity="0.4"/></svg>
             </button>
