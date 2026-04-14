@@ -8,6 +8,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
+import mdrIcon from '@/assets/images/message/mdr-icon.png'
 
 const chatStore = useChatStore()
 const contactStore = useContactStore()
@@ -154,7 +155,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
             <span v-if="conv.senderName && !conv.draft" class="sender-name">{{ conv.senderName }}:</span>
             <span class="conv-digest">{{ getDigest(conv) }}</span>
             <span v-if="conv.isMuted" class="muted-icon">
-              <svg viewBox="0 0 16 16" width="12" height="12"><path d="M12 4l-8 8M8 2a6 6 0 100 12A6 6 0 008 2z" fill="none" stroke="#ccc" stroke-width="1.2"/></svg>
+              <img :src="mdrIcon" alt="" />
             </span>
           </div>
         </div>
@@ -327,9 +328,15 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 
 .muted-icon {
   flex-shrink: 0;
-  margin-left: 4px;
+  margin-left: 6px;
   display: flex;
   align-items: center;
+
+  img {
+    display: block;
+    width: 12px;
+    height: 12px;
+  }
 }
 
 .conv-divider {
