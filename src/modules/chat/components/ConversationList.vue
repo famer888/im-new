@@ -4,6 +4,7 @@ import { useChatStore, FILE_HELPER_TARGET_ID, type Conversation } from '@/stores
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
+import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
@@ -14,6 +15,7 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
+const messageStore = useMessageStore()
 const uiStore = useUIStore()
 
 const showArchive = ref(false)
@@ -84,7 +86,23 @@ function formatTime(ts: number): string {
 
 function getDigest(conv: Conversation): string {
   if (conv.draft) return `[草稿] ${conv.draft}`
-  return conv.lastMsgDigest ?? ''
+  if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
+    return conv.lastMsgDigest
+  }
+
+  // 与 im 行为对齐：会话摘要为空时，兜底取已加载消息中的最后一条
+  const loaded = messageStore.getMessages(conv.id)
+  if (loaded.length > 0) {
+    const latest = loaded[loaded.length - 1]
+    const raw = (latest.content || '').trim()
+    if (latest.msgType === 1) return '[图片]'
+    if (latest.msgType === 2) return '[语音]'
+    if (latest.msgType === 3) return '[视频]'
+    if (latest.msgType === 7) return '[文件]'
+    if (raw) return raw
+  }
+
+  return ''
 }
 
 function handleSelect(conv: Conversation) {
