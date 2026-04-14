@@ -18,6 +18,8 @@ export interface Contact {
   pinyin: string | null
   letter?: string | null
   remark: string | null
+  bfReadCancel?: boolean
+  bfMyBlack?: boolean
   status: number
   updatedAt: number
 }
@@ -112,6 +114,17 @@ export const useContactStore = defineStore('contact', () => {
     return contact?.remark || contact?.nickname || id
   }
 
+  function patchContact(id: string, patch: Partial<Contact>) {
+    const target = contacts.value.find((c) => c.id === id)
+    if (!target) return
+    Object.assign(target, patch)
+  }
+
+  function removeContact(id: string) {
+    contacts.value = contacts.value.filter((c) => c.id !== id)
+    searchResults.value = searchResults.value.filter((c) => c.id !== id)
+  }
+
   return {
     contacts,
     searchResults,
@@ -120,5 +133,7 @@ export const useContactStore = defineStore('contact', () => {
     searchContacts,
     getContact,
     getDisplayName,
+    patchContact,
+    removeContact,
   }
 })

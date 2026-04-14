@@ -103,6 +103,57 @@ export async function contactsRelation(
 }
 
 /**
+ * Get contact detail.
+ * POST /contacts/contactsDetail
+ */
+export async function getContactsDetail(
+  data: { targetUid: number; groupId?: number; channelId?: number },
+  baseUrl?: string,
+): Promise<proto.ContactsDetailResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/contactsDetail`,
+    reqType: proto.ContactsDetailReq,
+    respType: proto.ContactsDetailResp,
+    data,
+  })
+}
+
+/**
+ * Update contact relation config.
+ * POST /contacts/updateContacts
+ */
+export async function updateContacts(
+  data: { op: proto.ContactsOperator; param: Record<string, unknown> },
+  baseUrl?: string,
+): Promise<proto.UpdateContactsResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/updateContacts`,
+    reqType: proto.UpdateContactsReq,
+    respType: proto.UpdateContactsResp,
+    data,
+  })
+}
+
+/**
+ * Add/remove blacklist for contact.
+ * POST /contacts/updateBlackContacts
+ */
+export async function updateBlackContacts(
+  data: { targetUid: number; op: number },
+  baseUrl?: string,
+): Promise<proto.UpdateBlackContactsResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/updateBlackContacts`,
+    reqType: proto.UpdateBlackContactsReq,
+    respType: proto.UpdateBlackContactsResp,
+    data,
+  })
+}
+
+/**
  * Search/find contacts by phone number or sign.
  * POST /contacts/findContactsList
  */
