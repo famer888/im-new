@@ -5,6 +5,10 @@ import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useMessageStore } from '@/stores/useMessageStore'
+import { useContactStore } from '@/stores/useContactStore'
+import { useGroupStore } from '@/stores/useGroupStore'
+import { useChannelStore } from '@/stores/useChannelStore'
 import SearchInput from '@/components/SearchInput.vue'
 import ConversationList from './ConversationList.vue'
 import SearchResults from './SearchResults.vue'
@@ -155,6 +159,25 @@ function handleLogout() {
 }
 
 async function confirmLogout() {
+  const messageStore = useMessageStore()
+  const contactStore = useContactStore()
+  const groupStore = useGroupStore()
+  const channelStore = useChannelStore()
+
+  chatStore.currentConversationId = null
+  chatStore.conversations = []
+  messageStore.clearAllMessageCaches()
+  contactStore.contacts = []
+  contactStore.searchResults = []
+  groupStore.groups = []
+  groupStore.memberMap = new Map()
+  channelStore.channels = []
+  searchStore.clearResults()
+
+  uiStore.setDetailView('none')
+  uiStore.setRightPanel('none')
+  uiStore.setSidebarTab('chats')
+
   await authStore.logout()
   await router.replace('/login')
   if (window.location.hash !== '#/login') {
