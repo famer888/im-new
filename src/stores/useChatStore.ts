@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -14,6 +14,26 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
 export const FILE_HELPER_TARGET_ID = '9901'
 /** 列表/侧栏展示名（与参考 UI「传输助手」一致） */
 export const FILE_HELPER_DISPLAY_NAME = '传输助手'
+
+function getConversationCacheKey(uid: string): string {
+  return `${uid}-conversations`
+}
+
+function saveConversationsToCache(uid: string, convs: Conversation[]) {
+  if (!uid) return
+  try {
+    localStorage.setItem(getConversationCacheKey(uid), JSON.stringify(convs))
+  } catch { /* storage full or unavailable */ }
+}
+
+function loadConversationsFromCache(uid: string): Conversation[] {
+  if (!uid) return []
+  try {
+    const stored = localStorage.getItem(getConversationCacheKey(uid))
+    if (stored) return JSON.parse(stored)
+  } catch { /* corrupted */ }
+  return []
+}
 
 export interface Conversation {
   id: string
@@ -94,25 +114,54 @@ export const useChatStore = defineStore('chat', () => {
     sortConversations()
   }
 
+  let _persistUid = ''
+
+  function enablePersistence(uid: string) {
+    _persistUid = uid
+  }
+
   async function loadConversations(uid: string) {
     loading.value = true
+    _persistUid = uid
     try {
+      let loaded: Conversation[] = []
+
       if (isTauri()) {
         const result = await tauriInvoke<any[]>('get_conversations', {
           uid,
           limit: 50,
           offset: 0,
         })
-        conversations.value = Array.isArray(result) ? result.map(normalizeConversation) : []
+        loaded = Array.isArray(result) ? result.map(normalizeConversation) : []
       }
-      // In browser mode, conversations are populated via WebSocket message events
+
+      // Check if we have real conversations beyond the auto-inserted file helper
+      const hasRealConversations = loaded.some(
+        (c) => c.targetId !== FILE_HELPER_TARGET_ID,
+      )
+
+      if (!hasRealConversations) {
+        const cached = loadConversationsFromCache(uid)
+        if (cached.length > 0) {
+          loaded = cached
+        }
+      }
+
+      conversations.value = loaded
     } catch (e) {
       console.error('[ChatStore] loadConversations failed:', e)
+      conversations.value = loadConversationsFromCache(uid)
     } finally {
       ensureFileHelperConversationInMemory()
       loading.value = false
     }
   }
+
+  watch(conversations, (val) => {
+    if (_persistUid) {
+      saveConversationsToCache(_persistUid, val)
+    }
+  }, { deep: true })
 
   function setCurrentConversation(id: string | null) {
     currentConversationId.value = id
@@ -231,6 +280,7 @@ export const useChatStore = defineStore('chat', () => {
     currentConversation,
     totalUnread,
     loading,
+    enablePersistence,
     loadConversations,
     setCurrentConversation,
     updateConversation,

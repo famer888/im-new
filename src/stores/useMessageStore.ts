@@ -198,6 +198,10 @@ export const useMessageStore = defineStore('message', () => {
       for (const msg of msgs) {
         appendMessage(convId, msg)
       }
+      const latest = msgs[msgs.length - 1]
+      if (latest) {
+        syncConversationSummary(convId, latest)
+      }
     }
   }
 
