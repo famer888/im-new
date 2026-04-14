@@ -13,8 +13,16 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
 
 export interface Channel {
   id: string
+  channelId: string
   name: string | null
+  channelName: string | null
   avatar: string | null
+  icon: string | null
+  logoColor: string | null
+  memberCount: number
+  status: number
+  adminPrivacy: number
+  isDisturb: boolean
   ownerId: string | null
   description: string | null
   updatedAt: number
@@ -46,7 +54,7 @@ export const useChannelStore = defineStore('channel', () => {
   async function loadChannelsViaApi(uid: string) {
     const allChannels: Channel[] = []
     let pageNum = 1
-    const pageSize = 50
+    const pageSize = 10
     let hasMore = true
     const seen = new Set<string>()
 
@@ -69,8 +77,16 @@ export const useChannelStore = defineStore('channel', () => {
           seen.add(id)
           allChannels.push({
             id,
+            channelId: id,
             name: item.channelName || id,
+            channelName: item.channelName || id,
             avatar: item.icon || null,
+            icon: item.icon || null,
+            logoColor: item.logoColor || null,
+            memberCount: Number(item.memberCount || 0),
+            status: Number(item.status || 0),
+            adminPrivacy: Number(item.adminPrivacy || 0),
+            isDisturb: Boolean(item.isDisturb),
             ownerId: null,
             description: null,
             updatedAt: Number(item.updateTime || item.createTime || 0),
@@ -116,8 +132,16 @@ export const useChannelStore = defineStore('channel', () => {
       fallbackSeen.add(channelId)
       fallbackChannels.push({
         id: channelId,
+        channelId,
         name: channelId,
+        channelName: channelId,
         avatar: null,
+        icon: null,
+        logoColor: null,
+        memberCount: 0,
+        status: 0,
+        adminPrivacy: 0,
+        isDisturb: false,
         ownerId: null,
         description: null,
         updatedAt: Number(conv.updatedAt || 0),
