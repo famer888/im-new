@@ -16,6 +16,7 @@ export interface Contact {
   nickname: string | null
   avatar: string | null
   pinyin: string | null
+  letter?: string | null
   remark: string | null
   status: number
   updatedAt: number
@@ -64,6 +65,7 @@ export const useContactStore = defineStore('contact', () => {
             nickname: u.nickName || u.nickname || null,
             avatar: u.icon || u.avatar || null,
             pinyin: (item as any).pinyin || null,
+            letter: (item as any).letter || null,
             remark: (item as any).depict || null,
             status: Number(u.uid) > 0 ? 1 : 0,
             updatedAt: Number((item as any).updateTime || 0),
