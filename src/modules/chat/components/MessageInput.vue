@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessageType, ConversationType } from '@/types'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useGroupStore } from '@/stores/useGroupStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 }>()
 
 const chatStore = useChatStore()
+const groupStore = useGroupStore()
 const settingStore = useSettingStore()
 const uiStore = useUIStore()
 const content = ref('')
@@ -40,7 +42,14 @@ const isFileHelperChat = computed(
 const showAdvancedTools = computed(
   () => !isFileHelperChat.value && !isFriend.value,
 )
-const isMuted = computed(() => chatStore.currentConversation?.isMuted ?? false)
+const showShutupTip = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv) return false
+  // 与 im send/index.vue 对齐：消息免打扰不影响输入区，仅群全员禁言才显示提示
+  if (conv.type !== ConversationType.Group) return false
+  const group = groupStore.getGroup(conv.targetId)
+  return Boolean(group?.isMuted)
+})
 const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
 
@@ -201,8 +210,8 @@ eventBus.on('editor:insert-at', handleAtSelect)
 
 <template>
   <div class="message-input" @drop="handleDrop" @dragover="handleDragOver">
-    <!-- 全员禁言提示 -->
-    <div v-if="isMuted" class="shutup-tip">
+    <!-- 与 im 逻辑一致：只在群全员禁言时提示 -->
+    <div v-if="showShutupTip" class="shutup-tip">
       {{ $t('全员禁言中') }}
     </div>
 
@@ -285,6 +294,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
 
     <FileUploadPreview
       v-if="showFilePreview"
+      :visible="showFilePreview"
       :files="pendingFiles"
       @send="handleFileSend"
       @cancel="showFilePreview = false; pendingFiles = []"
