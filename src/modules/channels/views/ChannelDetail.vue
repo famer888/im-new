@@ -1,16 +1,65 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { getChannelDetail, getChannelUsers } from '@/api/imChannel'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ channelId: string }>()
+const { t } = useI18n()
 const channelStore = useChannelStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
 
 const channel = computed(() => channelStore.getChannel(props.channelId))
+const detail = ref<{
+  channelName: string
+  icon: string
+  memberCount: number
+}>({
+  channelName: '',
+  icon: '',
+  memberCount: 0,
+})
+const memberList = ref<Array<{ id: string; name: string; icon: string; type: number }>>([])
+
+watch(
+  () => props.channelId,
+  async (channelId) => {
+    if (!channelId) return
+    try {
+      const [detailResp, usersResp] = await Promise.all([
+        getChannelDetail({ channelId }),
+        getChannelUsers({ channelId, pageNum: 1, pageSize: 10 }),
+      ])
+      const d = (detailResp?.data || {}) as Record<string, any>
+      detail.value = {
+        channelName: String(d.channelName || channel.value?.name || channelId),
+        icon: String(d.icon || channel.value?.avatar || ''),
+        memberCount: Number(d.memberCount || channel.value?.memberCount || 0),
+      }
+
+      const users = usersResp?.data?.rowList || []
+      memberList.value = users.map((item: any) => ({
+        id: String(item.uid || item.id || ''),
+        name: String(item.name || item.nickName || item.nickname || item.uid || item.id || ''),
+        icon: String(item.icon || ''),
+        type: Number(item.type ?? item.role ?? 9),
+      }))
+    } catch (e) {
+      console.error('[ChannelDetail] load channel detail failed:', e)
+      detail.value = {
+        channelName: String(channel.value?.name || channelId),
+        icon: String(channel.value?.avatar || ''),
+        memberCount: Number(channel.value?.memberCount || 0),
+      }
+      memberList.value = []
+    }
+  },
+  { immediate: true },
+)
 
 function startChat() {
   const conv = chatStore.ensureConversation(2, props.channelId)
@@ -21,35 +70,154 @@ function startChat() {
 </script>
 
 <template>
-  <div class="channel-detail" v-if="channel">
-    <div class="detail-header">
-      <TextAvatar :name="channel.name || channel.id" :src="channel.avatar" avatar-type="channel" :size="64" />
-      <div class="detail-name">{{ channel.name || channel.id }}</div>
-    </div>
-    <div v-if="channel.description" class="detail-section">
-      <div class="section-label">频道简介</div>
-      <div class="section-content">{{ channel.description }}</div>
-    </div>
-    <div class="detail-actions">
-      <button class="btn-chat" @click="startChat">进入频道</button>
+  <div class="communication-page">
+    <div v-if="channel || detail.channelName" class="communication-page-box">
+      <div class="user-info">
+        <TextAvatar
+          class="avatar"
+          :name="detail.channelName || channel?.name || channel?.id || props.channelId"
+          :src="detail.icon || channel?.avatar || null"
+          avatar-type="channel"
+          :size="60"
+          rounded
+        />
+        <div>
+          <div class="name">{{ detail.channelName || channel?.name || channel?.id || props.channelId }}</div>
+          <div class="count">
+            {{ t('群成员共{value}人', { value: detail.memberCount }) }}
+          </div>
+        </div>
+      </div>
+
+      <div class="user-des">
+        <div class="memberList">
+          <div
+            v-for="item in memberList.slice(0, 8)"
+            :key="item.id"
+            class="member-item"
+          >
+            <TextAvatar
+              :name="item.name || item.id"
+              :src="item.icon || null"
+              avatar-type="friend"
+              :size="35"
+              rounded
+            />
+            <div class="nick-name" :title="item.name || item.id">
+              {{ item.name || item.id }}
+            </div>
+            <div class="member-identity member-master" v-if="item.type === 0">
+              {{ t('群主') }}
+            </div>
+            <div class="member-identity" v-else-if="item.type === 1">
+              {{ t('管理员') }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="primaryBtn small" @click="startChat">
+        {{ t('发送消息') }}
+      </div>
     </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.channel-detail { padding: 32px 24px; display: flex; flex-direction: column; align-items: center; }
-.detail-header { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 20px; }
-.detail-name { font-size: 18px; font-weight: 500; color: #333; }
-.detail-section {
-  width: 100%; max-width: 360px; margin-bottom: 16px;
-  padding: 12px; background: #f5f5f5; border-radius: 4px;
+.communication-page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
 }
-.section-label { font-size: 12px; color: #999; margin-bottom: 6px; }
-.section-content { font-size: 14px; color: #333; line-height: 1.5; }
-.detail-actions { margin-top: 16px; }
-.btn-chat {
-  width: 200px; height: 40px; background: #3369fe; color: #fff;
-  border: none; border-radius: 4px; font-size: 14px; cursor: pointer;
-  &:hover { background: rgba(51, 105, 254, 0.8); }
+
+.communication-page-box {
+  padding: 80px 40px;
+}
+
+.user-info {
+  padding: 20px 0;
+  border-bottom: 1px solid #eee;
+  display: block;
+
+  .avatar {
+    margin-right: 20px;
+    width: 60px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
+    margin-bottom: 12px;
+  }
+
+  .name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+  }
+
+  .count {
+    margin-top: 5px;
+    color: #999;
+  }
+}
+
+.user-des {
+  padding: 20px 0 40px;
+
+  .memberList {
+    min-height: 77px;
+    display: flex;
+
+    .member-item {
+      margin-right: 10px;
+      text-align: center;
+      width: 50px;
+      cursor: pointer;
+
+      .nick-name {
+        font-size: 12px;
+        line-height: 12px;
+        white-space: nowrap;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+  }
+}
+
+.member-identity {
+  font-size: 12px;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: #fb9203;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.member-master {
+  background: #3369fe;
+}
+
+.primaryBtn {
+  color: #fff;
+  background-color: #3369fe;
+  text-align: center;
+  border: 1px solid #3369fe;
+  cursor: pointer;
+  padding: 0 28px;
+  display: inline-block;
+  height: 32px;
+  line-height: 32px;
+  font-size: 12px;
+  border-radius: 4px;
+
+  &.small {
+    margin-top: 0;
+  }
 }
 </style>

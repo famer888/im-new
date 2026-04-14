@@ -9,6 +9,7 @@ const props = withDefaults(defineProps<{
   src?: string | null
   size?: number
   rounded?: boolean
+  color?: string
   avatarType?: 'friend' | 'group' | 'channel' | 'member' | 'text'
 }>(), {
   size: 36,
@@ -33,6 +34,7 @@ const hasSrc = computed(() => !!props.src && !imageLoadError.value)
 const showImage = computed(() => props.avatarType !== 'text')
 const imageSrc = computed<string>(() => (hasSrc.value ? (props.src as string) : defaultSrc.value))
 const useCircle = computed(() => props.rounded || props.avatarType === 'group')
+const textBgColor = computed(() => props.color || '#3369fe')
 
 const sizeStyle = computed(() => ({
   width: props.size + 'px',
@@ -56,7 +58,7 @@ function handleImageError() {
       :style="{ borderRadius: useCircle ? '50%' : '4px' }"
       @error="handleImageError"
     />
-    <span v-else class="avatar-text">{{ initial }}</span>
+    <span v-else class="avatar-text" :style="{ background: textBgColor }">{{ initial }}</span>
   </div>
 </template>
 
@@ -82,7 +84,6 @@ function handleImageError() {
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: #3369fe;
   font-weight: 500;
   border-radius: inherit;
 }

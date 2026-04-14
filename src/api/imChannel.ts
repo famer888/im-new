@@ -96,6 +96,10 @@ export interface ChannelListItem {
   channelName?: string
   icon?: string
   logoColor?: string
+  memberCount?: number
+  status?: number
+  adminPrivacy?: number
+  isDisturb?: boolean | number
   updateTime?: number
   createTime?: number
 }
@@ -109,17 +113,41 @@ export interface ChannelListResp {
   }
 }
 
-export async function getChannelList(data: {
-  pageNum: number
-  pageSize: number
-}): Promise<ChannelListResp> {
+export interface ChannelDetailResp {
+  code: number
+  msg?: string
+  data?: ChannelListItem & {
+    id?: number | string
+    channelDesc?: string
+    memberType?: number
+  }
+}
+
+export interface ChannelUsersResp {
+  code: number
+  msg?: string
+  data?: {
+    rowList?: Array<{
+      uid?: number | string
+      id?: number | string
+      nickName?: string
+      nickname?: string
+      name?: string
+      icon?: string
+      type?: number
+      role?: number
+    }>
+    total?: number
+  }
+}
+
+async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
   const base = getRawBaseUrl()
-  const url = `${base}/channel/channelList`
+  const url = `${base}${path}`
   const signClient = getClientInfoForSign()
   console.info('[ChannelAPI] request', {
     url,
-    pageNum: data.pageNum,
-    pageSize: data.pageSize,
+    data,
     appVer: signClient.appVer,
     packageCode: signClient.packageCode,
     language: signClient.language,
@@ -142,13 +170,29 @@ export async function getChannelList(data: {
     throw new Error(`HTTP ${res.status}`)
   }
   const buf = await res.arrayBuffer()
-  const decoded = decodePacketWithAesJson(buf, API_CONFIG.secretKey)
-  console.info('[ChannelAPI] response', {
-    code: decoded?.code,
-    msg: decoded?.msg,
-    rowListLen: decoded?.data?.rowList?.length ?? 0,
-    total: decoded?.data?.total,
-    pageNum: data.pageNum,
-  })
-  return decoded
+  if (buf.byteLength < 6) {
+    throw new Error(`channel api response too short: ${buf.byteLength}`)
+  }
+  return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
+}
+
+export async function getChannelList(data: {
+  pageNum: number
+  pageSize: number
+}): Promise<ChannelListResp> {
+  return requestChannelJson<ChannelListResp>('/channel/channelList', data)
+}
+
+export async function getChannelDetail(data: {
+  channelId: number | string
+}): Promise<ChannelDetailResp> {
+  return requestChannelJson<ChannelDetailResp>('/channel/getChannelById', data)
+}
+
+export async function getChannelUsers(data: {
+  channelId: number | string
+  pageNum: number
+  pageSize: number
+}): Promise<ChannelUsersResp> {
+  return requestChannelJson<ChannelUsersResp>('/channel/channelMember/pageChannelNormalMember', data)
 }

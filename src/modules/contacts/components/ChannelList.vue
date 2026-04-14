@@ -34,14 +34,27 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       v-if="expanded"
       v-for="ch in channelStore.channels"
       :key="ch.id"
-      class="channel-item"
+      :class="['channel-item', { active: chatStore.currentConversation?.type === 2 && chatStore.currentConversation?.targetId === ch.id }]"
       @click="handleSelect(ch)"
     >
-      <TextAvatar :name="ch.name || ch.id" :src="ch.avatar" avatar-type="channel" :size="36" />
-      <div class="channel-info">
-        <span class="channel-name">{{ ch.name || ch.id }}</span>
-        <span v-if="ch.description" class="channel-desc">{{ ch.description }}</span>
-      </div>
+      <TextAvatar
+        v-if="!ch.avatar"
+        class="textAvatar"
+        :name="ch.channelName || ch.name || ch.id"
+        avatar-type="text"
+        :color="ch.logoColor || undefined"
+        :size="35"
+        rounded
+      />
+      <TextAvatar
+        v-else
+        :name="ch.channelName || ch.name || ch.id"
+        :src="ch.avatar"
+        avatar-type="channel"
+        :size="35"
+        rounded
+      />
+      <h3 class="channel-name">{{ (ch.channelName || ch.name || ch.id || '').replaceAll('🪵', '?') }}</h3>
     </div>
   </div>
 </template>
@@ -74,12 +87,37 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
 }
 
 .channel-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 16px; cursor: pointer;
-  &:hover { background: #e0e0e0; }
+  position: relative;
+  padding: 0 16px 0 63px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  background-color: #fcfcfc;
+  height: 59px;
+  box-sizing: border-box;
+  cursor: pointer;
+
+  &:hover { background: #f9f9f9; }
+  &.active { background: #efefef; }
 }
 
-.channel-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.channel-name { font-size: 14px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.channel-desc { font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.textAvatar {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.channel-name {
+  margin: 0;
+  width: 140px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  font-size: 14px;
+  color: #333;
+  font-weight: normal;
+  line-height: 18px;
+}
 </style>
