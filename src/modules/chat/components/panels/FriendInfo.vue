@@ -8,6 +8,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useI18n } from 'vue-i18n'
 import { proto } from '@/api/request'
 import { READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
 import choiceIcon from '@/assets/images/setting/choice-icon.png'
@@ -17,6 +18,7 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+const { t } = useI18n()
 
 const conv = computed(() => chatStore.currentConversation)
 const contact = computed(() => (conv.value ? contactStore.getContact(conv.value.targetId) : undefined))
@@ -26,6 +28,22 @@ const msgCancelTime = ref(30)
 const inBlacklist = ref(false)
 const working = ref(false)
 const showTimeMenu = ref(false)
+
+function formatReadBurnNotice(seconds: number, enabled: boolean) {
+  const name = t('你')
+  if (!enabled) return `${name}${t('关闭了阅后即焚')}`
+  let timeText = ''
+  if (seconds < 60) timeText = `${seconds}${t('秒')}`
+  else if (seconds < 3600) timeText = `${seconds / 60}${t('分钟')}`
+  else if (seconds < 86400) timeText = `${seconds / 3600}${t('小时')}`
+  else timeText = `${seconds / 86400}${t('天')}`
+  return `${name} ${t('设置了消息已读XX后销毁').replace('XX', timeText)}`
+}
+
+function appendReadBurnNotice(seconds: number, enabled: boolean) {
+  if (!conv.value) return
+  messageStore.appendLocalSystemNotice(conv.value.id, formatReadBurnNotice(seconds, enabled))
+}
 
 watch(contact, async (nextContact) => {
   readBurn.value = Boolean(nextContact?.bfReadCancel)
@@ -89,6 +107,7 @@ async function toggleReadBurn() {
       bfReadCancel: next,
       msgCancelTime: msgCancelTime.value,
     })
+    appendReadBurnNotice(msgCancelTime.value, next)
   } finally {
     working.value = false
   }
@@ -107,6 +126,7 @@ async function updateReadBurnTime(seconds: number) {
     })
     msgCancelTime.value = seconds
     contactStore.patchContact(contact.value.id, { msgCancelTime: seconds })
+    appendReadBurnNotice(seconds, true)
   } finally {
     working.value = false
     showTimeMenu.value = false

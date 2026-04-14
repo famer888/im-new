@@ -201,6 +201,25 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function appendLocalSystemNotice(conversationId: string, content: string) {
+    const now = Date.now()
+    const localId = `local-notice-${now}-${Math.random().toString(36).slice(2, 8)}`
+    appendMessage(conversationId, {
+      id: localId,
+      customMsgId: localId,
+      conversationId,
+      senderId: '',
+      msgType: 6,
+      content,
+      sendTime: now,
+      status: 1,
+      readStatus: 0,
+      version: 0,
+      isDeleted: false,
+      extra: null,
+    })
+  }
+
   function updateMessageStatus(messageId: string, status: number) {
     for (const [, list] of messageMap.value) {
       const msg = list.find((m) => m.id === messageId)
@@ -252,6 +271,7 @@ export const useMessageStore = defineStore('message', () => {
     sendMessage,
     appendMessage,
     batchAppendMessages,
+    appendLocalSystemNotice,
     updateMessageStatus,
     updateMessage,
     deleteMessage,
