@@ -32,12 +32,13 @@ const defaultSrc = computed(() => {
 const hasSrc = computed(() => !!props.src && !imageLoadError.value)
 const showImage = computed(() => props.avatarType !== 'text')
 const imageSrc = computed<string>(() => (hasSrc.value ? (props.src as string) : defaultSrc.value))
+const useCircle = computed(() => props.rounded || props.avatarType === 'group')
 
 const sizeStyle = computed(() => ({
   width: props.size + 'px',
   height: props.size + 'px',
   fontSize: Math.max(props.size * 0.4, 12) + 'px',
-  borderRadius: props.rounded ? '50%' : '4px',
+  borderRadius: useCircle.value ? '50%' : '4px',
 }))
 
 function handleImageError() {
@@ -52,7 +53,7 @@ function handleImageError() {
       :src="imageSrc"
       alt=""
       class="avatar-img"
-      :style="{ borderRadius: rounded ? '50%' : '4px' }"
+      :style="{ borderRadius: useCircle ? '50%' : '4px' }"
       @error="handleImageError"
     />
     <span v-else class="avatar-text">{{ initial }}</span>

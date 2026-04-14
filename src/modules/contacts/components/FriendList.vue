@@ -82,6 +82,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
             class="avatar"
             :name="contact.nickname || contact.id"
             :src="contact.avatar"
+            rounded
             :size="35"
           />
           <h3>{{ getDisplayName(contact) }}</h3>

@@ -70,6 +70,7 @@ function startChat() {
           <TextAvatar
             :name="m.nickname || m.userId"
             :src="m.avatar"
+            avatar-type="friend"
             :size="35"
             rounded
           />
