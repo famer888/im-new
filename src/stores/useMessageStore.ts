@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
+import { useChatStore } from './useChatStore'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -29,9 +30,45 @@ const MAX_CACHED_MESSAGES = 500
 const PAGE_SIZE = 50
 
 export const useMessageStore = defineStore('message', () => {
+  const chatStore = useChatStore()
   const messageMap = ref<Map<string, Message[]>>(new Map())
   const loadingMap = ref<Map<string, boolean>>(new Map())
   const hasMoreMap = ref<Map<string, boolean>>(new Map())
+
+  function getDigestByMessage(msgType: number, content: string | null): string {
+    if (msgType === 0) {
+      return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
+    }
+    if (msgType === 1) return '[图片]'
+    if (msgType === 2) return '[语音]'
+    if (msgType === 3) return '[视频]'
+    if (msgType === 7) return '[文件]'
+    return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
+  }
+
+  function syncConversationSummary(conversationId: string, msg: Message) {
+    const digest = getDigestByMessage(msg.msgType, msg.content)
+    const existing = chatStore.conversations.find((c) => c.id === conversationId)
+    if (existing) {
+      chatStore.addOrUpdateConversation({
+        ...existing,
+        lastMsgId: msg.id || existing.lastMsgId,
+        lastMsgTime: msg.sendTime || Date.now(),
+        lastMsgDigest: digest || existing.lastMsgDigest,
+        updatedAt: msg.sendTime || Date.now(),
+      })
+      return
+    }
+    const [typeRaw, targetId = ''] = conversationId.split('_')
+    const conv = chatStore.ensureConversation(Number(typeRaw || 0), targetId)
+    chatStore.addOrUpdateConversation({
+      ...conv,
+      lastMsgId: msg.id || conv.lastMsgId,
+      lastMsgTime: msg.sendTime || Date.now(),
+      lastMsgDigest: digest || conv.lastMsgDigest,
+      updatedAt: msg.sendTime || Date.now(),
+    })
+  }
 
   function normalizeMessage(raw: any): Message {
     return {
@@ -129,6 +166,7 @@ export const useMessageStore = defineStore('message', () => {
     })
     const normalized = normalizeMessage(result)
     appendMessage(conversationId, normalized)
+    syncConversationSummary(conversationId, normalized)
     return normalized
   }
 
