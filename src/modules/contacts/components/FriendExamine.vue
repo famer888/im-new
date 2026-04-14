@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import TextAvatar from '@/components/TextAvatar.vue'
+import FriendVerifyDetail from './FriendVerifyDetail.vue'
+import type { VerifyRecord } from './FriendVerifyDetail.vue'
+import { getContactsApplyList } from '@/api/imBase'
 
 interface FriendRequest {
   id: string
@@ -9,132 +12,162 @@ interface FriendRequest {
   avatar: string | null
   message: string
   status: 'pending' | 'accepted' | 'rejected'
+  bfMyBlack: boolean
+  type: number
+  identify?: string
+  gender?: number
+  depict?: string
 }
 
 const requests = ref<FriendRequest[]>([])
+const showDetail = ref(false)
+const selectedRecord = ref<VerifyRecord | null>(null)
 
 const pendingRequests = computed(() => requests.value.filter((req) => req.status === 'pending'))
 const recentRequests = computed(() => requests.value.filter((req) => req.status !== 'pending'))
 
-function handleAccept(req: FriendRequest) {
-  req.status = 'accepted'
-  // TODO: invoke accept_friend via Tauri
+onMounted(() => {
+  loadApplyList()
+})
+
+async function loadApplyList() {
+  try {
+    const resp = await getContactsApplyList({ version: 0 })
+    const all: FriendRequest[] = []
+    const unRecordList = (resp as any).unRecordList || []
+    const recordList = (resp as any).recordList || []
+
+    for (const item of unRecordList) {
+      const u = item.userInfo || {}
+      all.push({
+        id: String(u.uid || ''),
+        uid: String(u.uid || ''),
+        nickname: u.nickName || '',
+        avatar: u.icon || null,
+        message: item.msg || '',
+        status: 'pending',
+        bfMyBlack: Boolean(item.bfMyBlack),
+        type: Number(item.type || 0),
+        identify: u.identify || '',
+        gender: Number(u.gender || 0),
+        depict: u.depict || '',
+      })
+    }
+    for (const item of recordList) {
+      const u = item.userInfo || {}
+      all.push({
+        id: String(u.uid || ''),
+        uid: String(u.uid || ''),
+        nickname: u.nickName || '',
+        avatar: u.icon || null,
+        message: item.msg || '',
+        status: 'accepted',
+        bfMyBlack: Boolean(item.bfMyBlack),
+        type: Number(item.type || 0),
+        identify: u.identify || '',
+        gender: Number(u.gender || 0),
+        depict: u.depict || '',
+      })
+    }
+    requests.value = all
+  } catch (e) {
+    console.error('[FriendExamine] loadApplyList failed:', e)
+  }
 }
 
-function handleReject(req: FriendRequest) {
-  req.status = 'rejected'
-  // TODO: invoke reject_friend via Tauri
+function openVerifyDetail(req: FriendRequest) {
+  selectedRecord.value = {
+    userInfo: {
+      uid: Number(req.uid),
+      nickName: req.nickname,
+      icon: req.avatar || '',
+      identify: req.identify,
+      gender: req.gender,
+      depict: req.depict,
+    },
+    msg: req.message,
+    type: req.type,
+    bfMyBlack: req.bfMyBlack,
+  }
+  showDetail.value = true
+}
+
+function handleDetailBack() {
+  showDetail.value = false
+  selectedRecord.value = null
+}
+
+function handleDetailClose() {
+  showDetail.value = false
+  selectedRecord.value = null
+  loadApplyList()
 }
 </script>
 
 <template>
   <div class="friend-examine">
-    <!-- Old friend examine UI (kept for rollback)
-    <div class="examine-header">
-      <span class="title">好友验证</span>
-    </div>
-    <div class="examine-list">
-      <div v-for="req in requests" :key="req.id" class="examine-item">
-        <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="40" />
-        <div class="examine-info">
-          <div class="examine-name">{{ req.nickname || req.uid }}</div>
-          <div class="examine-msg">{{ req.message }}</div>
-        </div>
-        <div v-if="req.status === 'pending'" class="examine-actions">
-          <button class="btn-accept" @click="handleAccept(req)">接受</button>
-          <button class="btn-reject" @click="handleReject(req)">拒绝</button>
-        </div>
-        <span v-else-if="req.status === 'accepted'" class="status-text accepted">已添加</span>
-        <span v-else class="status-text rejected">已拒绝</span>
+    <FriendVerifyDetail
+      v-if="showDetail && selectedRecord"
+      :info="selectedRecord"
+      @back="handleDetailBack"
+      @close="handleDetailClose"
+    />
+
+    <template v-else>
+      <div class="examine-header">
+        <span class="title">新的朋友</span>
       </div>
-      <div v-if="requests.length === 0" class="empty">暂无验证消息</div>
-    </div>
-    -->
 
-    <div class="examine-header">
-      <span class="title">新的朋友</span>
-    </div>
-
-    <div class="examine-content">
-      <div class="section-title">待处理</div>
-      <div class="section-card">
-        <template v-if="pendingRequests.length > 0">
-          <div v-for="req in pendingRequests" :key="req.id" class="examine-item">
-            <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
-            <div class="examine-info">
-              <div class="row-top">
-                <div class="examine-name">{{ req.nickname || req.uid }}</div>
+      <div class="examine-content">
+        <div class="section-title">待处理</div>
+        <div class="section-card">
+          <template v-if="pendingRequests.length > 0">
+            <div v-for="req in pendingRequests" :key="req.id" class="examine-item">
+              <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
+              <div class="examine-info">
+                <div class="row-top">
+                  <div class="examine-name">{{ req.nickname || req.uid }}</div>
+                  <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
+                </div>
+                <div class="examine-msg">{{ req.message }}</div>
               </div>
-              <div class="examine-msg">{{ req.message }}</div>
-            </div>
-            <div class="examine-actions">
-              <button class="btn-accept" @click="handleAccept(req)">验证</button>
-            </div>
-          </div>
-        </template>
-      </div>
-
-      <div class="section-title">近期请求</div>
-      <div class="section-card">
-        <template v-if="recentRequests.length > 0">
-          <div v-for="req in recentRequests" :key="req.id" class="examine-item">
-            <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
-            <div class="examine-info">
-              <div class="row-top">
-                <div class="examine-name">{{ req.nickname || req.uid }}</div>
+              <div class="examine-actions">
+                <button class="btn-accept" @click="openVerifyDetail(req)">验证</button>
               </div>
-              <div class="examine-msg">{{ req.message }}</div>
             </div>
-            <span v-if="req.status === 'accepted'" class="status-text accepted">已同意</span>
-            <span v-else class="status-text rejected">已拒绝</span>
-          </div>
-        </template>
+          </template>
+        </div>
+
+        <div class="section-title">近期请求</div>
+        <div class="section-card">
+          <template v-if="recentRequests.length > 0">
+            <div v-for="req in recentRequests" :key="req.id" class="examine-item">
+              <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
+              <div class="examine-info">
+                <div class="row-top">
+                  <div class="examine-name">{{ req.nickname || req.uid }}</div>
+                  <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
+                </div>
+                <div class="examine-msg">{{ req.message }}</div>
+              </div>
+              <span v-if="req.status === 'accepted'" class="status-text accepted">已同意</span>
+              <span v-else class="status-text rejected">已拒绝</span>
+            </div>
+          </template>
+        </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <style lang="scss" scoped>
-/* Old friend examine styles (kept for rollback)
-.friend-examine { flex: 1; display: flex; flex-direction: column; background: #fff; }
-
-.examine-header {
-  height: 50px; display: flex; align-items: center; padding: 0 20px;
-  border-bottom: 1px solid #ebeef5;
-  .title { font-size: 15px; font-weight: 500; color: #333; }
-}
-
-.examine-list { flex: 1; overflow-y: auto; }
-
-.examine-item {
-  display: flex; align-items: center; gap: 12px; padding: 12px 20px;
-  border-bottom: 1px solid #f5f5f5;
-}
-
-.examine-info { flex: 1; min-width: 0; }
-.examine-name { font-size: 14px; color: #333; }
-.examine-msg { font-size: 12px; color: #999; margin-top: 2px; }
-
-.examine-actions { display: flex; gap: 6px; }
-.btn-accept {
-  height: 28px; padding: 0 12px; background: #3369fe; color: #fff;
-  border: none; border-radius: 4px; font-size: 12px; cursor: pointer;
-}
-.btn-reject {
-  height: 28px; padding: 0 12px; background: #fff; color: #666;
-  border: 1px solid #dcdfe6; border-radius: 4px; font-size: 12px; cursor: pointer;
-}
-
-.status-text { font-size: 12px; &.accepted { color: #67c23a; } &.rejected { color: #999; } }
-.empty { text-align: center; padding: 60px; color: #ccc; font-size: 13px; }
-*/
-
 .friend-examine {
   flex: 1;
   display: flex;
   flex-direction: column;
   background: #f6f6f6;
   overflow-y: auto;
+  position: relative;
 }
 
 .examine-header {
@@ -192,6 +225,12 @@ function handleReject(req: FriendRequest) {
   color: #000;
 }
 
+.black-tag {
+  font-size: 10px;
+  color: #fb2826;
+  margin-left: 6px;
+}
+
 .examine-msg {
   font-size: 12px;
   color: #b9babe;
@@ -230,5 +269,4 @@ function handleReject(req: FriendRequest) {
   border-radius: 4px;
   flex-shrink: 0;
 }
-
 </style>
