@@ -21,16 +21,37 @@ interface GroupedContacts {
 }
 
 const grouped = computed((): GroupedContacts[] => {
-  const map = new Map<string, typeof contactStore.contacts>()
-  for (const c of contactStore.contacts) {
-    const letter = (c.pinyin?.[0] ?? '#').toUpperCase()
-    const key = /^[A-Z]$/.test(letter) ? letter : '#'
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(c)
+  // 对齐旧版 im 的 eventFriend.fnFriendListFormat：按固定字母表分桶，
+  // 每个分桶内保留后端/本地返回顺序，不再做额外排序。
+  const letterOrder = [
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '#',
+  ]
+  const result: GroupedContacts[] = []
+  const list = contactStore.contacts
+
+  for (const letter of letterOrder) {
+    const items = list.filter((c) => {
+      const fromLetter = (c as any).letter
+      if (typeof fromLetter === 'string' && fromLetter.trim()) {
+        return fromLetter.toUpperCase() === letter
+      }
+      const initial = (c.pinyin?.[0] ?? '#').toUpperCase()
+      const fallback = /^[A-Z]$/.test(initial) ? initial : '#'
+      return fallback === letter
+    })
+    if (items.length > 0) {
+      result.push({ letter, items })
+    }
   }
-  return Array.from(map.entries())
-    .sort(([a], [b]) => a === '#' ? 1 : b === '#' ? -1 : a.localeCompare(b))
-    .map(([letter, items]) => ({ letter, items }))
+
+  return result
+})
+
+const activeFriendId = computed(() => {
+  const current = chatStore.currentConversation
+  if (!current || current.type !== 0) return null
+  return current.targetId
 })
 
 function handleSelect(contact: typeof contactStore.contacts[0]) {
@@ -38,47 +59,40 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
   chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('friend-detail')
 }
+
+function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
+  return contact.remark || contact.nickname || contact.id
+}
 </script>
 
 <template>
-  <div class="friend-list">
-    <!-- Old friend actions UI (kept for rollback)
-    <div class="friend-actions">
-      <button class="action-btn" @click="uiStore.addContactVisible = true">
-        <span>➕</span> 添加好友
-      </button>
-      <button class="action-btn" @click="uiStore.setDetailView('friend-examine')">
-        <span>📋</span> 好友验证
-      </button>
-    </div>
-    -->
-
+  <div class="friend-root">
     <h2 class="section-title">联系人</h2>
     <div v-for="group in grouped" :key="group.letter" class="friend-group">
       <div class="group-letter">{{ group.letter }}</div>
-      <div
-        v-for="contact in group.items"
-        :key="contact.id"
-        class="friend-item"
-        @click="handleSelect(contact)"
-      >
-        <TextAvatar :name="contact.nickname || contact.id" :src="contact.avatar" :size="36" />
-        <div class="friend-info">
-          <span class="friend-name">{{ contact.remark || contact.nickname || contact.id }}</span>
-        </div>
-      </div>
+      <ul class="friend-list">
+        <li
+          v-for="contact in group.items"
+          :key="contact.id"
+          class="friend-item"
+          :class="{ active: activeFriendId === contact.id }"
+          @click="handleSelect(contact)"
+        >
+          <TextAvatar
+            class="avatar"
+            :name="contact.nickname || contact.id"
+            :src="contact.avatar"
+            :size="35"
+          />
+          <h3>{{ getDisplayName(contact) }}</h3>
+        </li>
+      </ul>
     </div>
     <div class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
   </div>
 </template>
 
 <style lang="scss" scoped>
-/* Old friend list styles (kept for rollback)
-.friend-list { padding: 4px 0; }
-*/
-
-.friend-list { padding: 0; }
-
 .section-title {
   margin: 0;
   padding-left: 20px;
@@ -86,7 +100,7 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
   line-height: 26px;
   font-size: 14px;
   color: #333;
-  font-weight: 600;
+  font-weight: normal;
 }
 
 .group-letter {
@@ -98,18 +112,49 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
   border-top: 1px solid #eee;
 }
 
-.friend-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  cursor: pointer;
-  &:hover { background: #e0e0e0; }
+.friend-list {
+  padding: 0;
+  margin: 0;
 }
 
-.friend-name {
+.friend-item {
+  position: relative;
+  padding: 0 16px 0 63px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  background-color: #fcfcfc;
+  height: 59px;
+  box-sizing: border-box;
+  cursor: pointer;
+
+  &:hover {
+    background: #f9f9f9;
+  }
+
+  &.active {
+    background: #efefef;
+  }
+
+  .avatar {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+
+.friend-item > h3 {
+  margin: 0;
+  width: 140px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
   font-size: 14px;
   color: #333;
+  font-weight: normal;
+  line-height: 18px;
 }
 
 .contact-count {
@@ -117,7 +162,6 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
   text-align: center;
   font-size: 14px;
   color: #333;
-  font-weight: 500;
   border-top: 1px solid #eee;
   margin-bottom: 50px;
 }
