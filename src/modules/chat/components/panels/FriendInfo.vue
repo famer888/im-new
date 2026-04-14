@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { contactsRelation, getContactsDetail, updateBlackContacts, updateContacts } from '@/api/imBase'
@@ -9,6 +9,8 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { proto } from '@/api/request'
+import { READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
+import choiceIcon from '@/assets/images/setting/choice-icon.png'
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -20,8 +22,10 @@ const conv = computed(() => chatStore.currentConversation)
 const contact = computed(() => (conv.value ? contactStore.getContact(conv.value.targetId) : undefined))
 
 const readBurn = ref(false)
+const msgCancelTime = ref(30)
 const inBlacklist = ref(false)
 const working = ref(false)
+const showTimeMenu = ref(false)
 
 watch(contact, async (nextContact) => {
   readBurn.value = Boolean(nextContact?.bfReadCancel)
@@ -34,6 +38,7 @@ watch(contact, async (nextContact) => {
     const patch: Partial<typeof nextContact> = {
       bfReadCancel: Boolean(detail.bfReadCancel),
       bfMyBlack: Boolean(detail.bfMyBlack),
+      msgCancelTime: Number(detail.msgCancelTime || 30),
     }
     contactStore.patchContact(nextContact.id, patch)
   } catch {
@@ -43,6 +48,7 @@ watch(contact, async (nextContact) => {
 
 watch(contact, (nextContact) => {
   readBurn.value = Boolean(nextContact?.bfReadCancel)
+  msgCancelTime.value = Number(nextContact?.msgCancelTime || 30)
   inBlacklist.value = Boolean(nextContact?.bfMyBlack)
 })
 
@@ -75,14 +81,55 @@ async function toggleReadBurn() {
       param: {
         contactsId: Number(contact.value.id),
         bfReadCancel: next,
+        msgCancelTime: msgCancelTime.value,
       },
     })
     readBurn.value = next
-    contactStore.patchContact(contact.value.id, { bfReadCancel: next })
+    contactStore.patchContact(contact.value.id, {
+      bfReadCancel: next,
+      msgCancelTime: msgCancelTime.value,
+    })
   } finally {
     working.value = false
   }
 }
+
+async function updateReadBurnTime(seconds: number) {
+  if (!contact.value || working.value) return
+  working.value = true
+  try {
+    await updateContacts({
+      op: proto.ContactsOperator.READ_CANCEL_TIME,
+      param: {
+        contactsId: Number(contact.value.id),
+        msgCancelTime: seconds,
+      },
+    })
+    msgCancelTime.value = seconds
+    contactStore.patchContact(contact.value.id, { msgCancelTime: seconds })
+  } finally {
+    working.value = false
+    showTimeMenu.value = false
+  }
+}
+
+function handleOpenTimeMenu(e: MouseEvent) {
+  e.stopPropagation()
+  if (!readBurn.value) return
+  showTimeMenu.value = !showTimeMenu.value
+}
+
+function handleOutsideClick() {
+  if (showTimeMenu.value) showTimeMenu.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleOutsideClick)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleOutsideClick)
+})
 
 async function toggleBlacklist() {
   if (!contact.value || working.value) return
@@ -152,6 +199,23 @@ async function deleteContactItem() {
         <span>阅后即焚</span>
         <AppSwitch :model-value="readBurn" @update:model-value="toggleReadBurn" />
       </li>
+      <li v-if="readBurn">
+        <span>消息销毁时间</span>
+        <div class="select" @click="handleOpenTimeMenu">
+          {{ READ_BURN_TIME_OPTIONS.find((item) => item.value === msgCancelTime)?.label || '30秒' }}
+          <img :src="choiceIcon" alt="" />
+        </div>
+        <div v-if="showTimeMenu" class="menuTimeList" @click.stop>
+          <div
+            v-for="item in READ_BURN_TIME_OPTIONS"
+            :key="item.value"
+            class="menu-item"
+            @click="updateReadBurnTime(item.value)"
+          >
+            {{ item.label }}
+          </div>
+        </div>
+      </li>
       <li>
         <span>加入黑名单</span>
         <AppSwitch :model-value="inBlacklist" @update:model-value="toggleBlacklist" />
@@ -169,15 +233,25 @@ async function deleteContactItem() {
 }
 
 .profile {
-  padding: 12px 10px;
+  position: relative;
+  padding: 0 10px 4px 60px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  min-height: 75px;
-  background: #f5f5f5;
+  min-height: 55px;
+
+  :deep(.text-avatar),
+  :deep(img) {
+    position: absolute;
+    left: 10px;
+    width: 45px;
+    height: 45px;
+  }
 }
 
 .profile-text {
+  width: 100%;
+
   h2 {
     margin: 0;
     line-height: 25px;
@@ -208,11 +282,16 @@ async function deleteContactItem() {
   font-size: 12px;
   margin-left: 10px;
   cursor: pointer;
+
+  &:hover {
+    opacity: 0.8;
+  }
 }
 
 .config-list {
-  padding: 14px 0 0;
+  padding: 10px 0;
   margin: 0;
+  border-top: 10px solid #f5f5f5;
 
   li {
     list-style: none;
@@ -223,6 +302,43 @@ async function deleteContactItem() {
     padding: 0 10px;
     font-size: 14px;
     color: #333;
+    position: relative;
+  }
+}
+
+.select {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+
+  img {
+    width: 12px;
+    margin-left: 6px;
+  }
+}
+
+.menuTimeList {
+  position: absolute;
+  right: 10px;
+  top: 100%;
+  margin-top: 2px;
+  background: #fff;
+  border: 1px solid #e6e6e6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  z-index: 12;
+
+  .menu-item {
+    min-width: 72px;
+    height: 30px;
+    line-height: 30px;
+    padding: 0 10px;
+    text-align: left;
+    cursor: pointer;
+    color: #333;
+
+    &:hover {
+      background: #f5f5f5;
+    }
   }
 }
 
