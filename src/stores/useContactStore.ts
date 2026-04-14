@@ -20,6 +20,7 @@ export interface Contact {
   remark: string | null
   bfReadCancel?: boolean
   bfMyBlack?: boolean
+  msgCancelTime?: number
   status: number
   updatedAt: number
 }

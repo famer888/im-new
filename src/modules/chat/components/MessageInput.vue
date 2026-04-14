@@ -3,9 +3,13 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessageType, ConversationType } from '@/types'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
+import { getReadBurnTimeText } from '@/utils/readBurn'
+import { updateContacts } from '@/api/imBase'
+import { proto } from '@/api/request'
 import EmojiPicker from './send/EmojiPicker.vue'
 import AtListDialog from './send/AtListDialog.vue'
 import CreateLinkDialog from './send/CreateLinkDialog.vue'
@@ -13,6 +17,7 @@ import ScheduleDeletionDialog from './send/ScheduleDeletionDialog.vue'
 import FileUploadPreview from './FileUploadPreview.vue'
 import iconSmallActive from '@/assets/images/activeIcon/small-active.png'
 import iconFileActive from '@/assets/images/activeIcon/file-active.png'
+import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
 
 const emit = defineEmits<{
   (e: 'send', content: string, msgType: number): void
@@ -20,6 +25,7 @@ const emit = defineEmits<{
 
 const chatStore = useChatStore()
 const groupStore = useGroupStore()
+const contactStore = useContactStore()
 const settingStore = useSettingStore()
 const uiStore = useUIStore()
 const content = ref('')
@@ -52,6 +58,25 @@ const showShutupTip = computed(() => {
 })
 const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
+const currentContact = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Friend || conv.targetId === FILE_HELPER_TARGET_ID) return null
+  return contactStore.getContact(conv.targetId) ?? null
+})
+const showReadBurnTip = computed(() =>
+  Boolean(currentContact.value?.bfReadCancel),
+)
+const readBurnTimeText = computed(() =>
+  getReadBurnTimeText(currentContact.value?.msgCancelTime || 30),
+)
+
+watch(currentContact, (contact) => {
+  if (!contact) {
+    scheduleDeletionTime.value = 0
+    return
+  }
+  scheduleDeletionTime.value = Number(contact.msgCancelTime || 30)
+}, { immediate: true })
 
 // 草稿保存
 const draftMap = new Map<string, string>()
@@ -185,7 +210,38 @@ function handleFileSend(files: File[]) {
 }
 
 function handleScheduleDeletionConfirm(seconds: number) {
+  const contact = currentContact.value
+  if (!contact) return
   scheduleDeletionTime.value = seconds
+  if (seconds === 0) {
+    updateContacts({
+      op: proto.ContactsOperator.READ_CANCEL,
+      param: {
+        contactsId: Number(contact.id),
+        bfReadCancel: false,
+      },
+    }).then(() => {
+      contactStore.patchContact(contact.id, { bfReadCancel: false })
+    }).catch(() => {
+      // ignore update failure in UI layer
+    })
+    return
+  }
+
+  updateContacts({
+    op: proto.ContactsOperator.READ_CANCEL_TIME,
+    param: {
+      contactsId: Number(contact.id),
+      msgCancelTime: seconds,
+    },
+  }).then(() => {
+    contactStore.patchContact(contact.id, {
+      bfReadCancel: true,
+      msgCancelTime: seconds,
+    })
+  }).catch(() => {
+    // ignore update failure in UI layer
+  })
 }
 
 // 截图快捷键 (Ctrl+Shift+A)
@@ -233,10 +289,6 @@ eventBus.on('editor:insert-at', handleAtSelect)
             <button class="tool-btn" :title="$t('创建链接')" @click="showCreateLink = true">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-            <button class="tool-btn" :title="$t('阅后即焚')" @click="showScheduleDeletion = true">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="#666"/><path d="M12.5 7H11v6l5.25 3.15.75-1.23-4.5-2.67V7z" fill="#666"/></svg>
-              <span v-if="scheduleDeletionTime > 0" class="burn-indicator" />
-            </button>
           </template>
         </div>
       </div>
@@ -266,15 +318,15 @@ eventBus.on('editor:insert-at', handleAtSelect)
       </div>
 
       <div class="send-area">
-        <div class="send-left">
-          <span v-if="scheduleDeletionTime > 0 && !isFileHelperChat" class="burn-time-tip">
-            <svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 1C4.13 1 1 4.13 1 8s3.13 7 7 7 7-3.13 7-7-3.13-7-7-7z" fill="none" stroke="#da2e2e" stroke-width="1.2"/><path d="M8.5 4H7v5l3.5 2.1.5-.82L8.5 8.5V4z" fill="#da2e2e"/></svg>
-            {{ $t('阅后即焚已开启') }}
+        <div class="send-right">
+          <span v-if="showReadBurnTip" class="burn-time-tip" @click="showScheduleDeletion = true">
+            <img :src="readBurnTimeIcon" alt="" />
+            <span>{{ readBurnTimeText }}</span>
           </span>
+          <button class="send-btn" :disabled="!content.trim()" @click="handleSend">
+            {{ $t('发送') }}
+          </button>
         </div>
-        <button class="send-btn" :disabled="!content.trim()" @click="handleSend">
-          {{ $t('发送') }}
-        </button>
       </div>
     </template>
 
@@ -407,22 +459,36 @@ eventBus.on('editor:insert-at', handleAtSelect)
 .send-area {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0 14px 10px;
 }
 
-.send-left {
+.send-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
 }
 
 .burn-time-tip {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: #da2e2e;
+  height: 24px;
+  cursor: pointer;
+
+  img {
+    width: 16px;
+    height: 16px;
+    margin-right: 2px;
+  }
+
+  color: #999;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+
+  &:hover {
+    color: #666;
+  }
 }
 
 .send-btn {
