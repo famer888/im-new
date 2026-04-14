@@ -88,7 +88,8 @@ async function handleSend(content: string, msgType: number) {
 .chat-window {
   display: flex;
   flex-direction: column;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   background: #fff;
 }

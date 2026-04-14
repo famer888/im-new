@@ -4,11 +4,14 @@ import { useChatStore, FILE_HELPER_TARGET_ID, FILE_HELPER_DISPLAY_NAME } from '@
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
 import userIconV from '@/assets/images/userInfo/user-icon-v.png'
 import editIcon from '@/assets/images/message/edit-icon.png'
+import searchIcon from '@/assets/images/headNav/icon-search-black.png'
+import menuIcon from '@/assets/images/system/icon-menu.png'
 
 const props = defineProps<{
   conversationId: string
@@ -18,6 +21,7 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
+const uiStore = useUIStore()
 
 const conversation = computed(() =>
   chatStore.conversations.find((c) => c.id === props.conversationId),
@@ -104,6 +108,25 @@ function saveRemark() {
   // 与旧版行为保持一致：空值表示清空备注，回退到昵称显示
   friendContact.value.remark = val || null
 }
+
+function getCurrentPanelType() {
+  if (!conversation.value) return 'none' as const
+  if (conversation.value.type === ConversationType.Friend && !isFileHelper.value) return 'friend-info' as const
+  if (conversation.value.type === ConversationType.Group) return 'group-info' as const
+  if (conversation.value.type === ConversationType.Channel) return 'channel-info' as const
+  return 'none' as const
+}
+
+function toggleRightPanel() {
+  const panelType = getCurrentPanelType()
+  if (panelType === 'none') return
+  uiStore.setRightPanel(uiStore.rightPanel === panelType ? 'none' : panelType)
+}
+
+function handleSearch() {
+  // 与旧版入口一致：先保留搜索按钮与交互占位
+  if (!conversation.value) return
+}
 </script>
 
 <template>
@@ -146,7 +169,21 @@ function saveRemark() {
       </template>
     </div>
     <div class="header-right">
-      <!-- Group info, search, etc. -->
+      <img
+        v-if="!isFileHelper"
+        class="header-action-icon search"
+        :src="searchIcon"
+        alt=""
+        @click="handleSearch"
+      />
+      <button
+        v-if="!isFileHelper"
+        class="more-btn"
+        type="button"
+        @click="toggleRightPanel"
+      >
+        <img :src="menuIcon" alt="" />
+      </button>
     </div>
   </div>
 </template>
@@ -248,5 +285,40 @@ function saveRemark() {
   width: auto;
   display: block;
   margin-left: 5px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+.header-action-icon {
+  display: block;
+  cursor: pointer;
+
+  &.search {
+    width: 20px;
+    height: 20px;
+    margin-right: 10px;
+  }
+}
+
+.more-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  &:hover {
+    opacity: 0.8;
+  }
 }
 </style>

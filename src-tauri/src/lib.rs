@@ -136,6 +136,7 @@ pub fn run() {
             commands::file::get_download_progress,
             commands::window::open_chat_window,
             commands::window::close_chat_window,
+            commands::window::toggle_side_bar,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::repair::repair_clear_crypto_keys,
