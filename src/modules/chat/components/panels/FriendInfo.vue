@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import Toast from '@/components/Toast.vue'
 import { contactsRelation, getContactsDetail, updateBlackContacts, updateContacts } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -28,6 +30,16 @@ const msgCancelTime = ref(30)
 const inBlacklist = ref(false)
 const working = ref(false)
 const showTimeMenu = ref(false)
+const blacklistConfirmVisible = ref(false)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+function showToast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+}
 
 function formatReadBurnNotice(seconds: number, enabled: boolean) {
   const name = t('你')
@@ -151,17 +163,35 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', handleOutsideClick)
 })
 
-async function toggleBlacklist() {
+const blacklistConfirmContent = computed(() =>
+  inBlacklist.value
+    ? '确认移除黑名单吗'
+    : '加入黑名单后，你将不再接收到对方的任何消息',
+)
+
+function handleBlacklistToggle() {
+  if (!contact.value || working.value) return
+  blacklistConfirmVisible.value = true
+}
+
+async function confirmBlacklist() {
   if (!contact.value || working.value) return
   const next = !inBlacklist.value
   working.value = true
   try {
-    await updateBlackContacts({
+    const res = await updateBlackContacts({
       targetUid: Number(contact.value.id),
       op: next ? 6 : 7,
     })
-    inBlacklist.value = next
-    contactStore.patchContact(contact.value.id, { bfMyBlack: next })
+    const { errCode } = (res as any)?.commonResult || {}
+    if (errCode == 200) {
+      inBlacklist.value = next
+      contactStore.patchContact(contact.value.id, { bfMyBlack: next })
+      showToast(next ? '加入成功' : '移除成功')
+    } else {
+      const errorDesc = (res as any)?.errorDesc
+      if (errorDesc) showToast(errorDesc, 'error')
+    }
   } finally {
     working.value = false
   }
@@ -238,11 +268,24 @@ async function deleteContactItem() {
       </li>
       <li>
         <span>加入黑名单</span>
-        <AppSwitch :model-value="inBlacklist" @update:model-value="toggleBlacklist" />
+        <AppSwitch :model-value="inBlacklist" @update:model-value="handleBlacklistToggle" />
       </li>
       <li class="danger friend-left" @click="clearHistory">清空聊天记录</li>
       <li class="danger friend-left" @click="deleteContactItem">删除联系人</li>
     </ul>
+
+    <ConfirmDialog
+      v-model:visible="blacklistConfirmVisible"
+      variant="im"
+      :content="blacklistConfirmContent"
+      @confirm="confirmBlacklist"
+    />
+
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </div>
 </template>
 

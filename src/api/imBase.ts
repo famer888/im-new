@@ -154,6 +154,40 @@ export async function updateBlackContacts(
 }
 
 /**
+ * Get contacts apply list (friend requests).
+ * POST /contacts/contactsApplyList
+ */
+export async function getContactsApplyList(
+  data: { version?: number },
+  baseUrl?: string,
+): Promise<proto.ContactsApplyListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/contactsApplyList`,
+    reqType: proto.ContactsApplyListReq,
+    respType: proto.ContactsApplyListResp,
+    data,
+  })
+}
+
+/**
+ * Handle contacts apply (accept/reject friend request).
+ * POST /contacts/updateContactsApply
+ */
+export async function updateContactsApply(
+  data: { applyUid: number; op: number },
+  baseUrl?: string,
+): Promise<proto.UpdateContactsApplyResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/contacts/updateContactsApply`,
+    reqType: proto.UpdateContactsApplyReq,
+    respType: proto.UpdateContactsApplyResp,
+    data,
+  })
+}
+
+/**
  * Search/find contacts by phone number or sign.
  * POST /contacts/findContactsList
  */
