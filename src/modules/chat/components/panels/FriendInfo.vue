@@ -3,10 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { contactsRelation, getContactsDetail, updateBlackContacts, updateContacts } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -197,9 +198,48 @@ async function confirmBlacklist() {
   }
 }
 
-function clearHistory() {
+const clearMsgTypeList = ref<string[]>([])
+
+const isFileHelper = computed(() => conv.value?.targetId === FILE_HELPER_TARGET_ID)
+
+function openClearDialog() {
   if (!conv.value) return
+  if (isFileHelper.value) {
+    clearMsgTypeList.value = [t('仅清空本地聊天记录')]
+  } else {
+    clearMsgTypeList.value = [
+      t('仅清空本地聊天记录'),
+      t('清空本地和对方设备的聊天记录'),
+    ]
+  }
+}
+
+function handleClearSubmit(index: number) {
+  if (index === -1 || !conv.value) {
+    clearMsgTypeList.value = []
+    return
+  }
+  const isRemoteDeletion = index === 1
   messageStore.clearConversationMessages(conv.value.id)
+  chatStore.updateConversation({
+    id: conv.value.id,
+    lastMsgDigest: null,
+    lastMsgId: null,
+    unreadCount: 0,
+  })
+  if (isRemoteDeletion && contact.value) {
+    import('@/api/request').then(({ proto: p }) => {
+      const targetId = Number(contact.value!.id)
+      const reqData = {
+        msgId: -1,
+        msgTargetId: targetId,
+        clear: 1,
+        clearTime: Date.now(),
+      }
+      console.log('[FriendInfo] remote clear request:', reqData)
+    })
+  }
+  clearMsgTypeList.value = []
 }
 
 async function deleteContactItem() {
@@ -270,7 +310,7 @@ async function deleteContactItem() {
         <span>加入黑名单</span>
         <AppSwitch :model-value="inBlacklist" @update:model-value="handleBlacklistToggle" />
       </li>
-      <li class="danger friend-left" @click="clearHistory">清空聊天记录</li>
+      <li class="danger friend-left" @click="openClearDialog">清空聊天记录</li>
       <li class="danger friend-left" @click="deleteContactItem">删除联系人</li>
     </ul>
 
@@ -279,6 +319,13 @@ async function deleteContactItem() {
       variant="im"
       :content="blacklistConfirmContent"
       @confirm="confirmBlacklist"
+    />
+
+    <RadioSelectDialog
+      v-if="clearMsgTypeList.length > 0"
+      :title="t('请选择清空类型')"
+      :radio-text-list="clearMsgTypeList"
+      @submit="handleClearSubmit"
     />
 
     <Toast
