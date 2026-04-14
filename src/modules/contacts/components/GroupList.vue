@@ -37,7 +37,7 @@ function handleSelect(group: typeof groupStore.groups[0]) {
       class="group-item"
       @click="handleSelect(group)"
     >
-      <TextAvatar :name="group.name || group.id" :src="group.avatar" :size="36" />
+      <TextAvatar :name="group.name || group.id" :src="group.avatar" avatar-type="group" :size="36" />
       <div class="group-info">
         <span class="group-name">{{ group.name || group.id }}</span>
         <span class="group-count">{{ group.memberCount }} 人</span>

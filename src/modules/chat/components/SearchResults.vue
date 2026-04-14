@@ -64,7 +64,7 @@ function selectChannel(id: string) {
           class="result-item"
           @click="selectGroup(g.id)"
         >
-          <TextAvatar :name="g.name || g.id" :src="g.avatar" :size="32" />
+          <TextAvatar :name="g.name || g.id" :src="g.avatar" avatar-type="group" :size="32" />
           <span class="result-name">{{ g.name || g.id }}</span>
         </div>
       </div>
@@ -76,7 +76,7 @@ function selectChannel(id: string) {
           class="result-item"
           @click="selectChannel(ch.id)"
         >
-          <TextAvatar :name="ch.name || ch.id" :src="ch.avatar" :size="32" />
+          <TextAvatar :name="ch.name || ch.id" :src="ch.avatar" avatar-type="channel" :size="32" />
           <span class="result-name">{{ ch.name || ch.id }}</span>
         </div>
       </div>

@@ -37,7 +37,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       class="channel-item"
       @click="handleSelect(ch)"
     >
-      <TextAvatar :name="ch.name || ch.id" :src="ch.avatar" :size="36" />
+      <TextAvatar :name="ch.name || ch.id" :src="ch.avatar" avatar-type="channel" :size="36" />
       <div class="channel-info">
         <span class="channel-name">{{ ch.name || ch.id }}</span>
         <span v-if="ch.description" class="channel-desc">{{ ch.description }}</span>
