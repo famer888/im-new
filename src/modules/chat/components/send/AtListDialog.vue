@@ -52,6 +52,7 @@ function handleSelect(member: GroupMember) {
           <TextAvatar
             :name="member.nickname || member.userId"
             :src="member.avatar"
+            avatar-type="friend"
             :size="32"
           />
           <span>{{ member.nickname || member.userId }}</span>

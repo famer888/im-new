@@ -40,7 +40,6 @@ function handleSelect(group: typeof groupStore.groups[0]) {
       <TextAvatar :name="group.name || group.id" :src="group.avatar" avatar-type="group" :size="36" />
       <div class="group-info">
         <span class="group-name">{{ group.name || group.id }}</span>
-        <span class="group-count">{{ group.memberCount }} 人</span>
       </div>
     </div>
   </div>
@@ -84,5 +83,4 @@ function handleSelect(group: typeof groupStore.groups[0]) {
 
 .group-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .group-name { font-size: 14px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.group-count { font-size: 12px; color: #999; }
 </style>
