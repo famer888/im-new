@@ -43,6 +43,10 @@ export const useUIStore = defineStore('ui', () => {
 
   function setDetailView(view: DetailViewType) {
     detailView.value = view
+    // 右侧聊天面板仅属于聊天窗口，切到其他详情页时强制关闭
+    if (view !== 'chat' && rightPanel.value !== 'none') {
+      rightPanel.value = 'none'
+    }
   }
 
   function openSettings() { settingsVisible.value = true }

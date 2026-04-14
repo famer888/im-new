@@ -13,7 +13,9 @@ const uiStore = useUIStore()
 const chatStore = useChatStore()
 
 const conversation = computed(() => chatStore.currentConversation)
-const showPanel = computed(() => uiStore.rightPanel !== 'none')
+const showPanel = computed(() =>
+  uiStore.detailView === 'chat' && uiStore.rightPanel !== 'none',
+)
 const sidebarType = ref<SidebarOpenType>('none')
 
 watch(showPanel, async (visible) => {
