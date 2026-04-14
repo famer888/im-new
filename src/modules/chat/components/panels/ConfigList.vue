@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useMessageStore } from '@/stores/useMessageStore'
+import { useI18n } from 'vue-i18n'
+import { ConversationType } from '@/types'
 import AppSwitch from '@/components/AppSwitch.vue'
+import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const uiStore = useUIStore()
+const messageStore = useMessageStore()
+const { t } = useI18n()
 const conv = computed(() => chatStore.currentConversation)
+
+const isGroup = computed(() => conv.value?.type === ConversationType.Group)
+const isChannel = computed(() => conv.value?.type === ConversationType.Channel)
+const clearMsgTypeList = ref<string[]>([])
 
 async function togglePin() {
   if (!conv.value) return
@@ -22,6 +32,44 @@ async function toggleMute() {
 
 function openGroupNotice() {
   uiStore.setRightPanel('group-notice')
+}
+
+function openClearDialog() {
+  if (!conv.value) return
+  if (isGroup.value) {
+    clearMsgTypeList.value = [
+      t('仅清空本地聊天记录'),
+      t('清空本地和所有成员设备的聊天记录'),
+    ]
+  } else if (isChannel.value) {
+    clearMsgTypeList.value = [t('仅清空本地聊天记录')]
+  } else {
+    clearMsgTypeList.value = [
+      t('仅清空本地聊天记录'),
+      t('清空本地和对方设备的聊天记录'),
+    ]
+  }
+}
+
+function handleClearSubmit(index: number) {
+  if (index === -1 || !conv.value) {
+    clearMsgTypeList.value = []
+    return
+  }
+  const isRemoteDeletion = index === 1
+  messageStore.clearConversationMessages(conv.value.id)
+  chatStore.updateConversation({
+    id: conv.value.id,
+    lastMsgDigest: null,
+    lastMsgId: null,
+    unreadCount: 0,
+  })
+  if (isRemoteDeletion) {
+    const targetId = Number(conv.value.targetId)
+    const chatType = isGroup.value ? 'group' : isChannel.value ? 'channel' : 'friend'
+    console.log('[ConfigList] remote clear request:', { targetId, type: chatType, clear: 1, clearTime: Date.now() })
+  }
+  clearMsgTypeList.value = []
 }
 </script>
 
@@ -53,6 +101,18 @@ function openGroupNotice() {
         <span class="arrow">›</span>
       </div>
     </div>
+    <div class="config-section clear-section">
+      <div class="config-item clickable danger" @click="openClearDialog">
+        <span>清空聊天记录</span>
+      </div>
+    </div>
+
+    <RadioSelectDialog
+      v-if="clearMsgTypeList.length > 0"
+      :title="t('请选择清空类型')"
+      :radio-text-list="clearMsgTypeList"
+      @submit="handleClearSubmit"
+    />
   </div>
 </template>
 
@@ -80,6 +140,11 @@ function openGroupNotice() {
   &.clickable {
     cursor: pointer;
     &:hover { background: #f5f5f5; }
+  }
+
+  &.danger {
+    color: #f44e5a;
+    justify-content: flex-start;
   }
 }
 
