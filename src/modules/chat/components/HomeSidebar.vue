@@ -218,7 +218,7 @@ onBeforeUnmount(() => {
       </ul>
 
       <div ref="settingsWrapRef" class="nav-bottom">
-        <span class="setting-trigger" @click="handleSettingsClick">设置</span>
+        <span class="setting-trigger" @click="handleSettingsClick">设置-新项目</span>
       </div>
     </div>
 
