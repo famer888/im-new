@@ -57,6 +57,30 @@ onMounted(async () => {
       settingStore.loadSettings(),
     ])
     appLocale.value = settingStore.settings.language
+
+    // Bootstrap: if no real conversations exist, seed from contacts/groups
+    // (mirrors old im project's behavior of building the chat list from synced data)
+    const hasRealConversations = chatStore.conversations.some(
+      (c) => c.targetId !== FILE_HELPER_TARGET_ID,
+    )
+    if (!hasRealConversations) {
+      for (const contact of contactStore.contacts) {
+        if (contact.id && contact.status > 0) {
+          chatStore.ensureConversation(0, contact.id)
+        }
+      }
+      for (const group of groupStore.groups) {
+        if (group.id) {
+          chatStore.ensureConversation(1, group.id)
+        }
+      }
+      for (const channel of channelStore.channels) {
+        if (channel.id) {
+          chatStore.ensureConversation(2, channel.id)
+        }
+      }
+    }
+
     try {
       if ((window as any).__TAURI_INTERNALS__) {
         const { invoke } = await import('@tauri-apps/api/core')
@@ -64,7 +88,6 @@ onMounted(async () => {
       }
     } catch { /* WS not available in browser */ }
   }
-  // 未登录或 load 未走 finally 时，仍保证会话列表里有传输助手（与「传输」侧栏入口一致）
   chatStore.ensureFileHelperConversationInMemory()
   isInitialized.value = true
 })

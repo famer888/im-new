@@ -164,6 +164,9 @@ async function confirmLogout() {
   const groupStore = useGroupStore()
   const channelStore = useChannelStore()
 
+  // Disable persistence before clearing so the localStorage cache is preserved for next login
+  chatStore.enablePersistence('')
+
   chatStore.currentConversationId = null
   chatStore.conversations = []
   messageStore.clearAllMessageCaches()
