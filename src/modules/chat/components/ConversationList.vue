@@ -60,6 +60,17 @@ function getAvatar(conv: Conversation): string | null {
   }
 }
 
+function getAvatarType(conv: Conversation): 'friend' | 'group' | 'channel' {
+  switch (conv.type) {
+    case ConversationType.Group:
+      return 'group'
+    case ConversationType.Channel:
+      return 'channel'
+    default:
+      return 'friend'
+  }
+}
+
 function formatTime(ts: number): string {
   if (!ts) return ''
   const d = dayjs(ts)
@@ -122,6 +133,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           <TextAvatar
             :name="getName(conv)"
             :src="getAvatar(conv)"
+            :avatar-type="getAvatarType(conv)"
             :size="35"
             :rounded="!!getAvatar(conv)"
           />

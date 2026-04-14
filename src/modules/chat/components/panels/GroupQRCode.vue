@@ -8,7 +8,7 @@
       </div>
       <div class="dialog-content">
         <div class="qr-info">
-          <TextAvatar :name="groupName" :size="48" />
+          <TextAvatar :name="groupName" avatar-type="group" :size="48" />
           <div class="group-meta">
             <h3>{{ groupName }}</h3>
             <span>{{ $t('扫一扫，加入该群') }}</span>

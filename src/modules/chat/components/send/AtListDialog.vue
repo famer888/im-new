@@ -40,7 +40,7 @@ function handleSelect(member: GroupMember) {
       </div>
       <div class="at-list">
         <div class="at-item at-all" @click="handleSelect({ groupId, userId: 'all', nickname: '所有人', role: 0 })">
-          <TextAvatar name="@" :size="32" />
+          <TextAvatar name="@" avatar-type="text" :size="32" />
           <span>所有人</span>
         </div>
         <div

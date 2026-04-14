@@ -48,6 +48,7 @@ function startChat() {
           class="avatar"
           :name="group.name || group.id"
           :src="group.avatar"
+          avatar-type="group"
           :size="60"
           rounded
         />

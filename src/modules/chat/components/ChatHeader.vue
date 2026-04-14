@@ -70,6 +70,18 @@ const avatar = computed(() => {
   }
 })
 
+const avatarType = computed<'friend' | 'group' | 'channel'>(() => {
+  if (!conversation.value) return 'friend'
+  switch (conversation.value.type) {
+    case ConversationType.Group:
+      return 'group'
+    case ConversationType.Channel:
+      return 'channel'
+    default:
+      return 'friend'
+  }
+})
+
 watch(friendContact, (contact) => {
   remarkDraft.value = contact?.remark || contact?.nickname || ''
   editingRemark.value = false
@@ -110,6 +122,7 @@ function saveRemark() {
           class="header-avatar"
           :name="title || conversation?.targetId || '?'"
           :src="avatar || null"
+          :avatar-type="avatarType"
           :size="25"
           rounded
         />

@@ -34,6 +34,19 @@ function getName(conv: { type: number; targetId: string }): string {
   return conv.targetId
 }
 
+function getAvatar(conv: { type: number; targetId: string }): string | null {
+  if (conv.targetId === FILE_HELPER_TARGET_ID) return null
+  if (conv.type === ConversationType.Friend) return contactStore.getContact(conv.targetId)?.avatar ?? null
+  if (conv.type === ConversationType.Group) return groupStore.getGroup(conv.targetId)?.avatar ?? null
+  return null
+}
+
+function getAvatarType(conv: { type: number; targetId: string }): 'friend' | 'group' | 'channel' {
+  if (conv.type === ConversationType.Group) return 'group'
+  if (conv.type === ConversationType.Channel) return 'channel'
+  return 'friend'
+}
+
 function handleSelect(conv: { id: string; targetId: string }) {
   emit('forward', conv.id)
   emit('update:visible', false)
@@ -59,7 +72,12 @@ function handleSelect(conv: { id: string; targetId: string }) {
               class="forward-item"
               @click="handleSelect(conv)"
             >
-              <TextAvatar :name="getName(conv)" :size="36" />
+              <TextAvatar
+                :name="getName(conv)"
+                :src="getAvatar(conv)"
+                :avatar-type="getAvatarType(conv)"
+                :size="36"
+              />
               <span class="forward-name">{{ getName(conv) }}</span>
             </div>
             <div v-if="filteredConversations.length === 0" class="empty">无匹配结果</div>

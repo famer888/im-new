@@ -23,7 +23,7 @@ function startChat() {
 <template>
   <div class="channel-detail" v-if="channel">
     <div class="detail-header">
-      <TextAvatar :name="channel.name || channel.id" :src="channel.avatar" :size="64" />
+      <TextAvatar :name="channel.name || channel.id" :src="channel.avatar" avatar-type="channel" :size="64" />
       <div class="detail-name">{{ channel.name || channel.id }}</div>
     </div>
     <div v-if="channel.description" class="detail-section">
