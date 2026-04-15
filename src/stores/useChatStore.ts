@@ -143,6 +143,30 @@ export const useChatStore = defineStore('chat', () => {
     sortConversations()
   }
 
+  function updateGroupNotificationConv(digest: string, time: number, pendingCount: number) {
+    const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    const idx = conversations.value.findIndex((c) => c.id === id)
+    if (idx >= 0) {
+      const conv = conversations.value[idx]
+      conversations.value[idx] = {
+        ...conv,
+        lastMsgDigest: digest,
+        lastMsgTime: time,
+        unreadCount: pendingCount,
+        updatedAt: time || conv.updatedAt,
+      }
+      sortConversations()
+    }
+  }
+
+  function clearGroupNotificationUnread() {
+    const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    const idx = conversations.value.findIndex((c) => c.id === id)
+    if (idx >= 0) {
+      conversations.value[idx] = { ...conversations.value[idx], unreadCount: 0 }
+    }
+  }
+
   let _persistUid = ''
 
   function enablePersistence(uid: string) {
@@ -326,5 +350,7 @@ export const useChatStore = defineStore('chat', () => {
     clearAllLocalChatHistory,
     ensureFileHelperConversationInMemory,
     ensureGroupNotificationConversation,
+    updateGroupNotificationConv,
+    clearGroupNotificationUnread,
   }
 })

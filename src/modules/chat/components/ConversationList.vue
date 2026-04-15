@@ -116,6 +116,7 @@ function handleSelect(conv: Conversation) {
   chatStore.setCurrentConversation(conv.id)
   if (isGroupNotification(conv)) {
     uiStore.setDetailView('group-invitation')
+    chatStore.clearGroupNotificationUnread()
   } else {
     uiStore.setDetailView('chat')
   }
