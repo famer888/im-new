@@ -33,6 +33,13 @@ export const useUIStore = defineStore('ui', () => {
   const contextMenuPosition = ref({ x: 0, y: 0 })
   const contextMenuData = ref<Record<string, unknown>>({})
 
+  // Quote reply
+  const quoteMessage = ref<{ id: string; senderId: string; senderName: string; msgType: number; content: string | null } | null>(null)
+
+  // Multi-select mode
+  const selectionMode = ref(false)
+  const selectedMessageIds = ref<Set<string>>(new Set())
+
   function setSidebarTab(tab: SidebarTab) {
     sidebarTab.value = tab
   }
@@ -99,6 +106,34 @@ export const useUIStore = defineStore('ui', () => {
     contextMenuVisible.value = false
   }
 
+  function setQuoteMessage(msg: typeof quoteMessage.value) {
+    quoteMessage.value = msg
+  }
+
+  function clearQuoteMessage() {
+    quoteMessage.value = null
+  }
+
+  function enterSelectionMode(initialMessageId?: string) {
+    selectionMode.value = true
+    selectedMessageIds.value = new Set(initialMessageId ? [initialMessageId] : [])
+  }
+
+  function exitSelectionMode() {
+    selectionMode.value = false
+    selectedMessageIds.value = new Set()
+  }
+
+  function toggleMessageSelection(messageId: string) {
+    const s = new Set(selectedMessageIds.value)
+    if (s.has(messageId)) {
+      s.delete(messageId)
+    } else {
+      s.add(messageId)
+    }
+    selectedMessageIds.value = s
+  }
+
   return {
     sidebarTab,
     rightPanel,
@@ -139,7 +174,15 @@ export const useUIStore = defineStore('ui', () => {
     closeInviteFriend,
     openUpVersion,
     closeUpVersion,
+    quoteMessage,
+    selectionMode,
+    selectedMessageIds,
     showContextMenu,
     hideContextMenu,
+    setQuoteMessage,
+    clearQuoteMessage,
+    enterSelectionMode,
+    exitSelectionMode,
+    toggleMessageSelection,
   }
 })

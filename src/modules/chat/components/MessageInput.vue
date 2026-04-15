@@ -22,7 +22,7 @@ import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
 
 const emit = defineEmits<{
-  (e: 'send', content: string, msgType: number): void
+  (e: 'send', content: string, msgType: number, extra?: Record<string, unknown>): void
 }>()
 
 const chatStore = useChatStore()
@@ -116,7 +116,20 @@ watch(convId, (newId, oldId) => {
 function handleSend() {
   const text = content.value.trim()
   if (!text) return
-  emit('send', text, MessageType.Text)
+
+  const extra: Record<string, unknown> = {}
+  if (uiStore.quoteMessage) {
+    extra.quoteMessage = {
+      id: uiStore.quoteMessage.id,
+      senderId: uiStore.quoteMessage.senderId,
+      senderName: uiStore.quoteMessage.senderName,
+      msgType: uiStore.quoteMessage.msgType,
+      content: uiStore.quoteMessage.content,
+    }
+    uiStore.clearQuoteMessage()
+  }
+
+  emit('send', text, MessageType.Text, Object.keys(extra).length > 0 ? extra : undefined)
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
   if (convId.value) draftMap.delete(convId.value)
@@ -283,6 +296,18 @@ onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
 })
 
+function getQuoteDigest(msgType: number, content: string | null): string {
+  if (msgType === MessageType.Text) return (content || '').slice(0, 80)
+  if (msgType === MessageType.Image) return '[图片]'
+  if (msgType === MessageType.Audio) return '[语音]'
+  if (msgType === MessageType.Video) return '[视频]'
+  if (msgType === MessageType.File) return '[文件]'
+  if (msgType === MessageType.Location) return '[位置]'
+  if (msgType === MessageType.NameCard) return '[名片]'
+  if (msgType === MessageType.RedPacket) return '[红包]'
+  return (content || '').slice(0, 80)
+}
+
 eventBus.on('editor:insert-emoji', handleEmojiSelect)
 eventBus.on('editor:insert-at', handleAtSelect)
 </script>
@@ -295,6 +320,14 @@ eventBus.on('editor:insert-at', handleAtSelect)
     </div>
 
     <template v-else>
+      <!-- Quote reply preview -->
+      <div v-if="uiStore.quoteMessage" class="quote-preview">
+        <div class="quote-preview-content">
+          <span class="quote-sender">{{ uiStore.quoteMessage.senderName }}</span>
+          <span class="quote-text">{{ getQuoteDigest(uiStore.quoteMessage.msgType, uiStore.quoteMessage.content) }}</span>
+        </div>
+        <button class="quote-close" @click="uiStore.clearQuoteMessage()">×</button>
+      </div>
       <div class="toolbar">
         <div class="toolbar-left">
           <!-- 与 im components/active-icon.vue 一致：activeIcon/*.png + 灰度 / hover 彩色 -->
@@ -384,6 +417,58 @@ eventBus.on('editor:insert-at', handleAtSelect)
   background: #fff;
   flex-shrink: 0;
   position: relative;
+}
+
+.quote-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #f6f6f6;
+  border-bottom: 1px solid #eee;
+}
+
+.quote-preview-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #666;
+  overflow: hidden;
+  border-left: 2px solid #3369fe;
+  padding-left: 8px;
+}
+
+.quote-sender {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: #3369fe;
+}
+
+.quote-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quote-close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #999;
+  cursor: pointer;
+  border-radius: 50%;
+  margin-left: 8px;
+
+  &:hover { background: #eee; color: #333; }
 }
 
 .shutup-tip {
