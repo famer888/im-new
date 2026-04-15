@@ -31,8 +31,15 @@ import UpVersionDialog from '@/components/UpVersionDialog.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import type { MenuItem } from '@/components/ContextMenu.vue'
+import { MessageType } from '@/types'
+import { useMessageStore } from '@/stores/useMessageStore'
 
 import emptyBrandImg from '@/assets/images/login/dock.png'
+import menuCopy from '@/assets/images/menu/menu-copy.svg'
+import menuDelete from '@/assets/images/menu/menu-delete.svg'
+import menuSelect from '@/assets/images/menu/menu-select.svg'
+import menuReply from '@/assets/images/menu/menu-reply.svg'
+import menuForward from '@/assets/images/menu/menu-forward.svg'
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -43,6 +50,7 @@ const settingStore = useSettingStore()
 const { locale: appLocale } = useI18n()
 const uiStore = useUIStore()
 const networkStore = useNetworkStore()
+const messageStore = useMessageStore()
 
 const isInitialized = ref(false)
 
@@ -108,6 +116,15 @@ const inviteExistingMemberIds = computed(() => {
   return new Set(members.map(m => m.userId))
 })
 
+function messageSupportsCopy(msgType: unknown): boolean {
+  const t = Number(msgType)
+  return t === MessageType.Text || t === MessageType.Html2
+}
+
+const contextMenuVariant = computed(() =>
+  uiStore.contextMenuData.type === 'message' ? 'im' : 'default',
+)
+
 const contextMenuItems = computed((): MenuItem[] => {
   const data = uiStore.contextMenuData
   if (data.type === 'conversation') {
@@ -121,17 +138,31 @@ const contextMenuItems = computed((): MenuItem[] => {
     ]
   }
   if (data.type === 'message') {
-    const items: MenuItem[] = [
-      { key: 'copy', label: '复制', icon: '📋' },
-      { key: 'quote', label: '引用', icon: '↩' },
-      { key: 'forward', label: '转发', icon: '↗' },
-    ]
-    if (data.isSelf) {
-      items.push({ key: 'recall', label: '撤回', icon: '↺' })
+    const conv = chatStore.currentConversation
+    const convType = conv?.type ?? 0
+    const isSelf = Boolean(data.isSelf)
+    const items: MenuItem[] = []
+
+    if (messageSupportsCopy(data.msgType)) {
+      items.push({ key: 'copy', label: '复制', iconSrc: menuCopy })
     }
+
+    if (isSelf) {
+      const everyoneLabel =
+        convType === 0 ? '为双方删除' : '为所有人删除'
+      items.push({
+        key: 'delete_everyone',
+        label: everyoneLabel,
+        iconSrc: menuDelete,
+      })
+    }
+
     items.push(
-      { key: 'divider', label: '', divider: true },
-      { key: 'delete', label: '删除', icon: '🗑', danger: true },
+      { key: 'delete_local', label: '从本地删除', iconSrc: menuDelete },
+      { key: 'select', label: '选中', iconSrc: menuSelect },
+      { key: 'reply', label: '回复', iconSrc: menuReply },
+      { key: 'forward', label: '转发', iconSrc: menuForward },
+      { key: 'copy_msg_info', label: '复制消息信息', iconSrc: menuCopy },
     )
     return items
   }
@@ -162,18 +193,40 @@ async function handleContextMenuSelect(key: string) {
   }
   if (data.type === 'message') {
     const msgId = data.messageId as string
+    const convId = chatStore.currentConversationId
     switch (key) {
       case 'copy': {
         const text = data.content as string
         try { await navigator.clipboard.writeText(text) } catch { /* fallback */ }
         break
       }
+      case 'delete_everyone':
+        await chatStore.recallMessage(authStore.uid, msgId)
+        break
+      case 'delete_local':
+        if (convId) messageStore.deleteMessage(convId, msgId)
+        break
+      case 'select':
+        break
+      case 'reply':
+        break
       case 'forward':
         uiStore.openForwardDialog(msgId)
         break
-      case 'recall':
-        await chatStore.recallMessage(authStore.uid, msgId)
+      case 'copy_msg_info': {
+        const info = JSON.stringify(
+          {
+            id: data.messageId,
+            senderId: data.senderId,
+            msgType: data.msgType,
+            content: data.content,
+          },
+          null,
+          2,
+        )
+        try { await navigator.clipboard.writeText(info) } catch { /* fallback */ }
         break
+      }
     }
   }
 }
@@ -263,6 +316,7 @@ async function handleContextMenuSelect(key: string) {
       v-model:visible="uiStore.contextMenuVisible"
       :x="uiStore.contextMenuPosition.x"
       :y="uiStore.contextMenuPosition.y"
+      :variant="contextMenuVariant"
       :items="contextMenuItems"
       @select="handleContextMenuSelect"
     />
