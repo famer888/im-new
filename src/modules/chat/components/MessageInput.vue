@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessageType, ConversationType } from '@/types'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
@@ -20,6 +20,7 @@ import FileUploadPreview from './FileUploadPreview.vue'
 import iconSmallActive from '@/assets/images/activeIcon/small-active.png'
 import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
+import replyPreviewIcon from '@/assets/images/menu/menu-reply-preview.svg'
 
 const emit = defineEmits<{
   (e: 'send', content: string, msgType: number, extra?: Record<string, unknown>): void
@@ -111,6 +112,8 @@ watch(convId, (newId, oldId) => {
     content.value = draft
     if (editorRef.value) editorRef.value.textContent = draft
   }
+  uiStore.clearQuoteMessage()
+  uiStore.exitSelectionMode()
 })
 
 function handleSend() {
@@ -136,6 +139,16 @@ function handleSend() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (uiStore.quoteMessage) {
+      uiStore.clearQuoteMessage()
+      return
+    }
+    if (uiStore.selectionMode) {
+      uiStore.exitSelectionMode()
+      return
+    }
+  }
   const mode = settingStore.settings.sendShortcutKey
   if (mode === 'Ctrl+Enter') {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -308,6 +321,9 @@ function getQuoteDigest(msgType: number, content: string | null): string {
   return (content || '').slice(0, 80)
 }
 
+eventBus.on('editor:focus', () => {
+  nextTick(() => editorRef.value?.focus())
+})
 eventBus.on('editor:insert-emoji', handleEmojiSelect)
 eventBus.on('editor:insert-at', handleAtSelect)
 </script>
@@ -320,13 +336,18 @@ eventBus.on('editor:insert-at', handleAtSelect)
     </div>
 
     <template v-else>
-      <!-- Quote reply preview -->
-      <div v-if="uiStore.quoteMessage" class="quote-preview">
-        <div class="quote-preview-content">
-          <span class="quote-sender">{{ uiStore.quoteMessage.senderName }}</span>
-          <span class="quote-text">{{ getQuoteDigest(uiStore.quoteMessage.msgType, uiStore.quoteMessage.content) }}</span>
+      <!-- Quote reply preview (matches im's quote-info.vue) -->
+      <div v-if="uiStore.quoteMessage" class="quote-preview-bar">
+        <img class="quote-reply-icon" :src="replyPreviewIcon" alt="" />
+        <div class="quote-preview-body">
+          <div class="quote-preview-info">
+            <h3 class="quote-preview-sender">{{ uiStore.quoteMessage.senderName }}</h3>
+            <p class="quote-preview-text">{{ getQuoteDigest(uiStore.quoteMessage.msgType, uiStore.quoteMessage.content) }}</p>
+          </div>
         </div>
-        <button class="quote-close" @click="uiStore.clearQuoteMessage()">×</button>
+        <div class="quote-preview-close" @click.stop="uiStore.clearQuoteMessage()">
+          <svg viewBox="0 0 16 16" width="16" height="16"><path d="M4 4l8 8M12 4l-8 8" stroke="#999" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
       </div>
       <div class="toolbar">
         <div class="toolbar-left">
@@ -419,56 +440,79 @@ eventBus.on('editor:insert-at', handleAtSelect)
   position: relative;
 }
 
-.quote-preview {
+.quote-preview-bar {
+  position: relative;
+  height: 60px;
+  background: #fff;
+  border-top: 1px solid #eee;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  background: #f6f6f6;
-  border-bottom: 1px solid #eee;
+  z-index: 9;
 }
 
-.quote-preview-content {
+.quote-reply-icon {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 30px;
+  width: 30px;
+  z-index: 1;
+}
+
+.quote-preview-body {
+  padding-left: 60px;
+  height: 100%;
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #666;
-  overflow: hidden;
-  border-left: 2px solid #3369fe;
-  padding-left: 8px;
+  cursor: pointer;
+
+  &:hover { background: #efefef; }
 }
 
-.quote-sender {
-  flex-shrink: 0;
-  font-weight: 500;
+.quote-preview-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.quote-preview-sender {
+  margin: 0;
+  padding: 0;
+  line-height: 20px;
+  font-size: 14px;
+  font-weight: bold;
   color: #3369fe;
 }
 
-.quote-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.quote-preview-text {
+  font-size: 12px;
+  color: #555;
+  line-height: 20px;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  margin: 0;
 }
 
-.quote-close {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+.quote-preview-close {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: none;
-  border: none;
-  font-size: 16px;
-  color: #999;
   cursor: pointer;
-  border-radius: 50%;
-  margin-left: 8px;
+  opacity: 0.6;
+  flex-shrink: 0;
 
-  &:hover { background: #eee; color: #333; }
+  &:hover { opacity: 1; }
 }
 
 .shutup-tip {
