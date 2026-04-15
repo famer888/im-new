@@ -5,6 +5,8 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useGroupStore } from '@/stores/useGroupStore'
+import { ConversationType } from '@/types'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
@@ -15,6 +17,7 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 const messageStore = useMessageStore()
 const chatStore = useChatStore()
+const groupStore = useGroupStore()
 
 const conversationId = computed(() => (route.query.id as string) || chatStore.currentConversationId || '')
 
@@ -26,22 +29,22 @@ const isFileHelperChat = computed(() => {
   return conv?.targetId === FILE_HELPER_TARGET_ID
 })
 
-const isContactChat = computed(() => {
-  const id = conversationId.value
-  if (!id) return false
-  const conv = chatStore.conversations.find((c) => c.id === id)
-  if (conv) return conv.type === 0
-  // 兜底：会话尚未入 store 时按 id 前缀判断
-  return id.startsWith('0_')
-})
-
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
+
+function loadGroupMembersIfNeeded(convId: string) {
+  if (!authStore.uid || !convId) return
+  const conv = chatStore.conversations.find((c) => c.id === convId)
+  if (conv?.type === ConversationType.Group && conv.targetId) {
+    groupStore.loadMembers(authStore.uid, conv.targetId).catch(() => {})
+  }
+}
 
 onMounted(async () => {
   if (conversationId.value && authStore.uid) {
     await messageStore.loadMessages(authStore.uid, conversationId.value)
     await chatStore.markAsRead(authStore.uid, conversationId.value)
+    loadGroupMembersIfNeeded(conversationId.value)
   }
 })
 
@@ -49,6 +52,7 @@ watch(conversationId, async (newId) => {
   if (newId && authStore.uid) {
     await messageStore.loadMessages(authStore.uid, newId)
     await chatStore.markAsRead(authStore.uid, newId)
+    loadGroupMembersIfNeeded(newId)
   }
 })
 
@@ -67,7 +71,7 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
 <template>
   <div class="chat-window">
     <ChatHeader :conversation-id="conversationId" />
-    <div v-if="isContactChat" class="e2e-notice">
+    <div class="e2e-notice">
       <!-- 视觉 10px：浏览器常限制最小字号，用 12px 基准 + scale(10/12) -->
       <div class="e2e-notice-scale">
         <img class="e2e-lock" :src="lockIcon" alt="" />
