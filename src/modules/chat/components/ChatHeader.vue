@@ -5,6 +5,8 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useMessageStore } from '@/stores/useMessageStore'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
@@ -22,6 +24,41 @@ const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const uiStore = useUIStore()
+const authStore = useAuthStore()
+const messageStore = useMessageStore()
+
+const selectedCount = computed(() => uiStore.selectedMessageIds.size)
+const allSelf = computed(() => uiStore.selectedMessageItems.every(item => item.isSelf))
+const isFriendConv = computed(() => conversation.value?.type === ConversationType.Friend)
+
+function handleBatchForward() {
+  if (selectedCount.value === 0) return
+  const firstId = [...uiStore.selectedMessageIds][0]
+  uiStore.openForwardDialog(firstId)
+}
+
+function handleBatchDeleteLocal() {
+  const convId = chatStore.currentConversationId
+  if (!convId) return
+  for (const id of uiStore.selectedMessageIds) {
+    messageStore.deleteMessage(convId, id)
+  }
+  uiStore.exitSelectionMode()
+}
+
+async function handleBatchDeleteForAll() {
+  const convId = chatStore.currentConversationId
+  if (!convId || !authStore.uid) return
+  for (const item of uiStore.selectedMessageItems) {
+    await chatStore.recallMessage(authStore.uid, item.id)
+    messageStore.deleteMessage(convId, item.id)
+  }
+  uiStore.exitSelectionMode()
+}
+
+function handleCancelSelection() {
+  uiStore.exitSelectionMode()
+}
 
 const conversation = computed(() =>
   chatStore.conversations.find((c) => c.id === props.conversationId),
@@ -131,6 +168,15 @@ function handleSearch() {
 
 <template>
   <div class="chat-header">
+    <!-- Selection mode toolbar overlay (matches im top.vue) -->
+    <section v-if="uiStore.selectionMode" class="selected-toolbar">
+      <span @click="handleBatchForward">转发 {{ selectedCount }}</span>
+      <span @click="handleBatchDeleteLocal">删除 {{ selectedCount }}</span>
+      <span v-if="allSelf" @click="handleBatchDeleteForAll">
+        {{ isFriendConv ? `为双方删除 ${selectedCount}` : `为所有人删除 ${selectedCount}` }}
+      </span>
+      <span class="cancel" @click="handleCancelSelection">取消</span>
+    </section>
     <div class="header-left">
       <!-- 与 im chat-window/top.vue 传输助手分支一致：cszs 图标 + 文案 + user-icon-v -->
       <template v-if="isFileHelper">
@@ -200,6 +246,49 @@ function handleSearch() {
   flex-shrink: 0;
   font-size: 16px;
   font-weight: 700;
+  position: relative;
+  overflow: hidden;
+}
+
+.selected-toolbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  padding-left: 20px;
+
+  > span {
+    display: block;
+    height: 30px;
+    line-height: 30px;
+    min-width: 100px;
+    text-align: center;
+    background: #40a7e3;
+    color: #fff;
+    font-size: 14px;
+    font-weight: bold;
+    margin-right: 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    padding: 0 20px;
+
+    &:hover {
+      background: #2398db;
+    }
+
+    &.cancel {
+      background: #999;
+
+      &:hover {
+        background: #bbb;
+      }
+    }
+  }
 }
 
 .header-left {

@@ -110,7 +110,11 @@ function handleContextMenu(e: MouseEvent) {
 
 function handleClick() {
   if (uiStore.selectionMode) {
-    uiStore.toggleMessageSelection(props.message.id)
+    uiStore.toggleMessageSelection({
+      id: props.message.id,
+      msgId: props.message.id,
+      isSelf: isSelf.value,
+    })
   }
 }
 
@@ -130,15 +134,15 @@ onMounted(() => {
   <div
     ref="itemRef"
     v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected]"
-    :class="['message-item', { 'is-self': displayAsSelf, 'selection-mode': uiStore.selectionMode, 'is-selected': isSelected }]"
+    :class="['message-item', { 'is-self': displayAsSelf }]"
     @contextmenu="handleContextMenu"
-    @click="handleClick"
   >
-    <div v-if="uiStore.selectionMode && !isSystemMsg" class="selection-checkbox">
-      <div :class="['checkbox', { checked: isSelected }]">
-        <svg v-if="isSelected" viewBox="0 0 16 16" width="12" height="12"><path d="M3.5 8l3 3 6-6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </div>
-    </div>
+    <!-- Full-area selection overlay (matches im select-item.vue) -->
+    <div
+      v-if="uiStore.selectionMode && !isSystemMsg"
+      :class="['select-overlay', { active: isSelected }]"
+      @click.stop="handleClick"
+    ></div>
     <div v-if="isSystemMsg" class="system-message">
       <component :is="messageComponent" :message="message" />
     </div>
@@ -171,39 +175,29 @@ onMounted(() => {
 .message-item {
   padding: 6px 16px;
   contain: content;
+  position: relative;
+}
 
-  &.selection-mode {
-    display: flex;
-    align-items: flex-start;
-    cursor: pointer;
-    user-select: none;
+.select-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  border-radius: 10px;
+  cursor: pointer;
 
-    &:hover { background: rgba(51, 105, 254, 0.04); }
-    &.is-selected { background: rgba(51, 105, 254, 0.08); }
+  &:hover {
+    background: rgba(51, 105, 254, 0.1);
   }
-}
 
-.selection-checkbox {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  padding-top: 8px;
-  margin-right: 8px;
-}
+  &.active {
+    background: rgba(51, 105, 254, 0.2);
 
-.checkbox {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid #ccc;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-
-  &.checked {
-    background: #3369fe;
-    border-color: #3369fe;
+    &:hover {
+      background: rgba(51, 105, 254, 0.2);
+    }
   }
 }
 
