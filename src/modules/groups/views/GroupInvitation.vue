@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useGroupStore } from '@/stores/useGroupStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 
@@ -18,6 +20,8 @@ interface GroupReqItem {
 }
 
 const authStore = useAuthStore()
+const groupStore = useGroupStore()
+const chatStore = useChatStore()
 const list = ref<GroupReqItem[]>([])
 
 const statusText: Record<number, string> = {
@@ -36,24 +40,41 @@ function formatTime(ts: number): string {
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+function parseGroupReqItems(raw: any[]): GroupReqItem[] {
+  return raw
+    .map((item: any) => ({
+      groupReqId: Number(item.groupReqId),
+      groupId: Number(item.groupId),
+      groupName: item.groupName || '',
+      pic: item.pic || '',
+      msg: item.msg || '',
+      groupReqType: item.groupReqType || 0,
+      groupReqStatus: item.groupReqStatus || 0,
+      groupHostUid: Number(item.groupHostUid),
+      createTime: Number(item.createTime),
+      updateTime: Number(item.updateTime),
+    }))
+    .filter((item: GroupReqItem) => !(item as any).isHide)
+}
+
+function syncSidebarPreview(items: GroupReqItem[]) {
+  const latest = items[0]
+  const pendingCount = items.filter((i) => !i.groupReqStatus).length
+  if (latest) {
+    chatStore.updateGroupNotificationConv(
+      latest.msg || `${latest.groupName} 群通知`,
+      latest.updateTime || latest.createTime,
+      pendingCount,
+    )
+  }
+}
+
 async function loadList() {
   try {
     const res = await getGroupReqList({ pageNum: 1, pageSize: 100 })
     if (res?.groupReqs) {
-      list.value = res.groupReqs
-        .map((item: any) => ({
-          groupReqId: Number(item.groupReqId),
-          groupId: Number(item.groupId),
-          groupName: item.groupName || '',
-          pic: item.pic || '',
-          msg: item.msg || '',
-          groupReqType: item.groupReqType || 0,
-          groupReqStatus: item.groupReqStatus || 0,
-          groupHostUid: Number(item.groupHostUid),
-          createTime: Number(item.createTime),
-          updateTime: Number(item.updateTime),
-        }))
-        .filter((item: GroupReqItem) => !(item as any).isHide)
+      list.value = parseGroupReqItems(res.groupReqs)
+      syncSidebarPreview(list.value)
     }
   } catch (e) {
     console.error('[GroupInvitation] loadList failed:', e)
@@ -71,6 +92,23 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
     const res = await apiFn({ groupReqId: item.groupReqId, flag })
     if (Number((res as any)?.commonResult?.errCode) === 200) {
       list.value[index] = { ...list.value[index], groupReqStatus: flag ? 1 : 2 }
+      if (flag) {
+        const gid = String(item.groupId)
+        if (!groupStore.groups.find((g) => g.id === gid)) {
+          groupStore.groups.push({
+            id: gid,
+            name: item.groupName,
+            avatar: item.pic || null,
+            ownerId: null,
+            memberCount: 0,
+            notice: null,
+            isMuted: false,
+            updatedAt: Date.now(),
+          })
+        }
+        chatStore.ensureConversation(1, gid)
+      }
+      syncSidebarPreview(list.value)
     } else {
       console.error('操作失败', (res as any)?.commonResult?.errMsg)
     }
@@ -79,7 +117,10 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
   }
 }
 
-onMounted(() => loadList())
+onMounted(() => {
+  chatStore.clearGroupNotificationUnread()
+  loadList()
+})
 </script>
 
 <template>

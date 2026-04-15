@@ -36,6 +36,7 @@ import { MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 
+import { getGroupReqList } from '@/api/imBase'
 import emptyBrandImg from '@/assets/images/login/dock.png'
 import menuCopy from '@/assets/images/menu/menu-copy.svg'
 import menuDelete from '@/assets/images/menu/menu-delete.svg'
@@ -97,10 +98,28 @@ onMounted(async () => {
         await invoke('connect_ws', { url: '', aesKey: '' })
       }
     } catch { /* WS not available in browser */ }
+
+    loadGroupNotificationPreview()
   }
   chatStore.ensureFileHelperConversationInMemory()
   isInitialized.value = true
 })
+
+async function loadGroupNotificationPreview() {
+  try {
+    const res = await getGroupReqList({ pageNum: 1, pageSize: 100 })
+    const items = res?.groupReqs || []
+    if (items.length > 0) {
+      const latest = items[0]
+      const pendingCount = items.filter((i: any) => !i.groupReqStatus).length
+      chatStore.updateGroupNotificationConv(
+        latest.msg || `${latest.groupName || ''} 群通知`,
+        Number(latest.updateTime || latest.createTime || 0),
+        pendingCount,
+      )
+    }
+  } catch { /* silent */ }
+}
 
 const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?? '')
 
