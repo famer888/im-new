@@ -275,6 +275,9 @@ async function handleForward(targetConvId: string) {
 
   uiStore.exitSelectionMode()
   uiStore.closeForwardDialog()
+
+  chatStore.setCurrentConversation(targetConvId)
+  uiStore.setDetailView('chat')
 }
 
 </script>
