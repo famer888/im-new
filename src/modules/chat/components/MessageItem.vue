@@ -69,6 +69,20 @@ const isSystemMsg = computed(() =>
   props.message.msgType === MessageType.Notice,
 )
 
+function getQuoteContentDigest(msgType: number, content: string | null): string {
+  if (msgType === MessageType.Text) return (content || '').slice(0, 60)
+  if (msgType === MessageType.Image) return '[图片]'
+  if (msgType === MessageType.Audio) return '[语音]'
+  if (msgType === MessageType.Video) return '[视频]'
+  if (msgType === MessageType.File) return '[文件]'
+  if (msgType === MessageType.Location) return '[位置]'
+  if (msgType === MessageType.NameCard) return '[名片]'
+  if (msgType === MessageType.RedPacket || msgType === MessageType.RedPacketResult) return '[红包]'
+  if (msgType === MessageType.ChatTransfer || msgType === MessageType.ChatTransferResult) return '[转账]'
+  if (msgType === MessageType.Html2) return '[富文本]'
+  return (content || '').slice(0, 60) || '消息'
+}
+
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
@@ -90,6 +104,7 @@ function handleContextMenu(e: MouseEvent) {
     isSelf: isSelf.value,
     msgType: props.message.msgType,
     content: props.message.content,
+    extra: props.message.extra,
   })
 }
 
@@ -114,7 +129,7 @@ onMounted(() => {
 <template>
   <div
     ref="itemRef"
-    v-memo="[message.status, message.readStatus, uiStore.selectionMode, isSelected]"
+    v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected]"
     :class="['message-item', { 'is-self': displayAsSelf, 'selection-mode': uiStore.selectionMode, 'is-selected': isSelected }]"
     @contextmenu="handleContextMenu"
     @click="handleClick"
@@ -136,6 +151,11 @@ onMounted(() => {
       />
       <div class="bubble-area">
         <span v-if="showAvatar" class="sender-name">{{ senderName }}</span>
+        <!-- In-bubble quote block (matches im's msg/quote.vue) -->
+        <div v-if="message.quoteMessage" class="inline-quote-block">
+          <h3 class="inline-quote-sender">{{ message.quoteMessage.senderName }}</h3>
+          <p class="inline-quote-content">{{ getQuoteContentDigest(message.quoteMessage.msgType, message.quoteMessage.content) }}</p>
+        </div>
         <component :is="messageComponent" :message="message" />
         <div class="message-meta">
           <span v-if="message.status === 0" class="status sending">发送中</span>
@@ -210,6 +230,41 @@ onMounted(() => {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.inline-quote-block {
+  padding-left: 7px;
+  border-left: 2px solid #3369fe;
+  margin-bottom: 5px;
+  height: 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+
+  &:hover { background: rgba(51, 105, 254, 0.1); }
+}
+
+.inline-quote-sender {
+  margin: 0;
+  padding: 0;
+  line-height: 20px;
+  font-size: 14px;
+  font-weight: bold;
+  color: #3369fe;
+}
+
+.inline-quote-content {
+  margin: 0;
+  font-size: 12px;
+  color: #555;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .sender-name {

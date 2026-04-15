@@ -11,6 +11,14 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
+export interface QuoteMessageInfo {
+  id: string
+  senderId: string
+  senderName: string
+  msgType: number
+  content: string | null
+}
+
 export interface Message {
   id: string
   customMsgId: string | null
@@ -24,6 +32,7 @@ export interface Message {
   version: number
   isDeleted: boolean
   extra: string | null
+  quoteMessage?: QuoteMessageInfo | null
 }
 
 const MAX_CACHED_MESSAGES = 500
@@ -71,6 +80,14 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function normalizeMessage(raw: any): Message {
+    let quoteMessage: QuoteMessageInfo | null = raw.quoteMessage ?? null
+    const extraStr: string | null = raw.extra ?? null
+    if (!quoteMessage && extraStr) {
+      try {
+        const parsed = JSON.parse(extraStr)
+        if (parsed?.quoteMessage) quoteMessage = parsed.quoteMessage
+      } catch { /* not JSON */ }
+    }
     return {
       id: String(raw.id ?? ''),
       customMsgId: raw.customMsgId ?? raw.custom_msg_id ?? null,
@@ -83,7 +100,8 @@ export const useMessageStore = defineStore('message', () => {
       readStatus: Number(raw.readStatus ?? raw.read_status ?? 0),
       version: Number(raw.version ?? 0),
       isDeleted: Boolean(raw.isDeleted ?? raw.is_deleted ?? false),
-      extra: raw.extra ?? null,
+      extra: extraStr,
+      quoteMessage,
     }
   }
 
@@ -154,17 +172,48 @@ export const useMessageStore = defineStore('message', () => {
     content: string,
     extra?: Record<string, unknown>,
   ) {
-    if (!isTauri()) return null as any
+    const quoteMsg = (extra?.quoteMessage as QuoteMessageInfo) ?? null
+    const extraJson = extra && Object.keys(extra).length > 0 ? JSON.stringify(extra) : null
+
+    if (!isTauri()) {
+      const now = Date.now()
+      const localId = `local-${now}-${Math.random().toString(36).slice(2, 8)}`
+      const localMsg: Message = {
+        id: localId,
+        customMsgId: localId,
+        conversationId,
+        senderId: uid,
+        msgType,
+        content,
+        sendTime: now,
+        status: 1,
+        readStatus: 0,
+        version: 0,
+        isDeleted: false,
+        extra: extraJson,
+        quoteMessage: quoteMsg,
+      }
+      appendMessage(conversationId, localMsg)
+      syncConversationSummary(conversationId, localMsg)
+      return localMsg
+    }
+
     const result = await tauriInvoke<any>('send_message', {
       uid,
       request: {
         conversation_id: conversationId,
         msg_type: msgType,
         content,
-        extra,
+        extra: extraJson,
       },
     })
     const normalized = normalizeMessage(result)
+    if (quoteMsg && !normalized.quoteMessage) {
+      normalized.quoteMessage = quoteMsg
+    }
+    if (extraJson && !normalized.extra) {
+      normalized.extra = extraJson
+    }
     appendMessage(conversationId, normalized)
     syncConversationSummary(conversationId, normalized)
     return normalized

@@ -33,6 +33,7 @@ import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import type { MenuItem } from '@/components/ContextMenu.vue'
 import { MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
+import { eventBus } from '@/utils/eventBus'
 
 import emptyBrandImg from '@/assets/images/login/dock.png'
 import menuCopy from '@/assets/images/menu/menu-copy.svg'
@@ -221,6 +222,7 @@ async function handleContextMenuSelect(key: string) {
           msgType: data.msgType as number,
           content: data.content as string | null,
         })
+        eventBus.emit('editor:focus')
         break
       }
       case 'forward':

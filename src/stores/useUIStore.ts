@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { QuoteMessageInfo } from './useMessageStore'
 
 export type SidebarTab = 'chats' | 'contacts' | 'transfer'
 export type RightPanelType = 'none' | 'friend-info' | 'group-info' | 'channel-info' | 'group-members' | 'group-notice' | 'group-manage' | 'channel-notice' | 'channel-manage'
@@ -34,7 +35,7 @@ export const useUIStore = defineStore('ui', () => {
   const contextMenuData = ref<Record<string, unknown>>({})
 
   // Quote reply
-  const quoteMessage = ref<{ id: string; senderId: string; senderName: string; msgType: number; content: string | null } | null>(null)
+  const quoteMessage = ref<QuoteMessageInfo | null>(null)
 
   // Multi-select mode
   const selectionMode = ref(false)
