@@ -135,7 +135,6 @@ onMounted(() => {
     ref="itemRef"
     v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected]"
     :class="['message-item', { 'is-self': displayAsSelf }]"
-    @contextmenu="handleContextMenu"
   >
     <!-- Full-area selection overlay (matches im select-item.vue) -->
     <div
@@ -153,7 +152,7 @@ onMounted(() => {
         :size="36"
         class="msg-avatar"
       />
-      <div class="bubble-area">
+      <div class="bubble-area" @contextmenu.stop="handleContextMenu">
         <span v-if="showAvatar" class="sender-name">{{ senderName }}</span>
         <!-- In-bubble quote block (matches im's msg/quote.vue) -->
         <div v-if="message.quoteMessage" class="inline-quote-block">
@@ -174,7 +173,6 @@ onMounted(() => {
 <style lang="scss" scoped>
 .message-item {
   padding: 6px 16px;
-  contain: content;
   position: relative;
 }
 
