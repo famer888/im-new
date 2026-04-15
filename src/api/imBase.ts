@@ -240,3 +240,42 @@ export async function getGroupMemberList(
     },
   })
 }
+
+export async function getGroupReqList(
+  data: { pageNum: number; pageSize: number },
+  baseUrl?: string,
+): Promise<proto.GroupReqListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupReqList`,
+    reqType: proto.GroupReqListReq,
+    respType: proto.GroupReqListResp,
+    data: { pageNum: data.pageNum, pageSize: data.pageSize },
+  })
+}
+
+export async function groupCheckJoin(
+  data: { groupReqId: number; flag: boolean },
+  baseUrl?: string,
+): Promise<proto.GroupCheckJoinResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupCheckJoin`,
+    reqType: proto.GroupCheckJoinReq,
+    respType: proto.GroupCheckJoinResp,
+    data: { groupReqId: data.groupReqId, flag: data.flag },
+  })
+}
+
+export async function groupUserCheckJoin(
+  data: { groupReqId: number; flag: boolean },
+  baseUrl?: string,
+): Promise<proto.GroupCheckJoinResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupUserCheckJoin`,
+    reqType: proto.GroupCheckJoinReq,
+    respType: proto.GroupCheckJoinResp,
+    data: { groupReqId: data.groupReqId, flag: data.flag },
+  })
+}

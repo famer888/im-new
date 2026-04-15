@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useChatStore, FILE_HELPER_TARGET_ID, type Conversation } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID, GROUP_NOTIFICATION_TARGET_ID, GROUP_NOTIFICATION_DISPLAY_NAME, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -10,6 +10,7 @@ import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
+import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 
 const chatStore = useChatStore()
 const contactStore = useContactStore()
@@ -37,7 +38,12 @@ const displayList = computed(() =>
   showArchive.value ? archivedConversations.value : normalConversations.value,
 )
 
+function isGroupNotification(conv: Conversation): boolean {
+  return conv.targetId === GROUP_NOTIFICATION_TARGET_ID
+}
+
 function getName(conv: Conversation): string {
+  if (isGroupNotification(conv)) return GROUP_NOTIFICATION_DISPLAY_NAME
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conv.targetId)
@@ -51,6 +57,7 @@ function getName(conv: Conversation): string {
 }
 
 function getAvatar(conv: Conversation): string | null {
+  if (isGroupNotification(conv)) return groupNotificationIcon
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getContact(conv.targetId)?.avatar ?? null
@@ -107,7 +114,11 @@ function getDigest(conv: Conversation): string {
 
 function handleSelect(conv: Conversation) {
   chatStore.setCurrentConversation(conv.id)
-  uiStore.setDetailView('chat')
+  if (isGroupNotification(conv)) {
+    uiStore.setDetailView('group-invitation')
+  } else {
+    uiStore.setDetailView('chat')
+  }
 }
 
 function handleContextMenu(e: MouseEvent, conv: Conversation) {

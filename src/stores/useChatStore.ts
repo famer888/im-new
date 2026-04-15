@@ -15,6 +15,10 @@ export const FILE_HELPER_TARGET_ID = '9901'
 /** 列表/侧栏展示名（与参考 UI「传输助手」一致） */
 export const FILE_HELPER_DISPLAY_NAME = '传输助手'
 
+/** 群通知伪会话 id（与 im id:"invitation" type:"group" 一致） */
+export const GROUP_NOTIFICATION_TARGET_ID = 'invitation'
+export const GROUP_NOTIFICATION_DISPLAY_NAME = '群通知'
+
 function getConversationCacheKey(uid: string): string {
   return `${uid}-conversations`
 }
@@ -114,6 +118,31 @@ export const useChatStore = defineStore('chat', () => {
     sortConversations()
   }
 
+  function ensureGroupNotificationConversation() {
+    if (conversations.value.some((c) => c.targetId === GROUP_NOTIFICATION_TARGET_ID))
+      return
+    const now = Date.now()
+    const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    conversations.value.push({
+      id,
+      type: 1,
+      targetId: GROUP_NOTIFICATION_TARGET_ID,
+      lastMsgId: null,
+      lastMsgTime: 0,
+      lastMsgDigest: null,
+      unreadCount: 0,
+      isPinned: false,
+      isMuted: false,
+      isArchived: false,
+      draft: null,
+      senderName: null,
+      atMe: false,
+      scheduleDeletion: 0,
+      updatedAt: now,
+    })
+    sortConversations()
+  }
+
   let _persistUid = ''
 
   function enablePersistence(uid: string) {
@@ -153,6 +182,7 @@ export const useChatStore = defineStore('chat', () => {
       conversations.value = loadConversationsFromCache(uid)
     } finally {
       ensureFileHelperConversationInMemory()
+      ensureGroupNotificationConversation()
       loading.value = false
     }
   }
@@ -295,5 +325,6 @@ export const useChatStore = defineStore('chat', () => {
     deleteConversation,
     clearAllLocalChatHistory,
     ensureFileHelperConversationInMemory,
+    ensureGroupNotificationConversation,
   }
 })
