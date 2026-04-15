@@ -56,6 +56,46 @@ const searchPlaceholder = computed(() =>
   addAction.value && uiStore.sidebarTab === 'contacts' ? '搜索手机号/ID/群别名' : '搜索',
 )
 
+/** 与 im home-left/index.vue 一致：中间列表可左右拖拽改宽 */
+const NAV_BAR_WIDTH = 72
+const LIST_MIN_WIDTH = 261
+const LIST_WIDTH_STORAGE_KEY = 'listWidth'
+
+function parseStoredListWidth(): number {
+  const raw = localStorage.getItem(LIST_WIDTH_STORAGE_KEY)
+  if (raw == null) return LIST_MIN_WIDTH
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= LIST_MIN_WIDTH ? n : LIST_MIN_WIDTH
+}
+
+const listWidth = ref(parseStoredListWidth())
+const listWidthMax = ref(LIST_MIN_WIDTH)
+const isListResizeDown = ref(false)
+
+function updateListWidthMax() {
+  let extra = document.body.clientWidth - 848
+  if (extra < 0) extra = 0
+  listWidthMax.value = extra + LIST_MIN_WIDTH
+}
+
+function handleListResizeMouseMove(e: MouseEvent) {
+  if (!isListResizeDown.value) return
+  let w = e.clientX - NAV_BAR_WIDTH
+  if (w < LIST_MIN_WIDTH) w = LIST_MIN_WIDTH
+  if (w > listWidthMax.value) w = listWidthMax.value
+  listWidth.value = w
+  localStorage.setItem(LIST_WIDTH_STORAGE_KEY, String(w))
+}
+
+function handleListResizeMouseUp() {
+  if (isListResizeDown.value) isListResizeDown.value = false
+}
+
+function onListResizeHandleDown(e: MouseEvent) {
+  e.preventDefault()
+  isListResizeDown.value = true
+}
+
 watch(() => uiStore.sidebarTab, (tab) => {
   if (tab !== 'contacts') {
     addAction.value = false
@@ -199,10 +239,17 @@ async function openFileHelper() {
 }
 
 onMounted(() => {
+  updateListWidthMax()
+  window.addEventListener('resize', updateListWidthMax)
+  document.addEventListener('mousemove', handleListResizeMouseMove)
+  document.addEventListener('mouseup', handleListResizeMouseUp)
   window.addEventListener('mousedown', handleClickOutside)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateListWidthMax)
+  document.removeEventListener('mousemove', handleListResizeMouseMove)
+  document.removeEventListener('mouseup', handleListResizeMouseUp)
   window.removeEventListener('mousedown', handleClickOutside)
 })
 </script>
@@ -261,8 +308,11 @@ onBeforeUnmount(() => {
       </div>
     </Teleport>
 
-    <!-- Chat list area: min-width 261px -->
-    <div class="list-area">
+    <!-- Chat list area：宽度可拖拽，与 im .comList 一致 -->
+    <div
+      class="list-area"
+      :style="{ width: `${listWidth}px`, maxWidth: `${listWidthMax}px` }"
+    >
       <div class="sidebar-search">
         <SearchInput
           v-model="searchKeyword"
@@ -298,6 +348,7 @@ onBeforeUnmount(() => {
           <AddressBook v-else-if="uiStore.sidebarTab === 'contacts'" />
         </template>
       </div>
+      <i class="list-resize-handle" aria-hidden="true" @mousedown="onListResizeHandleDown" />
     </div>
 
     <ConfirmDialog
@@ -467,14 +518,25 @@ onBeforeUnmount(() => {
   }
 }
 
-// Chat list panel
+// Chat list panel（与 im .comList 一致）
 .list-area {
+  position: relative;
   min-width: 261px;
   border-right: 1px solid #eee;
   background-color: rgb(252, 252, 252);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+}
+
+.list-resize-handle {
+  position: absolute;
+  right: -5px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 10;
+  cursor: ew-resize;
 }
 
 .sidebar-search {
