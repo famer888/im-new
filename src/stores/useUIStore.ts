@@ -40,6 +40,7 @@ export const useUIStore = defineStore('ui', () => {
   // Multi-select mode
   const selectionMode = ref(false)
   const selectedMessageIds = ref<Set<string>>(new Set())
+  const selectedMessageItems = ref<Array<{ id: string; msgId: string; isSelf: boolean }>>([])
 
   function setSidebarTab(tab: SidebarTab) {
     sidebarTab.value = tab
@@ -115,22 +116,35 @@ export const useUIStore = defineStore('ui', () => {
     quoteMessage.value = null
   }
 
-  function enterSelectionMode(initialMessageId?: string) {
+  function enterSelectionMode(item?: { id: string; msgId: string; isSelf: boolean }) {
     selectionMode.value = true
-    selectedMessageIds.value = new Set(initialMessageId ? [initialMessageId] : [])
+    if (item) {
+      selectedMessageIds.value = new Set([item.id])
+      selectedMessageItems.value = [item]
+    } else {
+      selectedMessageIds.value = new Set()
+      selectedMessageItems.value = []
+    }
   }
 
   function exitSelectionMode() {
     selectionMode.value = false
     selectedMessageIds.value = new Set()
+    selectedMessageItems.value = []
   }
 
-  function toggleMessageSelection(messageId: string) {
+  function toggleMessageSelection(item: { id: string; msgId: string; isSelf: boolean }) {
     const s = new Set(selectedMessageIds.value)
-    if (s.has(messageId)) {
-      s.delete(messageId)
+    if (s.has(item.id)) {
+      s.delete(item.id)
+      selectedMessageItems.value = selectedMessageItems.value.filter(i => i.id !== item.id)
+      if (s.size === 0) {
+        exitSelectionMode()
+        return
+      }
     } else {
-      s.add(messageId)
+      s.add(item.id)
+      selectedMessageItems.value = [...selectedMessageItems.value, item]
     }
     selectedMessageIds.value = s
   }
@@ -178,6 +192,7 @@ export const useUIStore = defineStore('ui', () => {
     quoteMessage,
     selectionMode,
     selectedMessageIds,
+    selectedMessageItems,
     showContextMenu,
     hideContextMenu,
     setQuoteMessage,
