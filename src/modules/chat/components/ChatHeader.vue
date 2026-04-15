@@ -89,7 +89,9 @@ const title = computed(() => {
       return contactStore.getDisplayName(conversation.value.targetId)
     case ConversationType.Group: {
       const group = groupStore.getGroup(conversation.value.targetId)
-      return group?.name ?? ''
+      const name = group?.name ?? ''
+      const count = group?.memberCount || groupStore.getMembers(conversation.value.targetId).length
+      return count > 0 ? `${name} (${count}人)` : name
     }
     default:
       return ''
