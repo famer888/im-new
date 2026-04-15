@@ -3,8 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { ConversationType } from '@/types'
-import ConfigList from './ConfigList.vue'
-import MemberList from './MemberList.vue'
+import GroupInfoPanel from './GroupInfoPanel.vue'
 import FriendInfo from './FriendInfo.vue'
 import GroupNoticePanel from './GroupNoticePanel.vue'
 import { toggleSidebarWithWindow, type SidebarOpenType } from '@/utils/sidebarResize'
@@ -27,13 +26,10 @@ watch(showPanel, async (visible) => {
   <div class="right-panel" :class="{ open: showPanel, outer: sidebarType === 'outer' }">
     <template v-if="showPanel">
       <FriendInfo v-if="uiStore.rightPanel === 'friend-info'" />
-      <template v-else-if="uiStore.rightPanel === 'group-info'">
-        <ConfigList />
-        <MemberList v-if="conversation" :group-id="conversation.targetId" />
-      </template>
+      <GroupInfoPanel v-else-if="uiStore.rightPanel === 'group-info'" />
       <GroupNoticePanel v-else-if="uiStore.rightPanel === 'group-notice'" />
       <template v-else-if="uiStore.rightPanel === 'channel-info'">
-        <ConfigList />
+        <!-- channel panel placeholder -->
       </template>
     </template>
   </div>

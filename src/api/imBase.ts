@@ -279,3 +279,55 @@ export async function groupUserCheckJoin(
     data: { groupReqId: data.groupReqId, flag: data.flag },
   })
 }
+
+export async function disableGroup(
+  data: { groupId: number | string },
+  baseUrl?: string,
+): Promise<proto.DisableGroupResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/disableGroup`,
+    reqType: proto.DisableGroupReq,
+    respType: proto.DisableGroupResp,
+    data: { groupId: Number(data.groupId) },
+  })
+}
+
+export async function groupExit(
+  data: { groupId: number | string },
+  baseUrl?: string,
+): Promise<proto.GroupExitResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupExit`,
+    reqType: proto.GroupExitReq,
+    respType: proto.GroupExitResp,
+    data: { groupId: Number(data.groupId) },
+  })
+}
+
+export async function groupUpdate(
+  data: { op: number; groupParam: Record<string, unknown> },
+  baseUrl?: string,
+): Promise<proto.GroupUpdateResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupUpdate`,
+    reqType: proto.GroupUpdateReq,
+    respType: proto.GroupUpdateResp,
+    data: { op: data.op, groupParam: data.groupParam },
+  })
+}
+
+export async function getGroupDetail(
+  data: { groupId: number | string },
+  baseUrl?: string,
+): Promise<proto.GroupDetailResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupDetail`,
+    reqType: proto.GroupDetailReq,
+    respType: proto.GroupDetailResp,
+    data: { groupId: Number(data.groupId) },
+  })
+}
