@@ -1,11 +1,46 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { updateBlackContacts, updateContactsApply } from '@/api/imBase'
+import { proto } from '@/api/request'
 
 import backIcon from '@/assets/images/setting/back.png'
+
+const { t } = useI18n()
+
+function isApiSuccess(res: unknown): boolean {
+  const cr = (res as { commonResult?: { errCode?: number | LongLike } })?.commonResult
+  if (!cr) return false
+  const code = normalizeErrCode(cr.errCode)
+  return code === 200 || code === 0
+}
+
+type LongLike = { low?: number; high?: number; toNumber?: () => number }
+
+function normalizeErrCode(code: number | LongLike | undefined | null): number {
+  if (code == null) return -1
+  if (typeof code === 'number') return code
+  if (typeof (code as LongLike).toNumber === 'function') {
+    return (code as LongLike).toNumber!()
+  }
+  return Number(code)
+}
+
+function getApiErrorMessage(res: unknown): string {
+  const r = res as {
+    commonResult?: { errMsg?: string }
+    errorDesc?: string
+  }
+  return r?.commonResult?.errMsg || r?.errorDesc || ''
+}
+
+function toApplyUid(uid: number | string): number {
+  const n = typeof uid === 'number' ? uid : Number(uid)
+  return Number.isFinite(n) ? n : 0
+}
 
 export interface VerifyRecord {
   userInfo: {
@@ -76,38 +111,48 @@ async function confirmBlacklist() {
   working.value = true
   try {
     const res = await updateBlackContacts({
-      targetUid: Number(props.info.userInfo.uid),
+      targetUid: toApplyUid(props.info.userInfo.uid),
       op,
     })
-    const { errCode } = (res as any)?.commonResult || {}
-    if (errCode == 200) {
-      bfMyBlack.value = op === 6
-      if (op === 7) showToast('移除成功')
+    if (isApiSuccess(res)) {
+      bfMyBlack.value = op === proto.ContactsOperator.ADD_BLACK
+      if (op === proto.ContactsOperator.DEL_BLACK) showToast('移除成功')
     } else {
-      const errorDesc = (res as any)?.errorDesc
-      if (errorDesc) showToast(errorDesc, 'error')
+      const msg = getApiErrorMessage(res)
+      if (msg) showToast(msg, 'error')
     }
+  } catch (e) {
+    console.error('[FriendVerifyDetail] updateBlackContacts failed:', e)
+    showToast(t('当前网络异常，请检查网络设置'), 'error')
   } finally {
     working.value = false
   }
 }
 
+/** 与 im/new-friend-verify.vue passVerify 一致：POST /contacts/updateContactsApply，op=ADD_REQ(8) 同意申请 */
 async function passVerify() {
   if (working.value) return
+  const applyUid = toApplyUid(props.info.userInfo.uid)
+  if (!applyUid) {
+    showToast('用户 ID 无效', 'error')
+    return
+  }
   working.value = true
   try {
     const res = await updateContactsApply({
-      applyUid: Number(props.info.userInfo.uid),
-      op: 8,
+      applyUid,
+      op: proto.ContactsOperator.ADD_REQ,
     })
-    const { errCode } = (res as any)?.commonResult || {}
-    if (errCode == 200) {
-      showToast('操作成功')
-      setTimeout(() => emit('close'), 300)
+    if (isApiSuccess(res)) {
+      showToast(t('操作成功'))
+      emit('close')
     } else {
-      const errorDesc = (res as any)?.errorDesc
-      if (errorDesc) showToast(errorDesc, 'error')
+      const msg = getApiErrorMessage(res)
+      if (msg) showToast(msg, 'error')
     }
+  } catch (e) {
+    console.error('[FriendVerifyDetail] updateContactsApply failed:', e)
+    showToast(t('当前网络异常，请检查网络设置'), 'error')
   } finally {
     working.value = false
   }
@@ -157,14 +202,26 @@ async function passVerify() {
         <div
           v-if="bfMyBlack"
           class="primaryBtn blacklist-btn remove"
+          :class="{ disabled: working }"
           @click="joinBlackList(7)"
         >
           移除黑名单
         </div>
-        <div v-else class="primaryBtn blacklist-btn" @click="joinBlackList(6)">
+        <div
+          v-else
+          class="primaryBtn blacklist-btn"
+          :class="{ disabled: working }"
+          @click="joinBlackList(6)"
+        >
           加入黑名单
         </div>
-        <div class="primaryBtn" @click="passVerify()">通过验证</div>
+        <div
+          class="primaryBtn"
+          :class="{ disabled: working }"
+          @click="passVerify()"
+        >
+          {{ working ? '处理中...' : '通过验证' }}
+        </div>
       </div>
     </div>
 
@@ -317,8 +374,14 @@ async function passVerify() {
     cursor: pointer;
     font-size: 14px;
 
-    &:hover {
+    &:hover:not(.disabled) {
       opacity: 0.9;
+    }
+
+    &.disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      pointer-events: none;
     }
 
     &.blacklist-btn {
