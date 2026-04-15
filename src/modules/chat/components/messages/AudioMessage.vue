@@ -43,9 +43,10 @@ function togglePlay() {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 10px 12px;
     background: #fff;
-    border-radius: 4px;
+    border-radius: 10px;
+    border-top-left-radius: 0;
     cursor: pointer;
     min-width: 60px;
 
@@ -60,7 +61,10 @@ function togglePlay() {
   }
 
   &.self .audio-bubble {
-    background: #95ec69;
+    background: #98daff;
+    border: 1px solid #87cdf6;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 0;
     flex-direction: row-reverse;
   }
 }

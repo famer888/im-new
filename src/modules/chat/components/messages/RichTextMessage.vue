@@ -26,12 +26,15 @@ const sanitizedHtml = computed(() => {
 .rich-text-message {
   .bubble {
     display: inline-block;
-    padding: 8px 12px;
-    border-radius: 4px;
+    max-width: 450px;
+    min-width: 130px;
+    border-radius: 10px;
+    border-top-left-radius: 0;
+    padding: 10px 10px 10px 12px;
     background: #fff;
     font-size: 14px;
-    line-height: 1.6;
-    max-width: 100%;
+    line-height: 22px;
+    letter-spacing: 0.5px;
     word-break: break-all;
 
     :deep(a) {
@@ -45,6 +48,11 @@ const sanitizedHtml = computed(() => {
     }
   }
 
-  &.self .bubble { background: #95ec69; }
+  &.self .bubble {
+    background: #98daff;
+    border: 1px solid #87cdf6;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 0;
+  }
 }
 </style>
