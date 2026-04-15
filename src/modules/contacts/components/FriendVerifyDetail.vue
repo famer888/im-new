@@ -306,16 +306,6 @@ async function passVerify() {
     margin-top: 16px;
   }
 
-  .blacklist-btn {
-    background: #fb2826;
-    border: none;
-    margin-right: 10px;
-  }
-
-  .remove {
-    background: #1da949;
-  }
-
   .primaryBtn {
     width: 256px;
     height: 48px;
@@ -329,6 +319,16 @@ async function passVerify() {
 
     &:hover {
       opacity: 0.9;
+    }
+
+    &.blacklist-btn {
+      background-color: #fb2826;
+      border: none;
+      margin-right: 10px;
+    }
+
+    &.remove {
+      background-color: #1da949;
     }
   }
 }
