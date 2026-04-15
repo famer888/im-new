@@ -202,14 +202,27 @@ async function handleContextMenuSelect(key: string) {
       }
       case 'delete_everyone':
         await chatStore.recallMessage(authStore.uid, msgId)
+        if (convId) messageStore.deleteMessage(convId, msgId)
         break
       case 'delete_local':
         if (convId) messageStore.deleteMessage(convId, msgId)
         break
       case 'select':
+        uiStore.enterSelectionMode(msgId)
         break
-      case 'reply':
+      case 'reply': {
+        const senderName = data.isSelf
+          ? '我'
+          : contactStore.getDisplayName(data.senderId as string)
+        uiStore.setQuoteMessage({
+          id: msgId,
+          senderId: data.senderId as string,
+          senderName,
+          msgType: data.msgType as number,
+          content: data.content as string | null,
+        })
         break
+      }
       case 'forward':
         uiStore.openForwardDialog(msgId)
         break
@@ -229,6 +242,49 @@ async function handleContextMenuSelect(key: string) {
       }
     }
   }
+}
+
+async function handleForward(targetConvId: string) {
+  const msgId = uiStore.forwardMessageId
+  if (!msgId || !authStore.uid) return
+
+  const convId = chatStore.currentConversationId
+  if (!convId) return
+
+  const messages = messageStore.getMessages(convId)
+  const selectedIds = uiStore.selectedMessageIds
+
+  const msgsToForward = selectedIds.size > 0
+    ? messages.filter(m => selectedIds.has(m.id))
+    : messages.filter(m => m.id === msgId)
+
+  for (const msg of msgsToForward) {
+    await messageStore.sendMessage(
+      authStore.uid,
+      targetConvId,
+      msg.msgType,
+      msg.content ?? '',
+    )
+  }
+
+  uiStore.exitSelectionMode()
+  uiStore.closeForwardDialog()
+}
+
+function handleBatchDelete() {
+  const convId = chatStore.currentConversationId
+  if (!convId) return
+  for (const id of uiStore.selectedMessageIds) {
+    messageStore.deleteMessage(convId, id)
+  }
+  uiStore.exitSelectionMode()
+}
+
+async function handleBatchForward() {
+  const ids = uiStore.selectedMessageIds
+  if (ids.size === 0) return
+  const firstId = [...ids][0]
+  uiStore.openForwardDialog(firstId)
 }
 </script>
 
@@ -285,6 +341,7 @@ async function handleContextMenuSelect(key: string) {
     <ForwardSelectDialog
       v-model:visible="uiStore.forwardDialogVisible"
       :message-id="uiStore.forwardMessageId"
+      @forward="handleForward"
     />
     <FileImport
       :visible="uiStore.fileImportVisible"
@@ -311,6 +368,28 @@ async function handleContextMenuSelect(key: string) {
       :info="uiStore.upVersionInfo"
       @close="uiStore.closeUpVersion()"
     />
+
+    <!-- Selection mode toolbar -->
+    <Teleport to="body">
+      <Transition name="slide-up">
+        <div v-if="uiStore.selectionMode" class="selection-toolbar">
+          <span class="selection-count">已选 {{ uiStore.selectedMessageIds.size }} 条</span>
+          <div class="selection-actions">
+            <button class="sel-btn" :disabled="uiStore.selectedMessageIds.size === 0" @click="handleBatchDelete">
+              <img :src="menuDelete" alt="" class="sel-icon" />
+              删除
+            </button>
+            <button class="sel-btn" :disabled="uiStore.selectedMessageIds.size === 0" @click="handleBatchForward">
+              <img :src="menuForward" alt="" class="sel-icon" />
+              转发
+            </button>
+            <button class="sel-btn sel-btn--cancel" @click="uiStore.exitSelectionMode()">
+              取消
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <ContextMenu
       v-model:visible="uiStore.contextMenuVisible"
@@ -386,4 +465,59 @@ async function handleContextMenuSelect(key: string) {
 
 .slide-down-enter-active, .slide-down-leave-active { transition: all 0.3s; }
 .slide-down-enter-from, .slide-down-leave-to { opacity: 0; transform: translateY(-100%); }
+
+.selection-toolbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: #fff;
+  border-top: 1px solid #eee;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: 9500;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.selection-count {
+  font-size: 14px;
+  color: #666;
+}
+
+.selection-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.sel-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 16px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+
+  &:hover:not(:disabled) { background: #f5f5f5; }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+
+.sel-btn--cancel {
+  border-color: transparent;
+  color: #999;
+}
+
+.sel-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.slide-up-enter-active, .slide-up-leave-active { transition: all 0.25s ease; }
+.slide-up-enter-from, .slide-up-leave-to { opacity: 0; transform: translateY(100%); }
 </style>

@@ -58,9 +58,9 @@ async function handleLoadMore() {
   }
 }
 
-async function handleSend(content: string, msgType: number) {
+async function handleSend(content: string, msgType: number, extra?: Record<string, unknown>) {
   if (!conversationId.value || !authStore.uid) return
-  await messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content)
+  await messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra)
 }
 </script>
 
