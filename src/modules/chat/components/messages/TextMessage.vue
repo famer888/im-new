@@ -14,11 +14,7 @@ const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
-const isFriendChat = computed(
-  () => chatStore.currentConversation?.type === 0,
-)
 const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
-const useImBubbleStyle = computed(() => isFriendChat.value || isFileHelperChat.value)
 
 const formattedContent = computed(() => {
   const content = props.message.content ?? ''
@@ -30,7 +26,7 @@ const formattedContent = computed(() => {
 </script>
 
 <template>
-  <div :class="['text-message', { self: displayAsSelf, 'im-bubble-style': useImBubbleStyle }]">
+  <div :class="['text-message', { self: displayAsSelf }]">
     <div class="bubble" v-html="formattedContent" />
   </div>
 </template>
@@ -39,37 +35,23 @@ const formattedContent = computed(() => {
 .text-message {
   .bubble {
     display: inline-block;
-    padding: 8px 12px;
-    border-radius: 4px;
-    background: #fff;
+    max-width: 450px;
+    min-width: 130px;
+    border-radius: 10px;
+    border-top-left-radius: 0;
+    padding: 10px 10px 10px 12px;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 22px;
+    letter-spacing: 0.5px;
     word-break: break-all;
-    max-width: 100%;
+    background: #fff;
   }
 
   &.self .bubble {
-    background: #95ec69;
-  }
-
-  &.im-bubble-style {
-    .bubble {
-      max-width: 450px;
-      min-width: 130px;
-      border-radius: 10px;
-      border-top-left-radius: 0;
-      padding: 10px 10px 10px 12px;
-      line-height: 22px;
-      letter-spacing: 0.5px;
-      background: #fff;
-    }
-
-    &.self .bubble {
-      background: #98daff;
-      border: 1px solid #87cdf6;
-      border-top-left-radius: 10px;
-      border-top-right-radius: 0;
-    }
+    background: #98daff;
+    border: 1px solid #87cdf6;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 0;
   }
 }
 

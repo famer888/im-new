@@ -37,13 +37,20 @@ const quoteSenderName = computed(() =>
 .quote-message {
   .bubble {
     display: inline-block;
-    padding: 8px 12px;
-    border-radius: 4px;
+    max-width: 450px;
+    min-width: 130px;
+    border-radius: 10px;
+    border-top-left-radius: 0;
+    padding: 10px 10px 10px 12px;
     background: #fff;
-    max-width: 100%;
   }
 
-  &.self .bubble { background: #95ec69; }
+  &.self .bubble {
+    background: #98daff;
+    border: 1px solid #87cdf6;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 0;
+  }
 }
 
 .quote-block {
