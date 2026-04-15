@@ -4,6 +4,8 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import FriendVerifyDetail from './FriendVerifyDetail.vue'
 import type { VerifyRecord } from './FriendVerifyDetail.vue'
 import { getContactsApplyList } from '@/api/imBase'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 
 interface FriendRequest {
   id: string
@@ -18,6 +20,9 @@ interface FriendRequest {
   gender?: number
   depict?: string
 }
+
+const authStore = useAuthStore()
+const contactStore = useContactStore()
 
 const requests = ref<FriendRequest[]>([])
 const showDetail = ref(false)
@@ -97,10 +102,14 @@ function handleDetailBack() {
   selectedRecord.value = null
 }
 
-function handleDetailClose() {
+/** 与 im new-friend-examine-list verifyClose 一致：关闭后刷新申请列表并同步通讯录 */
+async function handleDetailClose() {
   showDetail.value = false
   selectedRecord.value = null
-  loadApplyList()
+  await loadApplyList()
+  if (authStore.uid) {
+    await contactStore.loadContacts(authStore.uid)
+  }
 }
 </script>
 
