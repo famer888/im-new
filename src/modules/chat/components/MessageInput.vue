@@ -49,10 +49,6 @@ const groupId = computed(() => chatStore.currentConversation?.targetId ?? '')
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
-/** 单聊与传输助手：仅保留表情+文件；群/频道显示扩展工具 */
-const showAdvancedTools = computed(
-  () => !isFileHelperChat.value && !isFriend.value,
-)
 const showShutupTip = computed(() => {
   const conv = chatStore.currentConversation
   if (!conv) return false
@@ -358,15 +354,6 @@ eventBus.on('editor:insert-at', handleAtSelect)
           <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('文件')" @click="handleFileSelect">
             <img class="im-active-icon" :src="iconFileActive" alt="" width="20" height="20" />
           </button>
-          <template v-if="showAdvancedTools">
-            <button class="tool-btn" type="button" :title="$t('截图')" @click="handleGlobalKeydown({ ctrlKey: true, shiftKey: true, key: 'a', preventDefault: () => {} } as any)">
-              <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="#666" stroke-width="1.5"/><path d="M9 3v18M3 9h18" fill="none" stroke="#666" stroke-width="1.5" opacity="0.4"/></svg>
-            </button>
-            <button v-if="isGroup" class="tool-btn" :title="$t('@提及')" @click="showAtList = !showAtList">@</button>
-            <button class="tool-btn" :title="$t('创建链接')" @click="showCreateLink = true">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round"/></svg>
-            </button>
-          </template>
         </div>
       </div>
 
