@@ -70,7 +70,7 @@ pub fn run() {
                     WebviewUrl::App("/#/login".into()),
                 )
                 .title("OCS Chat")
-                .inner_size(380.0, 520.0)
+                .inner_size(300.0, 420.0)
                 .resizable(false)
                 .center()
                 .visible(true);
