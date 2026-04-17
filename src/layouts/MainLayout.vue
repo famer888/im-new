@@ -95,9 +95,19 @@ onMounted(async () => {
     try {
       if ((window as any).__TAURI_INTERNALS__) {
         const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('connect_ws', { url: '', aesKey: '' })
+        const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
+        const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
+        if (wsUrl && aesKey) {
+          await invoke('connect_ws', { url: wsUrl, aesKey })
+        } else {
+          networkStore.setWsStatus('disconnected')
+          console.warn('[ws] skipped connect: missing ws config')
+        }
       }
-    } catch { /* WS not available in browser */ }
+    } catch (err) {
+      networkStore.setWsStatus('disconnected')
+      console.warn('[ws] connect failed:', err)
+    }
 
     loadGroupNotificationPreview()
   }

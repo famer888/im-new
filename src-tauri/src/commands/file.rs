@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{Emitter, State};
+use base64::{engine::general_purpose, Engine as _};
 
 use crate::crypto;
 
@@ -122,4 +123,29 @@ pub async fn get_download_progress(msg_id: String) -> Result<DownloadProgress, S
         downloaded_bytes: 0,
         status: "idle".to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn save_base64_image(file_path: String, base64_data: String) -> Result<(), String> {
+    let mut payload = base64_data.trim().to_string();
+    if let Some(idx) = payload.find(',') {
+        payload = payload[idx + 1..].to_string();
+    }
+
+    let bytes = general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("decode base64 failed: {}", e))?;
+
+    let path = PathBuf::from(file_path);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create parent dir failed: {}", e))?;
+    }
+
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|e| format!("write image file failed: {}", e))?;
+
+    Ok(())
 }

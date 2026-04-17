@@ -9,15 +9,17 @@
 
     <section>
       <template v-if="qrUrl">
-        <QrcodeVue
-          ref="qrcodeRef"
-          class="code"
-          :value="qrUrl"
-          level="H"
-          :size="180"
-        />
+        <div ref="qrcodeWrapRef">
+          <QrcodeVue
+            class="code"
+            :value="qrUrl"
+            level="H"
+            :size="180"
+            render-as="canvas"
+          />
+        </div>
         <h3>{{ $t('二维码长期有效') }}</h3>
-        <p @click="handleGroupQrCodeGet">
+        <p v-if="showResetCode" @click="handleGroupQrCodeGet">
           <img class="refresh-icon" src="@/assets/images/common/refresh.png" />
           {{ $t('重置二维码') }}
         </p>
@@ -62,6 +64,7 @@ import { useI18n } from 'vue-i18n'
 import QrcodeVue from 'qrcode.vue'
 import { getGroupDetail, groupQrCode } from '@/api/imBase'
 import Toast from '@/components/Toast.vue'
+import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
 
 const { t: $t } = useI18n()
 
@@ -69,13 +72,15 @@ const props = defineProps<{
   visible: boolean
   groupId: string
   groupName: string
+  canResetCode?: boolean
 }>()
 
 defineEmits<{ (e: 'close'): void }>()
 
 const qrUrl = ref('')
 const loading = ref(false)
-const qrcodeRef = ref<any>(null)
+const qrcodeWrapRef = ref<HTMLElement | null>(null)
+const showResetCode = ref(false)
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -87,17 +92,38 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
+function resolveQrCanvas(): HTMLCanvasElement | null {
+  const wrap = qrcodeWrapRef.value
+  if (!wrap) return null
+  const canvas = wrap.querySelector('canvas')
+  if (canvas instanceof HTMLCanvasElement) return canvas
+  return null
+}
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
 watch(() => props.visible, async (v) => {
   if (v && props.groupId) {
     loading.value = true
     qrUrl.value = ''
+    showResetCode.value = Boolean(props.canResetCode)
     try {
-      const res = await getGroupDetail({ groupId: props.groupId })
-      if (res?.qrUrl) {
-        qrUrl.value = res.qrUrl
+      if (props.canResetCode === undefined) {
+        const detail = await getGroupDetail({ groupId: props.groupId })
+        showResetCode.value = detail.memberType === 0 || Boolean(detail.bfResetQrcode)
+      }
+      const res = await groupQrCode({ groupId: props.groupId, force: false })
+      const { qrUrl: resQrUrl, shortLink } = res || {}
+      if (resQrUrl) {
+        qrUrl.value = shortLink || resQrUrl
+      } else {
+        showToast('二维码获取失败', 'error')
       }
     } catch (e) {
       console.error('get group qrcode failed:', e)
+      showToast('二维码获取失败', 'error')
     } finally {
       loading.value = false
     }
@@ -112,11 +138,11 @@ async function handleGroupQrCodeGet() {
     if (resQrUrl) {
       qrUrl.value = shortLink || resQrUrl
     } else {
-      showToast($t('二维码获取失败！'), 'error')
+      showToast('二维码获取失败', 'error')
     }
   } catch (e) {
     console.error('reset group qrcode failed:', e)
-    showToast($t('二维码获取失败！'), 'error')
+    showToast('二维码获取失败', 'error')
   }
 }
 
@@ -125,7 +151,7 @@ function handleCopy() {
   navigator.clipboard.writeText(qrUrl.value).then(() => {
     showToast($t('复制成功'))
   }).catch(() => {
-    showToast($t('复制失败'), 'error')
+    showToast('复制失败', 'error')
   })
 }
 
@@ -134,20 +160,13 @@ function handleForward() {
 }
 
 function handleSave() {
-  if (!qrcodeRef.value || !qrcodeRef.value.$el) {
-    showToast($t('保存失败'), 'error')
+  const qrcodeElement = resolveQrCanvas()
+  if (!qrcodeElement) {
+    console.error('[GroupQRCode] handleSave failed: canvas not found')
+    showToast('保存失败: 未获取到二维码画布', 'error')
     return
   }
   try {
-    const qrcodeElementBox = qrcodeRef.value.$el
-    const qrcodeElement = (qrcodeElementBox.tagName === 'CANVAS'
-      ? qrcodeElementBox
-      : qrcodeElementBox.querySelector('canvas')) as HTMLCanvasElement
-    if (!qrcodeElement) {
-      showToast($t('保存失败'), 'error')
-      return
-    }
-
     const dpr = window.devicePixelRatio || 1
     const baseWidth = 270
     const baseHeight = 300
@@ -181,15 +200,39 @@ function handleSave() {
     ctx.fillText(props.groupName || '', baseWidth / 2, 232)
 
     const dataUrl = canvas.toDataURL('image/png')
-    const link = document.createElement('a')
-    link.download = `${props.groupName || '群二维码'}.png`
-    link.href = dataUrl
-    link.click()
-
-    showToast($t('保存成功'))
+    handleExportQrCode(dataUrl)
   } catch (e) {
     console.error('Save QR code failed:', e)
-    showToast($t('保存失败'), 'error')
+    showToast('保存失败', 'error')
+  }
+}
+
+async function handleExportQrCode(qrCodeBase64: string) {
+  const suffix = '.png'
+  const fileName = `${props.groupName || '群二维码'}${suffix}`
+
+  if (!isTauri()) {
+    const link = document.createElement('a')
+    link.download = fileName
+    link.href = qrCodeBase64
+    link.click()
+    showToast('保存成功')
+    return
+  }
+
+  try {
+    const { filePath, canceled } = await userSelectSavePath(fileName)
+    if (!filePath || canceled) return
+    const finalPath = filePath.endsWith(suffix) ? filePath : `${filePath}${suffix}`
+    const err = await exportBase64ImgToLocal(qrCodeBase64, finalPath)
+    if (err) {
+      showToast(`保存失败: ${err.message}`, 'error')
+      return
+    }
+    showToast('保存成功')
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    showToast(`保存失败: ${message}`, 'error')
   }
 }
 </script>

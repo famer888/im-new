@@ -26,9 +26,15 @@ export interface AccountInfo {
   sourceId?: string
 }
 
+export interface WsConnectConfig {
+  wsUrl: string
+  aesKey: string
+}
+
 const ACCOUNT_LIST_KEY = 'login-account-list'
 const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'
+const WS_CONNECT_KEY = 'ws-connect-config'
 
 export const useAuthStore = defineStore('auth', () => {
   const session = ref<SessionInfo | null>(null)
@@ -38,6 +44,7 @@ export const useAuthStore = defineStore('auth', () => {
   const avatar = computed(() => session.value?.avatar ?? '')
   const accounts = ref<AccountInfo[]>([])
   const autoLoginEnabled = ref(true)
+  const wsConnectConfig = ref<WsConnectConfig | null>(null)
 
   function normalizeTauriSession(
     tauriSession: SessionInfo | (SessionInfo & { session_id?: string }) | null | undefined,
@@ -59,6 +66,32 @@ export const useAuthStore = defineStore('auth', () => {
       if (stored) accounts.value = JSON.parse(stored)
       autoLoginEnabled.value = localStorage.getItem(AUTO_LOGIN_KEY) !== 'false'
     } catch { /* empty */ }
+  }
+
+  function loadWsConnectConfig() {
+    try {
+      const stored = localStorage.getItem(WS_CONNECT_KEY)
+      if (!stored) return
+      const parsed = JSON.parse(stored) as Partial<WsConnectConfig>
+      if (parsed.wsUrl && parsed.aesKey) {
+        wsConnectConfig.value = {
+          wsUrl: parsed.wsUrl,
+          aesKey: parsed.aesKey,
+        }
+      }
+    } catch {
+      wsConnectConfig.value = null
+    }
+  }
+
+  function saveWsConnectConfig(config: WsConnectConfig) {
+    wsConnectConfig.value = config
+    localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(config))
+  }
+
+  function clearWsConnectConfig() {
+    wsConnectConfig.value = null
+    localStorage.removeItem(WS_CONNECT_KEY)
   }
 
   function saveAccounts() {
@@ -86,6 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function initSession() {
     loadAccounts()
+    loadWsConnectConfig()
 
     // If session was already set (e.g. by login()), skip restore
     if (session.value) return
@@ -189,6 +223,12 @@ export const useAuthStore = defineStore('auth', () => {
       })
       session.value = result
       localStorage.setItem(CURRENT_UID_KEY, result.uid)
+      if (request.wsUrl.trim() && request.aesKey.trim()) {
+        saveWsConnectConfig({
+          wsUrl: request.wsUrl.trim(),
+          aesKey: request.aesKey.trim(),
+        })
+      }
       addOrUpdateAccount({
         id: result.uid,
         name: result.nickname,
@@ -247,6 +287,7 @@ export const useAuthStore = defineStore('auth', () => {
     session.value = null
     localStorage.removeItem(CURRENT_UID_KEY)
     localStorage.removeItem('browser-session')
+    clearWsConnectConfig()
     const idx = accounts.value.findIndex(a => a.id === currentUid)
     if (idx >= 0) {
       accounts.value[idx].sessionId = undefined
@@ -289,6 +330,7 @@ export const useAuthStore = defineStore('auth', () => {
     avatar,
     accounts,
     autoLoginEnabled,
+    wsConnectConfig,
     initSession,
     login,
     logout,
