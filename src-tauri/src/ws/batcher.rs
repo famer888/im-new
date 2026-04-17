@@ -292,8 +292,16 @@ impl MessageBatcher {
 
         let sender_id = om.send_uid.to_string();
         let receiver_id = om.receive_uid.to_string();
-        let conversation_id = format!("0_{}", om.send_uid);
+        
         let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
+        // Wait, how do we know our own UID?
+        // We can check if sender_id == receiver_id.
+        // Actually, if we can't reliably know our own UID from CryptoEngine, we can just let frontend handle it or pass candidate_ids.
+        // But let's assume we can get our own UID from somewhere? 
+        // Actually, in imweb we often don't have our own UID easily available in batcher.
+        // Let's just use sender_id, and if frontend detects it's from self, frontend can adjust the conversationId!
+        // Wait, frontend depends on conversationId being correct. Let's just pass `0_{sender}` for now, but if sender==receiver, it's `0_{sender}`.
+        let conversation_id = format!("0_{}", om.send_uid);
         let ver = i64::from(om.version);
 
         // 兼容双端同步：优先按 sender 取 key，失败后退回 receiver。
@@ -302,22 +310,57 @@ impl MessageBatcher {
         } else {
             vec![sender_id.clone(), receiver_id.clone()]
         };
+        let mut ciphertexts_to_try = Vec::new();
+        // Extract all available ciphertexts from the new structure
+        if let Some(app) = &om.app_content {
+            ciphertexts_to_try.push((app.version as i64, "app", app.content.as_slice()));
+        }
+        if let Some(web) = &om.web_content {
+            ciphertexts_to_try.push((web.version as i64, "web", web.content.as_slice()));
+        }
+        if let Some(mapp) = &om.myself_app_content {
+            ciphertexts_to_try.push((mapp.version as i64, "app", mapp.content.as_slice()));
+        }
+        if let Some(mweb) = &om.myself_web_content {
+            ciphertexts_to_try.push((mweb.version as i64, "web", mweb.content.as_slice()));
+        }
+        // Fallback for old/unencrypted messages that might still use `content`
+        if !om.content.is_empty() {
+            ciphertexts_to_try.push((ver, "web", om.content.as_slice()));
+            ciphertexts_to_try.push((ver, "app", om.content.as_slice()));
+        }
+
         let mut decrypted: Result<Vec<u8>, crate::crypto::CryptoError> =
             Err(crate::crypto::CryptoError::KeyNotFound);
-        for fid in &candidate_ids {
-            decrypted = crypto
-                .decrypt_friend_message(fid, ver, "web", &om.content)
-                .or_else(|_| crypto.decrypt_friend_message(fid, ver, "app", &om.content))
-                .or_else(|_| {
-                    let k = crypto
-                        .get_latest_friend_key(fid, "web")
-                        .or_else(|| crypto.get_latest_friend_key(fid, "app"))
-                        .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-                    crate::crypto::aes::decrypt_message(&om.content, &k)
-                });
-            if decrypted.is_ok() {
-                break;
+        let mut fallback_err = None;
+
+        'outer: for fid in &candidate_ids {
+            for (v, source, cipher) in &ciphertexts_to_try {
+                if cipher.is_empty() {
+                    continue;
+                }
+                
+                decrypted = crypto
+                    .decrypt_friend_message(fid, *v, source, cipher)
+                    .or_else(|_| {
+                        let k = crypto
+                            .get_latest_friend_key(fid, source)
+                            .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                        crate::crypto::aes::decrypt_message(cipher, &k)
+                    });
+
+                if decrypted.is_ok() {
+                    break 'outer;
+                } else if let Err(e) = &decrypted {
+                    // Keep the first actual AES error instead of KeyNotFound
+                    if matches!(e, crate::crypto::CryptoError::AesError(_)) && fallback_err.is_none() {
+                        fallback_err = Some(crate::crypto::CryptoError::AesError(e.to_string()));
+                    }
+                }
             }
+        }
+        if decrypted.is_err() && fallback_err.is_some() {
+            decrypted = Err(fallback_err.unwrap());
         }
 
         let mut decrypt_pending = false;
@@ -327,13 +370,19 @@ impl MessageBatcher {
                 Err(_) => String::from_utf8_lossy(&plain).to_string(),
             },
             Err(e) => {
-                if let Ok(obj) = imweb::TextObj::decode(om.content.as_slice()) {
+                // Determine which ciphertext to use for fallback parsing
+                let fallback_cipher = ciphertexts_to_try
+                    .first()
+                    .map(|(_, _, c)| *c)
+                    .unwrap_or(om.content.as_slice());
+
+                if let Ok(obj) = imweb::TextObj::decode(fallback_cipher) {
                     warn!(
                         "PRIVATE_MSG_RECEIVED decrypt failed but raw TextObj parsed sender_uid={} msg_id={} err={}",
                         om.send_uid, om.msg_id, e
                     );
                     obj.content
-                } else if let Ok(s) = String::from_utf8(om.content.clone()) {
+                } else if let Ok(s) = String::from_utf8(fallback_cipher.to_vec()) {
                     warn!(
                         "PRIVATE_MSG_RECEIVED decrypt failed but raw UTF-8 parsed sender_uid={} msg_id={} err={}",
                         om.send_uid, om.msg_id, e
