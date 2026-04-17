@@ -108,11 +108,20 @@ pub fn send_private_text(
         .parse()
         .map_err(|_| SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str)))?;
 
-    // 版本号在服务端可能滚动，发送时按 source 取最新可用 key。
-    let rel_key = crypto
-        .get_latest_friend_key(friend_uid_str, "web")
-        .or_else(|| crypto.get_latest_friend_key(friend_uid_str, "app"))
-        .ok_or_else(|| SendError::MissingFriendKey(friend_uid_str.to_string()))?;
+    // 获取各种终端的 rel_key 及其 version，并转换 version 为 i32
+    let friend_app_key = crypto
+        .get_latest_friend_key_with_version(friend_uid_str, "app")
+        .map(|(v, k)| (v as i32, k));
+    let friend_web_key = crypto
+        .get_latest_friend_key_with_version(friend_uid_str, "web")
+        .map(|(v, k)| (v as i32, k));
+    let own_app_key = crypto
+        .get_latest_friend_key_with_version(sender_uid_str, "app")
+        .map(|(v, k)| (v as i32, k));
+
+    if friend_app_key.is_none() && friend_web_key.is_none() {
+        return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));
+    }
 
     let content_plain = super::encode_text_obj(text);
     let payload = super::build_send_private_message_req(
@@ -120,7 +129,9 @@ pub fn send_private_text(
         sender_uid,
         0,
         &content_plain,
-        &rel_key,
+        friend_app_key,
+        friend_web_key,
+        own_app_key,
         send_time,
         flag,
     )?;

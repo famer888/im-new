@@ -99,21 +99,39 @@ pub fn build_send_private_message_req(
     sender_uid: i64,
     msg_type: i32,
     content_plain: &[u8],
-    rel_key: &str,
+    friend_app_key: Option<(i32, String)>,
+    friend_web_key: Option<(i32, String)>,
+    own_app_key: Option<(i32, String)>,
     send_time: i64,
     flag: i64,
 ) -> Result<Vec<u8>, CryptoError> {
-    let encrypted = encrypt_with_rel_key(rel_key, content_plain)?;
     let mut hasher = Md5::new();
-    hasher.update(&encrypted);
+    hasher.update(content_plain);
     let content_md5 = format!("{:x}", hasher.finalize());
+
+    let encrypt_content = |key_info: Option<(i32, String)>| -> Result<Option<imweb::MessageContent>, CryptoError> {
+        if let Some((ver, rel_key)) = key_info {
+            let encrypted = encrypt_with_rel_key(&rel_key, content_plain)?;
+            Ok(Some(imweb::MessageContent {
+                content: encrypted,
+                attachment_key: String::new(),
+                version: ver,
+            }))
+        } else {
+            Ok(None)
+        }
+    };
+
+    let app_content = encrypt_content(friend_app_key)?;
+    let web_content = encrypt_content(friend_web_key)?;
+    let myself_app_content = encrypt_content(own_app_key)?;
 
     let one_to_one = imweb::OneToOneMessage {
         msg_id: 0,
         send_uid: sender_uid,
         receive_uid,
         msg_type,
-        content: encrypted,
+        content: vec![], // Empty for encrypted messages
         send_time,
         version: 1,
         content_md5,
@@ -121,9 +139,9 @@ pub fn build_send_private_message_req(
         send_user: None,
         snapchat_time: 0,
         source: 0,
-        app_content: None,
-        web_content: None,
-        myself_app_content: None,
+        app_content,
+        web_content,
+        myself_app_content,
         myself_web_content: None,
         group_send: false,
         channel_type: 0,

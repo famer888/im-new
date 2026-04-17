@@ -217,6 +217,33 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
+        (0, 0) => {
+            if let Err(e) = pipeline::send_private_text(
+                &ws_mgr,
+                &crypto,
+                &target_id,
+                &uid,
+                &request.content,
+                now,
+                client_flag,
+            ) {
+                error!(
+                    "send_private_text failed conversation={} err={}",
+                    request.conversation_id, e
+                );
+                // 标记成发送失败（-1），让 UI 显示重发按钮。
+                let failed_id = msg_id.clone();
+                let _ = db.with_connection(&uid, |conn| {
+                    conn.execute(
+                        "UPDATE messages SET status = -1 WHERE id = ?1",
+                        rusqlite::params![failed_id],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    Ok(())
+                });
+                return Err(e.to_string());
+            }
+        }
         (1, _) => {
             warn!(
                 "group non-text message (type={}) send not implemented yet; kept local only",

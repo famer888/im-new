@@ -117,6 +117,11 @@ impl CryptoEngine {
 
     /// 获取某个好友在指定 source 下“版本号最大的” relKey。
     pub fn get_latest_friend_key(&self, friend_id: &str, source: &str) -> Option<String> {
+        self.get_latest_friend_key_with_version(friend_id, source).map(|(_, rel)| rel)
+    }
+
+    /// 获取某个好友在指定 source 下“版本号最大的” (version, relKey)。
+    pub fn get_latest_friend_key_with_version(&self, friend_id: &str, source: &str) -> Option<(i64, String)> {
         let prefix = format!("{}:", friend_id);
         let mut best: Option<(i64, String)> = None;
         for entry in self.friend_keys.iter() {
@@ -129,7 +134,7 @@ impl CryptoEngine {
                 _ => best = Some((v.version, v.rel_key.clone())),
             }
         }
-        best.map(|(_, rel)| rel)
+        best
     }
 
     /// 是否存在该好友任意版本的 relKey（任意 source）。
@@ -207,6 +212,11 @@ impl CryptoEngine {
         let shared_secret =
             curve25519::compute_shared_secret(private_key_hex, peer_public_key_hex)?;
         let shared_hex = hex::encode_upper(&shared_secret);
+
+        if encrypted_msg_key.is_empty() {
+            // For friends, the relKey is exactly the shared secret hex
+            return Ok(shared_hex);
+        }
 
         let aes_key_preview = shared_hex.chars().take(16).collect::<String>();
         tracing::debug!(
