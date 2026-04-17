@@ -244,6 +244,30 @@ export async function ensureGroupRelKey(
 }
 
 /**
+ * 强制刷新群 relKey：清掉 Rust 侧缓存后重新向服务端 `GetKeyPair`
+ * 派生。用于"解密一条群消息失败且确实可能是 key 轮换了"的兜底。
+ *
+ * 对齐老 im `fnMsgDecryption` 在群分支里 `_decrypt` 抛错后
+ * `delete groupKeyObjs[id]` 的行为。
+ */
+export async function refreshGroupRelKey(
+  uid: string | number,
+  groupId: string | number,
+): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('refreshGroupRelKey: Tauri only')
+  }
+  const gid = String(groupId)
+  try {
+    await tauriInvoke<void>('clear_group_rel_key', { groupId: gid })
+  } catch (err) {
+    console.warn('[e2ee] clear_group_rel_key failed', { gid, err: String(err) })
+  }
+  pendingGroupKeys.delete(gid)
+  return ensureGroupRelKey(uid, gid)
+}
+
+/**
  * 保证好友 `friendId` 的 relKey 已被 Rust 缓存（单聊发送/接收解密使用）。
  */
 export async function ensureFriendRelKey(

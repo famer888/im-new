@@ -263,6 +263,18 @@ pub fn has_group_rel_key(crypto: State<'_, CryptoEngine>, group_id: String) -> b
     crypto.get_group_key(&group_id).is_some()
 }
 
+/// 从 CryptoEngine 移除指定群的 relKey 缓存。用于"收到一条群消息但
+/// 解密失败（key 可能已轮换）"时强制下一次 `ensureGroupRelKey` 走
+/// 服务端 `GetKeyPair` 重新派生。与老 im
+/// `fnMsgDecryption` 在 `_decrypt` 抛错后 `delete groupKeyObjs[id]`
+/// 的语义一致。
+#[tauri::command]
+pub fn clear_group_rel_key(crypto: State<'_, CryptoEngine>, group_id: String) -> Result<(), String> {
+    crypto.remove_group_key(&group_id);
+    tracing::info!(target: "e2ee", "clear_group_rel_key group_id={}", group_id);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn has_friend_rel_key(
     crypto: State<'_, CryptoEngine>,
@@ -406,13 +418,34 @@ pub fn decrypt_group_incoming(
     ciphertext_hex: String,
 ) -> Result<String, String> {
     let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
-    let plain = crypto
-        .decrypt_group_message(&group_id, &data)
-        .map_err(|e| e.to_string())?;
-    if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
-        return Ok(obj.content);
+    let key_cached = crypto.get_group_key(&group_id).is_some();
+    match crypto.decrypt_group_message(&group_id, &data) {
+        Ok(plain) => {
+            tracing::info!(
+                target: "e2ee",
+                "decrypt_group_incoming OK group_id={} cipher_len={} plain_len={} key_cached={}",
+                group_id,
+                data.len(),
+                plain.len(),
+                key_cached,
+            );
+            if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
+                return Ok(obj.content);
+            }
+            String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "e2ee",
+                "decrypt_group_incoming FAILED group_id={} cipher_len={} key_cached={} err={}",
+                group_id,
+                data.len(),
+                key_cached,
+                e,
+            );
+            Err(e.to_string())
+        }
     }
-    String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))
 }
 
 fn safe_head(s: &str, n: usize) -> String {

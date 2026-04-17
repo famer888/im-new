@@ -124,6 +124,7 @@ pub fn run() {
             commands::chat::clear_all_local_chat_history,
             commands::chat::cache_group_rel_key,
             commands::chat::has_group_rel_key,
+            commands::chat::clear_group_rel_key,
             commands::chat::has_friend_rel_key,
             commands::chat::derive_group_rel_key,
             commands::chat::derive_friend_rel_key,
