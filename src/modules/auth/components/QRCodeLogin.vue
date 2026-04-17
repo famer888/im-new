@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import QrcodeVue from 'qrcode.vue'
@@ -9,6 +9,11 @@ import { getQrCodeUrl, getIsLogin } from '@/api/imBase'
 import { getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
+
+const props = defineProps<{
+  loading?: boolean
+  extraDomains?: string[]
+}>()
 
 const { t } = useI18n()
 const router = useRouter()
@@ -32,6 +37,23 @@ const lastLoginInfo = ref<{ icon?: string; name?: string }>({})
 
 const domainList = ref<string[]>([getBaseUrl()])
 const urlIndex = ref(0)
+
+// 接收来自 NetworkConfig 检测出的有效域名，合并后切到首个有效域名重新拉取二维码
+watch(() => props.extraDomains, (newDomains) => {
+  if (!newDomains || !newDomains.length) return
+  const existingSet = new Set(domainList.value)
+  const toAdd = newDomains.filter(u => !existingSet.has(u))
+  if (toAdd.length) {
+    domainList.value = [...domainList.value, ...toAdd]
+  }
+  const firstValidIdx = domainList.value.indexOf(newDomains[0])
+  if (firstValidIdx !== -1) urlIndex.value = firstValidIdx
+
+  qrCodeUrlError.value = false
+  isOutTime.value = false
+  clearTimers()
+  setTimeout(() => { handleGetQrCodeUrl() }, 500)
+})
 
 let timerOutTimer: ReturnType<typeof setTimeout> | null = null
 let loginPollingTimer: ReturnType<typeof setTimeout> | null = null
