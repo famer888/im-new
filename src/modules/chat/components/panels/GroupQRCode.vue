@@ -1,36 +1,63 @@
 <template>
-  <div v-if="visible" class="group-qrcode-dialog">
-    <div class="dialog-mask" @click="$emit('close')" />
-    <div class="dialog-body">
-      <div class="dialog-header">
-        <span>{{ $t('群二维码') }}</span>
-        <span class="close-btn" @click="$emit('close')">✕</span>
+  <div v-if="visible" class="comGroupQrCode">
+    <div class="head">
+      <picture @click="$emit('close')">
+        <img src="@/assets/images/chat/arrow-left-blue.png" />
+      </picture>
+      {{ $t('群二维码') }}
+    </div>
+    
+    <section>
+      <template v-if="qrUrl">
+        <QrcodeVue
+          ref="qrcodeRef"
+          class="code"
+          :value="qrUrl"
+          level="H"
+          :size="180"
+        />
+        <h3>{{ $t('二维码长期有效') }}</h3>
+      </template>
+      <span v-else-if="loading">{{ $t('加载中...') }}</span>
+      <span v-else>{{ $t('二维码链接异常') }}</span>
+    </section>
+
+    <div v-if="qrUrl" class="buttons">
+      <div class="btn-item">
+        <button @click="handleForward">
+          <img src="@/assets/images/system/share.png" />
+        </button>
+        <span class="btn-title">{{ $t('转发给朋友') }}</span>
       </div>
-      <div class="dialog-content">
-        <div class="qr-info">
-          <TextAvatar :name="groupName" avatar-type="group" :size="48" />
-          <div class="group-meta">
-            <h3>{{ groupName }}</h3>
-            <span>{{ $t('扫一扫，加入该群') }}</span>
-          </div>
-        </div>
-        <div class="qr-container">
-          <QrcodeVue v-if="qrUrl" :value="qrUrl" :size="180" level="H" />
-          <p v-if="loading" class="loading">{{ $t('加载中...') }}</p>
-          <p v-if="!loading && !qrUrl" class="loading">{{ $t('二维码获取失败') }}</p>
-        </div>
-        <p class="tip">{{ $t('该二维码长期有效') }}</p>
+      <div class="btn-item">
+        <button @click="handleSave">
+          <img src="@/assets/images/system/down.png" />
+        </button>
+        <span class="btn-title">{{ $t('保存图片') }}</span>
+      </div>
+      <div class="btn-item">
+        <button @click="handleCopy">
+          <img src="@/assets/images/system/link.png" />
+        </button>
+        <span class="btn-title">{{ $t('复制链接') }}</span>
       </div>
     </div>
+    
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      @update:visible="toastVisible = $event"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import TextAvatar from '@/components/TextAvatar.vue'
-import { getGroupDetail } from '@/api/imBase'
 import QrcodeVue from 'qrcode.vue'
+import { getGroupDetail } from '@/api/imBase'
+import Toast from '@/components/Toast.vue'
 
 const { t: $t } = useI18n()
 
@@ -44,6 +71,17 @@ defineEmits<{ (e: 'close'): void }>()
 
 const qrUrl = ref('')
 const loading = ref(false)
+const qrcodeRef = ref<any>(null)
+
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+function showToast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+}
 
 watch(() => props.visible, async (v) => {
   if (v && props.groupId) {
@@ -61,84 +99,203 @@ watch(() => props.visible, async (v) => {
     }
   }
 })
+
+function handleCopy() {
+  if (!qrUrl.value) return
+  navigator.clipboard.writeText(qrUrl.value).then(() => {
+    showToast($t('复制成功'))
+  }).catch(() => {
+    showToast($t('复制失败'), 'error')
+  })
+}
+
+function handleForward() {
+  // TODO: 实现转发逻辑
+  showToast($t('暂未实现转发功能'))
+}
+
+function handleSave() {
+  if (!qrcodeRef.value || !qrcodeRef.value.$el) {
+    showToast($t('保存失败'), 'error')
+    return
+  }
+  
+  try {
+    const qrcodeCanvas = qrcodeRef.value.$el as HTMLCanvasElement
+    const dpr = window.devicePixelRatio || 1
+    const baseWidth = 270
+    const baseHeight = 300
+    
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    
+    canvas.width = baseWidth * dpr
+    canvas.height = baseHeight * dpr
+    ctx.scale(dpr, dpr)
+    
+    // 背景
+    ctx.fillStyle = '#F5F5F5'
+    ctx.fillRect(0, 0, baseWidth, baseHeight)
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, baseWidth, baseHeight - 35)
+    
+    // 绘制二维码
+    const codeW = qrcodeCanvas.width / dpr
+    const codeH = qrcodeCanvas.height / dpr
+    const codeX = (baseWidth - codeW) / 2
+    const codeY = 15
+    ctx.drawImage(qrcodeCanvas, codeX, codeY, codeW, codeH)
+    
+    // 绘制文字
+    ctx.fillStyle = '#787878'
+    ctx.font = '10px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText($t('二维码长期有效'), baseWidth / 2, 212)
+    
+    ctx.fillStyle = '#000000'
+    ctx.font = '14px sans-serif'
+    ctx.fillText(props.groupName || '', baseWidth / 2, 232)
+    
+    // 下载图片
+    const dataUrl = canvas.toDataURL('image/png')
+    const link = document.createElement('a')
+    link.download = `${props.groupName || '群二维码'}.png`
+    link.href = dataUrl
+    link.click()
+    
+    showToast($t('保存成功'))
+  } catch (e) {
+    console.error('Save QR code failed:', e)
+    showToast($t('保存失败'), 'error')
+  }
+}
 </script>
 
 <style lang="scss" scoped>
-.group-qrcode-dialog {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.dialog-mask {
+.comGroupQrCode {
   position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.3);
-}
-
-.dialog-body {
-  position: relative;
-  width: 320px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
-}
-
-.dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  font-size: 16px;
-  font-weight: 500;
-  border-bottom: 1px solid #f0f0f0;
-
-  .close-btn {
-    cursor: pointer;
-    color: #999;
-    &:hover { color: #333; }
-  }
-}
-
-.dialog-content {
-  padding: 20px;
+  right: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  z-index: 100;
   display: flex;
   flex-direction: column;
   align-items: center;
-}
 
-.qr-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  margin-bottom: 20px;
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    background: #ffffff;
+    border-bottom: 1px solid #f5f5f5;
+    position: relative;
+    height: 50px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #000;
+    width: 100%;
 
-  .group-meta {
-    h3 { font-size: 15px; color: #333; }
-    span { font-size: 12px; color: #999; }
+    picture {
+      position: absolute;
+      left: 0;
+      top: 0;
+      height: 50px;
+      width: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+
+      img {
+        display: block;
+        width: 25px;
+      }
+    }
   }
-}
 
-.qr-container {
-  width: 200px;
-  height: 200px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #f0f0f0;
-  border-radius: 4px;
+  section {
+    height: 250px;
+    width: 100%;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    position: relative;
+    padding-bottom: 30px;
+    margin-top: 20px;
 
-  canvas { max-width: 100%; max-height: 100%; }
-  .loading { color: #999; font-size: 13px; }
-}
+    h3 {
+      display: block;
+      font-size: 13px;
+      color: #787878;
+      line-height: 30px;
+      margin-top: 10px;
+      font-weight: normal;
+    }
 
-.tip {
-  margin-top: 12px;
-  font-size: 12px;
-  color: #999;
+    span {
+      font-size: 14px;
+      color: #999;
+    }
+  }
+
+  .buttons {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    width: 100%;
+    margin-top: 20px;
+
+    .btn-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      margin-left: 20px;
+
+      &:first-child {
+        margin-left: 0;
+      }
+    }
+
+    button {
+      width: 54px;
+      height: 54px;
+      background: #F2F9FF;
+      border-radius: 16px;
+      border: none;
+      font-size: 16px;
+      font-weight: 500;
+      color: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.2s;
+
+      &:hover {
+        background: #e8f4ff;
+      }
+
+      img {
+        display: block;
+        width: 20px;
+      }
+    }
+
+    .btn-title {
+      font-size: 12px;
+      color: #000;
+      font-weight: 300;
+    }
+  }
 }
 </style>
