@@ -14,6 +14,8 @@ export async function getQrCodeUrl(baseUrl?: string): Promise<proto.QrCodeUrlRes
     url: `${base}/login/qrCodeUrl`,
     reqType: proto.QrCodeUrlReq,
     respType: proto.QrCodeUrlResp,
+    // 与老 im 一致：登录前二维码接口不携带历史 session
+    withSessionId: false,
   })
 }
 
@@ -30,6 +32,8 @@ export async function getIsLogin(
     url: `${base}/login/isLogin`,
     reqType: proto.IsLoginReq,
     respType: proto.IsLoginResp,
+    // 与老 im 一致：扫码轮询阶段不带历史 session
+    withSessionId: false,
     data: {
       token: data.token,
       sysMac: data.sysMac,

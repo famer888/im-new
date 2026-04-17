@@ -5,6 +5,7 @@
 import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
 import { API_CONFIG, getBaseUrl } from './config'
 import * as proto from '@/proto/generated'
+import { ungzip } from 'pako'
 
 function generateMacAddress(): string {
   return Array.from(Array(16), () =>
@@ -81,17 +82,28 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
   return result
 }
 
-function getClientInfo(): proto.IClientInfo {
-  const device = getDeviceConfig()
-  const sessionId = getSessionIdFromStorage()
+/**
+ * 与老 im fnClientInfoGet 完全对齐：
+ * - sysModel 为平台名字符串（"MAC"/"WINDOWS"），不是设备指纹！服务端扫码配对靠它识别 PC 客户端
+ * - clientInfo 里 *不含* sysMac 字段（老 im 也没有）；sysMac 只在 IsLoginReq 顶层字段传
+ * - appVer 与老 im 的 1.6.8 → "168" 对齐
+ * - plat 固定 WIN=4（老 im 硬编码 4）
+ */
+function getPlatformSysModel(): string {
+  const ua = (navigator.userAgent || '').toLowerCase()
+  if (ua.includes('mac')) return 'MAC'
+  return 'WINDOWS'
+}
+
+function getClientInfo(withSessionId = true): proto.IClientInfo {
+  const sessionId = withSessionId ? getSessionIdFromStorage() : ''
   return {
     sessionId,
-    appVer: 167,
-    sysMac: device.sysMac,
-    sysModel: device.sysModel,
+    appVer: 168,
     packageCode: 7100,
-    plat: proto.Platform.WIN,
     language: 2,
+    plat: proto.Platform.WIN,
+    sysModel: getPlatformSysModel(),
   }
 }
 
@@ -110,11 +122,33 @@ function encodePacket(protoBytes: Uint8Array, aesKey: string): Uint8Array {
 
 /**
  * Decode an OCS binary response packet.
- * Skip first 6 bytes (2 header + 4 length), decrypt remaining.
+ *
+ * Packet layout:
+ *   byte[0]  = 0xC0/0xC1 (固定头)
+ *   byte[1]  = 压缩标志：0xC0 = gzip 压缩，0x80 = 未压缩
+ *   byte[2-5]= uint32 BE 内容长度
+ *   byte[6+] = 密文（可能经过 gzip）
+ *
+ * 与老 im 的 handleDecompress + handleDecode 完全对齐。
  */
 function decodePacket(data: ArrayBuffer, aesKey: string): Uint8Array {
-  const encrypted = new Uint8Array(data.slice(6))
-  return aesDecrypt(encrypted, aesKey)
+  const raw = new Uint8Array(data)
+  const compressFlag = raw[1]
+
+  let payload: Uint8Array
+  if (compressFlag === 0xC0) {
+    try {
+      const compressed = raw.slice(6)
+      payload = ungzip(compressed)
+    } catch (err) {
+      console.error('[decodePacket] gzip 解压失败，回退到原始数据:', err)
+      payload = raw.slice(6)
+    }
+  } else {
+    payload = raw.slice(6)
+  }
+
+  return aesDecrypt(payload, aesKey)
 }
 
 type ProtoMessageType<T> = {
@@ -132,11 +166,12 @@ export async function requestProto<TReq, TResp>(opts: {
   respType: ProtoMessageType<TResp>
   data?: Partial<TReq>
   aesKey?: string
+  withSessionId?: boolean
 }): Promise<TResp> {
-  const { url, reqType, respType, aesKey = API_CONFIG.aesKey } = opts
+  const { url, reqType, respType, aesKey = API_CONFIG.aesKey, withSessionId = true } = opts
 
   const reqData = {
-    clientInfo: getClientInfo(),
+    clientInfo: getClientInfo(withSessionId),
     ...opts.data,
   } as unknown as Partial<TReq>
   const reqMessage = reqType.create(reqData)
