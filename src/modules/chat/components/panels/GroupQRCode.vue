@@ -65,8 +65,10 @@ import QrcodeVue from 'qrcode.vue'
 import { groupQrCode } from '@/api/imBase'
 import Toast from '@/components/Toast.vue'
 import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
+import { useUIStore } from '@/stores/useUIStore'
 
 const { t: $t } = useI18n()
+const uiStore = useUIStore()
 
 const props = defineProps<{
   visible: boolean
@@ -149,16 +151,30 @@ function handleCopy() {
 }
 
 function handleForward() {
-  showToast($t('暂未实现转发功能'))
-}
-
-function handleSave() {
-  const qrcodeElement = resolveQrCanvas()
-  if (!qrcodeElement) {
-    console.error('[GroupQRCode] handleSave failed: canvas not found')
-    showToast('保存失败: 未获取到二维码画布', 'error')
+  const qrCodeBase64 = buildQrCodeImage()
+  if (!qrCodeBase64) {
+    showToast('转发失败', 'error')
     return
   }
+
+  const imageName = `${props.groupName || '群二维码'}.png`
+  uiStore.openForwardDialogWithPayload({
+    msgType: 1,
+    content: JSON.stringify({
+      name: imageName,
+      url: qrCodeBase64,
+      thumbnailUrl: qrCodeBase64,
+    }),
+  })
+}
+
+function buildQrCodeImage(): string | null {
+  const qrcodeElement = resolveQrCanvas()
+  if (!qrcodeElement) {
+    console.error('[GroupQRCode] buildQrCodeImage failed: canvas not found')
+    return null
+  }
+
   try {
     const dpr = window.devicePixelRatio || 1
     const baseWidth = 270
@@ -166,7 +182,7 @@ function handleSave() {
 
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) return null
 
     canvas.width = baseWidth * dpr
     canvas.height = baseHeight * dpr
@@ -193,11 +209,20 @@ function handleSave() {
     ctx.fillText(props.groupName || '', baseWidth / 2, 232)
 
     const dataUrl = canvas.toDataURL('image/png')
-    handleExportQrCode(dataUrl)
+    return dataUrl
   } catch (e) {
-    console.error('Save QR code failed:', e)
-    showToast('保存失败', 'error')
+    console.error('Build QR code image failed:', e)
+    return null
   }
+}
+
+function handleSave() {
+  const dataUrl = buildQrCodeImage()
+  if (!dataUrl) {
+    showToast('保存失败: 未获取到二维码画布', 'error')
+    return
+  }
+  handleExportQrCode(dataUrl)
 }
 
 async function handleExportQrCode(qrCodeBase64: string) {

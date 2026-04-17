@@ -281,8 +281,24 @@ async function handleContextMenuSelect(key: string) {
 }
 
 async function handleForward(targetConvId: string) {
+  if (!authStore.uid) return
+
+  if (uiStore.forwardMessagePayload) {
+    await messageStore.sendMessage(
+      authStore.uid,
+      targetConvId,
+      uiStore.forwardMessagePayload.msgType,
+      uiStore.forwardMessagePayload.content,
+      uiStore.forwardMessagePayload.extra,
+    )
+    uiStore.closeForwardDialog()
+    chatStore.setCurrentConversation(targetConvId)
+    uiStore.setDetailView('chat')
+    return
+  }
+
   const msgId = uiStore.forwardMessageId
-  if (!msgId || !authStore.uid) return
+  if (!msgId) return
 
   const convId = chatStore.currentConversationId
   if (!convId) return
