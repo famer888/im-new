@@ -5,7 +5,6 @@ import { useChatStore } from '@/stores/useChatStore'
 import { ConversationType } from '@/types'
 import GroupInfoPanel from './GroupInfoPanel.vue'
 import FriendInfo from './FriendInfo.vue'
-import GroupNoticePanel from './GroupNoticePanel.vue'
 import { toggleSidebarWithWindow, type SidebarOpenType } from '@/utils/sidebarResize'
 
 const uiStore = useUIStore()
@@ -27,7 +26,6 @@ watch(showPanel, async (visible) => {
     <template v-if="showPanel">
       <FriendInfo v-if="uiStore.rightPanel === 'friend-info'" />
       <GroupInfoPanel v-else-if="uiStore.rightPanel === 'group-info'" />
-      <GroupNoticePanel v-else-if="uiStore.rightPanel === 'group-notice'" />
       <template v-else-if="uiStore.rightPanel === 'channel-info'">
         <!-- channel panel placeholder -->
       </template>
