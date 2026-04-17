@@ -26,6 +26,12 @@ pub struct WsManager {
     connection_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     reconnect_count: Arc<std::sync::atomic::AtomicU32>,
     pending_messages: Arc<DashMap<String, PendingMessage>>,
+    /// AES 传输密钥：帧头 16 字节后的 protobuf 载荷用它做 AES-128-ECB 加解密。
+    /// 与老 im 的 `configs.TRENDS_AES_KEY || AES_KEY` 等价，`connect` 时写入。
+    aes_key: Arc<RwLock<Option<String>>>,
+    /// WS 登录上下文：用于连接建立后立刻发送 10001 LoginReq。
+    session_id: Arc<RwLock<String>>,
+    install_code: Arc<RwLock<String>>,
 }
 
 #[derive(Debug)]
@@ -46,10 +52,19 @@ impl WsManager {
             connection_handle: Arc::new(RwLock::new(None)),
             reconnect_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             pending_messages: Arc::new(DashMap::new()),
+            aes_key: Arc::new(RwLock::new(None)),
+            session_id: Arc::new(RwLock::new(String::new())),
+            install_code: Arc::new(RwLock::new(String::new())),
         }
     }
 
-    pub async fn connect(&self, url: &str, aes_key: &str) -> Result<(), WsError> {
+    pub async fn connect(
+        &self,
+        url: &str,
+        aes_key: &str,
+        session_id: Option<String>,
+        install_code: Option<String>,
+    ) -> Result<(), WsError> {
         if url.trim().is_empty() {
             *self.status.write() = ConnectionStatus::Disconnected;
             self.emit_status(ConnectionStatus::Disconnected);
@@ -64,6 +79,10 @@ impl WsManager {
         *self.status.write() = ConnectionStatus::Connecting;
         self.emit_status(ConnectionStatus::Connecting);
 
+        *self.aes_key.write() = Some(aes_key.to_string());
+        *self.session_id.write() = session_id.unwrap_or_default();
+        *self.install_code.write() = install_code.unwrap_or_default();
+
         let url = url.to_string();
         let aes_key = aes_key.to_string();
         let status = self.status.clone();
@@ -71,11 +90,15 @@ impl WsManager {
         let app_handle = self.app_handle.clone();
         let reconnect_count = self.reconnect_count.clone();
         let pending = self.pending_messages.clone();
+        let session_id = self.session_id.clone();
+        let install_code = self.install_code.clone();
 
         let handle = tokio::spawn(async move {
             connection::run_connection(
                 &url,
                 &aes_key,
+                session_id,
+                install_code,
                 status,
                 send_tx,
                 app_handle,
@@ -102,6 +125,9 @@ impl WsManager {
             handle.abort();
         }
         *self.send_tx.write() = None;
+        *self.aes_key.write() = None;
+        *self.session_id.write() = String::new();
+        *self.install_code.write() = String::new();
         self.reconnect_count
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
@@ -112,6 +138,25 @@ impl WsManager {
             Some(tx) => tx.send(data).map_err(|_| WsError::SendFailed),
             None => Err(WsError::NotConnected),
         }
+    }
+
+    /// 按老 im `initHeader` 格式打包一条 WS 请求：AES 加密 protobuf 载荷 +
+    /// 16 字节帧头（isJM / isZip / cmd / len / msg_id）后直接压入发送通道。
+    pub fn send_packet(
+        &self,
+        cmd: u16,
+        msg_id: i64,
+        protobuf_payload: &[u8],
+    ) -> Result<(), WsError> {
+        let aes_key = self
+            .aes_key
+            .read()
+            .clone()
+            .ok_or(WsError::NotConnected)?;
+
+        // mac 段目前按老 im WEB 默认行为不带（老 im 仅在 `TRENDS_AES_KEY` 配置下带 mac）。
+        let packet = codec::encode_packet(cmd, msg_id, protobuf_payload, &aes_key, None)?;
+        self.send(packet)
     }
 
     pub fn get_status(&self) -> ConnectionStatus {

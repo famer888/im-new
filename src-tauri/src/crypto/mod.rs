@@ -185,8 +185,49 @@ impl CryptoEngine {
             curve25519::compute_shared_secret(private_key_hex, peer_public_key_hex)?;
         let shared_hex = hex::encode_upper(&shared_secret);
 
-        let msg_key_bytes = aes::decrypt_ecb_128(encrypted_msg_key, shared_hex.as_bytes())?;
-        let rel_key_bytes = parse_protobuf_key(&msg_key_bytes)?;
+        let aes_key_preview = shared_hex.chars().take(16).collect::<String>();
+        tracing::debug!(
+            target: "e2ee",
+            "derive_rel_key: priv_len={} peer_pub_len={} shared_hex_head={} aes_key(prefix16)={} msgkey_len={}",
+            private_key_hex.len(),
+            peer_public_key_hex.len(),
+            &shared_hex[..shared_hex.len().min(16)],
+            aes_key_preview,
+            encrypted_msg_key.len()
+        );
+
+        let msg_key_bytes = aes::decrypt_ecb_128(encrypted_msg_key, shared_hex.as_bytes())
+            .map_err(|e| {
+                tracing::error!(
+                    target: "e2ee",
+                    "derive_rel_key: AES ECB decrypt failed: {} (msgkey bytes={})",
+                    e,
+                    encrypted_msg_key.len()
+                );
+                e
+            })?;
+
+        tracing::debug!(
+            target: "e2ee",
+            "derive_rel_key: msg_key_bytes after AES len={} head_hex={}",
+            msg_key_bytes.len(),
+            hex::encode(&msg_key_bytes[..msg_key_bytes.len().min(16)])
+        );
+
+        let rel_key_bytes = match parse_protobuf_key(&msg_key_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                // 兼容老 im 行为：
+                // 群 msgKey 解密后常常就是“裸 UTF-8 key bytes”，并不带 [0x0A][len] 包裹。
+                tracing::warn!(
+                    target: "e2ee",
+                    "derive_rel_key: parse_protobuf_key failed, fallback raw bytes: {} (decrypted head_hex={})",
+                    e,
+                    hex::encode(&msg_key_bytes[..msg_key_bytes.len().min(16)])
+                );
+                msg_key_bytes
+            }
+        };
 
         String::from_utf8(rel_key_bytes)
             .map(|s| s.trim().to_string())

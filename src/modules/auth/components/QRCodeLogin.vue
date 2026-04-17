@@ -6,7 +6,7 @@ import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin } from '@/api/imBase'
-import { getBaseUrl } from '@/api/config'
+import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
 
@@ -72,6 +72,21 @@ const currentBaseUrl = computed(() => {
 })
 
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
+
+function normalizeWsUrl(input: string): string {
+  const raw = (input || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw
+  if (raw.startsWith('https://')) return `wss://${raw.slice('https://'.length)}`
+  if (raw.startsWith('http://')) return `ws://${raw.slice('http://'.length)}`
+  return `ws://${raw}`
+}
+
+function inferSessionWsUrl(baseUrl: string): string {
+  const base = (baseUrl || '').trim()
+  if (!base) return ''
+  return normalizeWsUrl(base.replace(/webbiz/gi, 'websession'))
+}
 
 function loadLastLoginInfo() {
   try {
@@ -175,8 +190,8 @@ async function handleIsLoginGet() {
 
       emit('login-success', {
         sessionUrl: currentBaseUrl.value,
-        wsUrl: res.urls?.session || '',
-        aesKey: '',
+        wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(currentBaseUrl.value),
+        aesKey: API_CONFIG.aesKey,
         installCode: '',
         uid: loginId,
         nickname: res.nickName || '',

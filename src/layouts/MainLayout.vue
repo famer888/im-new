@@ -101,8 +101,10 @@ onMounted(async () => {
         const { invoke } = await import('@tauri-apps/api/core')
         const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
         const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
+        const sessionId = String(authStore.session?.sessionId || '').trim()
+        const installCode = ''
         if (wsUrl && aesKey) {
-          await invoke('connect_ws', { url: wsUrl, aesKey })
+          await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
         } else {
           networkStore.setWsStatus('disconnected')
           console.warn('[ws] skipped connect: missing ws config')

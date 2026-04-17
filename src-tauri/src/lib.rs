@@ -3,6 +3,7 @@ mod config;
 mod crypto;
 mod db;
 mod logger;
+mod messaging;
 mod platform;
 mod proto;
 mod updater;
@@ -121,6 +122,13 @@ pub fn run() {
             commands::chat::delete_conversation,
             commands::chat::search_messages,
             commands::chat::clear_all_local_chat_history,
+            commands::chat::cache_group_rel_key,
+            commands::chat::has_group_rel_key,
+            commands::chat::derive_group_rel_key,
+            commands::chat::set_curve_private_key_hex,
+            commands::chat::generate_curve25519_keypair,
+            commands::chat::mark_message_sent,
+            commands::chat::upsert_incoming_messages,
             commands::contacts::get_contacts,
             commands::contacts::search_contacts,
             commands::contacts::add_contact,
