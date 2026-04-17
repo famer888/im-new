@@ -5,7 +5,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
-import { ensureFriendRelKey, ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureFriendRelKey, ensureGroupRelKey, refreshGroupRelKey } from '@/utils/e2ee'
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -87,7 +87,9 @@ export async function setupTauriListeners() {
       console.warn('[msg:batch] dropped invalid items:', raw.length - valid.length)
     }
 
-    // 私聊入站时兜底预热好友 relKey（防止首次收到该联系人的消息时 Rust 侧还没缓存 key）。
+    // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
+    // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
+    //    的消息按 groupId 预热，避免对每条已正常的群消息都发 HTTP 请求。
     if (authStore.uid) {
       const uid = String(authStore.uid)
       const friendIds = Array.from(
@@ -106,11 +108,31 @@ export async function setupTauriListeners() {
           console.warn('[e2ee] ensureFriendRelKey on msg:batch failed', { fid, err: String(err) })
         }
       }
+
+      const pendingGroupIds = Array.from(
+        new Set(
+          valid
+            .filter((m: any) => Boolean(m?.extra?.decryptPending))
+            .map((m: any) => {
+              const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+              return String(m?.extra?.groupId || convId.split('_')[1] || '')
+            })
+            .filter((gid) => !!gid),
+        ),
+      )
+      for (const gid of pendingGroupIds) {
+        try {
+          await ensureGroupRelKey(uid, gid)
+        } catch (err) {
+          console.warn('[e2ee] ensureGroupRelKey on msg:batch failed', { gid, err: String(err) })
+        }
+      }
     }
 
     if (valid.length > 0) {
       const normalized: any[] = [...valid]
       if (authStore.uid) {
+        const uid = String(authStore.uid)
         try {
           const { invoke } = await import('@tauri-apps/api/core')
           for (const m of normalized) {
@@ -120,12 +142,15 @@ export async function setupTauriListeners() {
             const cipherHex = String(extra?.cipherHex || '')
             if (!decryptPending || !cipherHex || !convId.includes('_')) continue
 
-            try {
-              if (convId.startsWith('0_')) {
-                const senderId = String(m?.senderId ?? m?.sender_id ?? '')
-                const peerId = String(convId.split('_')[1] || '')
-                if (!senderId) continue
-                const version = Number(extra?.version || 1)
+            const msgType = Number(m?.msgType ?? m?.msg_type ?? 0)
+            const msgId = String(m?.id ?? m?.msgId ?? m?.msg_id ?? '')
+
+            if (convId.startsWith('0_')) {
+              const senderId = String(m?.senderId ?? m?.sender_id ?? '')
+              const peerId = String(convId.split('_')[1] || '')
+              if (!senderId) continue
+              const version = Number(extra?.version || 1)
+              try {
                 const plain = await invoke<string>('decrypt_private_incoming', {
                   senderId,
                   peerId,
@@ -136,9 +161,21 @@ export async function setupTauriListeners() {
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
                 }
-              } else if (convId.startsWith('1_')) {
-                const groupId = String(extra?.groupId || convId.split('_')[1] || '')
-                if (!groupId) continue
+                console.log('[e2ee] retry decrypt_private OK', { msgId, peerId, msgType })
+              } catch (err) {
+                console.warn('[e2ee] retry decrypt_private FAILED', {
+                  msgId,
+                  peerId,
+                  msgType,
+                  cipherLen: cipherHex.length,
+                  err: String(err),
+                })
+              }
+            } else if (convId.startsWith('1_')) {
+              const groupId = String(extra?.groupId || convId.split('_')[1] || '')
+              if (!groupId) continue
+              // 第一次重试：用当前 Rust 侧已有/刚 warmup 拿到的 relKey 解密。
+              try {
                 const plain = await invoke<string>('decrypt_group_incoming', {
                   groupId,
                   ciphertextHex: cipherHex,
@@ -147,9 +184,43 @@ export async function setupTauriListeners() {
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
                 }
+                console.log('[e2ee] retry decrypt_group OK', { msgId, groupId, msgType })
+                continue
+              } catch (err) {
+                console.warn('[e2ee] retry decrypt_group FAILED (1st pass)', {
+                  msgId,
+                  groupId,
+                  msgType,
+                  cipherLen: cipherHex.length,
+                  err: String(err),
+                })
               }
-            } catch {
-              // keep placeholder content this round; next batch/reload may decrypt after key sync
+              // 第二次重试：强制刷新 relKey（key 可能已轮换），再解一次。
+              try {
+                await refreshGroupRelKey(uid, groupId)
+                const plain = await invoke<string>('decrypt_group_incoming', {
+                  groupId,
+                  ciphertextHex: cipherHex,
+                })
+                m.content = plain
+                if (m.extra && typeof m.extra === 'object') {
+                  m.extra.decryptPending = false
+                }
+                console.log('[e2ee] retry decrypt_group OK after refresh', {
+                  msgId,
+                  groupId,
+                  msgType,
+                })
+              } catch (err) {
+                console.warn('[e2ee] retry decrypt_group FAILED (2nd pass, after refresh)', {
+                  msgId,
+                  groupId,
+                  msgType,
+                  cipherLen: cipherHex.length,
+                  err: String(err),
+                })
+                // 保留占位文案 + decryptPending=true，下一轮 batch/重启后仍可再试。
+              }
             }
           }
         } catch {

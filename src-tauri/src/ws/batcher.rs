@@ -208,25 +208,58 @@ impl MessageBatcher {
             let group_id = gm.group_id;
             let group_id_s = group_id.to_string();
             let conversation_id = format!("1_{}", group_id);
-            let content = match crypto.decrypt_group_message(&group_id_s, &gm.content) {
-                Ok(plain) => match imweb::TextObj::decode(plain.as_slice()) {
-                    Ok(obj) => obj.content,
-                    Err(_) => String::from_utf8_lossy(&plain).to_string(),
-                },
-                Err(e) => {
-                    warn!(
-                        "GROUP_MSG_RECEIVED decrypt failed group_id={} msg_id={} err={}",
-                        group_id, gm.msg_id, e
-                    );
-                    "[加密消息，等待密钥同步]".to_string()
-                }
-            };
+            let key_cached = crypto.get_group_key(&group_id_s).is_some();
+            // 和私聊一致：解密失败时除了给一个占位文案，还要带上 cipherHex +
+            // decryptPending，让前端 `msg:batch` 监听到后可以 ensureGroupRelKey
+            // 再走一次 `decrypt_group_incoming` 重试，从而彻底消除"表情/文本首
+            // 条消息在 key warmup 之前到达时被永久卡住在 [加密消息，等待密钥
+            // 同步]"的现象。
+            let (content, decrypt_pending) =
+                match crypto.decrypt_group_message(&group_id_s, &gm.content) {
+                    Ok(plain) => {
+                        let text = match imweb::TextObj::decode(plain.as_slice()) {
+                            Ok(obj) => obj.content,
+                            Err(_) => String::from_utf8_lossy(&plain).to_string(),
+                        };
+                        (text, false)
+                    }
+                    Err(e) => {
+                        // 兼容老客户端发来的明文消息（例如版本=0 或骰子/扑克等未加密类型）
+                        if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
+                            warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw TextObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                            (obj.content, false)
+                        } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
+                            warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw UTF-8 parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                            (s, false)
+                        } else {
+                            warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed group_id={} msg_id={} msg_type={} cipher_len={} version={} key_cached={} err={}",
+                                group_id,
+                                gm.msg_id,
+                                gm.msg_type,
+                                gm.content.len(),
+                                gm.version,
+                                key_cached,
+                                e
+                            );
+                            ("[加密消息，等待密钥同步]".to_string(), true)
+                        }
+                    }
+                };
             info!(
-                "GROUP_MSG_RECEIVED group_id={} msg_id={} sender_uid={} conversation_id={}",
+                "GROUP_MSG_RECEIVED group_id={} msg_id={} sender_uid={} msg_type={} conversation_id={} decrypt_pending={}",
                 group_id,
                 gm.msg_id,
                 gm.send_uid,
-                conversation_id
+                gm.msg_type,
+                conversation_id,
+                decrypt_pending,
             );
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_MSG_RECEIVED,
@@ -242,6 +275,8 @@ impl MessageBatcher {
                     "groupId": group_id,
                     "version": gm.version,
                     "contentMd5": gm.content_md5,
+                    "decryptPending": decrypt_pending,
+                    "cipherHex": hex::encode(&gm.content),
                 }),
             });
         }
