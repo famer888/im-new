@@ -14,10 +14,18 @@ const showNetworkConfig = ref(false)
 const showFileImport = ref(false)
 const isLoading = ref(false)
 const isMac = ref(false)
+const extraDomains = ref<string[]>([])
 
 onMounted(() => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
 })
+
+function handleValidDomainList(urls: string[]) {
+  if (!urls.length) return
+  const existing = new Set(extraDomains.value)
+  const merged = [...extraDomains.value, ...urls.filter(u => !existing.has(u))]
+  extraDomains.value = merged
+}
 
 async function handleLoginSuccess(session: {
   sessionUrl: string
@@ -60,10 +68,15 @@ async function handleClose() {
       @click="handleClose"
     />
 
-    <NetworkConfig v-if="showNetworkConfig" @close="showNetworkConfig = false" />
+    <NetworkConfig
+      v-if="showNetworkConfig"
+      @valid-domain-list="handleValidDomainList"
+      @close="showNetworkConfig = false"
+    />
     <QRCodeLogin
       v-else
       :loading="isLoading"
+      :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
       @show-network="showNetworkConfig = true"
       @show-import="showFileImport = true"
