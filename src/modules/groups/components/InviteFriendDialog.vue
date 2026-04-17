@@ -11,17 +11,17 @@
         <div class="friend-list">
           <div
             v-for="friend in filteredFriends"
-            :key="friend.uid"
-            :class="['friend-item', { selected: selectedIds.has(friend.uid), disabled: existingMemberIds.has(friend.uid) }]"
+            :key="friend.id"
+            :class="['friend-item', { selected: selectedIds.has(friend.id), disabled: existingMemberIds.has(friend.id) }]"
             @click="toggleSelect(friend)"
           >
             <AppCheckbox
-              :checked="selectedIds.has(friend.uid) || existingMemberIds.has(friend.uid)"
-              :disabled="existingMemberIds.has(friend.uid)"
+              :modelValue="selectedIds.has(friend.id) || existingMemberIds.has(friend.id)"
+              :disabled="existingMemberIds.has(friend.id)"
             />
-            <TextAvatar :name="friend.displayName" :size="32" />
-            <span class="friend-name ellipsis">{{ friend.displayName }}</span>
-            <span v-if="existingMemberIds.has(friend.uid)" class="in-group-tag">{{ $t('已在群中') }}</span>
+            <TextAvatar :name="friend.nickname || friend.id" :src="friend.avatar" :size="32" />
+            <span class="friend-name ellipsis">{{ friend.nickname || friend.id }}</span>
+            <span v-if="existingMemberIds.has(friend.id)" class="in-group-tag">{{ $t('已在群中') }}</span>
           </div>
         </div>
       </div>
@@ -42,6 +42,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import SearchInput from '@/components/SearchInput.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import AppCheckbox from '@/components/AppCheckbox.vue'
+import { groupMember } from '@/api/imBase'
 
 const { t: $t } = useI18n()
 const contactStore = useContactStore()
@@ -64,23 +65,36 @@ const filteredFriends = computed(() => {
   const key = searchKey.value.toLowerCase()
   if (!key) return contactStore.contacts
   return contactStore.contacts.filter(f =>
-    f.displayName.toLowerCase().includes(key),
+    (f.nickname || f.id).toLowerCase().includes(key),
   )
 })
 
-function toggleSelect(friend: { uid: string }) {
-  if (props.existingMemberIds.has(friend.uid)) return
-  if (selectedIds.has(friend.uid)) selectedIds.delete(friend.uid)
-  else selectedIds.add(friend.uid)
+function toggleSelect(friend: { id: string }) {
+  if (props.existingMemberIds.has(friend.id)) return
+  if (selectedIds.has(friend.id)) selectedIds.delete(friend.id)
+  else selectedIds.add(friend.id)
 }
 
 async function handleInvite() {
   if (selectedIds.size === 0) return
   try {
-    // TODO: invoke('invite_to_group', { groupId: props.groupId, memberIds: [...selectedIds] })
-    emit('invited')
-    emit('close')
-  } catch { /* empty */ }
+    const res = await groupMember({
+      op: 0,
+      groupId: props.groupId,
+      members: Array.from(selectedIds)
+    })
+    const code = (res as any)?.commonResult?.errCode
+    if (code === 200) {
+      if ((res as any)?.needCheckUids?.length > 0) {
+        // TODO: show toast about need check
+      }
+      emit('invited')
+      emit('close')
+      selectedIds.clear()
+    }
+  } catch (e) {
+    console.error('Invite failed:', e)
+  }
 }
 </script>
 

@@ -15,10 +15,11 @@
           </div>
         </div>
         <div class="qr-container">
-          <canvas ref="canvasRef" />
+          <QrcodeVue v-if="qrUrl" :value="qrUrl" :size="180" level="H" />
           <p v-if="loading" class="loading">{{ $t('加载中...') }}</p>
+          <p v-if="!loading && !qrUrl" class="loading">{{ $t('二维码获取失败') }}</p>
         </div>
-        <p class="tip">{{ $t('该二维码7天内有效，重新进入将更新') }}</p>
+        <p class="tip">{{ $t('该二维码长期有效') }}</p>
       </div>
     </div>
   </div>
@@ -28,6 +29,8 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { getGroupDetail } from '@/api/imBase'
+import QrcodeVue from 'qrcode.vue'
 
 const { t: $t } = useI18n()
 
@@ -39,14 +42,20 @@ const props = defineProps<{
 
 defineEmits<{ (e: 'close'): void }>()
 
-const canvasRef = ref<HTMLCanvasElement | null>(null)
+const qrUrl = ref('')
 const loading = ref(false)
 
 watch(() => props.visible, async (v) => {
   if (v && props.groupId) {
     loading.value = true
+    qrUrl.value = ''
     try {
-      // TODO: invoke('group_qr_code', { groupId }) → get QR data → render to canvas
+      const res = await getGroupDetail({ groupId: props.groupId })
+      if (res && res.qrUrl) {
+        qrUrl.value = res.qrUrl
+      }
+    } catch (e) {
+      console.error('get group qrcode failed:', e)
     } finally {
       loading.value = false
     }
