@@ -114,6 +114,8 @@ function getDigest(conv: Conversation): string {
 
 function handleSelect(conv: Conversation) {
   chatStore.setCurrentConversation(conv.id)
+  // 点击会话项后收起右侧信息面板（与 im 交互一致）
+  uiStore.setRightPanel('none')
   if (isGroupNotification(conv)) {
     uiStore.setDetailView('group-invitation')
     chatStore.clearGroupNotificationUnread()
