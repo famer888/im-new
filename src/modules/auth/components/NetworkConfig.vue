@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getRawBaseUrl } from '@/api/config'
 import { getAllDomains } from '@/utils/domainPool'
+import { collectAllDomainUrls } from '@/api/imDomain'
 
 interface DomainCheckItem {
   url: string
@@ -23,6 +24,7 @@ const isCompleted = ref(false)
 const validCount = ref(0)
 const cancelled = ref(false)
 const checkedUrls = ref<string[]>([])
+const retryCount = ref(0)
 
 const buttonText = computed(() => {
   if (isCompleted.value && validCount.value > 0) {
@@ -57,26 +59,24 @@ function getQrStatusText(status: null | -1 | 0 | 200) {
   return String(status)
 }
 
-/** 检测域名 DNS 是否可达（raw fetch，无 Protobuf） */
+/** 检测域名 DNS 是否可达（GET 请求，与老 im checkDomainIsNormal 一致） */
 async function checkDns(url: string): Promise<1 | 0> {
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 5000)
-    const resp = await fetch(`${url.replace(/\/$/, '')}/login/qrCodeUrl`, {
-      method: 'HEAD',
-      mode: 'no-cors',
+    const resp = await fetch(url.replace(/\/$/, ''), {
+      method: 'GET',
+      mode: 'cors',
       signal: controller.signal,
     })
     clearTimeout(timeoutId)
-    // no-cors 下 opaque response 也算通
-    void resp
-    return 1
+    return resp.ok && resp.status === 200 ? 1 : 0
   } catch {
     return 0
   }
 }
 
-/** 检测二维码接口是否返回 200 */
+/** 检测二维码接口是否返回有效 token（Protobuf 调用，与老 im checkQrCode 一致） */
 async function checkQrCode(url: string): Promise<200 | 0> {
   try {
     const { requestProto, proto } = await import('@/api/request')
@@ -84,6 +84,7 @@ async function checkQrCode(url: string): Promise<200 | 0> {
       url: `${url.replace(/\/$/, '')}/login/qrCodeUrl`,
       reqType: proto.QrCodeUrlReq,
       respType: proto.QrCodeUrlResp,
+      withSessionId: false,
     })
     return res?.token ? 200 : 0
   } catch {
@@ -91,27 +92,15 @@ async function checkQrCode(url: string): Promise<200 | 0> {
   }
 }
 
-function collectDomainUrls(): string[] {
-  const urls: string[] = []
-
-  // 1. Tauri 域名池
-  const poolDomains = getAllDomains('webBiz').map(d => d.domain)
-  urls.push(...poolDomains)
-
-  // 2. 配置中的 base URL 作为兜底
-  const base = getRawBaseUrl()
-  if (base && !urls.includes(base)) {
-    urls.push(base)
-  }
-
-  return [...new Set(urls)]
+/** 只获取本地动态域名池（不含 baseBuildUrl 兜底，与老 im getTrendsDomainPool 一致） */
+function getLocalPoolDomains(): string[] {
+  return getAllDomains('webBiz').map(d => d.domain)
 }
 
 async function checkDomainsFromIndex(startIndex: number) {
   for (let i = startIndex; i < domainList.value.length; i++) {
     if (cancelled.value) break
 
-    // DNS check
     domainList.value[i] = { ...domainList.value[i], dnsStatus: -1 }
     const dnsResult = await checkDns(domainList.value[i].url)
     if (cancelled.value) break
@@ -123,7 +112,6 @@ async function checkDomainsFromIndex(startIndex: number) {
       continue
     }
 
-    // QR check
     domainList.value[i] = { ...domainList.value[i], qrStatus: -1 }
     const httpCode = await checkQrCode(domainList.value[i].url)
     if (cancelled.value) break
@@ -133,19 +121,87 @@ async function checkDomainsFromIndex(startIndex: number) {
   }
 }
 
+/**
+ * 从远程域名 API 拉取新域名并追加到列表检测。
+ * 与老 im network.vue 的 fetchAndUpdateDomainPool 一致。
+ */
+async function fetchAndUpdateDomainPool() {
+  try {
+    const apiDomains = await collectAllDomainUrls('webBiz')
+    const newUrls = apiDomains.filter(url => !checkedUrls.value.includes(url))
+
+    if (newUrls.length) {
+      checkedUrls.value = [...checkedUrls.value, ...newUrls]
+      const newItems = newUrls.map(url => ({ url, dnsStatus: null as null, qrStatus: null as null }))
+      const startIndex = domainList.value.length
+      domainList.value = [...domainList.value, ...newItems]
+      await checkDomainsFromIndex(startIndex)
+    }
+
+    console.log(`[NetworkCheck] 域名补充完成，新增 ${newUrls.length} 个域名`)
+  } catch (err) {
+    console.error('[NetworkCheck] fetchAndUpdateDomainPool error:', err)
+  }
+}
+
+/**
+ * 与老 im network.vue 的 loadAndCheckDomains 完全对齐：
+ * 1. 先取动态域名池（不含 baseBuildUrl）
+ * 2. 池为空 → 调远程 API 补充
+ * 3. 最后才加 baseBuildUrl 作为兜底
+ */
+async function loadAndCheckDomains() {
+  let poolDomains = getLocalPoolDomains()
+
+  if (!poolDomains.length && retryCount.value < 2 && !cancelled.value) {
+    retryCount.value++
+    console.log(`[NetworkCheck] 动态域名池为空，进行第${retryCount.value}次补充`)
+    await fetchAndUpdateDomainPool()
+    poolDomains = getLocalPoolDomains()
+  }
+
+  const domainUrls = [...poolDomains]
+  const base = getRawBaseUrl()
+  if (base && !domainUrls.includes(base)) {
+    domainUrls.push(base)
+  }
+
+  const newUrls = [...new Set(domainUrls)].filter(url => !checkedUrls.value.includes(url))
+  if (!newUrls.length) return
+
+  checkedUrls.value = [...checkedUrls.value, ...newUrls]
+  const newItems = newUrls.map(url => ({ url, dnsStatus: null as null, qrStatus: null as null }))
+  const startIndex = domainList.value.length
+  domainList.value = [...domainList.value, ...newItems]
+  await checkDomainsFromIndex(startIndex)
+}
+
+/**
+ * 主入口：与老 im network.vue 的 fetchDomainList 完全对齐。
+ * 1. 先加载本地池 + 检测
+ * 2. 全部失败则从远程 API 拉取补充再检测
+ */
 async function fetchDomainList() {
   isChecking.value = true
   cancelled.value = false
   isCompleted.value = false
   validCount.value = 0
+  retryCount.value = 0
   checkedUrls.value = []
   domainList.value = []
 
-  const urls = collectDomainUrls().filter(u => !checkedUrls.value.includes(u))
-  checkedUrls.value = [...urls]
+  try {
+    await loadAndCheckDomains()
 
-  domainList.value = urls.map(url => ({ url, dnsStatus: null, qrStatus: null }))
-  await checkDomainsFromIndex(0)
+    if (validCount.value === 0 && retryCount.value < 2 && !cancelled.value) {
+      retryCount.value++
+      console.log(`[NetworkCheck] 全部检测失败，进行第${retryCount.value}次域名补充`)
+      await fetchAndUpdateDomainPool()
+      await loadAndCheckDomains()
+    }
+  } catch (err) {
+    console.error('[NetworkCheck] fetchDomainList error:', err)
+  }
 
   isChecking.value = false
   isCompleted.value = true

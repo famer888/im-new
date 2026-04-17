@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' https: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: https:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; img-src 'self' https: http: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws: https: http:; worker-src 'self' blob:"
     },
     "trayIcon": {
       "iconPath": "icons/icon.png",

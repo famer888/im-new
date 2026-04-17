@@ -29,7 +29,7 @@ const emit = defineEmits<{
 }>()
 
 const loginToken = ref('')
-const officialUrl = ref('55chat.com')
+const officialUrl = ref('97chat.com')
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
 const isLoading = ref(false)
@@ -72,7 +72,6 @@ const currentBaseUrl = computed(() => {
 })
 
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
-const LOGIN_STATUS_ALREADY_LOGIN = 2
 
 function loadLastLoginInfo() {
   try {
@@ -96,18 +95,23 @@ async function handleGetQrCodeUrl() {
     const res = await getQrCodeUrl(currentBaseUrl.value)
     isLoading.value = false
 
-    const errCode = res?.commonResult?.errCode
+    const errCode = Number(res?.commonResult?.errCode || 0)
     if (errCode && errCode !== 200) {
       console.error('[QRCode] Server error:', res.commonResult?.errMsg)
       qrCodeUrlError.value = true
+      isLoading.value = false
+      // 与老 im 一致：当前域名失败后切到下一个域名重试
+      if (domainList.value.length > 1) {
+        urlIndex.value++
+      }
       return
     }
 
     if (res?.token) {
       loginToken.value = res.token
-      if (res.officialUrl) {
-        officialUrl.value = res.officialUrl
-      }
+      // 注意：与老 im 完全一致——*不* 用 res.officialUrl 覆盖默认值。
+      // 二维码必须始终保持 `97chat.com?token=X&imQrCodeType=2` 格式，
+      // 手机 App 只认这个固定 host，其它 host 扫了没反应 → loginStatus 永远是 NOT_SCAN=0。
 
       timerOutTimer = setTimeout(() => {
         isOutTime.value = true
@@ -118,6 +122,10 @@ async function handleGetQrCodeUrl() {
       }, 1500)
     } else {
       qrCodeUrlError.value = true
+      // 与老 im 一致：token 无效也尝试切换域名
+      if (domainList.value.length > 1) {
+        urlIndex.value++
+      }
     }
   } catch (err) {
     console.error('[QRCode] Failed to get QR code URL:', err)
@@ -153,8 +161,8 @@ async function handleIsLoginGet() {
       sysModel: device.sysModel,
     }, currentBaseUrl.value)
 
-    const isLoginReady = Number(res?.loginStatus) === LOGIN_STATUS_ALREADY_LOGIN
-    if (res && res.uid && Number(res.uid) > 0 && isLoginReady) {
+    // 与老 im 一致：扫码登录成功仅以 uid > 0 为准
+    if (res && res.uid && Number(res.uid) > 0) {
       const loginId = String(res.uid)
       clearTimers()
 
