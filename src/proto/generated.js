@@ -44840,4 +44840,181 @@ export const DisableGroupResp = $root.DisableGroupResp = (() => {
     return DisableGroupResp;
 })();
 
+export const GroupQrCodeReq = $root.GroupQrCodeReq = (() => {
+    function GroupQrCodeReq(properties) {
+        if (properties)
+            for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                if (properties[keys[i]] != null)
+                    this[keys[i]] = properties[keys[i]];
+    }
+    GroupQrCodeReq.prototype.clientInfo = null;
+    GroupQrCodeReq.prototype.groupId = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+    GroupQrCodeReq.prototype.force = false;
+    GroupQrCodeReq.create = function create(properties) {
+        return new GroupQrCodeReq(properties);
+    };
+    GroupQrCodeReq.encode = function encode(message, writer) {
+        if (!writer)
+            writer = $Writer.create();
+        if (message.clientInfo != null && Object.hasOwnProperty.call(message, "clientInfo"))
+            $root.ClientInfo.encode(message.clientInfo, writer.uint32(10).fork()).ldelim();
+        if (message.groupId != null && Object.hasOwnProperty.call(message, "groupId"))
+            writer.uint32(16).int64(message.groupId);
+        if (message.force != null && Object.hasOwnProperty.call(message, "force"))
+            writer.uint32(24).bool(message.force);
+        return writer;
+    };
+    GroupQrCodeReq.encodeDelimited = function encodeDelimited(message, writer) {
+        return this.encode(message, writer).ldelim();
+    };
+    GroupQrCodeReq.decode = function decode(reader, length) {
+        if (!(reader instanceof $Reader))
+            reader = $Reader.create(reader);
+        let end = length === undefined ? reader.len : reader.pos + length, message = new $root.GroupQrCodeReq();
+        while (reader.pos < end) {
+            let tag = reader.uint32();
+            switch (tag >>> 3) {
+            case 1: message.clientInfo = $root.ClientInfo.decode(reader, reader.uint32()); break;
+            case 2: message.groupId = reader.int64(); break;
+            case 3: message.force = reader.bool(); break;
+            default: reader.skipType(tag & 7); break;
+            }
+        }
+        return message;
+    };
+    GroupQrCodeReq.decodeDelimited = function decodeDelimited(reader) {
+        if (!(reader instanceof $Reader))
+            reader = new $Reader(reader);
+        return this.decode(reader, reader.uint32());
+    };
+    GroupQrCodeReq.verify = function verify(message) {
+        if (typeof message !== "object" || message === null) return "object expected";
+        return null;
+    };
+    GroupQrCodeReq.fromObject = function fromObject(object) {
+        if (object instanceof $root.GroupQrCodeReq) return object;
+        let message = new $root.GroupQrCodeReq();
+        if (object.clientInfo != null) {
+            if (typeof object.clientInfo !== "object") throw TypeError(".GroupQrCodeReq.clientInfo: object expected");
+            message.clientInfo = $root.ClientInfo.fromObject(object.clientInfo);
+        }
+        if (object.groupId != null)
+            if ($util.Long) (message.groupId = $util.Long.fromValue(object.groupId)).unsigned = false;
+            else if (typeof object.groupId === "string") message.groupId = parseInt(object.groupId, 10);
+            else if (typeof object.groupId === "number") message.groupId = object.groupId;
+            else if (typeof object.groupId === "object") message.groupId = new $util.LongBits(object.groupId.low >>> 0, object.groupId.high >>> 0).toNumber();
+        if (object.force != null) message.force = Boolean(object.force);
+        return message;
+    };
+    GroupQrCodeReq.toObject = function toObject(message, options) {
+        if (!options) options = {};
+        let object = {};
+        if (options.defaults) {
+            if ($util.Long) { let long = new $util.Long(0, 0, false); object.groupId = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long; } else object.groupId = options.longs === String ? "0" : 0;
+            object.force = false;
+        }
+        if (message.clientInfo != null && message.hasOwnProperty("clientInfo")) object.clientInfo = $root.ClientInfo.toObject(message.clientInfo, options);
+        if (message.groupId != null && message.hasOwnProperty("groupId"))
+            if (typeof message.groupId === "number") object.groupId = options.longs === String ? String(message.groupId) : message.groupId;
+            else object.groupId = options.longs === String ? $util.Long.prototype.toString.call(message.groupId) : options.longs === Number ? new $util.LongBits(message.groupId.low >>> 0, message.groupId.high >>> 0).toNumber() : message.groupId;
+        if (message.force != null && message.hasOwnProperty("force")) object.force = message.force;
+        return object;
+    };
+    GroupQrCodeReq.prototype.toJSON = function toJSON() { return this.constructor.toObject(this, $protobuf.util.toJSONOptions); };
+    GroupQrCodeReq.getTypeUrl = function getTypeUrl(typeUrlPrefix) { return (typeUrlPrefix === undefined ? "type.googleapis.com" : typeUrlPrefix) + "/GroupQrCodeReq"; };
+    return GroupQrCodeReq;
+})();
+
+export const GroupQrCodeResp = $root.GroupQrCodeResp = (() => {
+    function GroupQrCodeResp(properties) {
+        if (properties)
+            for (let keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                if (properties[keys[i]] != null)
+                    this[keys[i]] = properties[keys[i]];
+    }
+    GroupQrCodeResp.prototype.commonResult = null;
+    GroupQrCodeResp.prototype.qrUrl = "";
+    GroupQrCodeResp.prototype.qrExpire = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+    GroupQrCodeResp.prototype.bfResetQrcode = false;
+    GroupQrCodeResp.prototype.shortLink = "";
+    GroupQrCodeResp.create = function create(properties) {
+        return new GroupQrCodeResp(properties);
+    };
+    GroupQrCodeResp.encode = function encode(message, writer) {
+        if (!writer) writer = $Writer.create();
+        if (message.commonResult != null && Object.hasOwnProperty.call(message, "commonResult"))
+            $root.CommonResult.encode(message.commonResult, writer.uint32(10).fork()).ldelim();
+        if (message.qrUrl != null && Object.hasOwnProperty.call(message, "qrUrl"))
+            writer.uint32(18).string(message.qrUrl);
+        if (message.qrExpire != null && Object.hasOwnProperty.call(message, "qrExpire"))
+            writer.uint32(24).int64(message.qrExpire);
+        if (message.bfResetQrcode != null && Object.hasOwnProperty.call(message, "bfResetQrcode"))
+            writer.uint32(32).bool(message.bfResetQrcode);
+        if (message.shortLink != null && Object.hasOwnProperty.call(message, "shortLink"))
+            writer.uint32(42).string(message.shortLink);
+        return writer;
+    };
+    GroupQrCodeResp.encodeDelimited = function encodeDelimited(message, writer) {
+        return this.encode(message, writer).ldelim();
+    };
+    GroupQrCodeResp.decode = function decode(reader, length) {
+        if (!(reader instanceof $Reader))
+            reader = $Reader.create(reader);
+        let end = length === undefined ? reader.len : reader.pos + length, message = new $root.GroupQrCodeResp();
+        while (reader.pos < end) {
+            let tag = reader.uint32();
+            switch (tag >>> 3) {
+            case 1: message.commonResult = $root.CommonResult.decode(reader, reader.uint32()); break;
+            case 2: message.qrUrl = reader.string(); break;
+            case 3: message.qrExpire = reader.int64(); break;
+            case 4: message.bfResetQrcode = reader.bool(); break;
+            case 5: message.shortLink = reader.string(); break;
+            default: reader.skipType(tag & 7); break;
+            }
+        }
+        return message;
+    };
+    GroupQrCodeResp.decodeDelimited = function decodeDelimited(reader) {
+        if (!(reader instanceof $Reader)) reader = new $Reader(reader);
+        return this.decode(reader, reader.uint32());
+    };
+    GroupQrCodeResp.verify = function verify(message) {
+        if (typeof message !== "object" || message === null) return "object expected";
+        return null;
+    };
+    GroupQrCodeResp.fromObject = function fromObject(object) {
+        if (object instanceof $root.GroupQrCodeResp) return object;
+        let message = new $root.GroupQrCodeResp();
+        if (object.commonResult != null) {
+            if (typeof object.commonResult !== "object") throw TypeError(".GroupQrCodeResp.commonResult: object expected");
+            message.commonResult = $root.CommonResult.fromObject(object.commonResult);
+        }
+        if (object.qrUrl != null) message.qrUrl = String(object.qrUrl);
+        if (object.qrExpire != null)
+            if ($util.Long) (message.qrExpire = $util.Long.fromValue(object.qrExpire)).unsigned = false;
+            else if (typeof object.qrExpire === "string") message.qrExpire = parseInt(object.qrExpire, 10);
+            else if (typeof object.qrExpire === "number") message.qrExpire = object.qrExpire;
+            else if (typeof object.qrExpire === "object") message.qrExpire = new $util.LongBits(object.qrExpire.low >>> 0, object.qrExpire.high >>> 0).toNumber();
+        if (object.bfResetQrcode != null) message.bfResetQrcode = Boolean(object.bfResetQrcode);
+        if (object.shortLink != null) message.shortLink = String(object.shortLink);
+        return message;
+    };
+    GroupQrCodeResp.toObject = function toObject(message, options) {
+        if (!options) options = {};
+        let object = {};
+        if (options.defaults) { object.qrUrl = ""; if ($util.Long) { let long = new $util.Long(0, 0, false); object.qrExpire = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long; } else object.qrExpire = options.longs === String ? "0" : 0; object.bfResetQrcode = false; object.shortLink = ""; }
+        if (message.commonResult != null && message.hasOwnProperty("commonResult")) object.commonResult = $root.CommonResult.toObject(message.commonResult, options);
+        if (message.qrUrl != null && message.hasOwnProperty("qrUrl")) object.qrUrl = message.qrUrl;
+        if (message.qrExpire != null && message.hasOwnProperty("qrExpire"))
+            if (typeof message.qrExpire === "number") object.qrExpire = options.longs === String ? String(message.qrExpire) : message.qrExpire;
+            else object.qrExpire = options.longs === String ? $util.Long.prototype.toString.call(message.qrExpire) : options.longs === Number ? new $util.LongBits(message.qrExpire.low >>> 0, message.qrExpire.high >>> 0).toNumber() : message.qrExpire;
+        if (message.bfResetQrcode != null && message.hasOwnProperty("bfResetQrcode")) object.bfResetQrcode = message.bfResetQrcode;
+        if (message.shortLink != null && message.hasOwnProperty("shortLink")) object.shortLink = message.shortLink;
+        return object;
+    };
+    GroupQrCodeResp.prototype.toJSON = function toJSON() { return this.constructor.toObject(this, $protobuf.util.toJSONOptions); };
+    GroupQrCodeResp.getTypeUrl = function getTypeUrl(typeUrlPrefix) { return (typeUrlPrefix === undefined ? "type.googleapis.com" : typeUrlPrefix) + "/GroupQrCodeResp"; };
+    return GroupQrCodeResp;
+})();
+
 export { $root as default };
