@@ -87,6 +87,7 @@ function clearSearchUi() {
 function selectContact(id: string) {
   const conv = chatStore.ensureConversation(0, id)
   chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
   clearSearchUi()
 }
@@ -94,6 +95,7 @@ function selectContact(id: string) {
 function selectGroup(id: string) {
   const conv = chatStore.ensureConversation(1, id)
   chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
   clearSearchUi()
 }
@@ -101,6 +103,7 @@ function selectGroup(id: string) {
 function selectChannel(id: string) {
   const conv = chatStore.ensureConversation(2, id)
   chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
   clearSearchUi()
 }
@@ -110,6 +113,7 @@ function selectMessage(m: Message) {
   const { type, targetId } = parseConversationRef(m.conversationId)
   const conv = chatStore.ensureConversation(type, targetId)
   chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')
   uiStore.setDetailView('chat')
   clearSearchUi()
