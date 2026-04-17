@@ -17,6 +17,7 @@ export const useUIStore = defineStore('ui', () => {
   const addContactVisible = ref(false)
   const forwardDialogVisible = ref(false)
   const forwardMessageId = ref<string | null>(null)
+  const forwardMessagePayload = ref<{ msgType: number; content: string; extra?: Record<string, unknown> } | null>(null)
   const accountDialogVisible = ref(false)
   const fileImportVisible = ref(false)
   const createGroupVisible = ref(false)
@@ -63,12 +64,20 @@ export const useUIStore = defineStore('ui', () => {
 
   function openForwardDialog(messageId: string) {
     forwardMessageId.value = messageId
+    forwardMessagePayload.value = null
+    forwardDialogVisible.value = true
+  }
+
+  function openForwardDialogWithPayload(payload: { msgType: number; content: string; extra?: Record<string, unknown> }) {
+    forwardMessageId.value = null
+    forwardMessagePayload.value = payload
     forwardDialogVisible.value = true
   }
 
   function closeForwardDialog() {
     forwardDialogVisible.value = false
     forwardMessageId.value = null
+    forwardMessagePayload.value = null
   }
 
   function openAccountDialog() { accountDialogVisible.value = true }
@@ -158,6 +167,7 @@ export const useUIStore = defineStore('ui', () => {
     addContactVisible,
     forwardDialogVisible,
     forwardMessageId,
+    forwardMessagePayload,
     accountDialogVisible,
     fileImportVisible,
     createGroupVisible,
@@ -176,6 +186,7 @@ export const useUIStore = defineStore('ui', () => {
     openSettings,
     closeSettings,
     openForwardDialog,
+    openForwardDialogWithPayload,
     closeForwardDialog,
     openAccountDialog,
     closeAccountDialog,
