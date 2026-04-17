@@ -1,0 +1,422 @@
+<script setup lang="ts">
+import { computed, ref, onMounted } from 'vue'
+import { useChatStore } from '@/stores/useChatStore'
+import { useGroupStore } from '@/stores/useGroupStore'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useI18n } from 'vue-i18n'
+import TextAvatar from '@/components/TextAvatar.vue'
+import AppSwitch from '@/components/AppSwitch.vue'
+import Toast from '@/components/Toast.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import { getGroupDetail } from '@/api/imBase'
+
+const { t: $t } = useI18n()
+const chatStore = useChatStore()
+const groupStore = useGroupStore()
+const authStore = useAuthStore()
+
+const props = defineProps<{
+  visible: boolean
+  groupId: string
+}>()
+
+const emit = defineEmits<{
+  (e: 'close'): void
+}>()
+
+const conv = computed(() => chatStore.currentConversation)
+const group = computed(() => props.groupId ? groupStore.getGroup(props.groupId) : undefined)
+
+const noticeText = ref('')
+const isEdit = ref(false)
+const bfAll = ref(false)
+const loginIsHost = ref(false)
+const editUser = ref<any>(null)
+const memberType = ref(-1)
+
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+const confirmVisible = ref(false)
+const confirmTitle = ref('')
+const confirmContent = ref('')
+const confirmAction = ref<(() => void) | null>(null)
+
+function showToast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+}
+
+function showConfirm(title: string, content: string, action: () => void) {
+  confirmTitle.value = title
+  confirmContent.value = content
+  confirmAction.value = action
+  confirmVisible.value = true
+}
+
+function handleConfirm() {
+  confirmAction.value?.()
+  confirmVisible.value = false
+}
+
+const displayUserType = computed(() => {
+  return editUser.value?.role ?? -1
+})
+
+const displayUserLabel = computed(() => {
+  if (displayUserType.value === 0) return '群主'
+  if (displayUserType.value === 1) return '管理员'
+  return ''
+})
+
+onMounted(async () => {
+  if (!props.groupId) return
+  try {
+    const detail = await getGroupDetail({ groupId: props.groupId })
+    memberType.value = detail.memberType ?? 2
+    noticeText.value = detail.groupNotice?.notice || ''
+    
+    // 判断是否有编辑权限 (群主或管理员)
+    loginIsHost.value = memberType.value === 0 || memberType.value === 1
+    
+    // 获取编辑者信息
+    if (detail.groupNotice?.editUser?.user) {
+      editUser.value = {
+        ...detail.groupNotice.editUser.user,
+        role: detail.groupNotice.editUser.type
+      }
+    } else {
+      // 默认显示群主或当前用户
+      const members = groupStore.getMembers(props.groupId)
+      const owner = members.find(m => m.role === 0)
+      if (owner) {
+        editUser.value = owner
+      }
+    }
+  } catch (e) {
+    console.error('get group detail failed:', e)
+  }
+})
+
+function handleActivateEdit() {
+  isEdit.value = true
+  noticeText.value = ''
+  
+  // 切换为当前用户
+  const members = groupStore.getMembers(props.groupId)
+  const current = members.find(m => m.userId === authStore.uid)
+  if (current) {
+    editUser.value = current
+  }
+}
+
+function handleCancel() {
+  isEdit.value = false
+  // 恢复原公告
+  if (group.value) {
+    noticeText.value = group.value.notice || ''
+  }
+}
+
+function handleOk() {
+  if (!noticeText.value || !noticeText.value.trim()) {
+    showToast($t('请输入内容'))
+    return
+  }
+  
+  if (bfAll.value) {
+    showConfirm(
+      $t('温馨提示'),
+      $t('发布该群简介会通知全部群成员，可能会对群成员造成打扰，确定发布？'),
+      () => {
+        handleSendNotice(true)
+      }
+    )
+  } else {
+    handleSendNotice(false)
+  }
+}
+
+async function handleSendNotice(notifyAll: boolean) {
+  try {
+    // TODO: 调用设置群公告接口
+    // await eventGroup.fnNoticeSet({ id: props.groupId, notice: noticeText.value, bfAll: notifyAll })
+    
+    if (group.value) {
+      group.value.notice = noticeText.value
+    }
+    
+    showToast($t('发布成功'))
+    isEdit.value = false
+    emit('close')
+  } catch (e) {
+    console.error('set notice failed:', e)
+    showToast($t('发布失败'), 'error')
+  }
+}
+</script>
+
+<template>
+  <div v-if="visible" class="comGroupNoticeDialog" @click.stop="emit('close')">
+    <div @click.stop>
+      <picture @click.stop="emit('close')">
+        <img src="@/assets/images/common/close-icon.png" />
+      </picture>
+      <div class="top">
+        <TextAvatar
+          :name="editUser?.nickname || editUser?.userId || ''"
+          :src="editUser?.avatar"
+          :size="35"
+          rounded
+        />
+        <h2>{{ editUser?.nickname || editUser?.userId || '' }}</h2>
+        <span
+          v-if="loginIsHost && displayUserLabel"
+          :class="{
+            groupOwner: displayUserType === 0,
+            isAdmin: displayUserType === 1,
+          }"
+        >
+          {{ $t(displayUserLabel) }}
+        </span>
+      </div>
+      <section>
+        <textarea
+          v-if="loginIsHost && isEdit"
+          v-model="noticeText"
+          maxlength="800"
+          :placeholder="$t('请输入内容')"
+        />
+        <div v-else class="notice-view">
+          <div v-if="noticeText" class="content">{{ noticeText }}</div>
+          <div v-else class="empty">{{ $t('无简介') }}</div>
+        </div>
+        <span v-if="loginIsHost && isEdit">{{ 800 - noticeText.length }}</span>
+      </section>
+      
+      <template v-if="loginIsHost">
+        <div v-if="!isEdit" class="bottom">
+          <span @click.stop="handleActivateEdit">{{ $t('发布新简介') }}</span>
+        </div>
+        <div v-if="isEdit" class="bfAll">
+          {{ $t('通知所有成员') }}
+          <span>{{ $t('推送告知所有的群成员，即使对方开启消息免打扰') }}</span>
+          <div class="switch-wrap">
+            <AppSwitch v-model="bfAll" />
+          </div>
+        </div>
+        <div v-if="isEdit" class="bottom">
+          <span @click.stop="handleOk">{{ $t('确认发布') }}</span>
+          <span @click.stop="handleCancel">{{ $t('取消') }}</span>
+        </div>
+      </template>
+    </div>
+    
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      @update:visible="toastVisible = $event"
+    />
+    
+    <ConfirmDialog
+      :visible="confirmVisible"
+      :title="confirmTitle"
+      :content="confirmContent"
+      variant="im"
+      type="danger"
+      @update:visible="confirmVisible = $event"
+      @confirm="handleConfirm"
+    />
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.comGroupNoticeDialog {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.2);
+
+  > div {
+    background: #fff;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 10px 16px;
+    border-radius: 8px;
+    width: 438px;
+    box-sizing: border-box;
+
+    > picture {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+
+      &:hover {
+        opacity: 0.8;
+      }
+      
+      img {
+        width: 14px;
+        height: 14px;
+      }
+    }
+
+    > .top {
+      height: 70px;
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+
+      :deep(.text-avatar) {
+        margin-right: 10px;
+      }
+
+      > h2 {
+        display: block;
+        margin: 0;
+        padding: 0;
+        line-height: 30px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #333;
+      }
+
+      > span {
+        display: block;
+        padding: 1px 10px;
+        margin-left: 5px;
+        background-color: #3369fe;
+        border-radius: 10px;
+        font-size: 12px;
+        color: #fff;
+        transform: scale(0.9);
+
+        &.groupOwner {
+          background-color: #3369fe;
+        }
+
+        &.isAdmin {
+          background-color: #fb9203;
+        }
+      }
+    }
+
+    > section {
+      position: relative;
+
+      > textarea {
+        padding: 15px 10px;
+        box-sizing: border-box;
+        width: 100%;
+        height: 223px;
+        background-color: rgb(245, 245, 245);
+        border-radius: 8px;
+        font-size: 14px;
+        color: #333;
+        display: block;
+        border: none;
+        outline: none;
+        resize: none;
+      }
+
+      .notice-view {
+        padding: 15px 10px;
+        box-sizing: border-box;
+        width: 100%;
+        height: 223px;
+        background-color: rgb(245, 245, 245);
+        border-radius: 8px;
+        overflow-y: auto;
+        
+        .content {
+          font-size: 14px;
+          color: #787878;
+          line-height: 20px;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+        
+        .empty {
+          color: #d3d1d1;
+          font-size: 14px;
+        }
+      }
+
+      > span {
+        position: absolute;
+        right: 10px;
+        bottom: -18px;
+        font-size: 12px;
+        color: #666;
+      }
+    }
+
+    > .bottom {
+      margin-top: 5px;
+      padding-bottom: 10px;
+      display: flex;
+      justify-content: flex-end;
+
+      > span {
+        display: block;
+        color: #fff;
+        background-color: #3369fe;
+        border: 1px solid #3369fe;
+        cursor: pointer;
+        padding: 0 28px;
+        height: 32px;
+        line-height: 32px;
+        font-size: 12px;
+        border-radius: 4px;
+
+        &:hover {
+          opacity: 0.8;
+        }
+
+        &:nth-child(2) {
+          background-color: #fff;
+          border: 1px solid #eeeeee;
+          color: #666666;
+          margin-left: 10px;
+        }
+      }
+    }
+
+    > .bfAll {
+      padding: 10px 0;
+      font-size: 13px;
+      line-height: 25px;
+      color: #333;
+      position: relative;
+
+      > span {
+        display: block;
+        font-size: 12px;
+        color: #999;
+        line-height: 18px;
+        max-width: 370px;
+      }
+
+      .switch-wrap {
+        position: absolute;
+        right: 0;
+        top: 27px;
+      }
+    }
+  }
+}
+</style>

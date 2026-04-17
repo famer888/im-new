@@ -13,6 +13,7 @@ import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import GroupQRCode from './GroupQRCode.vue'
+import GroupNoticeDialog from './GroupNoticeDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 const chatStore = useChatStore()
 const authStore = useAuthStore()
@@ -65,6 +66,7 @@ const showAllMembers = ref(false)
 
 const qrCodeVisible = ref(false)
 const inviteVisible = ref(false)
+const noticeVisible = ref(false)
 
 const existingMemberIds = computed(() => {
   return new Set(members.value.map(m => m.userId))
@@ -128,7 +130,7 @@ function copyText(text: string) {
 }
 
 function openGroupNotice() {
-  uiStore.setRightPanel('group-notice')
+  noticeVisible.value = true
 }
 
 async function togglePin() {
@@ -363,6 +365,11 @@ function handleOnlineTime(member: any) {
       :existing-member-ids="existingMemberIds"
       @close="inviteVisible = false"
       @invited="handleInvited"
+    />
+    <GroupNoticeDialog
+      :visible="noticeVisible"
+      :group-id="conv.targetId"
+      @close="noticeVisible = false"
     />
   </div>
 </template>
