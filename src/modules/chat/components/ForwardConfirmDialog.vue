@@ -395,7 +395,7 @@ function handleEmojiSelect(emoji: string) {
   border-bottom: 1px dashed #ddd;
   padding: 8px 20px 0;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 
   .emoji-icon {
     display: block;
@@ -430,7 +430,7 @@ function handleEmojiSelect(emoji: string) {
     position: absolute;
     left: 0;
     bottom: calc(100% + 4px);
-    z-index: 20;
+    z-index: 12001;
   }
 }
 
