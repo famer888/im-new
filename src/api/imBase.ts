@@ -352,3 +352,16 @@ export async function getGroupDetail(
     data: { groupId: Number(data.groupId) },
   })
 }
+
+export async function groupQrCode(
+  data: { groupId: number | string; force?: boolean },
+  baseUrl?: string,
+): Promise<proto.IGroupQrCodeResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupQrCode`,
+    reqType: proto.GroupQrCodeReq,
+    respType: proto.GroupQrCodeResp,
+    data: { groupId: Number(data.groupId), force: data.force ?? false },
+  })
+}

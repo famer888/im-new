@@ -14870,3 +14870,57 @@ export class DisableGroupResp implements IDisableGroupResp {
      */
     public static getTypeUrl(typeUrlPrefix?: string): string;
 }
+
+/** Properties of a GroupQrCodeReq. */
+export interface IGroupQrCodeReq {
+    clientInfo?: (IClientInfo|null);
+    groupId?: (number|Long|null);
+    force?: (boolean|null);
+}
+
+/** Represents a GroupQrCodeReq. */
+export class GroupQrCodeReq implements IGroupQrCodeReq {
+    constructor(properties?: IGroupQrCodeReq);
+    public clientInfo: (IClientInfo|null);
+    public groupId: (number|Long);
+    public force: boolean;
+    public static create(properties?: IGroupQrCodeReq): GroupQrCodeReq;
+    public static encode(message: IGroupQrCodeReq, writer?: $protobuf.Writer): $protobuf.Writer;
+    public static encodeDelimited(message: IGroupQrCodeReq, writer?: $protobuf.Writer): $protobuf.Writer;
+    public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): GroupQrCodeReq;
+    public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): GroupQrCodeReq;
+    public static verify(message: { [k: string]: any }): (string|null);
+    public static fromObject(object: { [k: string]: any }): GroupQrCodeReq;
+    public static toObject(message: GroupQrCodeReq, options?: $protobuf.IConversionOptions): { [k: string]: any };
+    public toJSON(): { [k: string]: any };
+    public static getTypeUrl(typeUrlPrefix?: string): string;
+}
+
+/** Properties of a GroupQrCodeResp. */
+export interface IGroupQrCodeResp {
+    commonResult?: (ICommonResult|null);
+    qrUrl?: (string|null);
+    qrExpire?: (number|Long|null);
+    bfResetQrcode?: (boolean|null);
+    shortLink?: (string|null);
+}
+
+/** Represents a GroupQrCodeResp. */
+export class GroupQrCodeResp implements IGroupQrCodeResp {
+    constructor(properties?: IGroupQrCodeResp);
+    public commonResult: (ICommonResult|null);
+    public qrUrl: string;
+    public qrExpire: (number|Long);
+    public bfResetQrcode: boolean;
+    public shortLink: string;
+    public static create(properties?: IGroupQrCodeResp): GroupQrCodeResp;
+    public static encode(message: IGroupQrCodeResp, writer?: $protobuf.Writer): $protobuf.Writer;
+    public static encodeDelimited(message: IGroupQrCodeResp, writer?: $protobuf.Writer): $protobuf.Writer;
+    public static decode(reader: ($protobuf.Reader|Uint8Array), length?: number): GroupQrCodeResp;
+    public static decodeDelimited(reader: ($protobuf.Reader|Uint8Array)): GroupQrCodeResp;
+    public static verify(message: { [k: string]: any }): (string|null);
+    public static fromObject(object: { [k: string]: any }): GroupQrCodeResp;
+    public static toObject(message: GroupQrCodeResp, options?: $protobuf.IConversionOptions): { [k: string]: any };
+    public toJSON(): { [k: string]: any };
+    public static getTypeUrl(typeUrlPrefix?: string): string;
+}
