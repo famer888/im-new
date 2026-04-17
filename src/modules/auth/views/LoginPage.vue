@@ -80,9 +80,8 @@ async function handleClose() {
 <style lang="scss" scoped>
 .loginRegistContainer {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  left: 0;
+  top: 0;
   height: 400px;
   width: 300px;
 

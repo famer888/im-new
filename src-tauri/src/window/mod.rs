@@ -123,7 +123,7 @@ impl WindowManager {
                     WebviewUrl::App("/#/home".into()),
                 )
                 .title("OCS Chat")
-                .inner_size(1000.0, 680.0)
+                .inner_size(900.0, 600.0)
                 .min_inner_size(800.0, 600.0)
                 .center();
 
@@ -165,8 +165,9 @@ impl WindowManager {
 
         match app.get_webview_window("login") {
             Some(login) => {
-                // Login window stays alive while hidden; force it back to QR-login route
-                // and reload to reset in-memory frontend state before showing it.
+                let _ = login.set_size(tauri::Size::Logical(tauri::LogicalSize::new(300.0, 420.0)));
+                login.set_resizable(false).ok();
+                let _ = login.center();
                 let _ = login.eval(
                     "window.location.hash = '#/login'; window.location.reload();",
                 );
@@ -180,7 +181,7 @@ impl WindowManager {
                     WebviewUrl::App("/#/login".into()),
                 )
                 .title("OCS Chat")
-                .inner_size(380.0, 520.0)
+                .inner_size(300.0, 420.0)
                 .resizable(false)
                 .center();
 
