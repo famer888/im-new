@@ -15,6 +15,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import GroupQRCode from './GroupQRCode.vue'
 import GroupNoticeDialog from './GroupNoticeDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
+import RemoveMemberDialog from '@/modules/groups/components/RemoveMemberDialog.vue'
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
@@ -67,6 +68,7 @@ const showAllMembers = ref(false)
 const qrCodeVisible = ref(false)
 const inviteVisible = ref(false)
 const noticeVisible = ref(false)
+const removeMemberVisible = ref(false)
 
 const existingMemberIds = computed(() => {
   return new Set(members.value.map(m => m.userId))
@@ -80,8 +82,19 @@ function openInvite() {
   inviteVisible.value = true
 }
 
+function openRemoveMember() {
+  removeMemberVisible.value = true
+}
+
 async function handleInvited() {
   // 邀请成功后刷新成员列表
+  if (conv.value?.targetId && authStore.uid) {
+    await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+  }
+}
+
+async function handleRemoved() {
+  // 移除成功后刷新成员列表
   if (conv.value?.targetId && authStore.uid) {
     await groupStore.loadMembers(authStore.uid, conv.value.targetId)
   }
@@ -300,6 +313,7 @@ function handleOnlineTime(member: any) {
           <span class="member-title">群成员({{ totalCount }})</span>
           <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
         </div>
+        <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
       </div>
 
       <div v-if="showAllMembers" class="member-search">
@@ -370,6 +384,15 @@ function handleOnlineTime(member: any) {
       :visible="noticeVisible"
       :group-id="conv.targetId"
       @close="noticeVisible = false"
+    />
+    
+    <RemoveMemberDialog
+      :visible="removeMemberVisible"
+      :group-id="conv.targetId"
+      :members="members"
+      :current-role="memberType"
+      @close="removeMemberVisible = false"
+      @removed="handleRemoved"
     />
   </div>
 </template>

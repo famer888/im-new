@@ -1,9 +1,15 @@
 <script setup lang="ts">
-const props = defineProps<{
+import checkboxImg from '@/assets/images/message/checkBox.png'
+import checkboxedImg from '@/assets/images/message/checkBoxed.png'
+
+const props = withDefaults(defineProps<{
   modelValue: boolean
   label?: string
   disabled?: boolean
-}>()
+  size?: number | string
+}>(), {
+  size: 16
+})
 
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 
@@ -15,10 +21,12 @@ function toggle() {
 </script>
 
 <template>
-  <label :class="['app-checkbox', { checked: modelValue, disabled }]" @click.prevent="toggle">
-    <span class="checkbox-box">
-      <span v-if="modelValue" class="checkbox-check">✓</span>
-    </span>
+  <label :class="['app-checkbox', { disabled }]" @click.prevent="toggle">
+    <img
+      :src="modelValue ? checkboxedImg : checkboxImg"
+      class="checkbox-icon"
+      :style="{ width: size + 'px', height: size + 'px' }"
+    />
     <span v-if="label" class="checkbox-label">{{ label }}</span>
   </label>
 </template>
@@ -31,29 +39,14 @@ function toggle() {
   cursor: pointer;
   user-select: none;
 
-  &.disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.checkbox-box {
-  width: 16px;
-  height: 16px;
-  border: 1px solid #dcdfe6;
-  border-radius: 3px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-
-  .checked & {
-    background: #3369fe;
-    border-color: #3369fe;
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }
 
-.checkbox-check {
-  color: #fff;
-  font-size: 11px;
-  line-height: 1;
+.checkbox-icon {
+  display: block;
 }
 
 .checkbox-label {
