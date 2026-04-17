@@ -19,7 +19,7 @@
           />
         </div>
         <h3>{{ $t('二维码长期有效') }}</h3>
-        <p v-if="showResetCode" @click="handleGroupQrCodeGet">
+        <p @click="handleGroupQrCodeGet">
           <img class="refresh-icon" src="@/assets/images/common/refresh.png" />
           {{ $t('重置二维码') }}
         </p>
@@ -62,7 +62,7 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import QrcodeVue from 'qrcode.vue'
-import { getGroupDetail, groupQrCode } from '@/api/imBase'
+import { groupQrCode } from '@/api/imBase'
 import Toast from '@/components/Toast.vue'
 import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
 
@@ -72,7 +72,6 @@ const props = defineProps<{
   visible: boolean
   groupId: string
   groupName: string
-  canResetCode?: boolean
 }>()
 
 defineEmits<{ (e: 'close'): void }>()
@@ -80,7 +79,6 @@ defineEmits<{ (e: 'close'): void }>()
 const qrUrl = ref('')
 const loading = ref(false)
 const qrcodeWrapRef = ref<HTMLElement | null>(null)
-const showResetCode = ref(false)
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -108,12 +106,7 @@ watch(() => props.visible, async (v) => {
   if (v && props.groupId) {
     loading.value = true
     qrUrl.value = ''
-    showResetCode.value = Boolean(props.canResetCode)
     try {
-      if (props.canResetCode === undefined) {
-        const detail = await getGroupDetail({ groupId: props.groupId })
-        showResetCode.value = detail.memberType === 0 || Boolean(detail.bfResetQrcode)
-      }
       const res = await groupQrCode({ groupId: props.groupId, force: false })
       const { qrUrl: resQrUrl, shortLink } = res || {}
       if (resQrUrl) {
