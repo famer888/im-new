@@ -36,6 +36,7 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import { MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
+import { ensureFriendRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 
 import { getGroupReqList } from '@/api/imBase'
 import emptyBrandImg from '@/assets/images/login/dock.png'
@@ -99,6 +100,23 @@ onMounted(async () => {
     try {
       if ((window as any).__TAURI_INTERNALS__) {
         const { invoke } = await import('@tauri-apps/api/core')
+        const uid = String(authStore.uid || '').trim()
+        if (uid) {
+          try {
+            // 对齐老 im：先保证自身私钥与联系人 relKey 已就绪，再连 WS，避免首批私聊下行解密失败。
+            await ensureOwnKeyPair(uid)
+            for (const contact of contactStore.contacts) {
+              if (!contact.id || contact.status <= 0) continue
+              try {
+                await ensureFriendRelKey(uid, contact.id)
+              } catch {
+                // ignore single-contact key prewarm failure
+              }
+            }
+          } catch {
+            // key prewarm best effort; do not block WS connect forever
+          }
+        }
         const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
         const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
         const sessionId = String(authStore.session?.sessionId || '').trim()

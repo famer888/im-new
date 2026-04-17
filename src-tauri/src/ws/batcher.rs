@@ -116,6 +116,12 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::PRIVATE_MSG_SENT => {
+                if let Err(e) = self.emit_private_msg_sent(&decoded_payload) {
+                    error!("20101 decode/emit failed: {}", e);
+                }
+                return;
+            }
             cmds::ERROR_RESP => {
                 if let Err(e) = self.emit_error_resp(&decoded_payload) {
                     error!("29999 decode/emit failed: {}", e);
@@ -139,10 +145,27 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::PRIVATE_MSG_RECEIVED => {
+                match self.decode_private_msg_received(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("decode PRIVATE_MSG_RECEIVED failed: {}", e);
+                    }
+                }
+                return;
+            }
             // 这些命令不是聊天正文，不进消息列表，避免干扰日志与 UI。
             cmds::GROUP_REQ_NUM_PUSH
             | cmds::GROUP_REQ_MSG_PUSH
             | cmds::GROUP_READ_RECEIPT_PUSH
+            | cmds::RECEIPT_PUSH
             | 20001
             | 20501 => {
                 return;
@@ -225,6 +248,97 @@ impl MessageBatcher {
         Ok(out)
     }
 
+    fn decode_private_msg_received(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushOneToOneMessageResp::decode(payload)
+            .map_err(|e| format!("decode PushOneToOneMessageResp: {}", e))?;
+        let Some(om) = resp.one_to_one_message else {
+            return Ok(Vec::new());
+        };
+
+        let sender_id = om.send_uid.to_string();
+        let receiver_id = om.receive_uid.to_string();
+        let conversation_id = format!("0_{}", om.send_uid);
+        let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
+        let ver = i64::from(om.version);
+
+        // 兼容双端同步：优先按 sender 取 key，失败后退回 receiver。
+        let candidate_ids = if sender_id == receiver_id {
+            vec![sender_id.clone()]
+        } else {
+            vec![sender_id.clone(), receiver_id.clone()]
+        };
+        let mut decrypted: Result<Vec<u8>, crate::crypto::CryptoError> =
+            Err(crate::crypto::CryptoError::KeyNotFound);
+        for fid in &candidate_ids {
+            decrypted = crypto
+                .decrypt_friend_message(fid, ver, "web", &om.content)
+                .or_else(|_| crypto.decrypt_friend_message(fid, ver, "app", &om.content))
+                .or_else(|_| {
+                    let k = crypto
+                        .get_latest_friend_key(fid, "web")
+                        .or_else(|| crypto.get_latest_friend_key(fid, "app"))
+                        .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                    crate::crypto::aes::decrypt_message(&om.content, &k)
+                });
+            if decrypted.is_ok() {
+                break;
+            }
+        }
+
+        let mut decrypt_pending = false;
+        let content = match decrypted {
+            Ok(plain) => match imweb::TextObj::decode(plain.as_slice()) {
+                Ok(obj) => obj.content,
+                Err(_) => String::from_utf8_lossy(&plain).to_string(),
+            },
+            Err(e) => {
+                if let Ok(obj) = imweb::TextObj::decode(om.content.as_slice()) {
+                    warn!(
+                        "PRIVATE_MSG_RECEIVED decrypt failed but raw TextObj parsed sender_uid={} msg_id={} err={}",
+                        om.send_uid, om.msg_id, e
+                    );
+                    obj.content
+                } else if let Ok(s) = String::from_utf8(om.content.clone()) {
+                    warn!(
+                        "PRIVATE_MSG_RECEIVED decrypt failed but raw UTF-8 parsed sender_uid={} msg_id={} err={}",
+                        om.send_uid, om.msg_id, e
+                    );
+                    s
+                } else {
+                    decrypt_pending = true;
+                    warn!(
+                        "PRIVATE_MSG_RECEIVED decrypt failed sender_uid={} msg_id={} err={}",
+                        om.send_uid, om.msg_id, e
+                    );
+                    "[加密消息，等待密钥同步]".to_string()
+                }
+            }
+        };
+
+        info!(
+            "PRIVATE_MSG_RECEIVED sender_uid={} receive_uid={} msg_id={} conversation_id={}",
+            om.send_uid, om.receive_uid, om.msg_id, conversation_id
+        );
+        Ok(vec![DecodedMessage {
+            cmd: cmds::PRIVATE_MSG_RECEIVED,
+            msg_id: om.msg_id.to_string(),
+            conversation_id,
+            sender_id: om.send_uid.to_string(),
+            msg_type: om.msg_type,
+            content,
+            send_time: om.send_time,
+            status: 1,
+            read_status: 0,
+            extra: serde_json::json!({
+                "receiveUid": om.receive_uid,
+                "version": om.version,
+                "decryptPending": decrypt_pending,
+                "friendIdCandidates": candidate_ids,
+                "cipherHex": hex::encode(&om.content),
+            }),
+        }])
+    }
+
     pub async fn flush(&mut self) {
         if self.buffer.is_empty() {
             return;
@@ -260,6 +374,26 @@ impl MessageBatcher {
         info!(
             "GROUP_MSG_SENT flag={} msg_id={} group_id={}",
             evt.flag, evt.msg_id, evt.group_id
+        );
+        self.app_handle
+            .emit("msg:sent", &evt)
+            .map_err(|e| format!("emit msg:sent: {}", e))?;
+        Ok(())
+    }
+
+    fn emit_private_msg_sent(&self, payload: &[u8]) -> Result<(), String> {
+        let resp = imweb::OneToOneMessageResp::decode(payload)
+            .map_err(|e| format!("decode OneToOneMessageResp: {}", e))?;
+        let evt = MsgSentEvent {
+            flag: resp.flag,
+            msg_id: resp.msg_id,
+            group_id: 0,
+            sent_over_time: resp.sent_over_time,
+            conversation_id: format!("0_{}", resp.receive_uid),
+        };
+        info!(
+            "PRIVATE_MSG_SENT flag={} msg_id={} receive_uid={}",
+            evt.flag, evt.msg_id, resp.receive_uid
         );
         self.app_handle
             .emit("msg:sent", &evt)

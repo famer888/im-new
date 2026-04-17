@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import { useChatStore } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
-import { ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureFriendRelKey, ensureGroupRelKey } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 
 function isTauri(): boolean {
@@ -353,13 +353,23 @@ export const useMessageStore = defineStore('message', () => {
       optimisticId,
     })
 
-    // 发送前先保证群 relKey 已在 Rust 缓存里；失败则标记为发送失败，不再继续。
+    // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。
     if (convType === 1 && targetId) {
       try {
         await ensureGroupRelKey(uid, targetId)
         console.log('[send] ensureGroupRelKey OK', { targetId })
       } catch (e) {
         console.error('[send] ensureGroupRelKey failed:', e)
+        updateMessageStatus(optimisticId, -1)
+        throw e
+      }
+    }
+    if (convType === 0 && targetId) {
+      try {
+        await ensureFriendRelKey(uid, targetId)
+        console.log('[send] ensureFriendRelKey OK', { targetId })
+      } catch (e) {
+        console.error('[send] ensureFriendRelKey failed:', e)
         updateMessageStatus(optimisticId, -1)
         throw e
       }

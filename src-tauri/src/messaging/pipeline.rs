@@ -13,12 +13,17 @@
 use tracing::info;
 
 use crate::crypto::CryptoEngine;
-use crate::ws::{commands::SEND_GROUP_MSG, WsError, WsManager};
+use crate::ws::{
+    commands::{SEND_GROUP_MSG, SEND_PRIVATE_MSG},
+    WsError, WsManager,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
     #[error("group rel key not cached for {0}; call derive_group_key or cache_group_rel_key first")]
     MissingGroupKey(String),
+    #[error("friend rel key not cached for {0}; call derive_friend_rel_key first")]
+    MissingFriendKey(String),
 
     #[error("crypto error: {0}")]
     Crypto(#[from] crate::crypto::CryptoError),
@@ -80,6 +85,50 @@ pub fn send_group_text(
     info!(
         "sent SEND_GROUP_MSG group_id={} flag={} bytes={}",
         group_id,
+        flag,
+        payload.len()
+    );
+    Ok(())
+}
+
+/// 发送一条单聊文本消息（10101）。
+pub fn send_private_text(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    friend_uid_str: &str,
+    sender_uid_str: &str,
+    text: &str,
+    send_time: i64,
+    flag: i64,
+) -> Result<(), SendError> {
+    let friend_uid: i64 = friend_uid_str
+        .parse()
+        .map_err(|_| SendError::InvalidId(format!("friend_uid '{}' not numeric", friend_uid_str)))?;
+    let sender_uid: i64 = sender_uid_str
+        .parse()
+        .map_err(|_| SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str)))?;
+
+    // 版本号在服务端可能滚动，发送时按 source 取最新可用 key。
+    let rel_key = crypto
+        .get_latest_friend_key(friend_uid_str, "web")
+        .or_else(|| crypto.get_latest_friend_key(friend_uid_str, "app"))
+        .ok_or_else(|| SendError::MissingFriendKey(friend_uid_str.to_string()))?;
+
+    let content_plain = super::encode_text_obj(text);
+    let payload = super::build_send_private_message_req(
+        friend_uid,
+        sender_uid,
+        0,
+        &content_plain,
+        &rel_key,
+        send_time,
+        flag,
+    )?;
+
+    ws.send_packet(SEND_PRIVATE_MSG, flag, &payload)?;
+    info!(
+        "sent SEND_PRIVATE_MSG friend_uid={} flag={} bytes={}",
+        friend_uid,
         flag,
         payload.len()
     );
