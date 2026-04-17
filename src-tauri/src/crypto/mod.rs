@@ -115,6 +115,29 @@ impl CryptoEngine {
         self.friend_keys.get(&k).map(|e| e.rel_key.clone())
     }
 
+    /// 获取某个好友在指定 source 下“版本号最大的” relKey。
+    pub fn get_latest_friend_key(&self, friend_id: &str, source: &str) -> Option<String> {
+        let prefix = format!("{}:", friend_id);
+        let mut best: Option<(i64, String)> = None;
+        for entry in self.friend_keys.iter() {
+            let (k, v) = (entry.key(), entry.value());
+            if !k.starts_with(&prefix) || v.source != source {
+                continue;
+            }
+            match &best {
+                Some((ver, _)) if *ver >= v.version => {}
+                _ => best = Some((v.version, v.rel_key.clone())),
+            }
+        }
+        best.map(|(_, rel)| rel)
+    }
+
+    /// 是否存在该好友任意版本的 relKey（任意 source）。
+    pub fn has_any_friend_key(&self, friend_id: &str) -> bool {
+        let prefix = format!("{}:", friend_id);
+        self.friend_keys.iter().any(|e| e.key().starts_with(&prefix))
+    }
+
     pub fn remove_friend_keys(&self, friend_id: &str) {
         let prefix = format!("{}:", friend_id);
         self.friend_keys.retain(|k, _| !k.starts_with(&prefix));

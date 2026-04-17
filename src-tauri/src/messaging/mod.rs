@@ -93,6 +93,55 @@ pub fn build_send_group_message_req(
     Ok(req.encode_to_vec())
 }
 
+/// 产出一条可直接交给 WS 发送的 `OneToOneMessageReq` protobuf bytes。
+pub fn build_send_private_message_req(
+    receive_uid: i64,
+    sender_uid: i64,
+    msg_type: i32,
+    content_plain: &[u8],
+    rel_key: &str,
+    send_time: i64,
+    flag: i64,
+) -> Result<Vec<u8>, CryptoError> {
+    let encrypted = encrypt_with_rel_key(rel_key, content_plain)?;
+    let mut hasher = Md5::new();
+    hasher.update(&encrypted);
+    let content_md5 = format!("{:x}", hasher.finalize());
+
+    let one_to_one = imweb::OneToOneMessage {
+        msg_id: 0,
+        send_uid: sender_uid,
+        receive_uid,
+        msg_type,
+        content: encrypted,
+        send_time,
+        version: 1,
+        content_md5,
+        attachment_key: String::new(),
+        send_user: None,
+        snapchat_time: 0,
+        source: 0,
+        app_content: None,
+        web_content: None,
+        myself_app_content: None,
+        myself_web_content: None,
+        group_send: false,
+        channel_type: 0,
+        msg_from: 0,
+        edit: 0,
+        links: Vec::new(),
+        sent_over_time: 0,
+        channel: 0,
+    };
+
+    let req = imweb::OneToOneMessageReq {
+        one_to_one_message: Some(one_to_one),
+        flag,
+    };
+
+    Ok(req.encode_to_vec())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

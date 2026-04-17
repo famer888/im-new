@@ -1,10 +1,11 @@
 import { useNetworkStore, type WsStatus } from '@/stores/useNetworkStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useChatStore, type Conversation } from '@/stores/useChatStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
-import { ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureFriendRelKey, ensureGroupRelKey } from '@/utils/e2ee'
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -39,12 +40,20 @@ export async function setupTauriListeners() {
     if (event.payload === 'connected' && !groupKeyWarmupPending) {
       const authStore = useAuthStore()
       const chatStore = useChatStore()
+      const contactStore = useContactStore()
       const uid = String(authStore.uid || '')
       if (!uid) return
       const groupIds = chatStore.conversations
         .filter((c) => c.type === 1 && /^\d+$/.test(String(c.targetId || '')))
         .map((c) => String(c.targetId))
-      if (groupIds.length === 0) return
+      const friendIds = chatStore.conversations
+        .filter((c) => c.type === 0 && /^\d+$/.test(String(c.targetId || '')))
+        .map((c) => String(c.targetId))
+      const contactFriendIds = contactStore.contacts
+        .map((c) => String(c.id || ''))
+        .filter((id) => /^\d+$/.test(id))
+      const allFriendIds = Array.from(new Set([...friendIds, ...contactFriendIds]))
+      if (groupIds.length === 0 && allFriendIds.length === 0) return
       groupKeyWarmupPending = (async () => {
         for (const gid of groupIds) {
           try {
@@ -53,13 +62,20 @@ export async function setupTauriListeners() {
             console.warn('[e2ee] warmup group relKey failed', { gid, err: String(err) })
           }
         }
+        for (const fid of allFriendIds) {
+          try {
+            await ensureFriendRelKey(uid, fid)
+          } catch (err) {
+            console.warn('[e2ee] warmup friend relKey failed', { fid, err: String(err) })
+          }
+        }
       })().finally(() => {
         groupKeyWarmupPending = null
       })
     }
   })
 
-  listen<Message[]>('msg:batch', (event) => {
+  listen<Message[]>('msg:batch', async (event) => {
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
     const raw = Array.isArray(event.payload) ? event.payload : []
@@ -70,10 +86,80 @@ export async function setupTauriListeners() {
     if (valid.length !== raw.length) {
       console.warn('[msg:batch] dropped invalid items:', raw.length - valid.length)
     }
+
+    // 私聊入站时兜底预热好友 relKey（防止首次收到该联系人的消息时 Rust 侧还没缓存 key）。
+    if (authStore.uid) {
+      const uid = String(authStore.uid)
+      const friendIds = Array.from(
+        new Set(
+          valid
+            .map((m: any) => String(m?.conversationId ?? m?.conversation_id ?? ''))
+            .filter((convId) => convId.startsWith('0_') && convId.includes('_'))
+            .map((convId) => convId.split('_')[1] || '')
+            .filter((fid) => !!fid && fid !== uid),
+        ),
+      )
+      for (const fid of friendIds) {
+        try {
+          await ensureFriendRelKey(uid, fid)
+        } catch (err) {
+          console.warn('[e2ee] ensureFriendRelKey on msg:batch failed', { fid, err: String(err) })
+        }
+      }
+    }
+
     if (valid.length > 0) {
-      messageStore.batchAppendMessages(valid as Message[])
+      const normalized: any[] = [...valid]
       if (authStore.uid) {
-        const incoming = valid.map((m: any) => ({
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          for (const m of normalized) {
+            const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+            const extra = m?.extra || {}
+            const decryptPending = Boolean(extra?.decryptPending)
+            const cipherHex = String(extra?.cipherHex || '')
+            if (!decryptPending || !cipherHex || !convId.includes('_')) continue
+
+            try {
+              if (convId.startsWith('0_')) {
+                const senderId = String(m?.senderId ?? m?.sender_id ?? '')
+                const peerId = String(convId.split('_')[1] || '')
+                if (!senderId) continue
+                const version = Number(extra?.version || 1)
+                const plain = await invoke<string>('decrypt_private_incoming', {
+                  senderId,
+                  peerId,
+                  version,
+                  ciphertextHex: cipherHex,
+                })
+                m.content = plain
+                if (m.extra && typeof m.extra === 'object') {
+                  m.extra.decryptPending = false
+                }
+              } else if (convId.startsWith('1_')) {
+                const groupId = String(extra?.groupId || convId.split('_')[1] || '')
+                if (!groupId) continue
+                const plain = await invoke<string>('decrypt_group_incoming', {
+                  groupId,
+                  ciphertextHex: cipherHex,
+                })
+                m.content = plain
+                if (m.extra && typeof m.extra === 'object') {
+                  m.extra.decryptPending = false
+                }
+              }
+            } catch {
+              // keep placeholder content this round; next batch/reload may decrypt after key sync
+            }
+          }
+        } catch {
+          // ignore invoke dynamic import failure
+        }
+      }
+
+      messageStore.batchAppendMessages(normalized as Message[])
+      if (authStore.uid) {
+        const incoming = normalized.map((m: any) => ({
           id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
           customMsgId: m?.customMsgId ?? m?.custom_msg_id ?? null,
           conversationId: String(m?.conversationId ?? m?.conversation_id ?? ''),

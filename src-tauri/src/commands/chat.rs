@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use prost::Message as _;
 use tauri::State;
 use tracing::{error, warn};
 
@@ -262,6 +263,19 @@ pub fn has_group_rel_key(crypto: State<'_, CryptoEngine>, group_id: String) -> b
     crypto.get_group_key(&group_id).is_some()
 }
 
+#[tauri::command]
+pub fn has_friend_rel_key(
+    crypto: State<'_, CryptoEngine>,
+    friend_id: String,
+    version: Option<i64>,
+    source: Option<String>,
+) -> bool {
+    if let (Some(v), Some(s)) = (version, source.as_deref()) {
+        return crypto.get_friend_key(&friend_id, v, s).is_some();
+    }
+    crypto.has_any_friend_key(&friend_id)
+}
+
 /// 把服务端下发的群消息 publicKey/msgKey（hex 字符串）与本地 curve25519
 /// 私钥做 Diffie-Hellman，派生 relKey 并缓存到 `CryptoEngine`。
 ///
@@ -315,6 +329,90 @@ pub fn derive_group_rel_key(
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+pub fn derive_friend_rel_key(
+    crypto: State<'_, CryptoEngine>,
+    friend_id: String,
+    public_key_hex: String,
+    encrypted_msg_key_hex: String,
+    version: Option<i64>,
+    source: Option<String>,
+) -> Result<String, String> {
+    let encrypted_msg_key = hex::decode(&encrypted_msg_key_hex)
+        .map_err(|e| format!("invalid msgKey hex: {}", e))?;
+    let ver = version.unwrap_or(1);
+    let src = source.unwrap_or_else(|| "web".to_string());
+    match crypto.derive_friend_key(
+        &friend_id,
+        ver,
+        &src,
+        &public_key_hex,
+        &encrypted_msg_key,
+    ) {
+        Ok(rel) => Ok(rel),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn decrypt_private_incoming(
+    crypto: State<'_, CryptoEngine>,
+    sender_id: String,
+    peer_id: Option<String>,
+    version: Option<i64>,
+    ciphertext_hex: String,
+) -> Result<String, String> {
+    let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
+    let ver = version.unwrap_or(1);
+    let mut candidates = vec![sender_id];
+    if let Some(pid) = peer_id {
+        if !pid.is_empty() && !candidates.iter().any(|x| x == &pid) {
+            candidates.push(pid);
+        }
+    }
+    let mut plain: Option<Vec<u8>> = None;
+    let mut last_err: Option<String> = None;
+    for friend_id in &candidates {
+        match crypto
+            .decrypt_friend_message(friend_id, ver, "web", &data)
+            .or_else(|_| crypto.decrypt_friend_message(friend_id, ver, "app", &data))
+            .or_else(|_| {
+                let key = crypto
+                    .get_latest_friend_key(friend_id, "web")
+                    .or_else(|| crypto.get_latest_friend_key(friend_id, "app"))
+                    .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                crate::crypto::aes::decrypt_message(&data, &key)
+            }) {
+            Ok(v) => {
+                plain = Some(v);
+                break;
+            }
+            Err(e) => last_err = Some(e.to_string()),
+        }
+    }
+    let plain = plain.ok_or_else(|| last_err.unwrap_or_else(|| "decrypt failed".to_string()))?;
+    if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
+        return Ok(obj.content);
+    }
+    String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))
+}
+
+#[tauri::command]
+pub fn decrypt_group_incoming(
+    crypto: State<'_, CryptoEngine>,
+    group_id: String,
+    ciphertext_hex: String,
+) -> Result<String, String> {
+    let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
+    let plain = crypto
+        .decrypt_group_message(&group_id, &data)
+        .map_err(|e| e.to_string())?;
+    if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
+        return Ok(obj.content);
+    }
+    String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))
 }
 
 fn safe_head(s: &str, n: usize) -> String {

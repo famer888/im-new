@@ -163,6 +163,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
 // ---------------------------------------------------------------------------
 
 const pendingGroupKeys = new Map<string, Promise<string>>()
+const pendingFriendKeys = new Map<string, Promise<string>>()
 
 /**
  * 保证群 `groupId` 的 relKey 已经被 Rust 缓存。拉取成功后返回 relKey
@@ -239,5 +240,98 @@ export async function ensureGroupRelKey(
   })
 
   pendingGroupKeys.set(gid, task)
+  return task
+}
+
+/**
+ * 保证好友 `friendId` 的 relKey 已被 Rust 缓存（单聊发送/接收解密使用）。
+ */
+export async function ensureFriendRelKey(
+  uid: string | number,
+  friendId: string | number,
+): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('ensureFriendRelKey: Tauri only')
+  }
+  const fid = String(friendId)
+  console.log('[e2ee] ensureFriendRelKey: start', { uid, fid })
+  const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', {
+    friendId: fid,
+    version: 1,
+    source: 'web',
+  })
+  if (cacheHit) {
+    console.log('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
+    return ''
+  }
+
+  const existing = pendingFriendKeys.get(fid)
+  if (existing) return existing
+
+  const task = (async () => {
+    await ensureOwnKeyPair(uid)
+    let web: any
+    let app: any
+    try {
+      const resp = await getKeyPair({
+        targetId: Number(fid),
+        flag: 1,
+        webKeyVersion: 1,
+        appKeyVersion: 1,
+      })
+      web = (resp as any)?.webKeyPair
+      app = (resp as any)?.appKeyPair
+    } catch {
+      // ignore and fallback below
+    }
+    if ((!web?.publicKey || !web?.msgKey) && (!app?.publicKey || !app?.msgKey)) {
+      const resp0 = await getKeyPair({
+        targetId: Number(fid),
+        flag: 1,
+        webKeyVersion: 0,
+        appKeyVersion: 0,
+      })
+      web = (resp0 as any)?.webKeyPair
+      app = (resp0 as any)?.appKeyPair
+    }
+    console.log('[e2ee] getKeyPair(friend) resp:', {
+      fid,
+      webKeyVersion: web?.keyVersion,
+      webPublicKeyLen: web?.publicKey ? String(web.publicKey).length : 0,
+      webMsgKeyLen: web?.msgKey ? String(web.msgKey).length : 0,
+      appKeyVersion: app?.keyVersion,
+      appPublicKeyLen: app?.publicKey ? String(app.publicKey).length : 0,
+      appMsgKeyLen: app?.msgKey ? String(app.msgKey).length : 0,
+    })
+    if ((!web?.publicKey || !web?.msgKey) && (!app?.publicKey || !app?.msgKey)) {
+      throw new Error(`[e2ee] getKeyPair(friend=${fid}) missing publicKey/msgKey`)
+    }
+    let last = ''
+    if (web?.publicKey && web?.msgKey) {
+      last = await tauriInvoke<string>('derive_friend_rel_key', {
+        friendId: fid,
+        publicKeyHex: String(web.publicKey),
+        encryptedMsgKeyHex: String(web.msgKey),
+        version: Number(web.keyVersion || 1),
+        source: 'web',
+      })
+      console.log('[e2ee] derive_friend_rel_key OK(web)', { fid, len: last.length })
+    }
+    if (app?.publicKey && app?.msgKey) {
+      last = await tauriInvoke<string>('derive_friend_rel_key', {
+        friendId: fid,
+        publicKeyHex: String(app.publicKey),
+        encryptedMsgKeyHex: String(app.msgKey),
+        version: Number(app.keyVersion || 1),
+        source: 'app',
+      })
+      console.log('[e2ee] derive_friend_rel_key OK(app)', { fid, len: last.length })
+    }
+    return last
+  })().finally(() => {
+    pendingFriendKeys.delete(fid)
+  })
+
+  pendingFriendKeys.set(fid, task)
   return task
 }
