@@ -371,6 +371,8 @@ function handleOnlineTime(member: any) {
 .group-info-panel {
   display: flex;
   flex-direction: column;
+  position: relative;
+  height: 100%;
 }
 
 /* 群别名 + 二维码 — 同 im group-alias-qrcode.vue */
