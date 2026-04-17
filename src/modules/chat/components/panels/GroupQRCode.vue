@@ -177,8 +177,8 @@ function buildQrCodeImage(): string | null {
 
   try {
     const dpr = window.devicePixelRatio || 1
-    const baseWidth = 270
-    const baseHeight = 300
+    const baseWidth = 360
+    const baseHeight = 340
 
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
@@ -191,22 +191,22 @@ function buildQrCodeImage(): string | null {
     ctx.fillStyle = '#F5F5F5'
     ctx.fillRect(0, 0, baseWidth, baseHeight)
     ctx.fillStyle = '#FFFFFF'
-    ctx.fillRect(0, 0, baseWidth, baseHeight - 35)
+    ctx.fillRect(0, 0, baseWidth, baseHeight - 40)
 
-    const codeW = qrcodeElement.width
-    const codeH = qrcodeElement.height
-    const codeX = (baseWidth - codeW) / 2
-    const codeY = 15
-    ctx.drawImage(qrcodeElement, codeX, codeY, codeW, codeH)
+    // 转发图保持较大二维码展示，避免文字和码体在预览中不可读
+    const drawCodeSize = 250
+    const codeX = (baseWidth - drawCodeSize) / 2
+    const codeY = 12
+    ctx.drawImage(qrcodeElement, codeX, codeY, drawCodeSize, drawCodeSize)
 
     ctx.fillStyle = '#787878'
-    ctx.font = '10px sans-serif'
+    ctx.font = '16px sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText($t('二维码长期有效'), baseWidth / 2, 212)
+    ctx.fillText($t('二维码长期有效'), baseWidth / 2, 286)
 
     ctx.fillStyle = '#000000'
-    ctx.font = '14px sans-serif'
-    ctx.fillText(props.groupName || '', baseWidth / 2, 232)
+    ctx.font = '22px sans-serif'
+    ctx.fillText(props.groupName || '', baseWidth / 2, 318)
 
     const dataUrl = canvas.toDataURL('image/png')
     return dataUrl
