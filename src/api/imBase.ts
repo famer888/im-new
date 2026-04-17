@@ -310,6 +310,23 @@ export async function groupExit(
   })
 }
 
+export async function groupMember(
+  data: { op: number; groupId: number | string; members: (number | string)[] },
+  baseUrl?: string,
+): Promise<proto.GroupMemberResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupMember`,
+    reqType: proto.GroupMemberReq,
+    respType: proto.GroupMemberResp,
+    data: {
+      op: data.op,
+      groupId: Number(data.groupId),
+      members: data.members.map(Number),
+    },
+  })
+}
+
 export async function groupUpdate(
   data: { op: number; groupParam: Record<string, unknown> },
   baseUrl?: string,

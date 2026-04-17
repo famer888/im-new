@@ -6,13 +6,14 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useI18n } from 'vue-i18n'
-import { getGroupDetail, groupUpdate, disableGroup, groupExit } from '@/api/imBase'
+import { getGroupDetail, groupUpdate, disableGroup, groupExit, groupMember } from '@/api/imBase'
 import AppSwitch from '@/components/AppSwitch.vue'
 import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
-
+import GroupQRCode from './GroupQRCode.vue'
+import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
@@ -29,6 +30,7 @@ const bfDisturb = ref(false)
 const bfJoinCheck = ref(false)
 const groupAliasName = ref('')
 const notice = ref('')
+const qrUrl = ref('')
 const clearMsgTypeList = ref<string[]>([])
 
 const toastVisible = ref(false)
@@ -61,6 +63,28 @@ function handleConfirm() {
 const search = ref('')
 const showAllMembers = ref(false)
 
+const qrCodeVisible = ref(false)
+const inviteVisible = ref(false)
+
+const existingMemberIds = computed(() => {
+  return new Set(members.value.map(m => m.userId))
+})
+
+function openQrCode() {
+  qrCodeVisible.value = true
+}
+
+function openInvite() {
+  inviteVisible.value = true
+}
+
+async function handleInvited() {
+  // 邀请成功后刷新成员列表
+  if (conv.value?.targetId && authStore.uid) {
+    await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+  }
+}
+
 const members = computed(() => {
   if (!conv.value) return []
   const all = groupStore.getMembers(conv.value.targetId)
@@ -88,6 +112,7 @@ onMounted(async () => {
     const groupBase = detail.group as any
     groupAliasName.value = groupBase?.groupAliasName || detail.groupNickName || ''
     notice.value = detail.groupNotice?.notice || ''
+    qrUrl.value = detail.qrUrl || ''
     if (detail.bfTop !== undefined) bfTop.value = detail.bfTop
     if (detail.bfDisturb !== undefined) bfDisturb.value = detail.bfDisturb
     if (groupBase?.bfJoinCheck !== undefined) bfJoinCheck.value = groupBase.bfJoinCheck
@@ -215,12 +240,13 @@ function handleOnlineTime(member: any) {
 <template>
   <div class="group-info-panel" v-if="conv">
     <!-- 群别名 + 二维码 (同 im group-alias-qrcode.vue) -->
-    <div class="group-alias-qrcode">
+    <div class="group-alias-qrcode" @click="openQrCode">
       <h3>群别名</h3>
       <div class="alias-right">
         <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
           @{{ groupAliasName }}
         </span>
+        <img class="code-icon" src="@/assets/images/chat/code.png" @click.stop="openQrCode" />
         <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
       </div>
     </div>
@@ -279,9 +305,6 @@ function handleOnlineTime(member: any) {
         <span class="cancel-btn" @click="showAllMembers = false; search = ''">取消</span>
       </div>
 
-      <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
-      <div class="invite-friend">邀请好友</div>
-
       <ul class="member-list">
         <li v-for="member in members" :key="member.userId" class="member-item">
           <TextAvatar
@@ -298,6 +321,9 @@ function handleOnlineTime(member: any) {
           <span v-else-if="member.role === 1" class="role-badge admin">管理员</span>
         </li>
       </ul>
+
+      <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
+      <div class="invite-friend" @click="openInvite">邀请好友</div>
     </div>
 
     <RadioSelectDialog
@@ -322,6 +348,21 @@ function handleOnlineTime(member: any) {
       :message="toastMessage"
       :type="toastType"
       @update:visible="toastVisible = $event"
+    />
+
+    <GroupQRCode
+      :visible="qrCodeVisible"
+      :group-id="conv.targetId"
+      :group-name="group?.name || groupAliasName"
+      @close="qrCodeVisible = false"
+    />
+
+    <InviteFriendDialog
+      :visible="inviteVisible"
+      :group-id="conv.targetId"
+      :existing-member-ids="existingMemberIds"
+      @close="inviteVisible = false"
+      @invited="handleInvited"
     />
   </div>
 </template>
@@ -366,6 +407,12 @@ function handleOnlineTime(member: any) {
       &:hover {
         opacity: 0.8;
       }
+    }
+
+    .code-icon {
+      width: 22px;
+      height: 22px;
+      margin-left: 8px;
     }
 
     .arrow {
@@ -518,12 +565,20 @@ function handleOnlineTime(member: any) {
   }
 
   .invite-friend {
-    padding: 8px 10px;
-    font-size: 14px;
+    position: sticky;
+    bottom: 0;
+    width: 100%;
+    height: 40px;
     color: #178aff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9;
+    background: #fff;
     cursor: pointer;
-    text-align: center;
-    border-bottom: 1px solid #f5f5f5;
+    font-size: 14px;
+    border-top: 1px solid #f5f5f5;
+    margin-top: 10px;
 
     &:hover {
       background: #f5f5f5;

@@ -17,13 +17,13 @@
           <div class="friend-list">
             <div
               v-for="friend in filteredFriends"
-              :key="friend.uid"
-              :class="['friend-item', { selected: selectedIds.has(friend.uid) }]"
-              @click="toggleSelect(friend.uid)"
+              :key="friend.id"
+              :class="['friend-item', { selected: selectedIds.has(friend.id) }]"
+              @click="toggleSelect(friend.id)"
             >
-              <AppCheckbox :checked="selectedIds.has(friend.uid)" />
-              <TextAvatar :name="friend.displayName" :size="32" />
-              <span class="friend-name ellipsis">{{ friend.displayName }}</span>
+              <AppCheckbox :modelValue="selectedIds.has(friend.id)" />
+              <TextAvatar :name="friend.nickname || friend.id" :src="friend.avatar" :size="32" />
+              <span class="friend-name ellipsis">{{ friend.nickname || friend.id }}</span>
             </div>
           </div>
         </div>
@@ -66,16 +66,16 @@ const filteredFriends = computed(() => {
   const key = searchKey.value.toLowerCase()
   if (!key) return contactStore.contacts
   return contactStore.contacts.filter(f =>
-    f.displayName.toLowerCase().includes(key) ||
-    f.uid.toLowerCase().includes(key),
+    (f.nickname || f.id).toLowerCase().includes(key) ||
+    f.id.toLowerCase().includes(key),
   )
 })
 
 const canCreate = computed(() => groupName.value.trim() && selectedIds.size >= 2)
 
-function toggleSelect(uid: string) {
-  if (selectedIds.has(uid)) selectedIds.delete(uid)
-  else selectedIds.add(uid)
+function toggleSelect(id: string) {
+  if (selectedIds.has(id)) selectedIds.delete(id)
+  else selectedIds.add(id)
 }
 
 async function handleCreate() {
