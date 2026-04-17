@@ -50,6 +50,12 @@ impl WsManager {
     }
 
     pub async fn connect(&self, url: &str, aes_key: &str) -> Result<(), WsError> {
+        if url.trim().is_empty() {
+            *self.status.write() = ConnectionStatus::Disconnected;
+            self.emit_status(ConnectionStatus::Disconnected);
+            return Err(WsError::ConnectionFailed("empty websocket url".to_string()));
+        }
+
         let current = *self.status.read();
         if current == ConnectionStatus::Connected || current == ConnectionStatus::Connecting {
             return Ok(());

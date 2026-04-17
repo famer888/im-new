@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default desktop capability",
+  "windows": ["main", "login", "chat_*"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-save"
+  ]
+}

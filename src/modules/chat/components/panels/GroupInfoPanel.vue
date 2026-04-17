@@ -30,6 +30,7 @@ const memberType = ref(-1)
 const bfTop = ref(false)
 const bfDisturb = ref(false)
 const bfJoinCheck = ref(false)
+const bfResetQrcode = ref(false)
 const groupAliasName = ref('')
 const notice = ref('')
 const qrUrl = ref('')
@@ -128,6 +129,7 @@ onMounted(async () => {
     groupAliasName.value = groupBase?.groupAliasName || detail.groupNickName || ''
     notice.value = detail.groupNotice?.notice || ''
     qrUrl.value = detail.qrUrl || ''
+    bfResetQrcode.value = Boolean(detail.bfResetQrcode)
     if (detail.bfTop !== undefined) bfTop.value = detail.bfTop
     if (detail.bfDisturb !== undefined) bfDisturb.value = detail.bfDisturb
     if (groupBase?.bfJoinCheck !== undefined) bfJoinCheck.value = groupBase.bfJoinCheck
@@ -370,6 +372,7 @@ function handleOnlineTime(member: any) {
       :visible="qrCodeVisible"
       :group-id="conv.targetId"
       :group-name="group?.name || groupAliasName"
+      :can-reset-code="memberType === 0 || bfResetQrcode"
       @close="qrCodeVisible = false"
     />
 
