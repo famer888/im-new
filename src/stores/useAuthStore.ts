@@ -36,6 +36,15 @@ const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'
 const WS_CONNECT_KEY = 'ws-connect-config'
 
+function normalizeWsUrl(input: string): string {
+  const raw = (input || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw
+  if (raw.startsWith('https://')) return `wss://${raw.slice('https://'.length)}`
+  if (raw.startsWith('http://')) return `ws://${raw.slice('http://'.length)}`
+  return `ws://${raw}`
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const session = ref<SessionInfo | null>(null)
   const isLoggedIn = computed(() => !!session.value)
@@ -75,8 +84,8 @@ export const useAuthStore = defineStore('auth', () => {
       const parsed = JSON.parse(stored) as Partial<WsConnectConfig>
       if (parsed.wsUrl && parsed.aesKey) {
         wsConnectConfig.value = {
-          wsUrl: parsed.wsUrl,
-          aesKey: parsed.aesKey,
+          wsUrl: normalizeWsUrl(parsed.wsUrl),
+          aesKey: String(parsed.aesKey).trim(),
         }
       }
     } catch {
@@ -85,8 +94,12 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function saveWsConnectConfig(config: WsConnectConfig) {
-    wsConnectConfig.value = config
-    localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(config))
+    const normalized = {
+      wsUrl: normalizeWsUrl(config.wsUrl),
+      aesKey: String(config.aesKey || '').trim(),
+    }
+    wsConnectConfig.value = normalized
+    localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(normalized))
   }
 
   function clearWsConnectConfig() {

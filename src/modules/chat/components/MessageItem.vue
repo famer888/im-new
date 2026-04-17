@@ -161,9 +161,9 @@ onMounted(() => {
         </div>
         <component :is="messageComponent" :message="message" />
         <div class="message-meta">
-          <span v-if="message.status === 0" class="status sending">发送中</span>
-          <span v-else-if="message.status === -1" class="status failed">发送失败</span>
-          <span v-else-if="message.status === 3" class="status read">已读</span>
+          <span v-if="isSelf && message.status === 0" class="status sending">发送中</span>
+          <span v-else-if="isSelf && message.status === -1" class="status failed">发送失败</span>
+          <span v-else-if="isSelf && message.status === 3" class="status read">已读</span>
         </div>
       </div>
     </div>

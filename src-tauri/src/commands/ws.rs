@@ -7,9 +7,24 @@ pub async fn connect_ws(
     ws_mgr: State<'_, WsManager>,
     url: String,
     aes_key: String,
+    session_id: Option<String>,
+    install_code: Option<String>,
 ) -> Result<(), String> {
+    tracing::info!(
+        target: "ws",
+        "connect_ws called url={} aes_key_len={}",
+        url,
+        aes_key.len()
+    );
+    if url.contains("webbiz") {
+        tracing::warn!(
+            target: "ws",
+            "connect_ws uses webbiz host (likely wrong for websocket): {}",
+            url
+        );
+    }
     ws_mgr
-        .connect(&url, &aes_key)
+        .connect(&url, &aes_key, session_id, install_code)
         .await
         .map_err(|e| e.to_string())
 }

@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import { useChatStore } from './useChatStore'
+import { useAuthStore } from './useAuthStore'
+import { ensureGroupRelKey } from '@/utils/e2ee'
+import { API_CONFIG } from '@/api/config'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -9,6 +12,88 @@ function isTauri(): boolean {
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<T>(cmd, args)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function normalizeWsUrl(input: string): string {
+  const raw = (input || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw
+  if (raw.startsWith('https://')) return `wss://${raw.slice('https://'.length)}`
+  if (raw.startsWith('http://')) return `ws://${raw.slice('http://'.length)}`
+  return `ws://${raw}`
+}
+
+async function resolveWsConnectConfig(): Promise<{
+  wsUrl: string
+  aesKey: string
+  sessionId: string
+  installCode: string
+}> {
+  const authStore = useAuthStore()
+  let wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
+  let aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
+  let sessionId = String(authStore.session?.sessionId || '').trim()
+  let installCode = ''
+
+  // 兼容历史缓存：若 authStore 尚未带出，直接读 localStorage 的持久化配置
+  if (!wsUrl || !aesKey) {
+    try {
+      const raw = localStorage.getItem('ws-connect-config')
+      if (raw) {
+        const parsed = JSON.parse(raw) as { wsUrl?: string; aesKey?: string }
+        wsUrl = wsUrl || String(parsed.wsUrl || '').trim()
+        aesKey = aesKey || String(parsed.aesKey || '').trim()
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  if (!sessionId) {
+    try {
+      const currentUid = localStorage.getItem('current-uid') || ''
+      const accountListText = localStorage.getItem('login-account-list')
+      const accountList = accountListText ? JSON.parse(accountListText) : []
+      if (Array.isArray(accountList) && accountList.length > 0) {
+        const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
+        const preferred = current || accountList[accountList.length - 1]
+        sessionId = String(preferred?.sessionId || '').trim()
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  // 不再回退到 webbiz baseUrl（会导致 ws 握手 key mismatch）；
+  // 尝试按老链路从 webSession 域名池推导 session ws 域名。
+  if (!wsUrl) {
+    try {
+      const { collectAllDomainUrls } = await import('@/api/imDomain')
+      const candidates = await collectAllDomainUrls('webSession')
+      if (Array.isArray(candidates) && candidates.length > 0) {
+        wsUrl = String(candidates[0] || '').trim()
+      }
+    } catch {
+      // ignore dynamic domain resolve failures
+    }
+  }
+
+  // 最后一层兜底：历史环境里常见 webbiz/websession 仅一段词差异
+  if (wsUrl && /webbiz/i.test(wsUrl)) {
+    wsUrl = wsUrl.replace(/webbiz/gi, 'websession')
+  }
+  if (!aesKey) aesKey = API_CONFIG.aesKey
+
+  return {
+    wsUrl: normalizeWsUrl(wsUrl),
+    aesKey,
+    sessionId,
+    installCode,
+  }
 }
 
 export interface QuoteMessageInfo {
@@ -43,6 +128,36 @@ export const useMessageStore = defineStore('message', () => {
   const messageMap = ref<Map<string, Message[]>>(new Map())
   const loadingMap = ref<Map<string, boolean>>(new Map())
   const hasMoreMap = ref<Map<string, boolean>>(new Map())
+  let pendingWsConnect: Promise<void> | null = null
+
+  async function ensureWsConnected(): Promise<void> {
+    if (!isTauri()) return
+
+    const status = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
+    if (status === 'connected') return
+
+    const { wsUrl, aesKey, sessionId, installCode } = await resolveWsConnectConfig()
+    if (!wsUrl || !aesKey) {
+      throw new Error('[ws] connect config missing (wsUrl/aesKey)')
+    }
+
+    if (!pendingWsConnect) {
+      pendingWsConnect = (async () => {
+        console.warn('[ws] ensureWsConnected: reconnecting...', { status, wsUrl })
+        await tauriInvoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
+        for (let i = 0; i < 20; i++) {
+          const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
+          if (s === 'connected') return
+          await sleep(150)
+        }
+        throw new Error('[ws] reconnect timeout: status did not become connected')
+      })().finally(() => {
+        pendingWsConnect = null
+      })
+    }
+
+    return pendingWsConnect
+  }
 
   function getDigestByMessage(msgType: number, content: string | null): string {
     if (msgType === 0) {
@@ -56,6 +171,10 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function syncConversationSummary(conversationId: string, msg: Message) {
+    if (!conversationId || !conversationId.includes('_')) {
+      console.warn('[msg] skip syncConversationSummary: invalid conversationId', { conversationId, msgId: msg.id })
+      return
+    }
     const digest = getDigestByMessage(msg.msgType, msg.content)
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
     if (existing) {
@@ -89,7 +208,7 @@ export const useMessageStore = defineStore('message', () => {
       } catch { /* not JSON */ }
     }
     return {
-      id: String(raw.id ?? ''),
+      id: String(raw.id ?? raw.msgId ?? raw.msg_id ?? ''),
       customMsgId: raw.customMsgId ?? raw.custom_msg_id ?? null,
       conversationId: String(raw.conversationId ?? raw.conversation_id ?? ''),
       senderId: String(raw.senderId ?? raw.sender_id ?? ''),
@@ -198,28 +317,122 @@ export const useMessageStore = defineStore('message', () => {
       return localMsg
     }
 
-    const result = await tauriInvoke<any>('send_message', {
+    const [typeRaw, targetId = ''] = conversationId.split('_')
+    const convType = Number(typeRaw || 0)
+
+    // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
+    // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
+    // 用它覆盖占位（会按 customMsgId 精准替换，避免重复）。
+    const clientFlag = Date.now()
+    const optimisticId = String(clientFlag)
+    const optimistic: Message = {
+      id: optimisticId,
+      customMsgId: optimisticId,
+      conversationId,
+      senderId: uid,
+      msgType,
+      content,
+      sendTime: clientFlag,
+      status: 0, // sending
+      readStatus: 0,
+      version: 0,
+      isDeleted: false,
+      extra: extraJson,
+      quoteMessage: quoteMsg,
+    }
+    appendMessage(conversationId, optimistic)
+    syncConversationSummary(conversationId, optimistic)
+
+    console.log('[send] begin', {
       uid,
-      request: {
-        conversation_id: conversationId,
-        msg_type: msgType,
-        content,
-        extra: extraJson,
-      },
+      conversationId,
+      convType,
+      targetId,
+      msgType,
+      contentLen: (content || '').length,
+      optimisticId,
     })
-    const normalized = normalizeMessage(result)
-    if (quoteMsg && !normalized.quoteMessage) {
-      normalized.quoteMessage = quoteMsg
+
+    // 发送前先保证群 relKey 已在 Rust 缓存里；失败则标记为发送失败，不再继续。
+    if (convType === 1 && targetId) {
+      try {
+        await ensureGroupRelKey(uid, targetId)
+        console.log('[send] ensureGroupRelKey OK', { targetId })
+      } catch (e) {
+        console.error('[send] ensureGroupRelKey failed:', e)
+        updateMessageStatus(optimisticId, -1)
+        throw e
+      }
     }
-    if (extraJson && !normalized.extra) {
-      normalized.extra = extraJson
+
+    try {
+      if (convType === 1 && msgType === 0) {
+        await ensureWsConnected()
+      }
+      console.log('[send] invoking Rust send_message', { conversationId, msgType })
+      const result = await tauriInvoke<any>('send_message', {
+        uid,
+        request: {
+          conversation_id: conversationId,
+          msg_type: msgType,
+          content,
+          extra: extraJson,
+          custom_msg_id: optimisticId,
+        },
+      })
+      console.log('[send] Rust send_message result:', result)
+      const normalized = normalizeMessage(result)
+      if (quoteMsg && !normalized.quoteMessage) {
+        normalized.quoteMessage = quoteMsg
+      }
+      if (extraJson && !normalized.extra) {
+        normalized.extra = extraJson
+      }
+      appendMessage(conversationId, normalized)
+      syncConversationSummary(conversationId, normalized)
+      return normalized
+    } catch (e) {
+      const errText = String((e as any)?.message || e || '')
+      const canRetryWs = convType === 1 && msgType === 0 && /Not connected/i.test(errText)
+      if (canRetryWs) {
+        try {
+          console.warn('[send] send_message got Not connected, reconnect + retry once')
+          await ensureWsConnected()
+          const retry = await tauriInvoke<any>('send_message', {
+            uid,
+            request: {
+              conversation_id: conversationId,
+              msg_type: msgType,
+              content,
+              extra: extraJson,
+              custom_msg_id: optimisticId,
+            },
+          })
+          const normalized = normalizeMessage(retry)
+          if (quoteMsg && !normalized.quoteMessage) {
+            normalized.quoteMessage = quoteMsg
+          }
+          if (extraJson && !normalized.extra) {
+            normalized.extra = extraJson
+          }
+          appendMessage(conversationId, normalized)
+          syncConversationSummary(conversationId, normalized)
+          return normalized
+        } catch (retryErr) {
+          console.error('[send] retry after reconnect failed:', retryErr)
+        }
+      }
+      console.error('[send] send_message failed:', e)
+      updateMessageStatus(optimisticId, -1)
+      throw e
     }
-    appendMessage(conversationId, normalized)
-    syncConversationSummary(conversationId, normalized)
-    return normalized
   }
 
   function appendMessage(conversationId: string, message: Message) {
+    if (!conversationId || !conversationId.includes('_')) {
+      console.warn('[msg] skip appendMessage: invalid conversationId', { conversationId, messageId: message.id })
+      return
+    }
     const list = messageMap.value.get(conversationId) ?? []
     const existIndex = list.findIndex(
       (m) => m.id === message.id || (m.customMsgId && m.customMsgId === message.customMsgId),
@@ -237,10 +450,19 @@ export const useMessageStore = defineStore('message', () => {
 
   function batchAppendMessages(messages: Message[]) {
     const grouped = new Map<string, Message[]>()
-    for (const msg of messages) {
-      const list = grouped.get(msg.conversationId) ?? []
+    for (const raw of messages as any[]) {
+      const msg = normalizeMessage(raw)
+      const convId = String(msg.conversationId || '')
+      if (!convId || !convId.includes('_')) {
+        console.warn('[msg] drop batch item: invalid conversationId', {
+          conversationId: (raw as any)?.conversationId ?? (raw as any)?.conversation_id,
+          messageId: (raw as any)?.id,
+        })
+        continue
+      }
+      const list = grouped.get(convId) ?? []
       list.push(msg)
-      grouped.set(msg.conversationId, list)
+      grouped.set(convId, list)
     }
 
     for (const [convId, msgs] of grouped) {
@@ -274,22 +496,94 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function updateMessageStatus(messageId: string, status: number) {
-    for (const [, list] of messageMap.value) {
-      const msg = list.find((m) => m.id === messageId)
-      if (msg) {
-        msg.status = status
+    for (const [convId, list] of messageMap.value.entries()) {
+      const idx = list.findIndex((m) => m.id === messageId || m.customMsgId === messageId)
+      if (idx >= 0) {
+        const next = [...list]
+        next[idx] = { ...next[idx], status }
+        messageMap.value.set(convId, next)
         break
       }
     }
   }
 
   function updateMessage(messageId: string, updates: Partial<Message>) {
-    for (const [, list] of messageMap.value) {
-      const msg = list.find((m) => m.id === messageId)
-      if (msg) {
-        Object.assign(msg, updates)
+    for (const [convId, list] of messageMap.value.entries()) {
+      const idx = list.findIndex((m) => m.id === messageId || m.customMsgId === messageId)
+      if (idx >= 0) {
+        const next = [...list]
+        next[idx] = { ...next[idx], ...updates }
+        messageMap.value.set(convId, next)
         break
       }
+    }
+  }
+
+  function applySendFailed(params: {
+    flag: number | string
+    conversationId?: string
+    reason?: string
+  }) {
+    const flag = String(params.flag || '')
+    if (!flag) return
+
+    const scan = (convId: string, list: Message[]): boolean => {
+      const idx = list.findIndex((m) => m.customMsgId === flag || m.id === flag)
+      if (idx < 0) return false
+      const next = [...list]
+      next[idx] = { ...next[idx], status: -1 }
+      messageMap.value.set(convId, next)
+      if (params.reason) {
+        console.warn('[msg:send-failed]', { convId, flag, reason: params.reason })
+      }
+      return true
+    }
+
+    if (params.conversationId) {
+      const list = messageMap.value.get(params.conversationId)
+      if (list) scan(params.conversationId, list)
+      return
+    }
+
+    for (const [convId, list] of messageMap.value.entries()) {
+      if (scan(convId, list)) break
+    }
+  }
+
+  /**
+   * 群消息 20201 回执落地。
+   *
+   * - 根据 `customMsgId (= flag)` 匹配本地乐观占位的那条；
+   * - 把 `id` 更新为服务端下发的真实 msgId、状态升级到 `sent(1)`、
+   *   `sendTime` 校正为服务端发送完成时间；
+   * - 同步更新会话最后一条消息 id，避免下次加载出现占位/真实 id 不一致。
+   */
+  function applySendReceipt(params: {
+    conversationId: string
+    flag: number | string
+    serverMsgId: number | string
+    sentOverTime?: number
+  }) {
+    const customMsgId = String(params.flag)
+    const serverId = String(params.serverMsgId)
+    const list = messageMap.value.get(params.conversationId)
+    if (!list) return
+    const idx = list.findIndex(
+      (m) => m.customMsgId === customMsgId || m.id === customMsgId,
+    )
+    if (idx < 0) return
+    const next = [...list]
+    const msg = { ...next[idx], id: serverId, status: 1 }
+    if (params.sentOverTime && params.sentOverTime > 0) {
+      msg.sendTime = params.sentOverTime
+    }
+    next[idx] = msg
+    messageMap.value.set(params.conversationId, next)
+
+    const chatStore = useChatStore()
+    const conv = chatStore.conversations.find((c) => c.id === params.conversationId)
+    if (conv && conv.lastMsgId === customMsgId) {
+      chatStore.addOrUpdateConversation({ ...conv, lastMsgId: serverId })
     }
   }
 
@@ -327,6 +621,8 @@ export const useMessageStore = defineStore('message', () => {
     appendLocalSystemNotice,
     updateMessageStatus,
     updateMessage,
+    applySendReceipt,
+    applySendFailed,
     deleteMessage,
     clearConversationMessages,
     clearAllMessageCaches,

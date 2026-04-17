@@ -1,6 +1,9 @@
 use super::{batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsError};
+use crate::proto::imweb;
+use crate::ws::{codec, commands};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
+use prost::Message as _;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -14,6 +17,8 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 100;
 pub async fn run_connection(
     url: &str,
     aes_key: &str,
+    session_id: Arc<RwLock<String>>,
+    install_code: Arc<RwLock<String>>,
     status: Arc<RwLock<ConnectionStatus>>,
     send_tx: Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: AppHandle,
@@ -33,6 +38,8 @@ pub async fn run_connection(
         match connect_and_run(
             &current_url,
             &aes_key,
+            &session_id,
+            &install_code,
             &status,
             &send_tx,
             &app_handle,
@@ -73,6 +80,8 @@ pub async fn run_connection(
 async fn connect_and_run(
     url: &str,
     aes_key: &str,
+    session_id: &Arc<RwLock<String>>,
+    install_code: &Arc<RwLock<String>>,
     status: &Arc<RwLock<ConnectionStatus>>,
     send_tx: &Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: &AppHandle,
@@ -92,6 +101,20 @@ async fn connect_and_run(
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     *send_tx.write() = Some(tx);
+
+    // 对齐老 im：连接建立后立即发送 10001 登录包，确保后续 10201 可被服务端接受。
+    let sid = session_id.read().clone();
+    let code = install_code.read().clone();
+    let login_packet = build_login_packet(aes_key, &sid, &code)?;
+    ws_sink
+        .send(Message::Binary(login_packet.into()))
+        .await
+        .map_err(|e| WsError::SendFailed)?;
+    info!(
+        "WebSocket login packet sent cmd=10001 session_id_len={} install_code_len={}",
+        sid.len(),
+        code.len()
+    );
 
     let mut batcher = MessageBatcher::new(app_handle.clone(), aes_key.to_string());
 
@@ -129,4 +152,25 @@ async fn connect_and_run(
     batcher.flush().await;
     *send_tx.write() = None;
     Ok(())
+}
+
+fn build_login_packet(aes_key: &str, session_id: &str, install_code: &str) -> Result<Vec<u8>, WsError> {
+    let req = imweb::LoginReq {
+        client_info: Some(imweb::ClientInfo {
+            session_id: session_id.to_string(),
+            app_ver: 168,
+            package_code: 7100,
+            plat: 4, // Platform::WIN（与老 im 保持一致）
+            language: 2,
+            sys_mac: String::new(),
+            sys_model: "MAC".to_string(),
+        }),
+        install_code: install_code.to_string(),
+    };
+    let payload = req.encode_to_vec();
+    let msg_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(commands::LOGIN as i64);
+    codec::encode_packet(commands::LOGIN, msg_id, &payload, aes_key, None)
 }
