@@ -19,7 +19,13 @@ const emit = defineEmits<{
 }>()
 
 const text = ref('')
-const extraFiles = ref<File[]>([])
+const extraFileItems = ref<Array<{
+  file: File
+  name: string
+  sizeLabel: string
+  isImage: boolean
+  previewUrl: string
+}>>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const showEmoji = ref(false)
@@ -34,21 +40,66 @@ const imagePreview = computed(() => {
   }
 })
 
+function estimateDataUrlSizeLabel(dataUrl: string) {
+  const base64 = dataUrl.split(',')[1] || ''
+  const bytes = Math.floor((base64.length * 3) / 4)
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} kb`
+  return `${(kb / 1024).toFixed(1)} mb`
+}
+
+const mainImageMeta = computed(() => {
+  if (!props.payload || props.payload.msgType !== 1) return null
+  try {
+    const parsed = JSON.parse(props.payload.content || '{}')
+    const url = String(parsed.thumbnailUrl || parsed.url || '')
+    const name = String(parsed.name || '二维码图片.jpg')
+    return {
+      name,
+      sizeLabel: estimateDataUrlSizeLabel(url),
+    }
+  } catch {
+    return {
+      name: '二维码图片.jpg',
+      sizeLabel: '--',
+    }
+  }
+})
+
 function triggerAddFile() {
   fileInputRef.value?.click()
+}
+
+function formatSize(size: number) {
+  const kb = size / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} kb`
+  return `${(kb / 1024).toFixed(1)} mb`
+}
+
+function createPreview(file: File) {
+  const isImage = file.type.startsWith('image/')
+  return {
+    file,
+    name: file.name,
+    sizeLabel: formatSize(file.size),
+    isImage,
+    previewUrl: isImage ? URL.createObjectURL(file) : '',
+  }
 }
 
 function handleAddFiles(e: Event) {
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   if (files.length > 0) {
-    extraFiles.value = [...extraFiles.value, ...files]
+    extraFileItems.value = [...extraFileItems.value, ...files.map(createPreview)]
   }
   input.value = ''
 }
 
 function removeExtraFile(index: number) {
-  extraFiles.value = extraFiles.value.filter((_, i) => i !== index)
+  const item = extraFileItems.value[index]
+  if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl)
+  extraFileItems.value = extraFileItems.value.filter((_, i) => i !== index)
 }
 
 function removeMainPreview() {
@@ -58,16 +109,22 @@ function removeMainPreview() {
 function handleConfirm() {
   emit('confirm', {
     text: text.value.trim(),
-    files: extraFiles.value,
+    files: extraFileItems.value.map((item) => item.file),
+  })
+  extraFileItems.value.forEach((item) => {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
   })
   text.value = ''
-  extraFiles.value = []
+  extraFileItems.value = []
 }
 
 function handleCancel() {
+  extraFileItems.value.forEach((item) => {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+  })
   showEmoji.value = false
   text.value = ''
-  extraFiles.value = []
+  extraFileItems.value = []
   emit('cancel')
 }
 
@@ -94,19 +151,36 @@ function handleEmojiSelect(emoji: string) {
     <div v-if="visible" class="forward-confirm-dialog" @click.self="handleCancel">
       <div class="panel" @click.stop>
         <div class="preview-area">
-          <ul :class="{ only: imagePreview && extraFiles.length === 0 }">
-            <li v-if="imagePreview" class="main-image-item">
+          <ul :class="{ only: imagePreview && extraFileItems.length === 0, multiple: extraFileItems.length > 0 }">
+            <li v-if="imagePreview && extraFileItems.length === 0" class="main-image-item">
               <picture>
                 <img :src="imagePreview" alt="" />
               </picture>
               <span class="close-main" @click="removeMainPreview">×</span>
             </li>
+            <li v-else-if="imagePreview" class="extra-file-item main-file-row">
+              <picture>
+                <img :src="imagePreview" alt="" />
+              </picture>
+              <div class="extra-file-meta">
+                <p class="extra-file-name"><span>名称:</span>{{ mainImageMeta?.name || '二维码图片.jpg' }}</p>
+                <p class="extra-file-size"><span>大小:</span>{{ mainImageMeta?.sizeLabel || '--' }}</p>
+              </div>
+              <span class="close-extra" @click="removeMainPreview">×</span>
+            </li>
             <li
-              v-for="(file, index) in extraFiles"
-              :key="`${file.name}_${index}`"
+              v-for="(item, index) in extraFileItems"
+              :key="`${item.name}_${index}`"
               class="extra-file-item"
             >
-              <div class="extra-file-name">{{ file.name }}</div>
+              <picture>
+                <img v-if="item.isImage" :src="item.previewUrl" alt="" />
+                <div v-else class="file-fallback">📎</div>
+              </picture>
+              <div class="extra-file-meta">
+                <p class="extra-file-name"><span>名称:</span>{{ item.name }}</p>
+                <p class="extra-file-size"><span>大小:</span>{{ item.sizeLabel }}</p>
+              </div>
               <span class="close-extra" @click="removeExtraFile(index)">×</span>
             </li>
           </ul>
@@ -151,7 +225,7 @@ function handleEmojiSelect(emoji: string) {
 .forward-confirm-dialog {
   position: fixed;
   inset: 0;
-  z-index: 9100;
+  z-index: 12000;
   background: rgba(0, 0, 0, 0.2);
 }
 
@@ -207,6 +281,12 @@ function handleEmojiSelect(emoji: string) {
         }
       }
     }
+
+    &.multiple {
+      > li {
+        margin-bottom: 6px;
+      }
+    }
   }
 }
 
@@ -234,25 +314,78 @@ function handleEmojiSelect(emoji: string) {
 }
 
 .extra-file-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
+  height: 80px;
+  padding: 0;
+  border-radius: 5px;
+  background: #eee;
+
+  > picture {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 64px;
+    height: 64px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    > img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+  }
 }
 
-.extra-file-name {
-  line-height: 32px;
-  font-size: 12px;
-  color: #666;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 300px;
+.main-file-row {
+  background: #eee;
+}
+
+.extra-file-meta {
+  position: absolute;
+  left: 78px;
+  right: 38px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  p {
+    margin: 0;
+    line-height: 22px;
+    font-size: 14px;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  span {
+    margin-right: 4px;
+    color: #333;
+  }
+}
+
+.file-fallback {
+  font-size: 26px;
+  line-height: 1;
 }
 
 .close-extra {
-  color: #999;
-  font-size: 14px;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -262,6 +395,7 @@ function handleEmojiSelect(emoji: string) {
   border-bottom: 1px dashed #ddd;
   padding: 8px 20px 0;
   position: relative;
+  overflow: hidden;
 
   .emoji-icon {
     display: block;
@@ -284,15 +418,12 @@ function handleEmojiSelect(emoji: string) {
     border: none;
     outline: none;
     resize: none;
-    font-size: 32px;
-    transform: scale(0.375);
-    transform-origin: left top;
-    width: calc(100% / 0.375);
-    min-height: calc(64px / 0.375);
+    font-size: 14px;
     color: #333;
-    line-height: 1.4;
+    line-height: 20px;
     margin: 0;
     padding: 0;
+    background: transparent;
   }
 
   .emoji-popup {
@@ -309,6 +440,9 @@ function handleEmojiSelect(emoji: string) {
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
+  position: relative;
+  z-index: 2;
+  background: #fff;
 }
 
 .link-btn {
