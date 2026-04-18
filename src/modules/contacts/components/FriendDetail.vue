@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useContactStore } from '@/stores/useContactStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -7,6 +8,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import editIcon from '@/assets/images/message/edit-icon.png'
 
 const props = defineProps<{ contactId: string }>()
+const { t } = useI18n()
 const contactStore = useContactStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
@@ -76,22 +78,21 @@ function saveDepict() {
         />
         <div>
           <span class="name">{{ contact.remark || contact.nickname || contact.id }}</span>
-          <p>
-            ID:
-            {{ contact.id }}
-            <span @click="handleCopyId">复制</span>
+          <p class="id-row">
+            <span class="id-line">{{ t('ID：') }}{{ contact.id }}</span>
+            <button type="button" class="copy-btn" @click="handleCopyId">{{ t('复制') }}</button>
           </p>
         </div>
       </div>
 
       <div class="user-des">
         <div class="item">
-          <div class="key">昵称：</div>
+          <div class="key">{{ t('昵称：') }}</div>
           <div class="val user-select">{{ contact.nickname || contact.id }}</div>
         </div>
 
         <div class="item">
-          <div class="key">备注名：</div>
+          <div class="key">{{ t('备注名：') }}</div>
           <div class="val">
             <input
               v-if="editingRemark"
@@ -102,14 +103,14 @@ function saveDepict() {
               @keyup.enter="saveRemark"
             />
             <span v-else class="user-select">
-              {{ contact.remark || contact.nickname || '未设置' }}
+              {{ contact.remark || contact.nickname || t('未设置') }}
             </span>
             <img v-if="!editingRemark" class="edit-icon" :src="editIcon" alt="" @click="editingRemark = true" />
           </div>
         </div>
 
         <div class="item">
-          <div class="key">描述：</div>
+          <div class="key">{{ t('描述：') }}</div>
           <div class="val">
             <input
               v-if="editingDepict"
@@ -118,19 +119,19 @@ function saveDepict() {
               maxlength="64"
               @blur="saveDepict"
               @keyup.enter="saveDepict"
-              placeholder="什么都没写"
+              :placeholder="t('什么都没写')"
             />
             <span v-else class="user-select">
-              {{ (contact as any).depict || '什么都没写' }}
+              {{ (contact as any).depict || t('什么都没写') }}
             </span>
             <img v-if="!editingDepict" class="edit-icon" :src="editIcon" alt="" @click="editingDepict = true" />
           </div>
         </div>
       </div>
 
-      <div class="primaryBtn small" @click="startChat">发送消息</div>
+      <div class="primaryBtn small" @click="startChat">{{ t('发送消息') }}</div>
     </div>
-    <div v-if="copyToastVisible" class="copy-toast">复制成功</div>
+    <div v-if="copyToastVisible" class="copy-toast">{{ t('复制成功') }}</div>
   </div>
 </template>
 
@@ -170,24 +171,47 @@ function saveDepict() {
         user-select: text;
       }
 
-      > div > p {
+      .id-row {
         width: 100%;
         display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 10px;
         margin-top: 10px;
+      }
 
-        > span {
-          background: #326aff;
-          color: #ffffff;
-          width: 36px;
-          height: 20px;
-          border-radius: 4px;
-          box-sizing: border-box;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          margin-left: 10px;
-          cursor: pointer;
+      .id-line {
+        flex: 1;
+        min-width: 0;
+        word-break: break-all;
+        font-size: 14px;
+        color: #333;
+      }
+
+      .copy-btn {
+        border: none;
+        background: #326aff;
+        color: #ffffff;
+        border-radius: 4px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        line-height: 1.2;
+        padding: 4px 10px;
+        min-height: 24px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        cursor: pointer;
+
+        &:hover {
+          background: #2958e6;
+        }
+
+        &:focus-visible {
+          outline: 2px solid rgba(50, 106, 255, 0.45);
+          outline-offset: 2px;
         }
       }
     }
@@ -196,11 +220,14 @@ function saveDepict() {
       padding: 10px 0;
 
       .item {
-        height: 33px;
+        min-height: 33px;
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
+        row-gap: 4px;
 
         .key {
+          flex-shrink: 0;
           margin-right: 10px;
           color: #999;
         }
