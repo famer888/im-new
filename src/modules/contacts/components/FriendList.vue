@@ -113,6 +113,11 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
   border-top: 1px solid #eee;
 }
 
+/* h2 才是第一个子节点，.friend-group 不是 :first-child，需用相邻兄弟选择器 */
+.section-title + .friend-group .group-letter {
+  border-top: none;
+}
+
 .friend-list {
   padding: 0;
   margin: 0;
