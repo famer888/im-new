@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -7,6 +8,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 import jtIcon from '@/assets/images/headNav/jt-icon.png'
 
+const { t } = useI18n()
 const channelStore = useChannelStore()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -27,7 +29,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
 <template>
   <div class="channel-list">
     <h2 class="section-title" @click="expanded = !expanded">
-      频道
+      {{ t('频道') }}
       <img class="arrow" :src="jtIcon" :style="expanded ? {} : { transform: 'rotate(180deg)' }" alt="toggle" />
     </h2>
     <div

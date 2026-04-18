@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useContactStore } from '@/stores/useContactStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -14,10 +15,16 @@ const props = withDefaults(
   { embed: false },
 )
 
+const { t, locale } = useI18n()
 const contactStore = useContactStore()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
+
+const contactCountLabel = computed(() => {
+  void locale.value
+  return t('联系人列表人数', { count: contactStore.contacts.length })
+})
 
 onMounted(() => {
   if (authStore.uid) contactStore.loadContacts(authStore.uid)
@@ -75,7 +82,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
 
 <template>
   <div class="friend-root" :class="{ embed: props.embed }">
-    <h2 v-if="!props.embed" class="section-title">联系人</h2>
+    <h2 v-if="!props.embed" class="section-title">{{ t('联系人') }}</h2>
     <div v-for="group in grouped" :key="group.letter" class="friend-group">
       <div class="group-letter">{{ group.letter }}</div>
       <ul class="friend-list">
@@ -97,7 +104,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
         </li>
       </ul>
     </div>
-    <div v-if="!props.embed" class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
+    <div v-if="!props.embed" class="contact-count">{{ contactCountLabel }}</div>
   </div>
 </template>
 

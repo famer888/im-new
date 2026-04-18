@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import FriendList from '../components/FriendList.vue'
 import GroupList from '../components/GroupList.vue'
 import ChannelList from '../components/ChannelList.vue'
 import { useUIStore } from '@/stores/useUIStore'
 import addNewIcon from '@/assets/images/headNav/add-new-icon.png'
 
+const { t } = useI18n()
 const uiStore = useUIStore()
 </script>
 
@@ -25,7 +27,7 @@ const uiStore = useUIStore()
 
     <div class="new-friend" @click="uiStore.setDetailView('friend-examine')">
       <img class="new-friend-icon" :src="addNewIcon" alt="new-friend" />
-      <span class="new-friend-title">新的好友</span>
+      <span class="new-friend-title">{{ t('新的好友') }}</span>
     </div>
 
     <div class="book-content">
