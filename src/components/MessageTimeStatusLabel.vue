@@ -4,6 +4,7 @@
  * 气泡右下角：时间 +（己方）发送中/失败/已送达/已读图标。
  */
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 import { MessageStatus } from '@/types/message'
 import { formatTimeStamp } from '@/utils/formatTimeStamp'
@@ -17,7 +18,12 @@ const props = defineProps<{
   isSelf: boolean
 }>()
 
-const timeText = computed(() => formatTimeStamp(props.message.sendTime))
+const { t, locale } = useI18n()
+
+const timeText = computed(() => {
+  void locale.value
+  return formatTimeStamp(props.message.sendTime, locale.value, t)
+})
 
 const showLoading = computed(
   () => props.isSelf && props.message.status === MessageStatus.Sending,

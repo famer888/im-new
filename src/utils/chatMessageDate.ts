@@ -6,6 +6,21 @@
 import dayjs from 'dayjs'
 import type { Message } from '@/stores/useMessageStore'
 
+/** vue-i18n `t`（用于日期条文案，随语言切换） */
+export type ChatDateTranslateFn = (key: string) => string
+
+function applyDatePlaceholders(
+  template: string,
+  year: number,
+  monthPadded: string,
+  dayPadded: string,
+  padZhStyle: boolean,
+): string {
+  const m = padZhStyle ? monthPadded : String(Number(monthPadded))
+  const d = padZhStyle ? dayPadded : String(Number(dayPadded))
+  return template.replace(/\$y/g, String(year)).replace(/\$m/g, m).replace(/\$d/g, d)
+}
+
 /** 0:今天、1:昨天、2:前天 */
 function isRecentDay(timestamp: number): number {
   const date = new Date(timestamp)
@@ -56,8 +71,13 @@ export function chatDate(onlineStatusUpdateTime: number): string {
 
 /**
  * 与 `base.js::chatPageDateformat` 一致：居中灰条上的文案（今天/昨天/前天/月日/年月日）。
+ * `t` + `locale` 与界面语言一致（勿用浏览器语言硬编码中文）。
  */
-export function chatPageDateformat(timestamp: number): string {
+export function chatPageDateformat(
+  timestamp: number,
+  t: ChatDateTranslateFn,
+  locale: string,
+): string {
   if (!timestamp) return ''
   const date = new Date(Number(timestamp))
   const now = new Date()
@@ -65,13 +85,19 @@ export function chatPageDateformat(timestamp: number): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   const diff = isRecentDay(Number(timestamp))
-  if (diff === 0) return '今天'
-  if (diff === 1) return '昨天'
-  if (diff === 2) return '前天'
+  if (diff === 0) return t('今天')
+  if (diff === 1) return t('昨天')
+  if (diff === 2) return t('前天')
+
+  const useEnStyle = locale === 'en' || locale === 'pt'
+  const padZhStyle = locale === 'ch' || locale === 'tw'
+
   if (year === now.getFullYear()) {
-    return `${month}月${day}日`
+    const key = useEnStyle ? 'XX月XX日' : 'm月d日'
+    return applyDatePlaceholders(t(key), year, month, day, padZhStyle)
   }
-  return `${year}年${month}月${day}日`
+  const key = useEnStyle ? 'XX年XX月XX日' : 'y年m月d日'
+  return applyDatePlaceholders(t(key), year, month, day, padZhStyle)
 }
 
 export interface MessageListEntry {
@@ -86,7 +112,11 @@ export interface MessageListEntry {
  * 与 `utils/widget/chat-msg-list.js::fnMsgListToBlockInfos` 中日期间隔规则一致：
  * 按自然日切换时在第一条消息上展示 `showTimeDay`。
  */
-export function attachDateSeparators(messages: Message[]): MessageListEntry[] {
+export function attachDateSeparators(
+  messages: Message[],
+  t: ChatDateTranslateFn,
+  locale: string,
+): MessageListEntry[] {
   let beforeTime = 0
   let lastShowTimeDay = ''
   const out: MessageListEntry[] = []
@@ -96,7 +126,7 @@ export function attachDateSeparators(messages: Message[]): MessageListEntry[] {
     let showTime: string | null = null
     if (!beforeTime || dayStr !== prevDayStr) {
       showTime = chatDate(msg.sendTime) || null
-      lastShowTimeDay = chatPageDateformat(msg.sendTime) || ''
+      lastShowTimeDay = chatPageDateformat(msg.sendTime, t, locale) || ''
     }
     beforeTime = msg.sendTime
     out.push({
