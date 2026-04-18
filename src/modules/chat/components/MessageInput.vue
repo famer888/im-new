@@ -9,6 +9,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
+import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import { getReadBurnTimeText } from '@/utils/readBurn'
 import { updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
@@ -36,6 +37,9 @@ const { t } = useI18n()
 const content = ref('')
 const editorRef = ref<HTMLDivElement | null>(null)
 const showEmoji = ref(false)
+const emojiToggleBtnRef = ref<HTMLElement | null>(null)
+const emojiPickerPopoverRef = ref<HTMLElement | null>(null)
+useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 const showAtList = ref(false)
 const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
@@ -113,6 +117,7 @@ watch(convId, (newId, oldId) => {
 })
 
 function handleSend() {
+  showEmoji.value = false
   const text = content.value.trim()
   if (!text) return
 
@@ -354,7 +359,13 @@ eventBus.on('editor:insert-at', handleAtSelect)
       <div class="toolbar">
         <div class="toolbar-left">
           <!-- 与 im components/active-icon.vue 一致：activeIcon/*.png + 灰度 / hover 彩色 -->
-          <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('表情')" @click="showEmoji = !showEmoji">
+          <button
+            ref="emojiToggleBtnRef"
+            class="tool-btn tool-btn-im-icon"
+            type="button"
+            :title="$t('表情')"
+            @click="showEmoji = !showEmoji"
+          >
             <img class="im-active-icon" :src="iconSmallActive" alt="" width="20" height="20" />
           </button>
           <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('文件')" @click="handleFileSelect">
@@ -375,7 +386,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
         />
 
         <Transition name="popup">
-          <div v-if="showEmoji" class="emoji-popup">
+          <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
             <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
           </div>
         </Transition>
