@@ -27,9 +27,25 @@ const sortedMessages = computed(() =>
 
 const entriesWithDate = computed(() => attachDateSeparators(sortedMessages.value))
 
+/** 用户点击「未读消息」条后隐藏（对齐旧 im 点击消失） */
+const unreadBannerDismissed = ref(false)
+
+watch(
+  () => props.conversationId,
+  () => {
+    unreadBannerDismissed.value = false
+  },
+)
+
+/** 实际用于分隔线逻辑：父组件快照未读数，可被点击清除 */
+const effectiveUnreadCount = computed(() => {
+  if (unreadBannerDismissed.value) return 0
+  return props.unreadCount ?? 0
+})
+
 /** 首条未读在排序列表中的下标（升序：末尾 N 条为未读区） */
 const unreadDividerIndex = computed(() => {
-  const n = props.unreadCount ?? 0
+  const n = effectiveUnreadCount.value
   if (n <= 0) return -1
   const len = sortedMessages.value.length
   if (len === 0) return -1
@@ -218,7 +234,7 @@ watch(
     stickToBottom.value = true
     const list = sortedMessages.value
     lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
-    if ((props.unreadCount ?? 0) > 0 && unreadDividerIndex.value >= 0) {
+    if (effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0) {
       await scrollUnreadBannerIntoView()
     } else {
       await flushScrollToBottom()
@@ -232,7 +248,7 @@ watch(
   async (loading) => {
     if (loading) return
     if (props.messages.length === 0) return
-    const hasUnread = (props.unreadCount ?? 0) > 0 && unreadDividerIndex.value >= 0
+    const hasUnread = effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0
     if (hasUnread) {
       await scrollUnreadBannerIntoView()
       return
@@ -242,13 +258,14 @@ watch(
   },
 )
 
-/** 父组件在 setup 阶段补写未读快照时，补滚到未读条 */
+/** 父组件补写未读快照时，补滚到未读条 */
 watch(
   () => props.unreadCount,
   async (n, prev) => {
     if (n === prev) return
     if (props.loading || props.messages.length === 0) return
-    if ((n ?? 0) <= 0 || unreadDividerIndex.value < 0) return
+    if ((n ?? 0) <= 0 || unreadBannerDismissed.value) return
+    if (unreadDividerIndex.value < 0) return
     await scrollUnreadBannerIntoView()
   },
 )
@@ -273,7 +290,7 @@ onMounted(async () => {
   lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
   stickToBottom.value = true
   if (list.length > 0) {
-    if ((props.unreadCount ?? 0) > 0 && unreadDividerIndex.value >= 0) {
+    if (effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0) {
       await scrollUnreadBannerIntoView()
     } else {
       await flushScrollToBottom()
@@ -307,6 +324,15 @@ function onUnreadBannerResize(el: Element | ComponentPublicInstance | null) {
     if (divIdx >= 0) updateItemHeight(`unread-${divIdx}`, h)
   }
 }
+
+/** 点击「未读消息」条后隐藏，并吸底避免虚拟列表少一行后视口错位 */
+function onUnreadBannerClick() {
+  unreadBannerDismissed.value = true
+  stickToBottom.value = true
+  void nextTick(() => {
+    void flushScrollToBottom()
+  })
+}
 </script>
 
 <template>
@@ -328,6 +354,10 @@ function onUnreadBannerResize(el: Element | ComponentPublicInstance | null) {
               v-if="item.kind === 'unread'"
               :ref="onUnreadBannerResize"
               class="unread-divider"
+              role="button"
+              tabindex="0"
+              @click.stop="onUnreadBannerClick"
+              @keydown.enter.prevent="onUnreadBannerClick"
             >
               <span class="unread-divider-label">{{ $t('未读消息') }}</span>
             </div>
@@ -404,7 +434,7 @@ function onUnreadBannerResize(el: Element | ComponentPublicInstance | null) {
   font-size: 12px;
 }
 
-/* 与旧 im / 参考稿：整行浅灰底，居中蓝字 */
+/* 与旧 im / 参考稿：整行浅灰底，居中蓝字；可点击关闭 */
 .unread-divider {
   display: flex;
   align-items: center;
@@ -414,12 +444,19 @@ function onUnreadBannerResize(el: Element | ComponentPublicInstance | null) {
   padding: 10px 16px 12px;
   margin: 0;
   background: #eee;
+  cursor: pointer;
+  user-select: none;
+
+  &:hover {
+    filter: brightness(0.97);
+  }
 
   .unread-divider-label {
     font-size: 14px;
     font-weight: bold;
     color: #2273ad;
     white-space: nowrap;
+    pointer-events: none;
   }
 }
 
