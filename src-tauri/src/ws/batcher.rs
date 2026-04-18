@@ -128,6 +128,34 @@ impl MessageBatcher {
                 }
                 return;
             }
+            // 20601 用户上下线推送（与 im `PushUserOnOrOffLineMessageResp` 一致）
+            cmds::USER_ONLINE_STATUS_PUSH => {
+                match imweb::PushUserOnOrOffLineMessageResp::decode(decoded_payload.as_slice()) {
+                    Ok(resp) => {
+                        let list: Vec<serde_json::Value> = resp
+                            .users
+                            .iter()
+                            .map(|u| {
+                                serde_json::json!({
+                                    "uid": u.uid.to_string(),
+                                    "online": u.online,
+                                    "createTime": u.create_time,
+                                    "bfShow": u.bf_show,
+                                })
+                            })
+                            .collect();
+                        let _ = self.app_handle.emit("user:online-status", &list);
+                        info!(
+                            "USER_ONLINE_STATUS_PUSH emitted users={}",
+                            resp.users.len()
+                        );
+                    }
+                    Err(e) => {
+                        warn!("decode PushUserOnOrOffLineMessageResp: {}", e);
+                    }
+                }
+                return;
+            }
             // 20202 是群消息下行推送。需要解出 conversation_id 才能进入前端列表。
             cmds::GROUP_MSG_RECEIVED => {
                 match self.decode_group_msg_received(&decoded_payload) {

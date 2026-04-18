@@ -9,6 +9,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useSearchStore } from '@/stores/useSearchStore'
+import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
@@ -83,6 +84,16 @@ const friendContact = computed(() => {
   const targetId = conversation.value?.targetId
   if (!targetId || !isFriendChat.value) return null
   return contactStore.getContact(targetId) ?? null
+})
+
+/** 与 im 好友资料/在线展示一致：在线显示「在线」，否则显示最后活跃时间文案 */
+const friendOnlineSubtitle = computed(() => {
+  if (!isFriendChat.value || !conversation.value) return ''
+  const c = friendContact.value
+  if (!c || c.bfShowOnline === false) return ''
+  if (c.online) return t('在线')
+  if (c.onlineStatusUpdateTime) return formatLastActiveText(c.onlineStatusUpdateTime, t)
+  return ''
 })
 
 const title = computed(() => {
@@ -207,31 +218,38 @@ function handleSearch() {
         <img class="file-helper-v" :src="userIconV" alt="" />
       </template>
       <template v-else>
-        <TextAvatar
-          class="header-avatar"
-          :name="title || conversation?.targetId || '?'"
-          :src="avatar || null"
-          :avatar-type="avatarType"
-          :size="25"
-          rounded
-        />
-        <input
-          v-if="isFriendChat && editingRemark"
-          ref="remarkInputRef"
-          v-model="remarkDraft"
-          class="title-input"
-          maxlength="50"
-          @blur="saveRemark"
-          @keyup.enter="saveRemark"
-        />
-        <span v-else class="title">{{ title }}</span>
-        <img
-          v-if="isFriendChat && !editingRemark"
-          class="friend-edit-icon"
-          :src="editIcon"
-          alt=""
-          @click="startEditRemark"
-        />
+        <div class="header-title-cluster">
+          <TextAvatar
+            class="header-avatar"
+            :name="title || conversation?.targetId || '?'"
+            :src="avatar || null"
+            :avatar-type="avatarType"
+            :size="25"
+            rounded
+          />
+          <div class="header-text-block">
+            <div class="title-row">
+              <input
+                v-if="isFriendChat && editingRemark"
+                ref="remarkInputRef"
+                v-model="remarkDraft"
+                class="title-input"
+                maxlength="50"
+                @blur="saveRemark"
+                @keyup.enter="saveRemark"
+              />
+              <span v-else class="title">{{ title }}</span>
+              <img
+                v-if="isFriendChat && !editingRemark"
+                class="friend-edit-icon"
+                :src="editIcon"
+                alt=""
+                @click="startEditRemark"
+              />
+            </div>
+            <div v-if="friendOnlineSubtitle" class="friend-status-line">{{ friendOnlineSubtitle }}</div>
+          </div>
+        </div>
       </template>
     </div>
     <div class="header-right">
@@ -317,6 +335,36 @@ function handleSearch() {
   gap: 0;
   min-width: 0;
   overflow: hidden;
+}
+
+.header-title-cluster {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+
+.header-text-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.friend-status-line {
+  font-size: 12px;
+  color: #999;
+  font-weight: 400;
+  line-height: 1.2;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

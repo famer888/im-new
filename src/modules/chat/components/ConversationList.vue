@@ -94,6 +94,15 @@ function formatTime(ts: number): string {
   return d.format('YYYY/MM/DD')
 }
 
+/** 与 im 会话列表 `&.online` 绿点一致：单聊好友在线且允许展示时显示 */
+function showFriendOnlineDot(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Friend) return false
+  if (conv.targetId === FILE_HELPER_TARGET_ID) return false
+  const c = contactStore.getContact(conv.targetId)
+  if (!c || c.bfShowOnline === false) return false
+  return Boolean(c.online)
+}
+
 function getDigest(conv: Conversation): string {
   if (conv.draft) return `[草稿] ${conv.draft}`
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
@@ -161,6 +170,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
         :class="['conv-item', {
           active: conv.id === chatStore.currentConversationId,
           pinned: conv.isPinned && !conv.isArchived,
+          'friend-online': showFriendOnlineDot(conv),
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -254,6 +264,20 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   &.active { background: #efefef; }
   &.pinned { background: #ede7e7; }
   &.pinned.active { background: #efefef; }
+
+  &.friend-online .conv-avatar-wrap::after {
+    content: '';
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    right: -1px;
+    bottom: -1px;
+    background: #10d561;
+    border: 1px solid #fcfcfc;
+    box-sizing: border-box;
+    z-index: 2;
+  }
 }
 
 .conv-avatar-wrap {
