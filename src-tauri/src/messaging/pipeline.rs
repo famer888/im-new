@@ -118,6 +118,9 @@ pub fn send_private_text(
     let own_app_key = crypto
         .get_latest_friend_key_with_version(sender_uid_str, "app")
         .map(|(v, k)| (v as i32, k));
+    let own_web_key = crypto
+        .get_latest_friend_key_with_version(sender_uid_str, "web")
+        .map(|(v, k)| (v as i32, k));
 
     if friend_app_key.is_none() && friend_web_key.is_none() {
         return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));
@@ -132,6 +135,7 @@ pub fn send_private_text(
         friend_app_key,
         friend_web_key,
         own_app_key,
+        own_web_key,
         send_time,
         flag,
     )?;
