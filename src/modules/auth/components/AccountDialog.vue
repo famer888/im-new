@@ -151,12 +151,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+/* 仅调整外层卡片尺寸：略加宽，避免英文「导出」一行与密码框挤在一起；内部行布局不变 */
 .account-dialog {
-  width: 350px;
-  min-height: 265px;
-  padding: 40px;
+  --dialog-pad: clamp(1rem, 5vw, 2.5rem);
   box-sizing: border-box;
+  width: min(100vw - 1rem, 28rem);
+  max-width: 100%;
+  min-height: 16.5rem;
+  padding: var(--dialog-pad);
   background: #fff;
+  border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
   text-align: left;
 }
@@ -164,16 +168,18 @@ onBeforeUnmount(() => {
 .dialog-head {
   display: flex;
   align-items: center;
-  height: 76px;
-  margin-bottom: 10px;
+  min-height: 4.75rem;
+  margin: 0 calc(-1 * var(--dialog-pad)) 0.625rem;
+  padding: 0 var(--dialog-pad) 0.625rem;
   border-bottom: 1px solid #eee;
+  box-sizing: border-box;
 }
 
 .dialog-title {
-  width: 205px;
-  height: 55px;
-  margin: 0 0 0 10px;
-  line-height: 55px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 0 0 0.625rem;
+  line-height: 1.35;
   font-size: 16px;
   color: #333;
   font-weight: 400;
@@ -182,22 +188,24 @@ onBeforeUnmount(() => {
 .dialog-row {
   display: flex;
   align-items: center;
-  height: 30px;
-  line-height: 30px;
-  margin: 0;
+  gap: 0.375rem 0.625rem;
+  min-height: 1.875rem;
+  line-height: 1.4;
+  margin: 0 0 0.625rem;
   color: #333;
   font-size: 14px;
 
   > span {
-    width: 37px;
-    margin-right: 5px;
+    flex: 0 0 auto;
     color: #666;
-    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   > i {
     font-style: normal;
-    max-width: 220px;
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
   }
 }
 
@@ -212,11 +220,14 @@ onBeforeUnmount(() => {
 }
 
 .nickname-text {
-  max-width: 200px;
+  flex: 1;
+  min-width: 0;
+  max-width: none;
 }
 
 .nickname-input {
-  width: 200px;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 24px;
   padding: 0;
   border: none;
@@ -230,9 +241,10 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
-  margin-left: 5px;
+  flex: 0 0 auto;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  margin-left: 0.125rem;
   padding: 0;
   border: 0;
   background: transparent;
@@ -244,44 +256,51 @@ onBeforeUnmount(() => {
 
   > img {
     display: block;
-    width: 15px;
-    height: 15px;
+    width: 0.9375rem;
+    height: 0.9375rem;
   }
 }
 
 .export-db {
   display: flex;
   align-items: center;
-  height: 20px;
-  margin-top: 10px;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.625rem;
+  min-height: 1.75rem;
+  margin-top: 0.875rem;
 
   > input {
-    width: 110px;
-    height: 22px;
+    flex: 1 1 7em;
+    min-width: 6em;
+    max-width: 100%;
+    height: 1.375rem;
     box-sizing: border-box;
-    margin-right: 10px;
-    padding: 0 10px;
+    padding: 0 0.625rem;
     border: 1px solid #3369fe;
     border-radius: 4px;
     text-align: center;
     outline: none;
 
     &::placeholder {
-      font-size: 12px;
+      font-size: 0.75rem;
       color: #999;
     }
   }
 
   > button {
-    height: 22px;
-    padding: 0 13px;
+    flex: 0 1 auto;
+    min-height: 1.375rem;
+    height: auto;
+    padding: 0.25rem 0.75rem;
     border: 0;
     border-radius: 4px;
     background: #3369fe;
     color: #fff;
-    font-size: 12px;
-    line-height: 22px;
+    font-size: 0.75rem;
+    line-height: 1.35;
     cursor: pointer;
+    white-space: normal;
+    text-align: center;
 
     &.disable {
       opacity: 0.5;
@@ -292,12 +311,13 @@ onBeforeUnmount(() => {
 
 .tips {
   position: relative;
-  width: 16px;
-  height: 16px;
-  margin-left: 5px;
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-left: 0.125rem;
   border: 1px solid #3369fe;
   border-radius: 50%;
-  line-height: 16px;
+  line-height: 1rem;
   text-align: center;
   cursor: pointer;
 
@@ -308,27 +328,27 @@ onBeforeUnmount(() => {
   > span {
     display: block;
     color: #3369fe;
-    font-size: 12px;
+    font-size: 0.75rem;
   }
 }
 
 .tips-pop {
   position: absolute;
   left: 0;
-  bottom: 22px;
+  bottom: 1.375rem;
   display: none;
-  padding: 10px;
+  padding: 0.625rem;
   border: 1px solid rgba(0, 0, 0, 0.15);
   box-shadow: 0 2px 2px 0 rgba(0, 0, 0, 0.14), 0 3px 1px -2px rgba(0, 0, 0, 0.2), 0 1px 5px 0 rgba(0, 0, 0, 0.12);
   background: #fff;
-  line-height: 20px;
+  line-height: 1.25;
   text-align: left;
 
   > p {
     margin: 0;
-    white-space: nowrap;
+    max-width: min(90vw, 20rem);
     color: #3369fe;
-    font-size: 12px;
+    font-size: 0.75rem;
   }
 }
 </style>
