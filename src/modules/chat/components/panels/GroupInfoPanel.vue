@@ -321,8 +321,10 @@ function handleOnlineTime(member: any) {
             :src="member.avatar"
             :size="30"
             rounded
+            style="cursor: pointer;"
+            @click="uiStore.openMemberInfo(member.userId, conv?.targetId)"
           />
-          <div class="member-detail">
+          <div class="member-detail" style="cursor: pointer;" @click="uiStore.openMemberInfo(member.userId, conv?.targetId)">
             <h2>{{ member.nickname || member.userId }}</h2>
             <p>{{ handleOnlineTime(member) }}</p>
           </div>

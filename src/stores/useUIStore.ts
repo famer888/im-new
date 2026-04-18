@@ -30,6 +30,9 @@ export const useUIStore = defineStore('ui', () => {
     version: '', url: '',
   })
 
+  const memberInfoVisible = ref(false)
+  const memberInfoTarget = ref({ userId: '', groupId: '' })
+
   // Context menu
   const contextMenuVisible = ref(false)
   const contextMenuPosition = ref({ x: 0, y: 0 })
@@ -106,6 +109,12 @@ export const useUIStore = defineStore('ui', () => {
     upVersionVisible.value = true
   }
   function closeUpVersion() { upVersionVisible.value = false }
+
+  function openMemberInfo(userId: string, groupId?: string) {
+    memberInfoTarget.value = { userId, groupId: groupId || '' }
+    memberInfoVisible.value = true
+  }
+  function closeMemberInfo() { memberInfoVisible.value = false }
 
   function showContextMenu(x: number, y: number, data: Record<string, unknown>) {
     contextMenuPosition.value = { x, y }
@@ -200,6 +209,10 @@ export const useUIStore = defineStore('ui', () => {
     closeInviteFriend,
     openUpVersion,
     closeUpVersion,
+    memberInfoVisible,
+    memberInfoTarget,
+    openMemberInfo,
+    closeMemberInfo,
     quoteMessage,
     selectionMode,
     selectedMessageIds,

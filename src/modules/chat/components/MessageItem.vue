@@ -186,9 +186,11 @@ onMounted(() => {
         :name="senderName"
         :size="36"
         class="msg-avatar"
+        style="cursor: pointer;"
+        @click="uiStore.openMemberInfo(message.senderId)"
       />
       <div class="bubble-area" @contextmenu.stop="handleContextMenu">
-        <span v-if="showAvatar" class="sender-name">{{ senderName }}</span>
+        <span v-if="showAvatar" class="sender-name" style="cursor: pointer;" @click="uiStore.openMemberInfo(message.senderId)">{{ senderName }}</span>
         <!-- In-bubble quote block (matches im's msg/quote.vue) -->
         <div v-if="message.quoteMessage" class="inline-quote-block">
           <h3 class="inline-quote-sender">{{ message.quoteMessage.senderName }}</h3>

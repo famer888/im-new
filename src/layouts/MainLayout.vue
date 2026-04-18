@@ -29,6 +29,7 @@ import CreateGroupDialog from '@/modules/groups/components/CreateGroupDialog.vue
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 import GroupQRCode from '@/modules/chat/components/panels/GroupQRCode.vue'
 import UpVersionDialog from '@/components/UpVersionDialog.vue'
+import MemberInfoDialog from '@/components/MemberInfoDialog.vue'
 
 import ContextMenu from '@/components/ContextMenu.vue'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
@@ -506,6 +507,8 @@ function handleForwardConfirmCancel() {
       :info="uiStore.upVersionInfo"
       @close="uiStore.closeUpVersion()"
     />
+
+    <MemberInfoDialog />
 
     <ContextMenu
       v-model:visible="uiStore.contextMenuVisible"
