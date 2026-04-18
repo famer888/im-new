@@ -188,41 +188,41 @@ function handleClearSubmit(index: number) {
 }
 
 function handleDisbandGroup() {
-  showConfirm('温馨提示', '解散群聊后,所有群成员将失去和群友的联系,同时该群的聊天内容将全部删除', async () => {
+  showConfirm(t('温馨提示'), t('解散群聊确认'), async () => {
     if (!conv.value) return
     try {
       const resp = await disableGroup({ groupId: conv.value.targetId })
       const code = (resp as any)?.commonResult?.errCode
       if (code === 200) {
-        showToast('解散成功')
+        showToast(t('解散成功'))
         uiStore.setRightPanel('none')
         chatStore.deleteConversation(authStore.uid!, conv.value.id)
       } else {
-        showToast((resp as any)?.errorDesc || '操作失败', 'error')
+        showToast((resp as any)?.errorDesc || t('操作失败'), 'error')
       }
     } catch (e) {
       console.error('[GroupInfoPanel] disband failed:', e)
-      showToast('操作失败', 'error')
+      showToast(t('操作失败'), 'error')
     }
   })
 }
 
 function handleExitGroup() {
-  showConfirm('退出群聊', '确认要退出群聊，且删除此群的聊天记录?', async () => {
+  showConfirm(t('退出群聊'), t('退出群聊确认'), async () => {
     if (!conv.value) return
     try {
       const resp = await groupExit({ groupId: conv.value.targetId })
       const code = (resp as any)?.commonResult?.errCode
       if (code === 200) {
-        showToast('退出成功')
+        showToast(t('退出成功'))
         uiStore.setRightPanel('none')
         chatStore.deleteConversation(authStore.uid!, conv.value.id)
       } else {
-        showToast((resp as any)?.errorDesc || '操作失败', 'error')
+        showToast((resp as any)?.errorDesc || t('操作失败'), 'error')
       }
     } catch (e) {
       console.error('[GroupInfoPanel] exit failed:', e)
-      showToast('操作失败', 'error')
+      showToast(t('操作失败'), 'error')
     }
   })
 }
@@ -249,7 +249,7 @@ function handleOnlineTime(member: any) {
   <div class="group-info-panel" v-if="conv">
     <!-- 群别名 + 二维码 (同 im group-alias-qrcode.vue) -->
     <div class="group-alias-qrcode" @click="openQrCode">
-      <h3>群别名</h3>
+      <h3>{{ t('群别名') }}</h3>
       <div class="alias-right">
         <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
           @{{ groupAliasName }}
@@ -262,48 +262,48 @@ function handleOnlineTime(member: any) {
     <!-- 群简介 (同 im group-notice/index.vue) -->
     <div class="group-notice-section" @click="openGroupNotice">
       <div class="notice-head">
-        <h3>群简介</h3>
+        <h3>{{ t('群简介') }}</h3>
         <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
       </div>
       <p class="notice-preview" v-if="notice">{{ notice }}</p>
-      <p class="notice-preview empty" v-else>无简介</p>
+      <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
     </div>
 
     <!-- 配置列表 (同 im config-list.vue) -->
     <ul class="config-list">
       <li>
-        <span>置顶聊天</span>
+        <span>{{ t('置顶聊天') }}</span>
         <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
       </li>
       <li>
-        <span>消息免打扰</span>
+        <span>{{ t('消息免打扰') }}</span>
         <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
       </li>
       <li v-if="isOwner">
-        <span>进群需审核</span>
+        <span>{{ t('进群需审核') }}</span>
         <AppSwitch :model-value="bfJoinCheck" @update:model-value="toggleJoinCheck" />
       </li>
       <li class="action-btn danger" @click="openClearDialog">
-        清空聊天记录
+        {{ t('清空聊天记录') }}
       </li>
       <li v-if="isOwner" class="action-btn danger" @click="handleDisbandGroup">
-        解散群聊
+        {{ t('解散群聊') }}
       </li>
       <li v-else class="action-btn danger" @click="handleExitGroup">
-        删除并退出
+        {{ t('删除并退出') }}
       </li>
     </ul>
 
     <!-- 管理员 (同 im index.vue 管理员 label) -->
     <ul v-if="memberType !== 2" class="manager-label">
-      <li>管理员</li>
+      <li>{{ t('管理员') }}</li>
     </ul>
 
     <!-- 群成员 (同 im member-list.vue) -->
     <div class="member-section">
       <div class="member-head">
         <div class="member-info" @click="showAllMembers = !showAllMembers">
-          <span class="member-title">群成员({{ totalCount }})</span>
+          <span class="member-title">{{ t('群成员列表标题', { count: totalCount }) }}</span>
           <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
         </div>
         <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
@@ -311,7 +311,7 @@ function handleOnlineTime(member: any) {
 
       <div v-if="showAllMembers" class="member-search">
         <input v-model="search" :placeholder="t('搜索')" />
-        <span class="cancel-btn" @click="showAllMembers = false; search = ''">取消</span>
+        <span class="cancel-btn" @click="showAllMembers = false; search = ''">{{ t('取消') }}</span>
       </div>
 
       <ul class="member-list">
@@ -328,13 +328,13 @@ function handleOnlineTime(member: any) {
             <h2>{{ member.nickname || member.userId }}</h2>
             <p>{{ handleOnlineTime(member) }}</p>
           </div>
-          <span v-if="member.role === 0" class="role-badge owner">群主</span>
-          <span v-else-if="member.role === 1" class="role-badge admin">管理员</span>
+          <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
+          <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
         </li>
       </ul>
 
       <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
-      <div class="invite-friend" @click="openInvite">邀请好友</div>
+      <div class="invite-friend" @click="openInvite">{{ t('邀请好友') }}</div>
     </div>
 
     <RadioSelectDialog
