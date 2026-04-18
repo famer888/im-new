@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import EmojiPicker from './send/EmojiPicker.vue'
 
 interface ForwardPayload {
@@ -29,6 +30,9 @@ const extraFileItems = ref<Array<{
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const showEmoji = ref(false)
+const emojiToggleBtnRef = ref<HTMLElement | null>(null)
+const emojiPickerPopoverRef = ref<HTMLElement | null>(null)
+useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 
 const imagePreview = computed(() => {
   if (!props.payload || props.payload.msgType !== 1) return ''
@@ -107,6 +111,7 @@ function removeMainPreview() {
 }
 
 function handleConfirm() {
+  showEmoji.value = false
   emit('confirm', {
     text: text.value.trim(),
     files: extraFileItems.value.map((item) => item.file),
@@ -129,6 +134,11 @@ function handleCancel() {
 }
 
 function handleEditorKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && showEmoji.value) {
+    e.preventDefault()
+    showEmoji.value = false
+    return
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleConfirm()
@@ -187,7 +197,7 @@ function handleEmojiSelect(emoji: string) {
         </div>
 
         <div class="editor-wrap">
-          <button class="emoji-icon" type="button" @click="handleEmojiToggle">☺</button>
+          <button ref="emojiToggleBtnRef" class="emoji-icon" type="button" @click="handleEmojiToggle">☺</button>
           <textarea
             ref="textareaRef"
             v-model="text"
@@ -195,7 +205,7 @@ function handleEmojiSelect(emoji: string) {
             @keydown="handleEditorKeydown"
           />
           <Transition name="popup">
-            <div v-if="showEmoji" class="emoji-popup">
+            <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
               <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
             </div>
           </Transition>

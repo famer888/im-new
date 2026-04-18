@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import EmojiPicker from './send/EmojiPicker.vue'
 
 const { t: $t } = useI18n()
@@ -28,6 +29,9 @@ interface PreviewItem {
 const list = ref<PreviewItem[]>([])
 const text = ref('')
 const showEmoji = ref(false)
+const emojiToggleBtnRef = ref<HTMLElement | null>(null)
+const emojiPickerPopoverRef = ref<HTMLElement | null>(null)
+useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
@@ -115,6 +119,7 @@ function handleRemove(index: number) {
 function handleConfirm() {
   if (list.value.length === 0) return
   if (list.value.some((item) => item.isError)) return
+  showEmoji.value = false
   emit('confirm', {
     text: text.value.trim(),
     files: list.value.map((item) => item.file),
@@ -136,6 +141,11 @@ function handleCancel() {
 }
 
 function handleEditorKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && showEmoji.value) {
+    e.preventDefault()
+    showEmoji.value = false
+    return
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleConfirm()
@@ -202,7 +212,7 @@ function handleEmojiSelect(emoji: string) {
           </div>
 
           <div class="editor-wrap">
-            <button class="emoji-icon" type="button" @click="handleEmojiToggle">
+            <button ref="emojiToggleBtnRef" class="emoji-icon" type="button" @click="handleEmojiToggle">
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" fill="none" stroke="#999" stroke-width="1.5" />
                 <circle cx="9" cy="10" r="1.1" fill="#999" />
@@ -217,7 +227,7 @@ function handleEmojiSelect(emoji: string) {
               @keydown="handleEditorKeydown"
             />
             <Transition name="popup">
-              <div v-if="showEmoji" class="emoji-popup">
+              <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
                 <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
               </div>
             </Transition>
