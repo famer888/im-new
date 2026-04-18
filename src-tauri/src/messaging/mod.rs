@@ -102,6 +102,7 @@ pub fn build_send_private_message_req(
     friend_app_key: Option<(i32, String)>,
     friend_web_key: Option<(i32, String)>,
     own_app_key: Option<(i32, String)>,
+    own_web_key: Option<(i32, String)>,
     send_time: i64,
     flag: i64,
 ) -> Result<Vec<u8>, CryptoError> {
@@ -125,6 +126,8 @@ pub fn build_send_private_message_req(
     let app_content = encrypt_content(friend_app_key)?;
     let web_content = encrypt_content(friend_web_key)?;
     let myself_app_content = encrypt_content(own_app_key)?;
+    let myself_web_content = encrypt_content(own_web_key.clone())?;
+    let own_web_version = own_web_key.as_ref().map(|(v, _)| *v).unwrap_or(1);
 
     let one_to_one = imweb::OneToOneMessage {
         msg_id: 0,
@@ -133,16 +136,18 @@ pub fn build_send_private_message_req(
         msg_type,
         content: vec![], // Empty for encrypted messages
         send_time,
-        version: 1,
+        // 对齐老 im：私聊 version 使用当前账号 web key 的版本号。
+        version: own_web_version,
         content_md5,
         attachment_key: String::new(),
         send_user: None,
         snapchat_time: 0,
-        source: 0,
+        // 对齐老 im：桌面/web 侧统一按 WEB 来源发包。
+        source: 1,
         app_content,
         web_content,
         myself_app_content,
-        myself_web_content: None,
+        myself_web_content,
         group_send: false,
         channel_type: 0,
         msg_from: 0,
