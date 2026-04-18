@@ -7,6 +7,7 @@ import { useChannelStore } from '@/stores/useChannelStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
+import { useSearchStore } from '@/stores/useSearchStore'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
@@ -26,6 +27,7 @@ const channelStore = useChannelStore()
 const uiStore = useUIStore()
 const authStore = useAuthStore()
 const messageStore = useMessageStore()
+const searchStore = useSearchStore()
 
 const selectedCount = computed(() => uiStore.selectedMessageIds.size)
 const allSelf = computed(() => uiStore.selectedMessageItems.every(item => item.isSelf))
@@ -162,9 +164,22 @@ function toggleRightPanel() {
   uiStore.setRightPanel(uiStore.rightPanel === panelType ? 'none' : panelType)
 }
 
+/** 与 im `top.vue serachChat` → `searchSpecifiedChat` 事件一致 */
 function handleSearch() {
-  // 与旧版入口一致：先保留搜索按钮与交互占位
   if (!conversation.value) return
+  const conv = conversation.value
+  const typeStr =
+    conv.type === ConversationType.Friend
+      ? ('friend' as const)
+      : conv.type === ConversationType.Group
+        ? ('group' as const)
+        : ('channel' as const)
+  searchStore.openSearchSpecifiedChat({
+    id: conv.targetId,
+    type: typeStr,
+    pic: typeof avatar.value === 'string' ? avatar.value : '',
+    name: title.value,
+  })
 }
 </script>
 

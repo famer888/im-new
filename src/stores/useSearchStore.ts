@@ -25,12 +25,62 @@ export interface SearchResults {
   messages: Message[]
 }
 
+/** 与 im `search-specified-chat` / `top.vue serachChat` 传入的 `info` 一致：id + type + pic + name */
+export type SearchSpecifiedChatType = 'friend' | 'group' | 'channel'
+
+export interface SearchSpecifiedChatInfo {
+  id: string
+  type: SearchSpecifiedChatType
+  pic?: string
+  name: string
+}
+
+/** 与 im `linkTo` → `chatMsgListSearchScrollTo` 的 data 字段一致，并补充 im-new 定位用字段 */
+export interface ChatMsgListSearchScrollToPayload {
+  id: string
+  type: SearchSpecifiedChatType
+  pic?: string
+  name: string
+  searchMsgInfo: null
+  customMsgId: string | null
+  sendTime: number
+  comType: 'chat'
+  conversationId: string
+  messageId: string
+}
+
+export function conversationIdFromSearchSpecified(info: SearchSpecifiedChatInfo): string {
+  const t = info.type === 'friend' ? 0 : info.type === 'group' ? 1 : 2
+  return `${t}_${info.id}`
+}
+
+function parseConversationRef(conversationId: string): { type: number; targetId: string } {
+  const i = conversationId.indexOf('_')
+  if (i <= 0) return { type: 0, targetId: conversationId }
+  const type = Number(conversationId.slice(0, i))
+  return {
+    type: Number.isFinite(type) ? type : 0,
+    targetId: conversationId.slice(i + 1),
+  }
+}
+
 export const useSearchStore = defineStore('search', () => {
   const keyword = ref('')
   const isSearching = ref(false)
   const results = ref<SearchResults>({ contacts: [], groups: [], channels: [], messages: [] })
   const specifiedChatId = ref<string | null>(null)
   const chatSearchResults = ref<Message[]>([])
+  /** 与 im `home-left` 的 `searchSpecifiedChat` 一致：非空时中间栏展示「当前会话内搜索」 */
+  const searchSpecifiedChatInfo = ref<SearchSpecifiedChatInfo | null>(null)
+  /**
+   * 与 im `eventBase.fnCommunicationSendMsg({ operator: 'chatMsgListSearchScrollTo', data })` 等效：
+   * MessageList 消费后清空。
+   */
+  const chatMsgListSearchScrollRequest = ref<(ChatMsgListSearchScrollToPayload & { requestId: number }) | null>(null)
+  let scrollRequestSeq = 0
+  /** 与 im `chat-msg-list` 的 `idHighlighted` 一致（按服务端 message id） */
+  const highlightSearchMessageId = ref<string | null>(null)
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null
 
   const hasResults = computed(() =>
     results.value.contacts.length > 0 ||
@@ -260,6 +310,60 @@ export const useSearchStore = defineStore('search', () => {
     chatSearchResults.value = []
   }
 
+  function openSearchSpecifiedChat(info: SearchSpecifiedChatInfo) {
+    searchSpecifiedChatInfo.value = info
+    specifiedChatId.value = conversationIdFromSearchSpecified(info)
+    chatSearchResults.value = []
+  }
+
+  function closeSearchSpecifiedChat() {
+    searchSpecifiedChatInfo.value = null
+    clearChatSearch()
+    chatMsgListSearchScrollRequest.value = null
+  }
+
+  /**
+   * 与 im `search-specified-chat.vue` / `searchs.vue` 里 `linkTo` 发往 `chatMsgListSearchScrollTo` 的 data 对齐。
+   */
+  function requestChatMsgListSearchScrollTo(payload: ChatMsgListSearchScrollToPayload) {
+    scrollRequestSeq += 1
+    chatMsgListSearchScrollRequest.value = { ...payload, requestId: scrollRequestSeq }
+  }
+
+  function clearChatMsgListSearchScrollRequest() {
+    chatMsgListSearchScrollRequest.value = null
+  }
+
+  /** 从全局搜索结果的一条 Message 构造与 im `linkTo` 相同的参数 */
+  function buildScrollPayloadFromMessage(m: Message, convName: string, pic?: string): ChatMsgListSearchScrollToPayload {
+    const { type, targetId } = parseConversationRef(m.conversationId)
+    const typeStr: SearchSpecifiedChatType = type === 1 ? 'group' : type === 2 ? 'channel' : 'friend'
+    return {
+      id: targetId,
+      type: typeStr,
+      pic,
+      name: convName,
+      searchMsgInfo: null,
+      customMsgId: m.customMsgId,
+      sendTime: m.sendTime,
+      comType: 'chat',
+      conversationId: m.conversationId,
+      messageId: m.id,
+    }
+  }
+
+  function setSearchMessageHighlight(messageId: string) {
+    if (highlightTimer) {
+      clearTimeout(highlightTimer)
+      highlightTimer = null
+    }
+    highlightSearchMessageId.value = messageId
+    highlightTimer = setTimeout(() => {
+      highlightSearchMessageId.value = null
+      highlightTimer = null
+    }, 2000)
+  }
+
   return {
     keyword,
     isSearching,
@@ -267,9 +371,19 @@ export const useSearchStore = defineStore('search', () => {
     hasResults,
     specifiedChatId,
     chatSearchResults,
+    searchSpecifiedChatInfo,
+    chatMsgListSearchScrollRequest,
+    highlightSearchMessageId,
     search,
     searchInChat,
     clearResults,
     clearChatSearch,
+    openSearchSpecifiedChat,
+    closeSearchSpecifiedChat,
+    requestChatMsgListSearchScrollTo,
+    clearChatMsgListSearchScrollRequest,
+    buildScrollPayloadFromMessage,
+    setSearchMessageHighlight,
+    conversationIdFromSearchSpecified,
   }
 })

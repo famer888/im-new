@@ -108,10 +108,17 @@ function selectChannel(id: string) {
   clearSearchUi()
 }
 
-/** 与 im searchs linkTo 消息项一致：进入对应会话 */
+/**
+ * 与 im `searchs.vue` `linkTo` 一致：切会话 + `chatMsgListSearchScrollTo`（此处走 Pinia 请求 MessageList 滚动）。
+ */
 function selectMessage(m: Message) {
   const { type, targetId } = parseConversationRef(m.conversationId)
   const conv = chatStore.ensureConversation(type, targetId)
+  const convName = convLabelForMessage(m)
+  const av = avatarPropsForMessage(m)
+  searchStore.requestChatMsgListSearchScrollTo(
+    searchStore.buildScrollPayloadFromMessage(m, convName, av.src ?? undefined),
+  )
   chatStore.setCurrentConversation(conv.id)
   uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')

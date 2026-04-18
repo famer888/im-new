@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useSearchStore } from '@/stores/useSearchStore'
 import { MessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
@@ -36,10 +37,15 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
 const uiStore = useUIStore()
+const searchStore = useSearchStore()
 const itemRef = ref<HTMLElement | null>(null)
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
 const isSelected = computed(() => uiStore.selectedMessageIds.has(props.message.id))
+/** 与 im `getCurrentMsgClass` 里 `active`（搜索定位高亮）一致 */
+const isSearchHighlighted = computed(
+  () => searchStore.highlightSearchMessageId === props.message.id,
+)
 
 const senderName = computed(() => {
   if (isSelf.value) return '我'
@@ -161,8 +167,8 @@ onMounted(() => {
 <template>
   <div
     ref="itemRef"
-    v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText]"
-    :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText }]"
+    v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText, isSearchHighlighted]"
+    :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
   >
     <span v-if="dateBannerText" class="showtimeDay">{{ dateBannerText }}</span>
     <!-- Full-area selection overlay (matches im select-item.vue) -->
@@ -211,6 +217,22 @@ onMounted(() => {
   /* 与旧 im `chat-msg-list/index.vue`：有日期条时上留白，条绝对定位居中 */
   &.showTime {
     padding-top: 40px;
+  }
+
+  /* 搜索定位：整行淡淡底色铺满聊天区宽度（抵消自身左右 padding，避免只高亮中间一截） */
+  &.search-hit-active {
+    margin-left: -16px;
+    margin-right: -16px;
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-bottom: 6px;
+    padding-top: 6px;
+    background: rgba(241, 245, 247);
+    border-radius: 0;
+
+    &.showTime {
+      padding-top: 40px;
+    }
   }
 }
 

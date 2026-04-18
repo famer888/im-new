@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
-import { type Message } from '@/stores/useMessageStore'
+import { useMessageStore, type Message } from '@/stores/useMessageStore'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
 import MessageItem from './MessageItem.vue'
 
@@ -17,6 +19,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'load-more'): void
 }>()
+
+const messageStore = useMessageStore()
+const authStore = useAuthStore()
+const searchStore = useSearchStore()
 
 const containerRef = ref<HTMLElement | null>(null)
 
@@ -307,6 +313,69 @@ onUnmounted(() => {
   if (floatHideTimer) clearTimeout(floatHideTimer)
   if (throttleTimer) clearTimeout(throttleTimer)
 })
+
+/**
+ * 与 im `chat-msg-list` 监听 `chatMsgListSearchScrollTo` → `handleMoveToId` + `handleHighlightedSet` 一致。
+ */
+watch(
+  () => searchStore.chatMsgListSearchScrollRequest,
+  async (req) => {
+    const convId = props.conversationId
+    if (!req || !convId || req.conversationId !== convId) return
+    const rid = req.requestId
+    const uid = authStore.uid
+    if (!uid) {
+      searchStore.clearChatMsgListSearchScrollRequest()
+      return
+    }
+
+    stickToBottom.value = false
+
+    for (let i = 0; i < 100; i++) {
+      if (messageStore.getMessages(convId).length > 0) break
+      if (!messageStore.isLoading(convId)) break
+      await new Promise<void>((r) => setTimeout(r, 40))
+    }
+
+    const findInList = () =>
+      messageStore.getMessages(convId).find(
+        (m) =>
+          m.id === req.messageId ||
+          (req.customMsgId != null && String(m.customMsgId) === String(req.customMsgId)),
+      )
+
+    let found = findInList()
+    let guard = 0
+    while (!found && messageStore.hasMore(convId) && guard < 60) {
+      guard += 1
+      await messageStore.loadOlderMessages(uid, convId)
+      if (searchStore.chatMsgListSearchScrollRequest?.requestId !== rid) return
+      found = findInList()
+    }
+
+    await nextTick()
+    await new Promise<void>((r) => requestAnimationFrame(() => r()))
+
+    if (searchStore.chatMsgListSearchScrollRequest?.requestId !== rid) return
+
+    if (found) {
+      for (let i = 0; i < 4; i++) {
+        scrollToItem(req.messageId)
+        await nextTick()
+        await new Promise<void>((r) => requestAnimationFrame(() => r()))
+      }
+      const el = containerRef.value
+      if (el) {
+        el.scrollTop = Math.max(0, el.scrollTop - 50)
+      }
+      searchStore.setSearchMessageHighlight(req.messageId)
+    }
+
+    if (searchStore.chatMsgListSearchScrollRequest?.requestId === rid) {
+      searchStore.clearChatMsgListSearchScrollRequest()
+    }
+  },
+)
 
 function handleItemResize(messageId: string, height: number) {
   updateItemHeight(messageId, height)
