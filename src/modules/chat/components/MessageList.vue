@@ -497,7 +497,7 @@ function onUnreadBannerClick() {
   position: relative;
   min-height: 0;
   contain: strict;
-  background: #f6f6f6;
+  background: rgba(246, 246, 246);
 }
 
 .loading-indicator {
