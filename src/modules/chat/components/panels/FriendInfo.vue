@@ -350,10 +350,12 @@ async function deleteContactItem() {
   align-items: center;
   min-height: 55px;
 
-  :deep(.text-avatar),
-  :deep(img) {
+  /* 仅定位外层头像容器；勿对内部 img 再设 absolute+left，否则会在圆内偏移并被裁成「半张」 */
+  :deep(.text-avatar) {
     position: absolute;
     left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
     width: 45px;
     height: 45px;
   }
