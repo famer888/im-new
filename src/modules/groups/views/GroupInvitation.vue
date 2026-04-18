@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -22,12 +23,16 @@ interface GroupReqItem {
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
 const chatStore = useChatStore()
+const { t } = useI18n()
 const list = ref<GroupReqItem[]>([])
 
-const statusText: Record<number, string> = {
-  1: '已同意',
-  2: '已拒绝',
-  3: '已失效',
+function statusLabel(status: number): string {
+  const map: Record<number, string> = {
+    1: t('已同意'),
+    2: t('已拒绝'),
+    3: t('已失效'),
+  }
+  return map[status] || ''
 }
 
 function formatTime(ts: number): string {
@@ -62,7 +67,10 @@ function syncSidebarPreview(items: GroupReqItem[]) {
   const pendingCount = items.filter((i) => !i.groupReqStatus).length
   if (latest) {
     chatStore.updateGroupNotificationConv(
-      latest.msg || `${latest.groupName} 群通知`,
+      latest.msg
+        || (latest.groupName
+          ? t('群通知条目摘要', { name: latest.groupName })
+          : t('群通知')),
       latest.updateTime || latest.createTime,
       pendingCount,
     )
@@ -110,7 +118,7 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
       }
       syncSidebarPreview(list.value)
     } else {
-      console.error('操作失败', (res as any)?.commonResult?.errMsg)
+      console.error(t('操作失败'), (res as any)?.commonResult?.errMsg)
     }
   } catch (e) {
     console.error('[GroupInvitation] check failed:', e)
@@ -125,7 +133,7 @@ onMounted(() => {
 
 <template>
   <div class="group-invitation">
-    <h1>群通知</h1>
+    <h1>{{ t('群通知') }}</h1>
     <ul class="notify-box">
       <li v-for="(item, index) in list" :key="item.groupReqId">
         <TextAvatar
@@ -148,13 +156,13 @@ onMounted(() => {
           class="right-info"
         >
           <template v-if="!item.groupReqStatus">
-            <button @click="handleCheck(item, false, index)">拒绝</button>
-            <button class="active" @click="handleCheck(item, true, index)">通过</button>
+            <button type="button" @click="handleCheck(item, false, index)">{{ t('拒绝') }}</button>
+            <button type="button" class="active" @click="handleCheck(item, true, index)">{{ t('通过') }}</button>
           </template>
-          <span v-else class="status-label">{{ statusText[item.groupReqStatus] || '' }}</span>
+          <span v-else class="status-label">{{ statusLabel(item.groupReqStatus) }}</span>
         </div>
       </li>
-      <li v-if="list.length === 0" class="empty-tip">暂无群通知</li>
+      <li v-if="list.length === 0" class="empty-tip">{{ t('暂无群通知') }}</li>
     </ul>
   </div>
 </template>
@@ -163,6 +171,8 @@ onMounted(() => {
 .group-invitation {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   background: #fff;
 
@@ -270,7 +280,8 @@ onMounted(() => {
     line-height: 30px;
     padding: 0 10px;
     border-radius: 5px;
-    width: 60px;
+    min-width: 60px;
+    width: auto;
     text-align: center;
     cursor: pointer;
 
@@ -279,14 +290,22 @@ onMounted(() => {
   }
 
   .status-label {
-    display: block;
+    display: inline-block;
     line-height: 30px;
-    height: 30px;
+    min-height: 30px;
+    padding: 0 8px;
     background: #eeeff3;
     color: #999b9e;
-    width: 60px;
+    min-width: 60px;
+    width: auto;
+    max-width: 120px;
     text-align: center;
     border-radius: 5px;
+    font-size: 12px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 </style>

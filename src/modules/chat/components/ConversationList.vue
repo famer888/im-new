@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, FILE_HELPER_TARGET_ID, GROUP_NOTIFICATION_TARGET_ID, GROUP_NOTIFICATION_DISPLAY_NAME, type Conversation } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID, GROUP_NOTIFICATION_TARGET_ID, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -45,7 +45,7 @@ function isGroupNotification(conv: Conversation): boolean {
 }
 
 function getName(conv: Conversation): string {
-  if (isGroupNotification(conv)) return GROUP_NOTIFICATION_DISPLAY_NAME
+  if (isGroupNotification(conv)) return t('群通知')
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conv.targetId)
