@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   message: string
@@ -18,55 +18,71 @@ watch(() => props.visible, (v) => {
     setTimeout(() => emit('update:visible', false), props.duration)
   }
 })
-
-const iconMap: Record<string, string> = {
-  info: 'ℹ️',
-  success: '✅',
-  warning: '⚠️',
-  error: '❌',
-}
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="toast">
-      <div v-if="visible" :class="['toast', `toast--${type}`]">
-        <span class="toast-icon">{{ iconMap[type] }}</span>
-        <span class="toast-text">{{ message }}</span>
+      <div v-if="visible" class="toast-overlay" role="status" aria-live="polite">
+        <div class="toast">
+          <span class="toast-text">{{ message }}</span>
+        </div>
       </div>
     </Transition>
   </Teleport>
 </template>
 
 <style lang="scss" scoped>
-.toast {
+/* 全屏 flex 居中，避免仅用 transform 时与动画冲突 */
+.toast-overlay {
   position: fixed;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
+  inset: 0;
   z-index: 9999;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-size: 13px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  pointer-events: auto;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
 
-  &--info { background: rgba(51, 105, 254, 0.08); color: #3369fe; }
-  &--success { background: #f0f9eb; color: #67c23a; }
-  &--warning { background: #fdf6ec; color: #e6a23c; }
-  &--error { background: #fddcde; color: #f44e5a; }
+.toast {
+  max-width: min(90vw, 320px);
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: #4d4d4d;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  pointer-events: auto;
+}
+
+.toast-text {
+  display: block;
+  color: #ffffff;
 }
 
 .toast-enter-active,
 .toast-leave-active {
-  transition: all 0.3s ease;
+  transition: opacity 0.25s ease;
 }
+
+.toast-enter-active .toast,
+.toast-leave-active .toast {
+  transition: transform 0.25s ease;
+}
+
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(-20px);
+}
+
+.toast-enter-from .toast,
+.toast-leave-to .toast {
+  transform: scale(0.96);
 }
 </style>

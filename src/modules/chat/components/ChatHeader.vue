@@ -9,9 +9,12 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useSearchStore } from '@/stores/useSearchStore'
+import { updateContacts } from '@/api/imBase'
+import { proto } from '@/api/request'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
+import Toast from '@/components/Toast.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
 import userIconV from '@/assets/images/userInfo/user-icon-v.png'
 import editIcon from '@/assets/images/message/edit-icon.png'
@@ -31,6 +34,16 @@ const authStore = useAuthStore()
 const messageStore = useMessageStore()
 const searchStore = useSearchStore()
 const { t, locale } = useI18n()
+
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+function showToast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = msg
+  toastType.value = type
+  toastVisible.value = true
+}
 
 const selectedCount = computed(() => uiStore.selectedMessageIds.size)
 const allSelf = computed(() => uiStore.selectedMessageItems.every(item => item.isSelf))
@@ -156,12 +169,36 @@ function startEditRemark() {
   })
 }
 
-function saveRemark() {
-  if (!friendContact.value) return
+/**
+ * 与 im `top.vue` `friendRemarkUpdate` → `eventFriend.fnRemarkUpdate` →
+ * `UpdateContacts({ op: 4, param: { contactsId, noteName } })` 一致。
+ */
+async function saveRemark() {
+  const contact = friendContact.value
+  if (!contact) return
   editingRemark.value = false
   const val = remarkDraft.value.trim()
-  // 与旧版行为保持一致：空值表示清空备注，回退到昵称显示
-  friendContact.value.remark = val || null
+  const prevRemark = (contact.remark || '').trim()
+  if (val === prevRemark) return
+
+  const prevStored = contact.remark
+  try {
+    await updateContacts({
+      op: proto.ContactsOperator.REMARK,
+      param: {
+        contactsId: Number(contact.id),
+        /** 空字符串表示删除备注（与 im `noteName: isDeleeteRemarkName ? "" : this.name` 一致） */
+        noteName: val === '' ? '' : val,
+      },
+    })
+    contactStore.patchContact(contact.id, { remark: val || null })
+    showToast(t('修改成功'), 'success')
+  } catch (e) {
+    console.error('[ChatHeader] update remark failed', e)
+    contact.remark = prevStored
+    remarkDraft.value = prevStored || contact.nickname || ''
+    showToast(t('操作失败'), 'error')
+  }
 }
 
 function getCurrentPanelType() {
@@ -269,6 +306,12 @@ function handleSearch() {
         <img :src="menuIcon" alt="" />
       </button>
     </div>
+
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </div>
 </template>
 
