@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -20,6 +21,7 @@ const emit = defineEmits<{
   (e: 'load-more'): void
 }>()
 
+const { t, locale } = useI18n()
 const messageStore = useMessageStore()
 const authStore = useAuthStore()
 const searchStore = useSearchStore()
@@ -31,7 +33,9 @@ const sortedMessages = computed(() =>
   [...props.messages].sort((a, b) => a.sendTime - b.sendTime),
 )
 
-const entriesWithDate = computed(() => attachDateSeparators(sortedMessages.value))
+const entriesWithDate = computed(() =>
+  attachDateSeparators(sortedMessages.value, t, locale.value),
+)
 
 /** 用户点击「未读消息」条后隐藏（对齐旧 im 点击消失） */
 const unreadBannerDismissed = ref(false)

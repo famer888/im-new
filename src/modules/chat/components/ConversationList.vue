@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useChatStore, FILE_HELPER_TARGET_ID, GROUP_NOTIFICATION_TARGET_ID, GROUP_NOTIFICATION_DISPLAY_NAME, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
@@ -12,6 +13,7 @@ import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 
+const { t, locale } = useI18n()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
@@ -83,10 +85,11 @@ function getAvatarType(conv: Conversation): 'friend' | 'group' | 'channel' {
 
 function formatTime(ts: number): string {
   if (!ts) return ''
+  void locale.value
   const d = dayjs(ts)
   const today = dayjs()
   if (d.isSame(today, 'day')) return d.format('HH:mm')
-  if (d.isSame(today.subtract(1, 'day'), 'day')) return '昨天'
+  if (d.isSame(today.subtract(1, 'day'), 'day')) return t('昨天')
   if (d.isSame(today, 'year')) return d.format('MM/DD')
   return d.format('YYYY/MM/DD')
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -15,6 +16,7 @@ const props = defineProps<{
   keyword: string
 }>()
 
+const { t, locale } = useI18n()
 const searchStore = useSearchStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
@@ -72,10 +74,11 @@ function previewContent(m: Message): string {
 
 function formatMsgTime(ts: number): string {
   if (!ts) return ''
+  void locale.value
   const d = dayjs(ts)
   const today = dayjs()
   if (d.isSame(today, 'day')) return d.format('HH:mm')
-  if (d.isSame(today.subtract(1, 'day'), 'day')) return '昨天'
+  if (d.isSame(today.subtract(1, 'day'), 'day')) return t('昨天')
   return d.format('MM/DD')
 }
 

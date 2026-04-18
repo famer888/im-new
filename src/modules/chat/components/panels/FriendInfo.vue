@@ -21,7 +21,34 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
-const { t } = useI18n()
+const { t, locale } = useI18n()
+
+/** 与 READ_BURN_TIME_OPTIONS 数值一致，文案走 i18n */
+function readBurnDurationLabel(seconds: number): string {
+  switch (seconds) {
+    case 5: return `5${t('秒')}`
+    case 10: return `10${t('秒')}`
+    case 30: return `30${t('秒')}`
+    case 60: return `1${t('分钟')}`
+    case 3600: return `1${t('小时')}`
+    case 21600: return `6${t('小时')}`
+    case 43200: return `12${t('小时')}`
+    case 86400: return `1${t('天')}`
+    case 259200: return `3${t('天')}`
+    case 604800: return `7${t('天')}`
+    default: return `30${t('秒')}`
+  }
+}
+
+const readBurnTimeOptions = computed(() => {
+  void locale.value
+  return READ_BURN_TIME_OPTIONS.map((o) => ({
+    value: o.value,
+    label: readBurnDurationLabel(o.value),
+  }))
+})
+
+const currentReadBurnLabel = computed(() => readBurnDurationLabel(msgCancelTime.value))
 
 const conv = computed(() => chatStore.currentConversation)
 const contact = computed(() => (conv.value ? contactStore.getContact(conv.value.targetId) : undefined))
@@ -164,11 +191,12 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', handleOutsideClick)
 })
 
-const blacklistConfirmContent = computed(() =>
-  inBlacklist.value
-    ? '确认移除黑名单吗'
-    : '加入黑名单后，你将不再接收到对方的任何消息',
-)
+const blacklistConfirmContent = computed(() => {
+  void locale.value
+  return inBlacklist.value
+    ? t('确认移除黑名单吗')
+    : t('加入黑名单后，你将不再接收到对方的任何消息')
+})
 
 function handleBlacklistToggle() {
   if (!contact.value || working.value) return
@@ -188,7 +216,7 @@ async function confirmBlacklist() {
     if (errCode == 200) {
       inBlacklist.value = next
       contactStore.patchContact(contact.value.id, { bfMyBlack: next })
-      showToast(next ? '加入成功' : '移除成功')
+      showToast(next ? t('加入成功') : t('移除成功'))
     } else {
       const errorDesc = (res as any)?.errorDesc
       if (errorDesc) showToast(errorDesc, 'error')
@@ -269,35 +297,35 @@ async function deleteContactItem() {
       />
       <div class="profile-text">
         <h2>{{ contact.remark || contact.nickname || contact.id }}</h2>
-        <p>
-          ID: {{ contact.id }}
-          <span class="copy-btn" @click="copyId">复制</span>
+        <p class="id-row">
+          <span class="id-line">{{ t('ID：') }}{{ contact.id }}</span>
+          <button type="button" class="copy-btn" @click="copyId">{{ t('复制') }}</button>
         </p>
       </div>
     </div>
 
     <ul class="config-list">
       <li>
-        <span>置顶聊天</span>
+        <span>{{ t('置顶聊天') }}</span>
         <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
       </li>
       <li>
-        <span>消息免打扰</span>
+        <span>{{ t('消息免打扰') }}</span>
         <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
       </li>
       <li>
-        <span>阅后即焚</span>
+        <span>{{ t('阅后即焚') }}</span>
         <AppSwitch :model-value="readBurn" @update:model-value="toggleReadBurn" />
       </li>
       <li v-if="readBurn">
-        <span>消息销毁时间</span>
+        <span>{{ t('消息销毁时间') }}</span>
         <div class="select" @click="handleOpenTimeMenu">
-          {{ READ_BURN_TIME_OPTIONS.find((item) => item.value === msgCancelTime)?.label || '30秒' }}
+          {{ currentReadBurnLabel }}
           <img :src="choiceIcon" alt="" />
         </div>
         <div v-if="showTimeMenu" class="menuTimeList" @click.stop>
           <div
-            v-for="item in READ_BURN_TIME_OPTIONS"
+            v-for="item in readBurnTimeOptions"
             :key="item.value"
             class="menu-item"
             @click="updateReadBurnTime(item.value)"
@@ -307,11 +335,11 @@ async function deleteContactItem() {
         </div>
       </li>
       <li>
-        <span>加入黑名单</span>
+        <span>{{ t('加入黑名单') }}</span>
         <AppSwitch :model-value="inBlacklist" @update:model-value="handleBlacklistToggle" />
       </li>
-      <li class="danger friend-left" @click="openClearDialog">清空聊天记录</li>
-      <li class="danger friend-left" @click="deleteContactItem">删除联系人</li>
+      <li class="danger friend-left" @click="openClearDialog">{{ t('清空聊天记录') }}</li>
+      <li class="danger friend-left" @click="deleteContactItem">{{ t('删除联系人') }}</li>
     </ul>
 
     <ConfirmDialog
@@ -372,31 +400,47 @@ async function deleteContactItem() {
     color: #333;
   }
 
-  p {
+  .id-row {
     margin: 0;
     width: 100%;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    gap: 8px 10px;
     font-size: 12px;
     color: #333;
+  }
+
+  .id-line {
+    flex: 1;
+    min-width: 0;
+    word-break: break-all;
   }
 }
 
 .copy-btn {
+  border: none;
   background: #326aff;
   color: #fff;
-  width: 36px;
-  height: 20px;
   border-radius: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  margin-left: 10px;
+  line-height: 1.2;
+  padding: 4px 10px;
+  min-height: 24px;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
 
   &:hover {
-    opacity: 0.8;
+    background: #2958e6;
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgba(50, 106, 255, 0.45);
+    outline-offset: 2px;
   }
 }
 
