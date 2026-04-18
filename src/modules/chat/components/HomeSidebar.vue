@@ -37,6 +37,7 @@ const chatStore = useChatStore()
 const router = useRouter()
 
 const searchKeyword = ref('')
+const searchInputRef = ref<{ focus: () => void } | null>(null)
 const addAction = ref(false)
 const avatarWrapRef = ref<HTMLElement | null>(null)
 const accountDialogPosition = ref({ x: 74, y: 56 })
@@ -153,6 +154,13 @@ function handleClearSearch() {
   if (searchStore.searchSpecifiedChatInfo) {
     searchStore.clearChatSearch()
   }
+}
+
+/** 与 im 搜索条一致：点击输入区域外缘仍可聚焦输入框，便于开始搜索 */
+function handleSearchBarClick(e: MouseEvent) {
+  const el = e.target as HTMLElement
+  if (el.closest('.add-btn') || el.closest('.add-cancel') || el.closest('.icon-back')) return
+  searchInputRef.value?.focus()
 }
 
 function handleBackSpecifiedChat() {
@@ -349,7 +357,11 @@ onBeforeUnmount(() => {
       class="list-area"
       :style="{ width: `${listWidth}px`, maxWidth: `${listWidthMax}px` }"
     >
-      <div class="sidebar-search" :class="{ 'has-back': !!searchStore.searchSpecifiedChatInfo }">
+      <div
+        class="sidebar-search"
+        :class="{ 'has-back': !!searchStore.searchSpecifiedChatInfo }"
+        @click="handleSearchBarClick"
+      >
         <img
           v-if="searchStore.searchSpecifiedChatInfo"
           class="icon-back"
@@ -358,6 +370,7 @@ onBeforeUnmount(() => {
           @click="handleBackSpecifiedChat"
         />
         <SearchInput
+          ref="searchInputRef"
           v-model="searchKeyword"
           :placeholder="searchPlaceholder"
           @search="handleSearch"
@@ -383,13 +396,13 @@ onBeforeUnmount(() => {
           v-if="uiStore.sidebarTab === 'contacts' && addAction && searchKeyword.trim()"
           :search-text="searchKeyword"
         />
-        <!-- 传输 Tab 始终显示 SendHelper（含「传输助手」行）；避免搜索框残留关键字时把整个侧栏换成搜索结果 -->
-        <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
+        <!-- 与 im home-left/index.vue 一致：有搜索关键字时中间栏为 ComSearchs（SearchResults），空关键字时传输 Tab 才显示 SendHelper -->
         <ChatSpecifiedSearch
           v-else-if="searchStore.searchSpecifiedChatInfo"
           :search-text="searchKeyword"
         />
         <SearchResults v-else-if="searchKeyword.trim()" :keyword="searchKeyword" />
+        <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
         <template v-else>
           <ConversationList v-if="uiStore.sidebarTab === 'chats'" />
           <AddressBook v-else-if="uiStore.sidebarTab === 'contacts'" />
