@@ -350,22 +350,22 @@ async function handleExportQrCode(qrCodeBase64: string) {
 
   .buttons {
     display: flex;
-    align-items: center;
-    justify-content: center;
+    align-items: flex-start;
+    justify-content: space-evenly;
+    width: 100%;
+    box-sizing: border-box;
     border: none;
     flex-shrink: 0;
-    padding: 20px 0 30px;
+    padding: 20px 8px 30px;
+    gap: 4px;
 
     .btn-item {
+      flex: 1 1 0;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      margin-left: 20px;
-
-      &:first-child {
-        margin-left: 0;
-      }
+      justify-content: flex-start;
     }
 
     button {
@@ -396,9 +396,16 @@ async function handleExportQrCode(qrCodeBase64: string) {
     }
 
     .btn-title {
+      display: block;
+      width: 100%;
+      max-width: 100%;
       font-size: 12px;
       color: #000;
       font-weight: 300;
+      line-height: 1.35;
+      text-align: center;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
     }
   }
 }
