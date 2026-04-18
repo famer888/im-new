@@ -110,6 +110,24 @@ export function useVirtualScroll<T>({
     }
   }
 
+  /**
+   * 根据滚动偏移找到「视口顶端」落在哪一条消息上（与旧 im 用 offsetTop 遍历等效，供浮动日期条使用）。
+   */
+  function indexAtScrollTop(scrollTopValue: number): number {
+    const list = items.value
+    if (list.length === 0) return 0
+    let acc = 0
+    for (let i = 0; i < list.length; i++) {
+      const key = getItemKey(list[i])
+      const h = heightCache.get(key) ?? estimatedItemHeight
+      if (scrollTopValue >= acc && scrollTopValue < acc + h) {
+        return i
+      }
+      acc += h
+    }
+    return list.length - 1
+  }
+
   onMounted(() => {
     if (containerRef.value) {
       containerHeight.value = containerRef.value.clientHeight
@@ -141,5 +159,6 @@ export function useVirtualScroll<T>({
     scrollToBottom,
     scrollToItem,
     visibleRange,
+    indexAtScrollTop,
   }
 }

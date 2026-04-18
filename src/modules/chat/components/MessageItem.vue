@@ -25,7 +25,11 @@ const TransferMessage = defineAsyncComponent(() => import('./messages/TransferMe
 const LocationMessage = defineAsyncComponent(() => import('./messages/LocationMessage.vue'))
 const SystemNotification = defineAsyncComponent(() => import('./messages/SystemNotification.vue'))
 
-const props = defineProps<{ message: Message }>()
+const props = defineProps<{
+  message: Message
+  /** 与旧 im `n.showTime` + `showTimeDay`：本条为「新一天」首条时居中显示日期条 */
+  dateBannerText?: string | null
+}>()
 const emit = defineEmits<{ (e: 'resize', height: number): void }>()
 
 const authStore = useAuthStore()
@@ -157,9 +161,10 @@ onMounted(() => {
 <template>
   <div
     ref="itemRef"
-    v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected]"
-    :class="['message-item', { 'is-self': displayAsSelf }]"
+    v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText]"
+    :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText }]"
   >
+    <span v-if="dateBannerText" class="showtimeDay">{{ dateBannerText }}</span>
     <!-- Full-area selection overlay (matches im select-item.vue) -->
     <div
       v-if="uiStore.selectionMode && !isSystemMsg"
@@ -202,6 +207,28 @@ onMounted(() => {
 .message-item {
   padding: 6px 16px;
   position: relative;
+
+  /* 与旧 im `chat-msg-list/index.vue`：有日期条时上留白，条绝对定位居中 */
+  &.showTime {
+    padding-top: 40px;
+  }
+}
+
+.showtimeDay {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  margin-left: 0;
+  background-color: rgba(0, 0, 0, 0.2);
+  color: white;
+  font-size: 12px;
+  padding: 0.5em;
+  text-align: center;
+  line-height: 1em;
+  height: auto;
+  border-radius: 5px;
 }
 
 .select-overlay {
