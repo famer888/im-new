@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
@@ -24,6 +25,7 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
+const { t } = useI18n()
 
 const searchText = ref('')
 const selectedType = ref<null | 'friend' | 'group' | 'channel'>(null)
@@ -31,10 +33,10 @@ const scrollShowIndex = ref(0)
 const listRef = ref<HTMLElement | null>(null)
 
 const currentTitle = computed(() => {
-  if (selectedType.value === 'friend') return '选择朋友'
-  if (selectedType.value === 'group') return '选择群聊'
-  if (selectedType.value === 'channel') return '选择频道'
-  return '消息转发'
+  if (selectedType.value === 'friend') return t('选择朋友')
+  if (selectedType.value === 'group') return t('选择群聊')
+  if (selectedType.value === 'channel') return t('选择频道')
+  return t('消息转发')
 })
 
 interface ForwardItem {
@@ -235,7 +237,7 @@ onBeforeUnmount(() => {
         </h1>
         <div class="search">
           <img :src="searchIcon" />
-          <input v-model="searchText" placeholder="搜索" />
+          <input v-model="searchText" :placeholder="t('搜索')" />
           <picture v-if="searchText !== ''" @click="searchText = ''">
             <img :src="searchCloseIcon" />
           </picture>
@@ -245,28 +247,28 @@ onBeforeUnmount(() => {
             <div v-show="selectedType === null" class="top-items">
               <div class="top-item" @click="handleSelectFriend">
                 <img class="avatar" :src="logoFriend" />
-                <span class="label">选择朋友</span>
+                <span class="label">{{ t('选择朋友') }}</span>
                 <img class="arrow" :src="arrowRight" />
               </div>
               <div class="divider"></div>
               <div class="top-item" @click="handleSelectGroup">
                 <img class="avatar" :src="logoGroup" />
-                <span class="label">选择群聊</span>
+                <span class="label">{{ t('选择群聊') }}</span>
                 <img class="arrow" :src="arrowRight" />
               </div>
               <div class="divider"></div>
               <div class="top-item" @click="handleSelectChannel">
                 <img class="avatar" :src="logoChannel" />
-                <span class="label">选择频道</span>
+                <span class="label">{{ t('选择频道') }}</span>
                 <img class="arrow" :src="arrowRight" />
               </div>
             </div>
             <div v-show="selectedType === null" class="section-separator">
-              <span>最近</span>
+              <span>{{ t('最近') }}</span>
             </div>
             <section ref="listRef">
               <div v-if="list.length === 0" class="empty-state">
-                暂无数据
+                {{ t('暂无数据') }}
               </div>
               <ul
                 v-else
@@ -295,7 +297,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="btns">
-          <span @click.stop="handleClose">取消</span>
+          <span @click.stop="handleClose">{{ t('取消') }}</span>
         </div>
       </div>
     </div>

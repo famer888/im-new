@@ -67,8 +67,44 @@ import Toast from '@/components/Toast.vue'
 import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
 import { useUIStore } from '@/stores/useUIStore'
 
-const { t: $t } = useI18n()
+const { t: $t, locale } = useI18n()
 const uiStore = useUIStore()
+
+/** 英文/葡语/越南语界面下，系统另存为等对话框更适合拉丁文件名 */
+function prefersAsciiFriendlyFileNames(): boolean {
+  const loc = (locale.value || '').toLowerCase()
+  return loc.startsWith('en') || loc.startsWith('pt') || loc.startsWith('vi')
+}
+
+const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/
+
+function safeFileNameId(): string {
+  return String(props.groupId || 'group').replace(/[/\\?%*:|"<>.\s]/g, '_').slice(0, 48) || 'group'
+}
+
+function sanitizeFileNameStem(name: string): string {
+  const s = name.replace(/[/\\?%*:|"<>]/g, '_').trim().slice(0, 120)
+  return s || $t('群二维码')
+}
+
+/** 保存/转发图片默认主文件名（不含扩展名）：英文界面下中文群名改为 Group-QR-{id} 等 */
+function qrImageFileStem(): string {
+  const raw = props.groupName?.trim() ?? ''
+  const idPart = safeFileNameId()
+  const latinUi = prefersAsciiFriendlyFileNames()
+
+  if (!raw) {
+    return latinUi ? $t('群二维码默认文件名', { id: idPart }) : sanitizeFileNameStem($t('群二维码'))
+  }
+  if (latinUi && CJK_RE.test(raw)) {
+    return $t('群二维码默认文件名', { id: idPart })
+  }
+  return sanitizeFileNameStem(raw)
+}
+
+function qrImageFileName(): string {
+  return `${qrImageFileStem()}.png`
+}
 
 const props = defineProps<{
   visible: boolean
@@ -114,11 +150,11 @@ watch(() => props.visible, async (v) => {
       if (resQrUrl) {
         qrUrl.value = shortLink || resQrUrl
       } else {
-        showToast('二维码获取失败', 'error')
+        showToast($t('二维码获取失败'), 'error')
       }
     } catch (e) {
       console.error('get group qrcode failed:', e)
-      showToast('二维码获取失败', 'error')
+      showToast($t('二维码获取失败'), 'error')
     } finally {
       loading.value = false
     }
@@ -133,11 +169,11 @@ async function handleGroupQrCodeGet() {
     if (resQrUrl) {
       qrUrl.value = shortLink || resQrUrl
     } else {
-      showToast('二维码获取失败', 'error')
+      showToast($t('二维码获取失败'), 'error')
     }
   } catch (e) {
     console.error('reset group qrcode failed:', e)
-    showToast('二维码获取失败', 'error')
+    showToast($t('二维码获取失败'), 'error')
   }
 }
 
@@ -146,18 +182,18 @@ function handleCopy() {
   navigator.clipboard.writeText(qrUrl.value).then(() => {
     showToast($t('复制成功'))
   }).catch(() => {
-    showToast('复制失败', 'error')
+    showToast($t('复制失败'), 'error')
   })
 }
 
 function handleForward() {
   const qrCodeBase64 = buildQrCodeImage()
   if (!qrCodeBase64) {
-    showToast('转发失败', 'error')
+    showToast($t('转发失败'), 'error')
     return
   }
 
-  const imageName = `${props.groupName || '群二维码'}.png`
+  const imageName = qrImageFileName()
   uiStore.openForwardDialogWithPayload({
     msgType: 1,
     content: JSON.stringify({
@@ -219,7 +255,7 @@ function buildQrCodeImage(): string | null {
 function handleSave() {
   const dataUrl = buildQrCodeImage()
   if (!dataUrl) {
-    showToast('保存失败: 未获取到二维码画布', 'error')
+    showToast($t('保存失败无画布'), 'error')
     return
   }
   handleExportQrCode(dataUrl)
@@ -227,14 +263,14 @@ function handleSave() {
 
 async function handleExportQrCode(qrCodeBase64: string) {
   const suffix = '.png'
-  const fileName = `${props.groupName || '群二维码'}${suffix}`
+  const fileName = qrImageFileName()
 
   if (!isTauri()) {
     const link = document.createElement('a')
     link.download = fileName
     link.href = qrCodeBase64
     link.click()
-    showToast('保存成功')
+    showToast($t('保存成功'))
     return
   }
 
@@ -244,13 +280,13 @@ async function handleExportQrCode(qrCodeBase64: string) {
     const finalPath = filePath.endsWith(suffix) ? filePath : `${filePath}${suffix}`
     const err = await exportBase64ImgToLocal(qrCodeBase64, finalPath)
     if (err) {
-      showToast(`保存失败: ${err.message}`, 'error')
+      showToast($t('保存失败详情', { detail: err.message }), 'error')
       return
     }
-    showToast('保存成功')
+    showToast($t('保存成功'))
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
-    showToast(`保存失败: ${message}`, 'error')
+    showToast($t('保存失败详情', { detail: message }), 'error')
   }
 }
 </script>
