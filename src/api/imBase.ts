@@ -209,6 +209,26 @@ export async function findContactsList(
 }
 
 /**
+ * 群别名 / 关键字查群（与老 im `imGroup.groupSearch` → `/group/groupSearch` 一致）
+ * POST /group/groupSearch
+ */
+export async function groupSearch(
+  data: { fromUid: number; context: string },
+  baseUrl?: string,
+): Promise<proto.GroupOrUserResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupSearch`,
+    reqType: proto.GroupOrUserReq,
+    respType: proto.GroupOrUserResp,
+    data: {
+      fromUid: data.fromUid,
+      context: data.context,
+    },
+  })
+}
+
+/**
  * Get group list.
  * POST /group/groupContactList
  */
