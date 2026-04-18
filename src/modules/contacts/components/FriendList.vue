@@ -6,6 +6,14 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 
+const props = withDefaults(
+  defineProps<{
+    /** 嵌入「添加好友」等侧栏：隐藏「联系人」标题与底部人数统计 */
+    embed?: boolean
+  }>(),
+  { embed: false },
+)
+
 const contactStore = useContactStore()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -66,8 +74,8 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
 </script>
 
 <template>
-  <div class="friend-root">
-    <h2 class="section-title">联系人</h2>
+  <div class="friend-root" :class="{ embed: props.embed }">
+    <h2 v-if="!props.embed" class="section-title">联系人</h2>
     <div v-for="group in grouped" :key="group.letter" class="friend-group">
       <div class="group-letter">{{ group.letter }}</div>
       <ul class="friend-list">
@@ -89,7 +97,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
         </li>
       </ul>
     </div>
-    <div class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
+    <div v-if="!props.embed" class="contact-count">{{ contactStore.contacts.length }} 位联系人</div>
   </div>
 </template>
 
@@ -170,5 +178,9 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
   color: #333;
   border-top: 1px solid #eee;
   margin-bottom: 50px;
+}
+
+.friend-root.embed .group-letter:first-of-type {
+  border-top: none;
 }
 </style>
