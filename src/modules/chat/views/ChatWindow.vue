@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -32,13 +32,31 @@ const isFileHelperChat = computed(() => {
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
 
-/** 进入会话瞬间的未读条数（markAsRead 清零前从列表读取），供「未读消息」分隔条展示 */
+/** 进入会话时的未读条数快照，供「未读消息」分隔条（markAsRead 后列表里会变成 0，故单独存） */
 const sessionInitialUnread = ref(0)
+/** 已为当前会话执行过 markAsRead 后，不再用 store 覆盖快照，避免把已算好的 N 冲掉 */
+const unreadSnapshotLocked = ref(false)
 
 function captureUnreadSnapshot(convId: string) {
   const conv = chatStore.conversations.find((c) => c.id === convId)
-  sessionInitialUnread.value = conv?.unreadCount ?? 0
+  const n = conv?.unreadCount ?? 0
+  sessionInitialUnread.value = Math.max(sessionInitialUnread.value, n)
 }
+
+/**
+ * 会话列表可能晚于路由到达：在 locked 前持续用 store 里的 unread 抬快照，
+ * 解决「第一次 capture 为 0、分隔条永远不出现」。
+ */
+watch(
+  [conversationId, () => chatStore.conversations],
+  () => {
+    if (unreadSnapshotLocked.value) return
+    const id = conversationId.value
+    if (!id) return
+    captureUnreadSnapshot(id)
+  },
+  { deep: true, immediate: true },
+)
 
 function loadGroupMembersIfNeeded(convId: string) {
   if (!authStore.uid || !convId) return
@@ -50,12 +68,26 @@ function loadGroupMembersIfNeeded(convId: string) {
 
 watch(
   conversationId,
-  async (newId) => {
-    if (!newId || !authStore.uid) return
-    captureUnreadSnapshot(newId)
-    await messageStore.loadMessages(authStore.uid, newId)
-    await chatStore.markAsRead(authStore.uid, newId)
-    loadGroupMembersIfNeeded(newId)
+  async (newId, oldId) => {
+    if (oldId !== undefined && newId !== oldId) {
+      sessionInitialUnread.value = 0
+      unreadSnapshotLocked.value = false
+    }
+    if (!newId) {
+      sessionInitialUnread.value = 0
+      unreadSnapshotLocked.value = false
+      return
+    }
+    if (!authStore.uid) return
+    const myId = newId
+    await nextTick()
+    captureUnreadSnapshot(myId)
+    await messageStore.loadMessages(authStore.uid, myId)
+    if (conversationId.value !== myId) return
+    await chatStore.markAsRead(authStore.uid, myId)
+    if (conversationId.value !== myId) return
+    unreadSnapshotLocked.value = true
+    loadGroupMembersIfNeeded(myId)
   },
   { immediate: true },
 )
