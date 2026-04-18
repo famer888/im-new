@@ -90,17 +90,26 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
           v-for="contact in group.items"
           :key="contact.id"
           class="friend-item"
-          :class="{ active: activeFriendId === contact.id }"
+          :class="{
+            active: activeFriendId === contact.id,
+            'friend-online': contact.bfShowOnline !== false && Boolean(contact.online),
+          }"
           @click="handleSelect(contact)"
         >
-          <TextAvatar
-            class="avatar"
-            :name="contact.nickname || contact.id"
-            :src="contact.avatar"
-            rounded
-            :size="35"
-          />
+          <div class="friend-avatar-wrap">
+            <TextAvatar
+              class="avatar"
+              :name="contact.nickname || contact.id"
+              :src="contact.avatar"
+              rounded
+              :size="35"
+            />
+          </div>
           <h3>{{ getDisplayName(contact) }}</h3>
+          <!-- 与 im address-book/friends.vue：<p v-if="item.online">{{ $t("在线") }}</p> -->
+          <p v-if="contact.bfShowOnline !== false && contact.online" class="online-label">
+            {{ t('在线') }}
+          </p>
         </li>
       </ul>
     </div>
@@ -158,12 +167,28 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
     background: #efefef;
   }
 
-  .avatar {
+  &.friend-online .friend-avatar-wrap::after {
+    content: '';
     position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    right: -1px;
+    bottom: -1px;
+    background: #10d561;
+    border: 1px solid #fcfcfc;
+    box-sizing: border-box;
+    z-index: 2;
   }
+}
+
+.friend-avatar-wrap {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 35px;
+  height: 35px;
 }
 
 .friend-item > h3 {
@@ -175,6 +200,17 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
   font-size: 14px;
   color: #333;
   font-weight: normal;
+  line-height: 18px;
+}
+
+/* 与 im address-book/index.vue `> ul > li > p` 一致 */
+.friend-item > p.online-label {
+  margin: 0;
+  margin-top: 4px;
+  width: 140px;
+  font-size: 14px;
+  font-weight: 400;
+  color: #999;
   line-height: 18px;
 }
 

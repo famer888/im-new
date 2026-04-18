@@ -23,6 +23,12 @@ export interface Contact {
   msgCancelTime?: number
   status: number
   updatedAt: number
+  /** 与 im `user.userOnOrOffline.online` 一致 */
+  online?: boolean
+  /** 与 im `userOnOrOffline.createTime` 一致（毫秒，用于「xx前在线」） */
+  onlineStatusUpdateTime?: number
+  /** 为 false 时不展示在线状态（与 proto `bfShow` 一致） */
+  bfShowOnline?: boolean
 }
 
 export const useContactStore = defineStore('contact', () => {
@@ -63,6 +69,15 @@ export const useContactStore = defineStore('contact', () => {
         const list = resp.contactsList || []
         for (const item of list) {
           const u = (item as any).userInfo || item
+          const oo = u?.userOnOrOffline
+          const onlinePatch =
+            oo != null
+              ? {
+                  online: Boolean(oo.online),
+                  onlineStatusUpdateTime: Number(oo.createTime || 0) || undefined,
+                  bfShowOnline: (oo as { bfShow?: boolean }).bfShow !== false,
+                }
+              : {}
           allContacts.push({
             id: String(u.uid || ''),
             nickname: u.nickName || u.nickname || null,
@@ -72,6 +87,7 @@ export const useContactStore = defineStore('contact', () => {
             remark: (item as any).depict || null,
             status: Number(u.uid) > 0 ? 1 : 0,
             updatedAt: Number((item as any).updateTime || 0),
+            ...onlinePatch,
           })
         }
         const totalCount = resp.count || 0
@@ -126,6 +142,23 @@ export const useContactStore = defineStore('contact', () => {
     searchResults.value = searchResults.value.filter((c) => c.id !== id)
   }
 
+  /** 与 im 20601 `PushUserOnOrOffLineMessageResp` / 好友列表刷新一致 */
+  function applyOnlineStatusUpdates(
+    rows: Array<{ uid: string; online: boolean; createTime: number; bfShow?: boolean }>,
+  ) {
+    for (const row of rows) {
+      if (!row.uid) continue
+      const patch = {
+        online: row.online,
+        onlineStatusUpdateTime: row.createTime || undefined,
+        bfShowOnline: row.bfShow !== false,
+      }
+      patchContact(row.uid, patch)
+      const inSearch = searchResults.value.find((c) => c.id === row.uid)
+      if (inSearch) Object.assign(inSearch, patch)
+    }
+  }
+
   return {
     contacts,
     searchResults,
@@ -136,5 +169,6 @@ export const useContactStore = defineStore('contact', () => {
     getDisplayName,
     patchContact,
     removeContact,
+    applyOnlineStatusUpdates,
   }
 })

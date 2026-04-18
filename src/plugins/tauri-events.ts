@@ -75,6 +75,15 @@ export async function setupTauriListeners() {
     }
   })
 
+  /** 与 im 20601 `PushUserOnOrOffLineMessageResp` 一致：实时刷新好友在线状态 */
+  listen<
+    Array<{ uid: string; online: boolean; createTime: number; bfShow?: boolean }>
+  >('user:online-status', (event) => {
+    const contactStore = useContactStore()
+    const raw = Array.isArray(event.payload) ? event.payload : []
+    contactStore.applyOnlineStatusUpdates(raw)
+  })
+
   listen<Message[]>('msg:batch', async (event) => {
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
