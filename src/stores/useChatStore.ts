@@ -12,8 +12,6 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
 
 /** 与旧 im 一致：系统占位好友 id，会话 id 为 `0_9901` */
 export const FILE_HELPER_TARGET_ID = '9901'
-/** 列表/侧栏展示名（与参考 UI「传输助手」一致） */
-export const FILE_HELPER_DISPLAY_NAME = '传输助手'
 
 /** 群通知伪会话 id（与 im id:"invitation" type:"group" 一致） */
 export const GROUP_NOTIFICATION_TARGET_ID = 'invitation'

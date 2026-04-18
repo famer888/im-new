@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { useChatStore, FILE_HELPER_TARGET_ID, FILE_HELPER_DISPLAY_NAME } from '@/stores/useChatStore'
+import { useI18n } from 'vue-i18n'
+import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -28,6 +29,7 @@ const uiStore = useUIStore()
 const authStore = useAuthStore()
 const messageStore = useMessageStore()
 const searchStore = useSearchStore()
+const { t, locale } = useI18n()
 
 const selectedCount = computed(() => uiStore.selectedMessageIds.size)
 const allSelf = computed(() => uiStore.selectedMessageItems.every(item => item.isSelf))
@@ -84,8 +86,9 @@ const friendContact = computed(() => {
 })
 
 const title = computed(() => {
+  void locale.value
   if (!conversation.value) return ''
-  if (conversation.value.targetId === FILE_HELPER_TARGET_ID) return FILE_HELPER_DISPLAY_NAME
+  if (conversation.value.targetId === FILE_HELPER_TARGET_ID) return t('传输助手')
   switch (conversation.value.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conversation.value.targetId)
@@ -200,7 +203,7 @@ function handleSearch() {
         <picture class="file-helper-picture">
           <img :src="fileHelperIcon" alt="" />
         </picture>
-        <span class="file-helper-title">{{ FILE_HELPER_DISPLAY_NAME }}</span>
+        <span class="file-helper-title">{{ t('传输助手') }}</span>
         <img class="file-helper-v" :src="userIconV" alt="" />
       </template>
       <template v-else>
