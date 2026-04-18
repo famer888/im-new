@@ -49,14 +49,14 @@ onMounted(async () => {
         <div>
           <img class="login-num-icon" :src="logoNumIcon" alt="" />
         </div>
-        <div class="version">{{ t('版本信息') }} {{ appVersion }}</div>
+        <div class="version">{{ t('版本') }} {{ appVersion }}</div>
       </div>
     </div>
 
     <div v-if="hasAnyTasks" class="tasks-section">
-      <div class="helper-header">文件传输</div>
+      <div class="helper-header">{{ t('文件传输') }}</div>
       <div v-if="activeTasks.length > 0" class="task-section">
-        <div class="section-title">传输中</div>
+        <div class="section-title">{{ t('传输中') }}</div>
         <div v-for="task in activeTasks" :key="task.id" class="task-item">
           <span class="task-icon">📎</span>
           <div class="task-info">
@@ -69,7 +69,7 @@ onMounted(async () => {
         </div>
       </div>
       <div v-if="completedTasks.length > 0" class="task-section">
-        <div class="section-title">已完成</div>
+        <div class="section-title">{{ t('已完成') }}</div>
         <div v-for="task in completedTasks" :key="task.id" class="task-item">
           <span class="task-icon">✅</span>
           <div class="task-info">

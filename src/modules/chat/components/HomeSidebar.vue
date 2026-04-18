@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -30,6 +31,7 @@ import addBlueIcon from '@/assets/images/headNav/add_blue.png'
 
 const uiStore = useUIStore()
 const searchStore = useSearchStore()
+const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const router = useRouter()
@@ -54,9 +56,12 @@ const settingsWrapRef = ref<HTMLElement | null>(null)
 const settingsMenuRef = ref<HTMLElement | null>(null)
 const navBarRef = ref<HTMLElement | null>(null)
 const logoutConfirmVisible = ref(false)
-const searchPlaceholder = computed(() =>
-  addAction.value && uiStore.sidebarTab === 'contacts' ? '搜索手机号/ID/群别名' : '搜索',
-)
+const searchPlaceholder = computed(() => {
+  void locale.value
+  return addAction.value && uiStore.sidebarTab === 'contacts'
+    ? t('搜索手机号/ID/群别名')
+    : t('搜索')
+})
 
 /** 与 im home-left/index.vue 一致：中间列表可左右拖拽改宽 */
 const NAV_BAR_WIDTH = 72
