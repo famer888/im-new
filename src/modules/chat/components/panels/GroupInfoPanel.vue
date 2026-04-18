@@ -27,8 +27,6 @@ const conv = computed(() => chatStore.currentConversation)
 const group = computed(() => conv.value ? groupStore.getGroup(conv.value.targetId) : undefined)
 
 const memberType = ref(-1)
-const bfTop = ref(false)
-const bfDisturb = ref(false)
 const bfJoinCheck = ref(false)
 const bfResetQrcode = ref(false)
 const groupAliasName = ref('')
@@ -117,9 +115,6 @@ onMounted(async () => {
   if (!conv.value) return
   const gid = conv.value.targetId
 
-  bfTop.value = conv.value.isPinned ?? false
-  bfDisturb.value = conv.value.isMuted ?? false
-
   await groupStore.loadMembers(authStore.uid!, gid)
 
   try {
@@ -130,8 +125,6 @@ onMounted(async () => {
     notice.value = detail.groupNotice?.notice || ''
     qrUrl.value = detail.qrUrl || ''
     bfResetQrcode.value = Boolean(detail.bfResetQrcode)
-    if (detail.bfTop !== undefined) bfTop.value = detail.bfTop
-    if (detail.bfDisturb !== undefined) bfDisturb.value = detail.bfDisturb
     if (groupBase?.bfJoinCheck !== undefined) bfJoinCheck.value = groupBase.bfJoinCheck
   } catch (e) {
     console.error('[GroupInfoPanel] getGroupDetail failed:', e)
@@ -150,14 +143,12 @@ function openGroupNotice() {
 
 async function togglePin() {
   if (!conv.value) return
-  bfTop.value = !bfTop.value
-  await chatStore.pinConversation(authStore.uid, conv.value.id, bfTop.value)
+  await chatStore.pinConversation(authStore.uid, conv.value.id, !conv.value.isPinned)
 }
 
 async function toggleMute() {
   if (!conv.value) return
-  bfDisturb.value = !bfDisturb.value
-  await chatStore.muteConversation(authStore.uid, conv.value.id, bfDisturb.value)
+  await chatStore.muteConversation(authStore.uid, conv.value.id, !conv.value.isMuted)
 }
 
 async function toggleJoinCheck() {
@@ -282,11 +273,11 @@ function handleOnlineTime(member: any) {
     <ul class="config-list">
       <li>
         <span>置顶聊天</span>
-        <AppSwitch :model-value="bfTop" @update:model-value="togglePin" />
+        <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
       </li>
       <li>
         <span>消息免打扰</span>
-        <AppSwitch :model-value="bfDisturb" @update:model-value="toggleMute" />
+        <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
       </li>
       <li v-if="isOwner">
         <span>进群需审核</span>
