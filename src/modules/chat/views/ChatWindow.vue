@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -32,6 +32,14 @@ const isFileHelperChat = computed(() => {
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
 
+/** 进入会话瞬间的未读条数（markAsRead 清零前从列表读取），供「未读消息」分隔条展示 */
+const sessionInitialUnread = ref(0)
+
+function captureUnreadSnapshot(convId: string) {
+  const conv = chatStore.conversations.find((c) => c.id === convId)
+  sessionInitialUnread.value = conv?.unreadCount ?? 0
+}
+
 function loadGroupMembersIfNeeded(convId: string) {
   if (!authStore.uid || !convId) return
   const conv = chatStore.conversations.find((c) => c.id === convId)
@@ -40,21 +48,17 @@ function loadGroupMembersIfNeeded(convId: string) {
   }
 }
 
-onMounted(async () => {
-  if (conversationId.value && authStore.uid) {
-    await messageStore.loadMessages(authStore.uid, conversationId.value)
-    await chatStore.markAsRead(authStore.uid, conversationId.value)
-    loadGroupMembersIfNeeded(conversationId.value)
-  }
-})
-
-watch(conversationId, async (newId) => {
-  if (newId && authStore.uid) {
+watch(
+  conversationId,
+  async (newId) => {
+    if (!newId || !authStore.uid) return
+    captureUnreadSnapshot(newId)
     await messageStore.loadMessages(authStore.uid, newId)
     await chatStore.markAsRead(authStore.uid, newId)
     loadGroupMembersIfNeeded(newId)
-  }
-})
+  },
+  { immediate: true },
+)
 
 async function handleLoadMore() {
   if (conversationId.value && authStore.uid) {
@@ -79,9 +83,11 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
       </div>
     </div>
     <MessageList
+      :conversation-id="conversationId"
       :messages="messages"
       :loading="isLoading"
       :has-more="messageStore.hasMore(conversationId)"
+      :unread-count="sessionInitialUnread"
       @load-more="handleLoadMore"
     />
     <MessageInput @send="handleSend" />

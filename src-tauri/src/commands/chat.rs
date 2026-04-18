@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 use prost::Message as _;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tracing::{error, warn};
 
 use crate::crypto::CryptoEngine;
@@ -65,8 +67,12 @@ pub struct IncomingMessagePayload {
 }
 
 /// 入站消息落库（用于 WS 推送消息的本地历史持久化）。
+///
+/// 对齐列表未读角标：对「入库前不存在」且「发送者不是当前账号」的消息递增 `unread_count`，
+/// 并向各前端窗口 `emit("conv:update", …)`（此前仅落库未推会话，角标恒为 0）。
 #[tauri::command]
 pub async fn upsert_incoming_messages(
+    app: AppHandle,
     db: State<'_, DbManager>,
     uid: String,
     messages: Vec<IncomingMessagePayload>,
@@ -75,63 +81,118 @@ pub async fn upsert_incoming_messages(
         return Ok(0);
     }
 
-    db.with_connection(&uid, |conn| {
-        let mut rows: Vec<models::Message> = Vec::with_capacity(messages.len());
-        for item in &messages {
-            if item.id.trim().is_empty() || item.conversation_id.trim().is_empty() {
-                continue;
+    let uid_trim = uid.trim().to_string();
+
+    let (count, conv_ids_to_emit) = db
+        .with_connection(&uid_trim, |conn| {
+            let mut rows: Vec<models::Message> = Vec::with_capacity(messages.len());
+            for item in &messages {
+                if item.id.trim().is_empty() || item.conversation_id.trim().is_empty() {
+                    continue;
+                }
+                rows.push(models::Message {
+                    id: item.id.clone(),
+                    custom_msg_id: item.custom_msg_id.clone(),
+                    conversation_id: item.conversation_id.clone(),
+                    sender_id: item.sender_id.clone(),
+                    msg_type: item.msg_type,
+                    content: item.content.clone(),
+                    send_time: item.send_time,
+                    status: item.status.unwrap_or(1),
+                    read_status: item.read_status.unwrap_or(0),
+                    version: item.version.unwrap_or(0),
+                    is_deleted: item.is_deleted.unwrap_or(false),
+                    extra: item.extra.as_ref().map(|e| e.to_string()),
+                });
             }
-            rows.push(models::Message {
-                id: item.id.clone(),
-                custom_msg_id: item.custom_msg_id.clone(),
-                conversation_id: item.conversation_id.clone(),
-                sender_id: item.sender_id.clone(),
-                msg_type: item.msg_type,
-                content: item.content.clone(),
-                send_time: item.send_time,
-                status: item.status.unwrap_or(1),
-                read_status: item.read_status.unwrap_or(0),
-                version: item.version.unwrap_or(0),
-                is_deleted: item.is_deleted.unwrap_or(false),
-                extra: item.extra.as_ref().map(|e| e.to_string()),
-            });
-        }
 
-        if rows.is_empty() {
-            return Ok(0usize);
-        }
+            if rows.is_empty() {
+                return Ok((0usize, Vec::<String>::new()));
+            }
 
-        queries::batch_insert_messages(conn, &rows)?;
+            // 未读：INSERT OR REPLACE 前检查是否为新 id；同批重复 id 只计一次
+            let mut unread_delta: HashMap<String, i32> = HashMap::new();
+            let mut seen_ids_for_unread = HashSet::<String>::new();
+            for msg in &rows {
+                if !seen_ids_for_unread.insert(msg.id.clone()) {
+                    continue;
+                }
+                let existed_before = conn
+                    .query_row(
+                        "SELECT 1 FROM messages WHERE id = ?1",
+                        rusqlite::params![&msg.id],
+                        |_| Ok(()),
+                    )
+                    .is_ok();
+                if existed_before {
+                    continue;
+                }
+                if msg.sender_id != uid_trim {
+                    *unread_delta.entry(msg.conversation_id.clone()).or_insert(0) += 1;
+                }
+            }
 
-        for msg in &rows {
-            let (conv_type, target_id) = parse_conversation_id(&msg.conversation_id)
-                .unwrap_or((0, String::new()));
-            conn.execute(
-                "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
+            queries::batch_insert_messages(conn, &rows)?;
+
+            for msg in &rows {
+                let (conv_type, target_id) = parse_conversation_id(&msg.conversation_id)
+                    .unwrap_or((0, String::new()));
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
                  VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![msg.conversation_id, conv_type, target_id, msg.send_time],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-            conn.execute(
-                "UPDATE conversations
+                    rusqlite::params![msg.conversation_id, conv_type, target_id, msg.send_time],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                conn.execute(
+                    "UPDATE conversations
                  SET last_msg_id = ?1,
                      last_msg_time = ?2,
                      last_msg_digest = ?3,
                      updated_at = ?2
                  WHERE id = ?4
                    AND (last_msg_time IS NULL OR last_msg_time <= ?2)",
-                rusqlite::params![
-                    msg.id,
-                    msg.send_time,
-                    msg.content.clone().unwrap_or_default(),
-                    msg.conversation_id,
-                ],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    rusqlite::params![
+                        msg.id,
+                        msg.send_time,
+                        msg.content.clone().unwrap_or_default(),
+                        msg.conversation_id,
+                    ],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            }
+
+            for (conv_id, delta) in unread_delta {
+                if delta > 0 {
+                    conn
+                        .execute(
+                            "UPDATE conversations SET unread_count = unread_count + ?1 WHERE id = ?2",
+                            rusqlite::params![delta, conv_id],
+                        )
+                        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                }
+            }
+
+            let mut seen_conv = HashSet::<String>::new();
+            let mut conv_ids_to_emit = Vec::<String>::new();
+            for msg in &rows {
+                if seen_conv.insert(msg.conversation_id.clone()) {
+                    conv_ids_to_emit.push(msg.conversation_id.clone());
+                }
+            }
+
+            Ok((rows.len(), conv_ids_to_emit))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for conv_id in conv_ids_to_emit {
+        if let Ok(Some(conv)) =
+            db.with_connection(&uid_trim, |conn| queries::get_conversation_by_id(conn, &conv_id))
+        {
+            let _ = app.emit("conv:update", &conv);
         }
-        Ok(rows.len())
-    })
-    .map_err(|e| e.to_string())
+    }
+
+    Ok(count)
 }
 
 /// 解析 `{type}_{targetId}` 形式的 conversation_id。

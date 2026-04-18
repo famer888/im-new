@@ -93,7 +93,7 @@ export function useVirtualScroll<T>({
     if (containerRef.value) {
       containerRef.value.scrollTo({
         top: totalHeight.value,
-        behavior: smooth ? 'smooth' : 'instant',
+        behavior: smooth ? 'smooth' : 'auto',
       })
     }
   }
