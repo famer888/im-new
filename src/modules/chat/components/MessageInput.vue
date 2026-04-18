@@ -240,13 +240,19 @@ function handleFileSelect() {
   input.click()
 }
 
-function handleFileSend(files: File[]) {
+function handleFileSend(payload: { text: string; files: File[] } | File[]) {
+  const files = Array.isArray(payload) ? payload : payload.files
+  const text = Array.isArray(payload) ? '' : (payload.text || '').trim()
+
   for (const file of files) {
     if (file.type.startsWith('image/')) {
       emit('send', JSON.stringify({ name: file.name, size: file.size, path: '' }), MessageType.Image)
     } else {
       emit('send', JSON.stringify({ name: file.name, size: file.size, ext: file.name.split('.').pop() }), MessageType.File)
     }
+  }
+  if (text) {
+    emit('send', text, MessageType.Text)
   }
   showFilePreview.value = false
   pendingFiles.value = []
@@ -410,10 +416,10 @@ eventBus.on('editor:insert-at', handleAtSelect)
 
     <FileUploadPreview
       v-if="showFilePreview"
-      :visible="showFilePreview"
+      v-model:visible="showFilePreview"
       :files="pendingFiles"
-      @send="handleFileSend"
-      @cancel="showFilePreview = false; pendingFiles = []"
+      @confirm="handleFileSend"
+      @cancel="pendingFiles = []"
     />
   </div>
 </template>
