@@ -6,6 +6,9 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
 import type { Message } from '@/stores/useMessageStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+/** 与 im `@/assets/images/common/search-*.png` 一致 */
+import searchDataImg from '@/assets/images/common/search-data.png'
+import searchNoDataImg from '@/assets/images/common/search-no-data.png'
 
 const props = defineProps<{
   searchText: string
@@ -107,7 +110,10 @@ function linkTo(m: Message) {
       <div class="title">找到{{ searchStore.chatSearchResults.length || 0 }}条消息</div>
     </div>
 
-    <ul v-if="searchText.trim()" class="msg-list-box">
+    <ul
+      v-if="searchText.trim() && searchStore.chatSearchResults.length > 0"
+      class="msg-list-box"
+    >
       <li
         v-for="(item, index) in searchStore.chatSearchResults"
         :key="'searchMsg' + index"
@@ -131,10 +137,13 @@ function linkTo(m: Message) {
       </li>
     </ul>
 
+    <!-- 与 im `search-specified-chat.vue`：无关键字 / 无结果 两套插图 -->
     <div v-if="!searchText.trim()" class="search-tip">
+      <img class="icon-tip" :src="searchDataImg" alt="" />
       <span class="tip-msg">搜索消息</span>
     </div>
-    <div v-else-if="searchText.trim() && !searchStore.chatSearchResults.length" class="search-tip">
+    <div v-else-if="searchText.trim() && searchStore.chatSearchResults.length === 0" class="search-tip">
+      <img class="icon-tip" :src="searchNoDataImg" alt="" />
       <span class="tip-msg">搜索无结果</span>
     </div>
   </div>
@@ -237,10 +246,21 @@ function linkTo(m: Message) {
   width: 100%;
   margin-top: 20px;
 
+  .icon-tip {
+    display: block;
+    width: 30%;
+    max-width: 220px;
+    min-width: 120px;
+    height: auto;
+    margin: 0 auto;
+    object-fit: contain;
+  }
+
   .tip-msg {
     margin-top: 12px;
     font-size: 13px;
     color: #999;
+    text-align: center;
   }
 }
 
