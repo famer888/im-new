@@ -53,7 +53,7 @@ const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const settingStore = useSettingStore()
-const { locale: appLocale } = useI18n()
+const { locale: appLocale, t } = useI18n()
 const uiStore = useUIStore()
 const networkStore = useNetworkStore()
 const messageStore = useMessageStore()
@@ -148,7 +148,10 @@ async function loadGroupNotificationPreview() {
       const latest = items[0]
       const pendingCount = items.filter((i: any) => !i.groupReqStatus).length
       chatStore.updateGroupNotificationConv(
-        latest.msg || `${latest.groupName || ''} 群通知`,
+        latest.msg
+          || (latest.groupName
+            ? t('群通知条目摘要', { name: String(latest.groupName) })
+            : t('群通知')),
         Number(latest.updateTime || latest.createTime || 0),
         pendingCount,
       )

@@ -15,7 +15,6 @@ export const FILE_HELPER_TARGET_ID = '9901'
 
 /** 群通知伪会话 id（与 im id:"invitation" type:"group" 一致） */
 export const GROUP_NOTIFICATION_TARGET_ID = 'invitation'
-export const GROUP_NOTIFICATION_DISPLAY_NAME = '群通知'
 
 function getConversationCacheKey(uid: string): string {
   return `${uid}-conversations`
