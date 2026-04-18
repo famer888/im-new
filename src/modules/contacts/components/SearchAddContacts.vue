@@ -1,15 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { findContactsList, contactsRelation } from '@/api/imBase'
+import { useChatStore } from '@/stores/useChatStore'
+import { findContactsList, contactsRelation, groupSearch } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
-import FriendList from './FriendList.vue'
-/** 与 im `search-add-contacts.vue` 一致 */
+/** 与 im `search-add-contacts.vue` 一致：先群搜索再手机号找人；结果区仅「群聊 / 联系人」Tab */
 import searchBlueIcon from '@/assets/images/headNav/search-blue.png'
 import addNewIcon from '@/assets/images/headNav/add-new-icon.png'
-import emptyIcon from '@/assets/images/common/empty-icon.png'
 import searchNoDataImg from '@/assets/images/common/search-no-data.png'
 
 const props = defineProps<{
@@ -23,14 +21,25 @@ type FoundContact = {
   isFriend: boolean
 }
 
+type GroupHit = {
+  id: string
+  name: string
+  avatar: string
+}
+
 const authStore = useAuthStore()
-const contactStore = useContactStore()
 const uiStore = useUIStore()
+const chatStore = useChatStore()
 
 const searching = ref(false)
 const searchTriggered = ref(false)
 const searchDone = ref(false)
-const searchResult = ref<FoundContact[]>([])
+/** 与老 im 一致：0=群聊 1=联系人 */
+const tabAction = ref(0)
+const groupHit = ref<GroupHit | null>(null)
+const contactHits = ref<FoundContact[]>([])
+const searchResultNone = ref(false)
+
 const selectedUser = ref<FoundContact | null>(null)
 const verifyMessage = ref('')
 const sending = ref(false)
@@ -38,15 +47,21 @@ const sendResult = ref<'success' | 'fail' | null>(null)
 
 const trimmedQuery = computed(() => props.searchText.replace(/@/g, '').trim())
 
-onMounted(() => {
-  if (authStore.uid) contactStore.loadContacts(authStore.uid)
-})
+const hasSearchPayload = computed(() => !!groupHit.value || contactHits.value.length > 0)
+
+const tabList = [
+  { name: '群聊', key: 0 },
+  { name: '联系人', key: 1 },
+]
 
 function resetResultState() {
   searching.value = false
   searchTriggered.value = false
   searchDone.value = false
-  searchResult.value = []
+  tabAction.value = 1
+  groupHit.value = null
+  contactHits.value = []
+  searchResultNone.value = false
   selectedUser.value = null
   verifyMessage.value = ''
   sending.value = false
@@ -57,6 +72,26 @@ watch(() => props.searchText, () => {
   resetResultState()
 })
 
+function tabSelect(key: number) {
+  tabAction.value = key
+}
+
+function parseGroupHit(gs: unknown): GroupHit | null {
+  const gd = (gs as any)?.groupDetail
+  const gb = gd?.groupBase
+  if (!gb) return null
+  const rawId = gb.groupId ?? gb.id
+  if (rawId == null || rawId === '') return null
+  const id = typeof rawId === 'object' && rawId !== null && 'toString' in rawId
+    ? String(rawId)
+    : String(rawId)
+  return {
+    id,
+    name: String(gb.name ?? gb.groupName ?? ''),
+    avatar: String(gb.pic ?? gb.icon ?? ''),
+  }
+}
+
 async function handleSearch() {
   const val = trimmedQuery.value
   if (!val) return
@@ -64,13 +99,24 @@ async function handleSearch() {
   searching.value = true
   searchTriggered.value = true
   searchDone.value = false
-  searchResult.value = []
+  groupHit.value = null
+  contactHits.value = []
+  searchResultNone.value = false
   selectedUser.value = null
 
+  const fromUid = Number(authStore.uid)
   try {
+    const gs = await groupSearch({ fromUid: Number.isFinite(fromUid) ? fromUid : 0, context: val })
+    const gh = parseGroupHit(gs)
+    if (gh) {
+      groupHit.value = gh
+      tabAction.value = 0
+      return
+    }
+
     const resp = await findContactsList({ phoneNum: val, findType: 1 })
     const list = resp.detailList || []
-    searchResult.value = list.map((item: any) => {
+    contactHits.value = list.map((item: any) => {
       const userInfo = item.userInfo || {}
       return {
         uid: String(userInfo.uid || ''),
@@ -79,9 +125,13 @@ async function handleSearch() {
         isFriend: !!userInfo.friendRelation?.bfFriend,
       }
     })
+    tabAction.value = 1
+    if (contactHits.value.length === 0) {
+      searchResultNone.value = true
+    }
   } catch (error) {
     console.error('[SearchAddContacts] search failed:', error)
-    searchResult.value = []
+    searchResultNone.value = true
   } finally {
     searching.value = false
     searchDone.value = true
@@ -92,6 +142,15 @@ function handleSelectUser(user: FoundContact) {
   selectedUser.value = user
   verifyMessage.value = `我是${authStore.nickname || ''}`
   sendResult.value = null
+}
+
+function handleSelectGroup() {
+  const g = groupHit.value
+  if (!g?.id) return
+  const conv = chatStore.ensureConversation(1, g.id)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
 }
 
 function handleBack() {
@@ -157,7 +216,6 @@ async function handleAdd() {
 
     <template v-else>
       <div class="add-contacts-body">
-        <!-- 与 im `.add-tip`：白底卡片 + 蓝方块放大镜 + 文案 + 右箭头 -->
         <div
           v-if="trimmedQuery && !searchTriggered"
           class="search-entry-card"
@@ -185,35 +243,71 @@ async function handleAdd() {
 
         <div v-if="searchTriggered" class="search-result-wrap">
           <div v-if="searching" class="state-loading">搜索中...</div>
-          <template v-else-if="searchResult.length > 0">
+          <template v-else-if="hasSearchPayload">
+            <!-- 与老 im `.tabs`：仅群聊 / 联系人 -->
+            <div class="search-tabs">
+              <button
+                v-for="item in tabList"
+                :key="item.key"
+                type="button"
+                class="tab-item"
+                :class="{ 'tab-active': tabAction === item.key }"
+                @click="tabSelect(item.key)"
+              >
+                {{ item.name }}
+              </button>
+            </div>
+            <template v-if="tabAction === 1 && contactHits.length > 0">
+              <div
+                v-for="user in contactHits"
+                :key="user.uid"
+                class="result-contact-row"
+                @click="handleSelectUser(user)"
+              >
+                <TextAvatar :name="user.nickname || user.uid" :src="user.avatar" :size="40" rounded />
+                <span class="result-name">{{ user.nickname || user.uid }}</span>
+              </div>
+            </template>
+            <!-- 群聊 Tab 无群结果时：与老 im 搜索无数据图一致（assets 同 im `search-no-data.png`） -->
+            <div v-else-if="tabAction === 0 && !groupHit" class="search-no-data-block tab-panel-empty">
+              <img class="search-no-data-img" :src="searchNoDataImg" alt="" />
+              <span class="search-no-data-tip">搜索无结果</span>
+            </div>
             <div
-              v-for="user in searchResult"
-              :key="user.uid"
+              v-else-if="groupHit"
               class="result-contact-row"
-              @click="handleSelectUser(user)"
+              role="button"
+              tabindex="0"
+              @click="handleSelectGroup"
+              @keydown.enter.prevent="handleSelectGroup"
             >
-              <TextAvatar :name="user.nickname || user.uid" :src="user.avatar" :size="40" rounded />
-              <span class="result-name">{{ user.nickname || user.uid }}</span>
+              <TextAvatar
+                :name="groupHit.name || groupHit.id"
+                :src="groupHit.avatar"
+                avatar-type="group"
+                :size="40"
+              />
+              <span class="result-name">{{ groupHit.name || groupHit.id }}</span>
             </div>
           </template>
-          <div v-else-if="searchDone" class="search-no-data-block">
+          <div v-else-if="searchDone && searchResultNone" class="search-no-data-block">
             <img class="search-no-data-img" :src="searchNoDataImg" alt="" />
             <span class="search-no-data-tip">搜索无结果</span>
           </div>
         </div>
 
-        <!-- 与 AddressBook「新的好友」行一致 -->
-        <div class="new-friend-row" role="button" tabindex="0" @click="goNewFriendExamine" @keydown.enter.prevent="goNewFriendExamine">
+        <!-- 未发起搜索时保留入口；有结果后与老 im（searchAddContactsIng）一致不再展示 -->
+        <div
+          v-if="!searchTriggered"
+          class="new-friend-row"
+          role="button"
+          tabindex="0"
+          @click="goNewFriendExamine"
+          @keydown.enter.prevent="goNewFriendExamine"
+        >
           <img class="new-friend-icon" :src="addNewIcon" alt="" />
           <span class="new-friend-title">新的好友</span>
         </div>
-
-        <!-- 本地无好友：与全局搜索空态一致的 briefcase 风 empty-icon -->
-        <div v-if="contactStore.contacts.length === 0" class="empty-book">
-          <img class="empty-book-icon" :src="emptyIcon" alt="" />
-          <span class="empty-book-text">暂无数据</span>
-        </div>
-        <FriendList v-else embed class="friend-list-embed" />
       </div>
     </template>
   </div>
@@ -237,7 +331,6 @@ async function handleAdd() {
   box-sizing: border-box;
 }
 
-/* —— 搜索入口卡片（对齐 im `.add-tip`） —— */
 .search-entry-card {
   display: flex;
   align-items: center;
@@ -271,7 +364,6 @@ async function handleAdd() {
   min-width: 0;
 }
 
-/* 与 im 一致：headNav/search-blue.png 自带蓝底方块 + 放大镜 */
 .search-entry-icon {
   flex-shrink: 0;
   width: 24px;
@@ -290,7 +382,6 @@ async function handleAdd() {
   white-space: nowrap;
 }
 
-/* 列表右侧指示：矢量尖角，避免 PNG 发糊、双影 */
 .search-entry-chevron {
   flex-shrink: 0;
   width: 20px;
@@ -308,7 +399,6 @@ async function handleAdd() {
   }
 }
 
-/* —— 搜索结果 —— */
 .search-result-wrap {
   margin-top: 10px;
   flex-shrink: 0;
@@ -319,6 +409,30 @@ async function handleAdd() {
   text-align: center;
   font-size: 14px;
   color: #999;
+}
+
+/* 与老 im `.tabs` / `.tab-action` */
+.search-tabs {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 10px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.tab-item {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 15px;
+  color: #333;
+  cursor: pointer;
+}
+
+.tab-active {
+  color: #429efd;
+  font-weight: 500;
 }
 
 .result-contact-row {
@@ -345,6 +459,10 @@ async function handleAdd() {
   white-space: nowrap;
 }
 
+.tab-panel-empty {
+  padding-top: 36px;
+}
+
 .search-no-data-block {
   display: flex;
   flex-direction: column;
@@ -366,7 +484,6 @@ async function handleAdd() {
   }
 }
 
-/* —— 新的好友 —— */
 .new-friend-row {
   display: flex;
   align-items: center;
@@ -394,43 +511,6 @@ async function handleAdd() {
   color: #000;
 }
 
-/* —— 暂无数据 —— */
-.empty-book {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 36px 16px 24px;
-  min-height: 120px;
-}
-
-.empty-book-icon {
-  display: block;
-  width: 32%;
-  max-width: 160px;
-  height: auto;
-  opacity: 0.85;
-}
-
-.empty-book-text {
-  margin-top: 14px;
-  font-size: 14px;
-  color: #999;
-  text-align: center;
-}
-
-.friend-list-embed {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  margin: 0 -12px;
-  padding: 0 12px;
-  background: #fcfcfc;
-  border-radius: 6px;
-}
-
-/* —— 详情 —— */
 .user-detail {
   padding: 12px 16px 24px;
   background: #f5f5f5;
