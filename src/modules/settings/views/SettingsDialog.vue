@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, watch, onBeforeUnmount, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import SystemSettings from '../components/SystemSettings.vue'
 import ChatSettings from '../components/ChatSettings.vue'
 import PrivacySettings from '../components/PrivacySettings.vue'
@@ -9,16 +10,18 @@ import RepairSettings from '../components/RepairSettings.vue'
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
+const { t } = useI18n()
+
 type Tab = 'system' | 'chat' | 'privacy' | 'language' | 'repair'
 const activeTab = ref<Tab>('chat')
 
-const tabs: { key: Tab; label: string }[] = [
-  { key: 'chat', label: '聊天设置' },
-  { key: 'system', label: '系统设置' },
-  { key: 'privacy', label: '隐私设置' },
-  { key: 'language', label: '语言设置' },
-  { key: 'repair', label: '异常修复' },
-]
+const tabs = computed((): { key: Tab; label: string }[] => [
+  { key: 'chat', label: t('聊天设置') },
+  { key: 'system', label: t('系统设置') },
+  { key: 'privacy', label: t('隐私设置') },
+  { key: 'language', label: t('语言设置') },
+  { key: 'repair', label: t('异常修复') },
+])
 
 function closeDialog() {
   emit('update:visible', false)
