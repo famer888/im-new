@@ -109,8 +109,12 @@ watch(
 )
 
 watch(() => uiStore.sidebarTab, (tab) => {
-  if (tab !== 'contacts') {
-    addAction.value = false
+  // 切换侧栏目录时清空搜索：避免通讯录「添加好友」输入残留到「消息」仍走 SearchResults（应对齐图2 仅会话列表 + 空搜索框）
+  addAction.value = false
+  searchKeyword.value = ''
+  searchStore.clearResults()
+  if (searchStore.searchSpecifiedChatInfo) {
+    searchStore.closeSearchSpecifiedChat()
   }
   // 传输助手聊天仅在「传输」Tab 下展示；切到消息/通讯录时关闭右侧会话（与 im 一致）
   if (tab !== 'transfer') {
