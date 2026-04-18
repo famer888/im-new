@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useVirtualScroll } from '@/composables/useVirtualScroll'
 import { type Message } from '@/stores/useMessageStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
 import MessageItem from './MessageItem.vue'
 
 const props = defineProps<{
+  /** 切换会话时用于重置滚动（避免沿用上一会话的 scrollTop / 未触发 length 监听） */
+  conversationId?: string
   messages: Message[]
   loading: boolean
   hasMore: boolean
@@ -25,14 +27,54 @@ const sortedMessages = computed(() =>
 
 const entriesWithDate = computed(() => attachDateSeparators(sortedMessages.value))
 
-const { visibleItems, totalHeight, offsetTop, scrollToBottom, updateItemHeight, indexAtScrollTop } =
-  useVirtualScroll<MessageListEntry>({
-    items: entriesWithDate,
+/** 首条未读在排序列表中的下标（升序：末尾 N 条为未读区） */
+const unreadDividerIndex = computed(() => {
+  const n = props.unreadCount ?? 0
+  if (n <= 0) return -1
+  const len = sortedMessages.value.length
+  if (len === 0) return -1
+  return Math.max(0, len - n)
+})
+
+/**
+ * 将「未读消息」条作为独立虚拟行，避免插在气泡旁导致总高度与虚拟列表不一致。
+ */
+type ChatVirtualRow =
+  | { kind: 'unread'; key: string }
+  | { kind: 'msg'; entry: MessageListEntry }
+
+const rowsForVirtual = computed((): ChatVirtualRow[] => {
+  const entries = entriesWithDate.value
+  const divIdx = unreadDividerIndex.value
+  const rows: ChatVirtualRow[] = []
+  for (let i = 0; i < entries.length; i++) {
+    if (divIdx >= 0 && i === divIdx) {
+      rows.push({ kind: 'unread', key: `unread-${i}` })
+    }
+    rows.push({ kind: 'msg', entry: entries[i] })
+  }
+  return rows
+})
+
+const { visibleItems, totalHeight, offsetTop, scrollToBottom, updateItemHeight, indexAtScrollTop, scrollToItem } =
+  useVirtualScroll<ChatVirtualRow>({
+    items: rowsForVirtual,
     estimatedItemHeight: 72,
     bufferSize: 5,
     containerRef,
-    getItemKey: (entry) => entry.message.id,
+    getItemKey: (row) => (row.kind === 'unread' ? row.key : row.entry.message.id),
   })
+
+/** 未读条占位高度（测量前兜底，避免 scrollToItem 偏差过大） */
+watch(
+  rowsForVirtual,
+  (rows) => {
+    for (const r of rows) {
+      if (r.kind === 'unread') updateItemHeight(r.key, 44)
+    }
+  },
+  { flush: 'post', deep: true },
+)
 
 /** 与旧 im `floatDate` / `floatDateVisible`：滚动时顶部固定提示当前所处日期 */
 const floatDate = ref('')
@@ -57,9 +99,13 @@ function setTimeDayMsg() {
   }
 
   const idx = indexAtScrollTop(currentScrollTop)
-  const row = entriesWithDate.value[idx]
-  if (row) {
-    floatDate.value = row.showTimeDay
+  const rows = rowsForVirtual.value
+  let row = rows[idx]
+  if (row?.kind === 'unread') {
+    row = rows[idx + 1]
+  }
+  if (row?.kind === 'msg') {
+    floatDate.value = row.entry.showTimeDay
     floatDateVisible.value = true
   }
 
@@ -89,16 +135,53 @@ function setTimeDayMsgThrottled() {
 }
 
 const isAtBottom = ref(true)
+/** 进入会话 / 首屏加载：吸底；用户上滑看历史后为 false，避免加载更多后跳回底部 */
+const stickToBottom = ref(true)
 const lastMessageId = ref<string>('')
 
-const unreadDividerIndex = computed(() => {
-  if (!props.unreadCount || props.unreadCount <= 0) return -1
-  return sortedMessages.value.length - props.unreadCount
-})
+/** 用容器真实 scrollHeight 多次对齐底部，抵消虚拟列表首屏估算高度偏小导致的「停在顶部空白」 */
+async function flushScrollToBottom() {
+  const run = () => {
+    const el = containerRef.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+    isAtBottom.value = gap < 50
+  }
+  await nextTick()
+  run()
+  await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  run()
+  await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  run()
+  setTimeout(run, 0)
+  setTimeout(run, 48)
+  setTimeout(run, 120)
+}
+
+/** 有未读时优先滚到「未读消息」条，便于看到分割交互（与旧 im 一致） */
+async function scrollUnreadBannerIntoView() {
+  const divIdx = unreadDividerIndex.value
+  if (divIdx < 0) {
+    await flushScrollToBottom()
+    return
+  }
+  const bannerKey = `unread-${divIdx}`
+  await nextTick()
+  updateItemHeight(bannerKey, 44)
+  scrollToItem(bannerKey)
+  await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  const el = containerRef.value
+  if (el) {
+    el.scrollTop = Math.max(0, el.scrollTop - 20)
+  }
+  stickToBottom.value = false
+}
 
 async function pinToLatest() {
   await nextTick()
-  scrollToBottom(true)
+  scrollToBottom(false)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       const el = containerRef.value
@@ -112,7 +195,13 @@ async function pinToLatest() {
 function handleScroll() {
   if (!containerRef.value) return
   const { scrollTop, scrollHeight, clientHeight } = containerRef.value
-  isAtBottom.value = scrollHeight - scrollTop - clientHeight < 50
+  const gap = scrollHeight - scrollTop - clientHeight
+  isAtBottom.value = gap < 50
+  if (gap > 100) {
+    stickToBottom.value = false
+  } else if (gap < 40) {
+    stickToBottom.value = true
+  }
 
   if (scrollTop < 100 && props.hasMore && !props.loading) {
     emit('load-more')
@@ -120,6 +209,49 @@ function handleScroll() {
 
   setTimeDayMsgThrottled()
 }
+
+watch(
+  () => props.conversationId,
+  async () => {
+    await nextTick()
+    lastMessageId.value = ''
+    stickToBottom.value = true
+    const list = sortedMessages.value
+    lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
+    if ((props.unreadCount ?? 0) > 0 && unreadDividerIndex.value >= 0) {
+      await scrollUnreadBannerIntoView()
+    } else {
+      await flushScrollToBottom()
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.loading,
+  async (loading) => {
+    if (loading) return
+    if (props.messages.length === 0) return
+    const hasUnread = (props.unreadCount ?? 0) > 0 && unreadDividerIndex.value >= 0
+    if (hasUnread) {
+      await scrollUnreadBannerIntoView()
+      return
+    }
+    if (!stickToBottom.value) return
+    await flushScrollToBottom()
+  },
+)
+
+/** 父组件在 setup 阶段补写未读快照时，补滚到未读条 */
+watch(
+  () => props.unreadCount,
+  async (n, prev) => {
+    if (n === prev) return
+    if (props.loading || props.messages.length === 0) return
+    if ((n ?? 0) <= 0 || unreadDividerIndex.value < 0) return
+    await scrollUnreadBannerIntoView()
+  },
+)
 
 watch(
   () => props.messages.length,
@@ -130,27 +262,49 @@ watch(
     lastMessageId.value = latestId
 
     const appendedNewMessage = !!latestId && latestId !== prevLatestId
-    if (appendedNewMessage) {
+    if (appendedNewMessage && stickToBottom.value) {
       await pinToLatest()
     }
   },
 )
 
-onMounted(() => {
+onMounted(async () => {
   const list = sortedMessages.value
   lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
-  scrollToBottom()
+  stickToBottom.value = true
+  if (list.length > 0) {
+    if ((props.unreadCount ?? 0) > 0 && unreadDividerIndex.value >= 0) {
+      await scrollUnreadBannerIntoView()
+    } else {
+      await flushScrollToBottom()
+    }
+  }
 })
+
+function onClickScrollToLatest() {
+  stickToBottom.value = true
+  void pinToLatest()
+}
 
 onUnmounted(() => {
   if (floatHideTimer) clearTimeout(floatHideTimer)
   if (throttleTimer) clearTimeout(throttleTimer)
 })
 
-function handleItemResize(key: string, height: number) {
-  updateItemHeight(key, height)
-  if (isAtBottom.value) {
+function handleItemResize(messageId: string, height: number) {
+  updateItemHeight(messageId, height)
+  if (stickToBottom.value || isAtBottom.value) {
     void pinToLatest()
+  }
+}
+
+function onUnreadBannerResize(el: Element | ComponentPublicInstance | null) {
+  const node = el && '$el' in el ? (el as ComponentPublicInstance).$el : el
+  if (!node || !(node instanceof HTMLElement)) return
+  const h = node.getBoundingClientRect().height
+  if (h > 0) {
+    const divIdx = unreadDividerIndex.value
+    if (divIdx >= 0) updateItemHeight(`unread-${divIdx}`, h)
   }
 }
 </script>
@@ -169,17 +323,19 @@ function handleItemResize(key: string, height: number) {
 
       <div class="scroll-content" :style="{ height: totalHeight + 'px', position: 'relative' }">
         <div :style="{ transform: `translateY(${offsetTop}px)` }">
-          <template v-for="{ item, key, index } in visibleItems" :key="key">
+          <template v-for="{ item, key } in visibleItems" :key="key">
             <div
-              v-if="unreadDividerIndex >= 0 && index === unreadDividerIndex"
+              v-if="item.kind === 'unread'"
+              :ref="onUnreadBannerResize"
               class="unread-divider"
             >
-              <span>{{ $t('以下为未读消息') }}</span>
+              <span class="unread-divider-label">{{ $t('未读消息') }}</span>
             </div>
             <MessageItem
-              :message="item.message"
-              :date-banner-text="item.showTime ? item.showTimeDay : null"
-              @resize="(h: number) => handleItemResize(key, h)"
+              v-else
+              :message="item.entry.message"
+              :date-banner-text="item.entry.showTime ? item.entry.showTimeDay : null"
+              @resize="(h: number) => handleItemResize(item.entry.message.id, h)"
             />
           </template>
         </div>
@@ -188,7 +344,8 @@ function handleItemResize(key: string, height: number) {
       <button
         v-if="!isAtBottom"
         class="scroll-bottom-btn"
-        @click="scrollToBottom(true)"
+        type="button"
+        @click="onClickScrollToLatest"
       >
         ↓ {{ $t('最新消息') }}
       </button>
@@ -247,24 +404,21 @@ function handleItemResize(key: string, height: number) {
   font-size: 12px;
 }
 
+/* 与旧 im / 参考稿：整行浅灰底，居中蓝字 */
 .unread-divider {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
-  gap: 12px;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 16px 12px;
+  margin: 0;
+  background: #eee;
 
-  &::before,
-  &::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: #f44e5a;
-    opacity: 0.4;
-  }
-
-  span {
-    font-size: 12px;
-    color: #f44e5a;
+  .unread-divider-label {
+    font-size: 14px;
+    font-weight: bold;
+    color: #2273ad;
     white-space: nowrap;
   }
 }

@@ -79,6 +79,61 @@ pub fn get_conversations(conn: &Connection, limit: i64, offset: i64) -> Result<V
         .map_err(|e| DbError::SqliteError(e.to_string()))
 }
 
+/// 单条会话（与列表查询字段一致），供 `conv:update` 推送。
+pub fn get_conversation_by_id(conn: &Connection, id: &str) -> Result<Option<Conversation>, DbError> {
+    let sql = "SELECT 
+                c.id,
+                c.type,
+                c.target_id,
+                c.last_msg_id,
+                COALESCE(
+                    NULLIF(c.last_msg_time, 0),
+                    (SELECT m.send_time
+                     FROM messages m
+                     WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                     ORDER BY m.send_time DESC
+                     LIMIT 1),
+                    0
+                ) AS last_msg_time,
+                COALESCE(
+                    NULLIF(c.last_msg_digest, ''),
+                    (SELECT m.content
+                     FROM messages m
+                     WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                     ORDER BY m.send_time DESC
+                     LIMIT 1)
+                ) AS last_msg_digest,
+                c.unread_count,
+                c.is_pinned,
+                c.is_muted,
+                c.draft,
+                c.updated_at
+             FROM conversations c
+             WHERE c.id = ?1";
+
+    let conv = conn.query_row(sql, params![id], |row| {
+        Ok(Conversation {
+            id: row.get(0)?,
+            conv_type: row.get(1)?,
+            target_id: row.get(2)?,
+            last_msg_id: row.get(3)?,
+            last_msg_time: row.get(4)?,
+            last_msg_digest: row.get(5)?,
+            unread_count: row.get(6)?,
+            is_pinned: row.get::<_, i32>(7)? != 0,
+            is_muted: row.get::<_, i32>(8)? != 0,
+            draft: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    });
+
+    match conv {
+        Ok(c) => Ok(Some(c)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(DbError::SqliteError(e.to_string())),
+    }
+}
+
 // ─── Messages ───
 
 pub fn get_messages(
