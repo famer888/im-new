@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -27,6 +28,7 @@ type GroupHit = {
   avatar: string
 }
 
+const { t } = useI18n()
 const authStore = useAuthStore()
 const uiStore = useUIStore()
 const chatStore = useChatStore()
@@ -306,7 +308,7 @@ async function handleAdd() {
           @keydown.enter.prevent="goNewFriendExamine"
         >
           <img class="new-friend-icon" :src="addNewIcon" alt="" />
-          <span class="new-friend-title">新的好友</span>
+          <span class="new-friend-title">{{ t('新的好友') }}</span>
         </div>
       </div>
     </template>
