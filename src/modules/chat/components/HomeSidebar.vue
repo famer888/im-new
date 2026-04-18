@@ -12,6 +12,8 @@ import { useChannelStore } from '@/stores/useChannelStore'
 import SearchInput from '@/components/SearchInput.vue'
 import ConversationList from './ConversationList.vue'
 import SearchResults from './SearchResults.vue'
+import ChatSpecifiedSearch from './ChatSpecifiedSearch.vue'
+import backIcon from '@/assets/images/setting/back.png'
 import SendHelper from './SendHelper.vue'
 import AddressBook from '@/modules/contacts/views/AddressBook.vue'
 import SearchAddContacts from '@/modules/contacts/components/SearchAddContacts.vue'
@@ -96,6 +98,16 @@ function onListResizeHandleDown(e: MouseEvent) {
   isListResizeDown.value = true
 }
 
+watch(
+  () => searchStore.searchSpecifiedChatInfo,
+  (info) => {
+    if (info) {
+      searchKeyword.value = ''
+      searchStore.clearResults()
+    }
+  },
+)
+
 watch(() => uiStore.sidebarTab, (tab) => {
   if (tab !== 'contacts') {
     addAction.value = false
@@ -116,14 +128,28 @@ function handleSearch(query: string) {
   if (uiStore.sidebarTab === 'contacts' && addAction.value) {
     return
   }
-  if (authStore.uid) {
-    searchStore.search(authStore.uid, query)
+  if (!authStore.uid) return
+  /** 与 im `search-specified-chat`：`window.$db.searchTable({ id, type, searchText })` 对应本项目的 `searchInChat` */
+  if (searchStore.searchSpecifiedChatInfo) {
+    const convId = searchStore.conversationIdFromSearchSpecified(searchStore.searchSpecifiedChatInfo)
+    void searchStore.searchInChat(authStore.uid, convId, query)
+    return
   }
+  searchStore.search(authStore.uid, query)
 }
 
 function handleClearSearch() {
   searchKeyword.value = ''
   searchStore.clearResults()
+  if (searchStore.searchSpecifiedChatInfo) {
+    searchStore.clearChatSearch()
+  }
+}
+
+function handleBackSpecifiedChat() {
+  if (!searchStore.searchSpecifiedChatInfo) return
+  searchKeyword.value = ''
+  searchStore.closeSearchSpecifiedChat()
 }
 
 function handleAddAction() {
@@ -216,6 +242,7 @@ async function confirmLogout() {
   groupStore.memberMap = new Map()
   channelStore.channels = []
   searchStore.clearResults()
+  searchStore.closeSearchSpecifiedChat()
 
   uiStore.setDetailView('none')
   uiStore.setRightPanel('none')
@@ -313,7 +340,14 @@ onBeforeUnmount(() => {
       class="list-area"
       :style="{ width: `${listWidth}px`, maxWidth: `${listWidthMax}px` }"
     >
-      <div class="sidebar-search">
+      <div class="sidebar-search" :class="{ 'has-back': !!searchStore.searchSpecifiedChatInfo }">
+        <img
+          v-if="searchStore.searchSpecifiedChatInfo"
+          class="icon-back"
+          :src="backIcon"
+          alt=""
+          @click="handleBackSpecifiedChat"
+        />
         <SearchInput
           v-model="searchKeyword"
           :placeholder="searchPlaceholder"
@@ -342,6 +376,10 @@ onBeforeUnmount(() => {
         />
         <!-- 传输 Tab 始终显示 SendHelper（含「传输助手」行）；避免搜索框残留关键字时把整个侧栏换成搜索结果 -->
         <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
+        <ChatSpecifiedSearch
+          v-else-if="searchStore.searchSpecifiedChatInfo"
+          :search-text="searchKeyword"
+        />
         <SearchResults v-else-if="searchKeyword.trim()" :keyword="searchKeyword" />
         <template v-else>
           <ConversationList v-if="uiStore.sidebarTab === 'chats'" />
@@ -544,6 +582,22 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 10px 10px 10px 16px;
   gap: 8px;
+
+  &.has-back {
+    padding-left: 10px;
+  }
+
+  .icon-back {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    cursor: pointer;
+    display: block;
+
+    &:hover {
+      opacity: 0.8;
+    }
+  }
 }
 
 .add-btn {
