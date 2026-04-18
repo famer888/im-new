@@ -7,6 +7,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { MessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
+import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 
 const TextMessage = defineAsyncComponent(() => import('./messages/TextMessage.vue'))
 const ImageMessage = defineAsyncComponent(() => import('./messages/ImageMessage.vue'))
@@ -68,6 +69,29 @@ const isSystemMsg = computed(() =>
   props.message.msgType === MessageType.System ||
   props.message.msgType === MessageType.Notice,
 )
+
+/** 与 `messageComponent` 一致：仅「非纯文本气泡」在外层叠加时间条，其余走 TextMessage 内嵌（含 default 分支） */
+const useOuterTimeOverlay = computed(() => {
+  switch (props.message.msgType) {
+    case MessageType.Image:
+    case MessageType.DynamicImage:
+    case MessageType.Video:
+    case MessageType.Audio:
+    case MessageType.Location:
+    case MessageType.File:
+    case MessageType.NameCard:
+    case MessageType.SetImage:
+    case MessageType.AnimatedGame:
+    case MessageType.Html2:
+    case MessageType.RedPacket:
+    case MessageType.RedPacketResult:
+    case MessageType.ChatTransfer:
+    case MessageType.ChatTransferResult:
+      return true
+    default:
+      return false
+  }
+})
 
 function getQuoteContentDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Text) return (content || '').slice(0, 60)
@@ -159,11 +183,15 @@ onMounted(() => {
           <h3 class="inline-quote-sender">{{ message.quoteMessage.senderName }}</h3>
           <p class="inline-quote-content">{{ getQuoteContentDigest(message.quoteMessage.msgType, message.quoteMessage.content) }}</p>
         </div>
-        <component :is="messageComponent" :message="message" />
-        <div class="message-meta">
-          <span v-if="isSelf && message.status === 0" class="status sending">发送中</span>
-          <span v-else-if="isSelf && message.status === -1" class="status failed">发送失败</span>
-          <span v-else-if="isSelf && message.status === 3" class="status read">已读</span>
+        <!-- 文本/default：时间与状态在 TextMessage 气泡内（对齐旧 im）；媒体等在容器右下角叠加 -->
+        <component
+          v-if="!useOuterTimeOverlay"
+          :is="messageComponent"
+          :message="message"
+        />
+        <div v-else class="non-text-bubble-host">
+          <component :is="messageComponent" :message="message" />
+          <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
         </div>
       </div>
     </div>
@@ -265,13 +293,10 @@ onMounted(() => {
   margin-bottom: 2px;
 }
 
-.message-meta {
-  font-size: 11px;
-
-  .status {
-    &.sending { color: #e6a23c; }
-    &.failed { color: #f44e5a; }
-    &.read { color: #67c23a; }
-  }
+.non-text-bubble-host {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
 }
 </style>
