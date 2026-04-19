@@ -70,6 +70,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { updateUserInfo } from '@/api/imBase'
+import { proto } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
 
 const { t: $t } = useI18n()
@@ -81,6 +83,7 @@ defineEmits<{
 
 const password = ref('')
 const isNicknameEditing = ref(false)
+const nicknameSaving = ref(false)
 const nicknameDraft = ref('')
 const nicknameInputRef = ref<HTMLInputElement | null>(null)
 const accountDialogRef = ref<HTMLElement | null>(null)
@@ -122,11 +125,14 @@ function handleDocumentMouseDown(event: MouseEvent) {
 }
 
 function handleNicknameCancel() {
+  if (nicknameSaving.value) return
   nicknameDraft.value = authStore.nickname || ''
   isNicknameEditing.value = false
 }
 
-function handleNicknameSave() {
+async function handleNicknameSave() {
+  if (nicknameSaving.value) return
+
   const nextName = nicknameDraft.value.trim()
   if (!nextName) {
     nicknameDraft.value = authStore.nickname || ''
@@ -135,7 +141,27 @@ function handleNicknameSave() {
   }
 
   if (nextName !== authStore.nickname) {
-    authStore.updateProfile({ nickname: nextName })
+    nicknameSaving.value = true
+    try {
+      const response = await updateUserInfo({
+        userParam: {
+          nickName: nextName,
+        },
+        ops: [proto.UserOperator.NICK_NAME],
+      })
+      const commonResult = response.commonResult
+      if (commonResult?.errCode === 200) {
+        authStore.updateProfile({ nickname: nextName })
+      } else {
+        nicknameDraft.value = authStore.nickname || ''
+        console.warn('[AccountDialog] update nickname failed:', commonResult?.errMsg || commonResult?.errCode)
+      }
+    } catch (error) {
+      nicknameDraft.value = authStore.nickname || ''
+      console.warn('[AccountDialog] update nickname failed:', error)
+    } finally {
+      nicknameSaving.value = false
+    }
   }
 
   isNicknameEditing.value = false

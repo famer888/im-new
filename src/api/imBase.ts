@@ -73,6 +73,23 @@ export async function getUserInfo(
 }
 
 /**
+ * Update current user profile.
+ * POST /user/update
+ */
+export async function updateUserInfo(
+  data: { userParam: Record<string, unknown>; ops: proto.UserOperator[] },
+  baseUrl?: string,
+): Promise<proto.UpdateResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/user/update`,
+    reqType: proto.UpdateReq,
+    respType: proto.UpdateResp,
+    data: data as Partial<proto.UpdateReq>,
+  })
+}
+
+/**
  * Get contacts (friends) list.
  * POST /contacts/contactsList
  */
