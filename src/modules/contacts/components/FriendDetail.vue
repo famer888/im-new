@@ -5,6 +5,8 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { updateContacts } from '@/api/imBase'
+import { proto } from '@/api/request'
 import editIcon from '@/assets/images/message/edit-icon.png'
 
 const props = defineProps<{ contactId: string }>()
@@ -18,6 +20,8 @@ const remarkDraft = ref('')
 const depictDraft = ref('')
 const editingRemark = ref(false)
 const editingDepict = ref(false)
+const savingRemark = ref(false)
+const savingDepict = ref(false)
 const copyToastVisible = ref(false)
 let copyToastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -51,17 +55,75 @@ async function handleCopyId() {
   }
 }
 
-function saveRemark() {
-  editingRemark.value = false
-  if (contact.value) {
-    contact.value.remark = remarkDraft.value
+async function saveRemark() {
+  if (!contact.value || savingRemark.value) return
+  const targetId = contact.value.id
+  const nextRemark = remarkDraft.value.trim()
+  const currentRemark = contact.value.remark || ''
+
+  if (nextRemark === currentRemark) {
+    editingRemark.value = false
+    return
+  }
+
+  savingRemark.value = true
+  try {
+    const res = await updateContacts({
+      op: proto.ContactsOperator.REMARK,
+      param: {
+        contactsId: Number(targetId),
+        noteName: nextRemark,
+      },
+    })
+    const { errCode, errMsg } = (res as any)?.commonResult || {}
+    if (errCode == 200) {
+      contactStore.patchContact(targetId, { remark: nextRemark || null })
+      editingRemark.value = false
+    } else {
+      remarkDraft.value = currentRemark
+      console.warn('[FriendDetail] update remark failed:', errMsg || errCode)
+    }
+  } catch (error) {
+    remarkDraft.value = currentRemark
+    console.warn('[FriendDetail] update remark failed:', error)
+  } finally {
+    savingRemark.value = false
   }
 }
 
-function saveDepict() {
-  editingDepict.value = false
-  if (contact.value) {
-    (contact.value as any).depict = depictDraft.value
+async function saveDepict() {
+  if (!contact.value || savingDepict.value) return
+  const targetId = contact.value.id
+  const nextDepict = depictDraft.value.trim()
+  const currentDepict = contact.value.depict || ''
+
+  if (nextDepict === currentDepict) {
+    editingDepict.value = false
+    return
+  }
+
+  savingDepict.value = true
+  try {
+    const res = await updateContacts({
+      op: proto.ContactsOperator.DESCRIBE,
+      param: {
+        contactsId: Number(targetId),
+        depict: nextDepict,
+      },
+    })
+    const { errCode, errMsg } = (res as any)?.commonResult || {}
+    if (errCode == 200) {
+      contactStore.patchContact(targetId, { depict: nextDepict || null })
+      editingDepict.value = false
+    } else {
+      depictDraft.value = currentDepict
+      console.warn('[FriendDetail] update depict failed:', errMsg || errCode)
+    }
+  } catch (error) {
+    depictDraft.value = currentDepict
+    console.warn('[FriendDetail] update depict failed:', error)
+  } finally {
+    savingDepict.value = false
   }
 }
 </script>

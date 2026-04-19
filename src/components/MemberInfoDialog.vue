@@ -7,6 +7,8 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { updateContacts } from '@/api/imBase'
+import { proto } from '@/api/request'
 import editIcon from '@/assets/images/message/edit-icon.png'
 import closeIcon from '@/assets/images/common/close-icon.png'
 
@@ -46,6 +48,8 @@ const editingRemark = ref(false)
 const editingDepict = ref(false)
 const remarkDraft = ref('')
 const depictDraft = ref('')
+const savingRemark = ref(false)
+const savingDepict = ref(false)
 const remarkInputRef = ref<HTMLInputElement | null>(null)
 const depictInputRef = ref<HTMLInputElement | null>(null)
 
@@ -80,27 +84,79 @@ function startEditDepict() {
   })
 }
 
-function saveRemark() {
-  editingRemark.value = false
-  if (isFriend.value && contactInfo.value) {
-    const newRemark = remarkDraft.value.trim()
-    contactInfo.value.remark = newRemark || null
-    contactStore.patchContact(userId.value, { remark: newRemark || null })
+async function saveRemark() {
+  if (!isFriend.value || !contactInfo.value || savingRemark.value) return
+  const newRemark = remarkDraft.value.trim()
+  const currentRemark = contactInfo.value.remark || ''
+
+  if (newRemark === currentRemark) {
+    editingRemark.value = false
+    return
+  }
+
+  savingRemark.value = true
+  try {
+    const res = await updateContacts({
+      op: proto.ContactsOperator.REMARK,
+      param: {
+        contactsId: Number(userId.value),
+        noteName: newRemark,
+      },
+    })
+    const { errCode, errMsg } = (res as any)?.commonResult || {}
+    if (errCode == 200) {
+      contactStore.patchContact(userId.value, { remark: newRemark || null })
+      editingRemark.value = false
+    } else {
+      remarkDraft.value = currentRemark
+      console.warn('[MemberInfoDialog] update remark failed:', errMsg || errCode)
+    }
+  } catch (error) {
+    remarkDraft.value = currentRemark
+    console.warn('[MemberInfoDialog] update remark failed:', error)
+  } finally {
+    savingRemark.value = false
   }
 }
 
-function saveDepict() {
-  editingDepict.value = false
+async function saveDepict() {
+  if (savingDepict.value) return
   const newDepict = depictDraft.value.trim()
   if (isFriend.value && contactInfo.value) {
-    ;(contactInfo.value as any).depict = newDepict || null
-    contactStore.patchContact(userId.value, { depict: newDepict || null } as any)
-  } else if (isSelf.value) {
-    // Save self depict if possible. For now, try patching the contact store if exists.
-    if (contactInfo.value) {
-      ;(contactInfo.value as any).depict = newDepict || null
-      contactStore.patchContact(userId.value, { depict: newDepict || null } as any)
+    const currentDepict = contactInfo.value.depict || ''
+    if (newDepict === currentDepict) {
+      editingDepict.value = false
+      return
     }
+
+    savingDepict.value = true
+    try {
+      const res = await updateContacts({
+        op: proto.ContactsOperator.DESCRIBE,
+        param: {
+          contactsId: Number(userId.value),
+          depict: newDepict,
+        },
+      })
+      const { errCode, errMsg } = (res as any)?.commonResult || {}
+      if (errCode == 200) {
+        contactStore.patchContact(userId.value, { depict: newDepict || null })
+        editingDepict.value = false
+      } else {
+        depictDraft.value = currentDepict
+        console.warn('[MemberInfoDialog] update depict failed:', errMsg || errCode)
+      }
+    } catch (error) {
+      depictDraft.value = currentDepict
+      console.warn('[MemberInfoDialog] update depict failed:', error)
+    } finally {
+      savingDepict.value = false
+    }
+  } else if (isSelf.value) {
+    if (contactInfo.value) {
+      contactStore.patchContact(userId.value, { depict: newDepict || null })
+    }
+    editingDepict.value = false
   }
 }
 
