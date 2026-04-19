@@ -189,13 +189,18 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::KEY_PAIR_CHANGE_PUSH => {
+                if let Err(e) = self.handle_key_pair_change(&decoded_payload) {
+                    warn!("decode KEY_PAIR_CHANGE_PUSH failed: {}", e);
+                }
+                return;
+            }
             // 这些命令不是聊天正文，不进消息列表，避免干扰日志与 UI。
             cmds::GROUP_REQ_NUM_PUSH
             | cmds::GROUP_REQ_MSG_PUSH
             | cmds::GROUP_READ_RECEIPT_PUSH
             | cmds::RECEIPT_PUSH
-            | 20001
-            | 20501 => {
+            | 20001 => {
                 return;
             }
             // 其余命令先保留老逻辑，走批处理（后续补上对应 proto 解码）。
@@ -339,24 +344,49 @@ impl MessageBatcher {
             vec![sender_id.clone(), receiver_id.clone()]
         };
         let mut ciphertexts_to_try = Vec::new();
-        // Extract all available ciphertexts from the new structure
-        if let Some(app) = &om.app_content {
-            ciphertexts_to_try.push((app.version as i64, "app", app.content.as_slice()));
-        }
+        let sender_source = if om.source == 1 { "web" } else { "app" };
+        // 老 im 接收私聊时，解密 key 使用顶层 `version + source`（发送端密钥），
+        // 不是 MessageContent.version（接收端对应设备的 keyVersion）。
+        // 桌面端优先尝试 webContent，和老 im `fnFriendMsgAdd` 保持一致。
         if let Some(web) = &om.web_content {
+            ciphertexts_to_try.push((ver, sender_source, web.content.as_slice()));
             ciphertexts_to_try.push((web.version as i64, "web", web.content.as_slice()));
         }
+        if let Some(app) = &om.app_content {
+            ciphertexts_to_try.push((ver, sender_source, app.content.as_slice()));
+            ciphertexts_to_try.push((app.version as i64, "app", app.content.as_slice()));
+        }
         if let Some(mapp) = &om.myself_app_content {
+            ciphertexts_to_try.push((ver, sender_source, mapp.content.as_slice()));
             ciphertexts_to_try.push((mapp.version as i64, "app", mapp.content.as_slice()));
         }
         if let Some(mweb) = &om.myself_web_content {
+            ciphertexts_to_try.push((ver, sender_source, mweb.content.as_slice()));
             ciphertexts_to_try.push((mweb.version as i64, "web", mweb.content.as_slice()));
         }
         // Fallback for old/unencrypted messages that might still use `content`
         if !om.content.is_empty() {
+            ciphertexts_to_try.push((ver, sender_source, om.content.as_slice()));
             ciphertexts_to_try.push((ver, "web", om.content.as_slice()));
             ciphertexts_to_try.push((ver, "app", om.content.as_slice()));
         }
+        let cipher_candidates: Vec<serde_json::Value> = ciphertexts_to_try
+            .iter()
+            .filter(|(_, _, cipher)| !cipher.is_empty())
+            .map(|(version, source, cipher)| {
+                serde_json::json!({
+                    "version": *version,
+                    "source": *source,
+                    "cipherHex": hex::encode(*cipher),
+                })
+            })
+            .collect();
+        let primary_cipher_hex = cipher_candidates
+            .first()
+            .and_then(|v| v.get("cipherHex"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let mut decrypted: Result<Vec<u8>, crate::crypto::CryptoError> =
             Err(crate::crypto::CryptoError::KeyNotFound);
@@ -446,9 +476,51 @@ impl MessageBatcher {
                 "version": om.version,
                 "decryptPending": decrypt_pending,
                 "friendIdCandidates": candidate_ids,
-                "cipherHex": hex::encode(&om.content),
+                "cipherHex": primary_cipher_hex,
+                "cipherCandidates": cipher_candidates,
             }),
         }])
+    }
+
+    fn handle_key_pair_change(&self, payload: &[u8]) -> Result<(), String> {
+        let resp = imweb::PushKeyPairChangeMessageResp::decode(payload)
+            .map_err(|e| format!("decode PushKeyPairChangeMessageResp: {}", e))?;
+        let uid = resp.uid.to_string();
+        let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
+
+        if let Some(web) = resp.web_key_pair.as_ref() {
+            if !web.public_key.is_empty() && web.key_version > 0 {
+                // Do not cache pushed web keys here. Unlike the old im, im-new also uses
+                // the Rust friend-key cache to choose the sender's own top-level web
+                // version. A 20501 from another PC under the same account can otherwise
+                // poison outgoing messages with a version whose private key we do not own.
+                info!(
+                    "KEY_PAIR_CHANGE observed web key uid={} version={} (not cached)",
+                    uid, web.key_version
+                );
+            }
+        }
+        if let Some(app) = resp.app_key_pair.as_ref() {
+            if !app.public_key.is_empty() && app.key_version > 0 {
+                match crypto.derive_friend_key(
+                    &uid,
+                    app.key_version as i64,
+                    "app",
+                    &app.public_key,
+                    &[],
+                ) {
+                    Ok(_) => info!(
+                        "KEY_PAIR_CHANGE cached app key uid={} version={}",
+                        uid, app.key_version
+                    ),
+                    Err(e) => warn!(
+                        "KEY_PAIR_CHANGE derive app key failed uid={} version={} err={}",
+                        uid, app.key_version, e
+                    ),
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn flush(&mut self) {
