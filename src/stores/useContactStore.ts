@@ -18,6 +18,7 @@ export interface Contact {
   pinyin: string | null
   letter?: string | null
   remark: string | null
+  depict?: string | null
   bfReadCancel?: boolean
   bfMyBlack?: boolean
   msgCancelTime?: number
@@ -84,7 +85,8 @@ export const useContactStore = defineStore('contact', () => {
             avatar: u.icon || u.avatar || null,
             pinyin: (item as any).pinyin || null,
             letter: (item as any).letter || null,
-            remark: (item as any).depict || null,
+            remark: u.friendRelation?.remarkName || null,
+            depict: u.depict || null,
             status: Number(u.uid) > 0 ? 1 : 0,
             updatedAt: Number((item as any).updateTime || 0),
             ...onlinePatch,
