@@ -59,18 +59,18 @@ function getQrStatusText(status: null | -1 | 0 | 200) {
   return String(status)
 }
 
-/** 检测域名 DNS 是否可达（GET 请求，与老 im checkDomainIsNormal 一致） */
+/** 检测域名是否可达（服务器有响应即视为可达，不强要求 200） */
 async function checkDns(url: string): Promise<1 | 0> {
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 5000)
-    const resp = await fetch(url.replace(/\/$/, ''), {
+    await fetch(url.replace(/\/$/, ''), {
       method: 'GET',
-      mode: 'cors',
+      mode: 'no-cors',
       signal: controller.signal,
     })
     clearTimeout(timeoutId)
-    return resp.ok && resp.status === 200 ? 1 : 0
+    return 1
   } catch {
     return 0
   }

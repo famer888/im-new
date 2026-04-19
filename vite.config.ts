@@ -25,13 +25,13 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, ''),
+          rewrite: (path: string) => path.replace(/^\/api/, ''),
           secure: false,
         },
         '/domain-api': {
           target: env.VITE_APP_BASE_DOMAIN || 'http://test-domain-api.68chat.co',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/domain-api/, ''),
+          rewrite: (path: string) => path.replace(/^\/domain-api/, ''),
           secure: false,
         },
       },

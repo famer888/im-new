@@ -9,6 +9,7 @@ import { getQrCodeUrl, getIsLogin } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { getAllDomains } from '@/utils/domainPool'
 
 const props = defineProps<{
   loading?: boolean
@@ -226,6 +227,14 @@ function clearTimers() {
 onMounted(() => {
   getDeviceConfig()
   loadLastLoginInfo()
+
+  // 从缓存预加载可用域名，避免首次启动只有一个兜底域名
+  const poolDomains = getAllDomains('webBiz').map(d => d.domain).filter(Boolean)
+  if (poolDomains.length) {
+    const base = getBaseUrl()
+    domainList.value = [...new Set([base, ...poolDomains.filter(d => d !== base)])]
+  }
+
   handleGetQrCodeUrl()
 })
 
