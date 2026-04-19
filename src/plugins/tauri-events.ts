@@ -5,7 +5,12 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
-import { ensureFriendRelKey, ensureGroupRelKey, refreshGroupRelKey } from '@/utils/e2ee'
+import {
+  ensureFriendRelKey,
+  ensureFriendRelKeyForVersion,
+  ensureGroupRelKey,
+  refreshGroupRelKey,
+} from '@/utils/e2ee'
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -87,7 +92,41 @@ export async function setupTauriListeners() {
   listen<Message[]>('msg:batch', async (event) => {
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
-    const raw = Array.isArray(event.payload) ? event.payload : []
+    const currentUid = String(authStore.uid || '')
+    const raw = (Array.isArray(event.payload) ? event.payload : []).map((item: any) => {
+      const m = { ...item }
+      let extra = m?.extra
+      if (typeof extra === 'string') {
+        try {
+          extra = JSON.parse(extra)
+        } catch {
+          extra = {}
+        }
+      }
+      if (!extra || typeof extra !== 'object') extra = {}
+      m.extra = extra
+
+      const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+      const senderId = String(m?.senderId ?? m?.sender_id ?? '')
+      const receiveUid = String(extra?.receiveUid ?? m?.receiveUid ?? m?.receive_uid ?? '')
+      if (
+        currentUid &&
+        convId.startsWith('0_') &&
+        senderId === currentUid &&
+        receiveUid &&
+        receiveUid !== currentUid
+      ) {
+        const fixedConvId = `0_${receiveUid}`
+        m.conversationId = fixedConvId
+        m.conversation_id = fixedConvId
+        m.extra = {
+          ...extra,
+          receiveUid,
+          originalConversationId: convId,
+        }
+      }
+      return m
+    })
     const valid = raw.filter((m: any) => {
       const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
       return convId.includes('_')
@@ -112,7 +151,11 @@ export async function setupTauriListeners() {
       )
       for (const fid of friendIds) {
         try {
-          await ensureFriendRelKey(uid, fid)
+          const forceRefresh = valid.some((m: any) => {
+            const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+            return convId === `0_${fid}` && Boolean(m?.extra?.decryptPending)
+          })
+          await ensureFriendRelKey(uid, fid, forceRefresh)
         } catch (err) {
           console.warn('[e2ee] ensureFriendRelKey on msg:batch failed', { fid, err: String(err) })
         }
@@ -149,7 +192,23 @@ export async function setupTauriListeners() {
             const extra = m?.extra || {}
             const decryptPending = Boolean(extra?.decryptPending)
             const cipherHex = String(extra?.cipherHex || '')
-            if (!decryptPending || !cipherHex || !convId.includes('_')) continue
+            const cipherCandidates = Array.isArray(extra?.cipherCandidates)
+              ? extra.cipherCandidates
+                  .map((c: any) => ({
+                    version: Number(c?.version || extra?.version || 1),
+                    source: String(c?.source || ''),
+                    cipherHex: String(c?.cipherHex || ''),
+                  }))
+                  .filter((c: any) => !!c.cipherHex)
+              : []
+            if (cipherHex && cipherCandidates.length === 0) {
+              cipherCandidates.push({
+                version: Number(extra?.version || 1),
+                source: '',
+                cipherHex,
+              })
+            }
+            if (!decryptPending || cipherCandidates.length === 0 || !convId.includes('_')) continue
 
             const msgType = Number(m?.msgType ?? m?.msg_type ?? 0)
             const msgId = String(m?.id ?? m?.msgId ?? m?.msg_id ?? '')
@@ -158,25 +217,62 @@ export async function setupTauriListeners() {
               const senderId = String(m?.senderId ?? m?.sender_id ?? '')
               const peerId = String(convId.split('_')[1] || '')
               if (!senderId) continue
-              const version = Number(extra?.version || 1)
+              let privateDecrypted = false
+              let lastErr: unknown = null
               try {
-                const plain = await invoke<string>('decrypt_private_incoming', {
-                  senderId,
-                  peerId,
-                  version,
-                  ciphertextHex: cipherHex,
-                })
-                m.content = plain
-                if (m.extra && typeof m.extra === 'object') {
-                  m.extra.decryptPending = false
+                for (const candidate of cipherCandidates) {
+                  try {
+                    try {
+                      await ensureFriendRelKeyForVersion(
+                        uid,
+                        senderId,
+                        Number(candidate.version || 0),
+                        String(candidate.source || ''),
+                      )
+                    } catch (keyErr) {
+                      console.warn('[e2ee] ensureFriendRelKeyForVersion failed', {
+                        msgId,
+                        senderId,
+                        version: candidate.version,
+                        source: candidate.source,
+                        err: String(keyErr),
+                      })
+                    }
+                    const plain = await invoke<string>('decrypt_private_incoming', {
+                      senderId,
+                      peerId,
+                      version: Number(candidate.version || 1),
+                      ciphertextHex: String(candidate.cipherHex || ''),
+                    })
+                    m.content = plain
+                    if (m.extra && typeof m.extra === 'object') {
+                      m.extra.decryptPending = false
+                      m.extra.cipherHex = candidate.cipherHex
+                    }
+                    privateDecrypted = true
+                    console.log('[e2ee] retry decrypt_private OK', {
+                      msgId,
+                      peerId,
+                      msgType,
+                      version: candidate.version,
+                    })
+                    break
+                  } catch (err) {
+                    lastErr = err
+                  }
                 }
-                console.log('[e2ee] retry decrypt_private OK', { msgId, peerId, msgType })
+                if (privateDecrypted) continue
+                throw lastErr || new Error('decrypt_private failed for all candidates')
               } catch (err) {
                 console.warn('[e2ee] retry decrypt_private FAILED', {
                   msgId,
                   peerId,
                   msgType,
-                  cipherLen: cipherHex.length,
+                  candidates: cipherCandidates.map((c: any) => ({
+                    version: c.version,
+                    source: c.source,
+                    cipherLen: String(c.cipherHex || '').length,
+                  })),
                   err: String(err),
                 })
               }
