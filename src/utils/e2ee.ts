@@ -82,6 +82,62 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       publicKeyHead: cached.publicKey.slice(0, 16),
       keyVersion: cached.keyVersion,
     })
+
+    let selfAppKeyPair: any = null
+    try {
+      const resp = await getKeyPair({ targetId: Number(uid) })
+      const web = (resp as any)?.webKeyPair
+      selfAppKeyPair = (resp as any)?.appKeyPair
+      const serverWebPublicKey = web?.publicKey ? String(web.publicKey).toUpperCase() : ''
+      const serverWebKeyVersion = Number(web?.keyVersion || 0)
+      if (
+        serverWebPublicKey &&
+        serverWebKeyVersion &&
+        (serverWebPublicKey !== cached.publicKey || serverWebKeyVersion !== cached.keyVersion)
+      ) {
+        console.warn('[e2ee] own web key cache mismatch, rotating local key', {
+          uid,
+          cachedKeyVersion: cached.keyVersion,
+          serverWebKeyVersion,
+          cachedPubHead: cached.publicKey.slice(0, 16),
+          serverPubHead: serverWebPublicKey.slice(0, 16),
+        })
+        const fresh = await tauriInvoke<{
+          privateKeyHex: string
+          publicKeyHex: string
+        }>('generate_curve25519_keypair')
+        const upd = await updateKeyPair({ publicKey: fresh.publicKeyHex })
+        const keyVersion = Number((upd as any)?.keyVersion || 0)
+        if (!keyVersion) {
+          throw new Error('[e2ee] updateKeyPair returned empty keyVersion after cache mismatch')
+        }
+        const kp: OwnKeyPair = {
+          privateKey: fresh.privateKeyHex,
+          publicKey: fresh.publicKeyHex,
+          keyVersion,
+        }
+        saveOwnKey(uid, kp)
+        await tauriInvoke<void>('set_curve_private_key_hex', {
+          privateKeyHex: kp.privateKey,
+        })
+        await tauriInvoke<string>('derive_friend_rel_key', {
+          friendId: String(uid),
+          publicKeyHex: kp.publicKey,
+          encryptedMsgKeyHex: '',
+          version: Number(kp.keyVersion || 1),
+          source: 'web',
+        })
+        console.log('[e2ee] rotated and derived self web rel_key', {
+          uid,
+          keyVersion: kp.keyVersion,
+          pubHead: kp.publicKey.slice(0, 16),
+        })
+        return kp
+      }
+    } catch (err) {
+      console.warn('[e2ee] own web key server check failed, using local cache:', err)
+    }
+
     await tauriInvoke<void>('set_curve_private_key_hex', {
       privateKeyHex: cached.privateKey,
     })
@@ -92,11 +148,26 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         publicKeyHex: cached.publicKey,
         encryptedMsgKeyHex: '',
         version: Number(cached.keyVersion || 1),
-        source: 'app',
+        source: 'web',
       })
-      console.log('[e2ee] derived self app rel_key (cache hit)');
+      console.log('[e2ee] derived self web rel_key (cache hit)');
     } catch (err) {
-      console.error('[e2ee] derive self app rel_key failed (cache hit)', err);
+      console.error('[e2ee] derive self web rel_key failed (cache hit)', err);
+    }
+
+    if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
+      try {
+        await tauriInvoke<string>('derive_friend_rel_key', {
+          friendId: String(uid),
+          publicKeyHex: String(selfAppKeyPair.publicKey),
+          encryptedMsgKeyHex: '',
+          version: Number(selfAppKeyPair.keyVersion || 1),
+          source: 'app',
+        })
+        console.log('[e2ee] derived self app rel_key (cache hit)');
+      } catch (err) {
+        console.error('[e2ee] derive self app rel_key failed (cache hit)', err);
+      }
     }
 
     return cached
@@ -109,10 +180,12 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       publicKey?: string
       keyVersion?: number
     } = {}
+    let selfAppKeyPair: any = null
     try {
-      const resp = await getKeyPair({ targetId: Number(uid), flag: 0 })
+      const resp = await getKeyPair({ targetId: Number(uid) })
       const web = (resp as any)?.webKeyPair
       const app = (resp as any)?.appKeyPair
+      selfAppKeyPair = app
       console.log('[e2ee] getKeyPair(self) resp:', {
         hasWeb: !!web,
         webPubHead: web?.publicKey ? String(web.publicKey).slice(0, 16) : null,
@@ -164,11 +237,26 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         publicKeyHex: kp.publicKey,
         encryptedMsgKeyHex: '',
         version: Number(kp.keyVersion || 1),
-        source: 'app',
+        source: 'web',
       })
-      console.log('[e2ee] derived self app rel_key');
+      console.log('[e2ee] derived self web rel_key');
     } catch (err) {
-      console.error('[e2ee] derive self app rel_key failed', err);
+      console.error('[e2ee] derive self web rel_key failed', err);
+    }
+
+    if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
+      try {
+        await tauriInvoke<string>('derive_friend_rel_key', {
+          friendId: String(uid),
+          publicKeyHex: String(selfAppKeyPair.publicKey),
+          encryptedMsgKeyHex: '',
+          version: Number(selfAppKeyPair.keyVersion || 1),
+          source: 'app',
+        })
+        console.log('[e2ee] derived self app rel_key');
+      } catch (err) {
+        console.error('[e2ee] derive self app rel_key failed', err);
+      }
     }
     console.log('[e2ee] ensureOwnKeyPair DONE', {
       uid,
@@ -191,6 +279,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
 
 const pendingGroupKeys = new Map<string, Promise<string>>()
 const pendingFriendKeys = new Map<string, Promise<string>>()
+const pendingFriendVersionKeys = new Map<string, Promise<string>>()
 
 /**
  * 保证群 `groupId` 的 relKey 已经被 Rust 缓存。拉取成功后返回 relKey
@@ -300,18 +389,20 @@ export async function refreshGroupRelKey(
 export async function ensureFriendRelKey(
   uid: string | number,
   friendId: string | number,
+  forceRefresh = false,
 ): Promise<string> {
   if (!isTauri()) {
     throw new Error('ensureFriendRelKey: Tauri only')
   }
   const fid = String(friendId)
   console.log('[e2ee] ensureFriendRelKey: start', { uid, fid })
+  await ensureOwnKeyPair(uid)
   const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', {
     friendId: fid,
     version: 1,
     source: 'web',
   })
-  if (cacheHit) {
+  if (cacheHit && !forceRefresh) {
     console.log('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
     return ''
   }
@@ -320,15 +411,11 @@ export async function ensureFriendRelKey(
   if (existing) return existing
 
   const task = (async () => {
-    await ensureOwnKeyPair(uid)
     let web: any
     let app: any
     try {
       const resp = await getKeyPair({
         targetId: Number(fid),
-        flag: 0,
-        webKeyVersion: -1,
-        appKeyVersion: -1,
       })
       web = (resp as any)?.webKeyPair
       app = (resp as any)?.appKeyPair
@@ -336,12 +423,9 @@ export async function ensureFriendRelKey(
       // ignore and fallback below
     }
     if (!web?.publicKey && !app?.publicKey) {
-      console.warn(`[e2ee] getKeyPair(friend=${fid}) missing publicKey, retrying with version=0`);
+      console.warn(`[e2ee] getKeyPair(friend=${fid}) missing publicKey`);
       const resp0 = await getKeyPair({
         targetId: Number(fid),
-        flag: 0,
-        webKeyVersion: 0,
-        appKeyVersion: 0,
       })
       web = (resp0 as any)?.webKeyPair
       app = (resp0 as any)?.appKeyPair
@@ -383,5 +467,102 @@ export async function ensureFriendRelKey(
   })
 
   pendingFriendKeys.set(fid, task)
+  return task
+}
+
+/**
+ * 按消息携带的具体 keyVersion/source 补齐好友 relKey。
+ *
+ * 老 im 在收到私聊时会用 `source` 判断请求 `webKeyVersion` 或
+ * `appKeyVersion`，而不是只拿最新 key。这里用于解密失败后的精准重试。
+ */
+export async function ensureFriendRelKeyForVersion(
+  uid: string | number,
+  friendId: string | number,
+  version: number,
+  source?: string,
+): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('ensureFriendRelKeyForVersion: Tauri only')
+  }
+  const fid = String(friendId)
+  const ver = Number(version || 0)
+  const src = String(source || '').toLowerCase()
+  if (!fid || !ver) return ''
+  if (fid === String(uid) && src === 'web') {
+    const own = loadOwnKey(uid)
+    if (!own || Number(own.keyVersion || 0) !== ver) {
+      console.warn('[e2ee] skip deriving self web key for non-local version', {
+        uid,
+        ver,
+        localVersion: own?.keyVersion,
+      })
+      return ''
+    }
+  }
+
+  if (src === 'web' || src === 'app') {
+    const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', {
+      friendId: fid,
+      version: ver,
+      source: src,
+    })
+    if (cacheHit) return ''
+  }
+
+  const pendingKey = `${fid}:${ver}:${src || 'any'}`
+  const existing = pendingFriendVersionKeys.get(pendingKey)
+  if (existing) return existing
+
+  const task = (async () => {
+    await ensureOwnKeyPair(uid)
+    const req: {
+      targetId: number
+      webKeyVersion?: number
+      appKeyVersion?: number
+    } = {
+      targetId: Number(fid),
+    }
+    if (src === 'web') {
+      req.webKeyVersion = ver
+    } else if (src === 'app') {
+      req.appKeyVersion = ver
+    } else {
+      const own = fid === String(uid) ? loadOwnKey(uid) : null
+      if (fid !== String(uid) || Number(own?.keyVersion || 0) === ver) {
+        req.webKeyVersion = ver
+      }
+      req.appKeyVersion = ver
+    }
+    const resp = await getKeyPair(req)
+    const web = (resp as any)?.webKeyPair
+    const app = (resp as any)?.appKeyPair
+    let last = ''
+    if (web?.publicKey && Number(web.keyVersion || 0) === ver) {
+      last = await tauriInvoke<string>('derive_friend_rel_key', {
+        friendId: fid,
+        publicKeyHex: String(web.publicKey),
+        encryptedMsgKeyHex: '',
+        version: ver,
+        source: 'web',
+      })
+      console.log('[e2ee] derive_friend_rel_key OK(web/version)', { fid, ver, len: last.length })
+    }
+    if (app?.publicKey && Number(app.keyVersion || 0) === ver) {
+      last = await tauriInvoke<string>('derive_friend_rel_key', {
+        friendId: fid,
+        publicKeyHex: String(app.publicKey),
+        encryptedMsgKeyHex: '',
+        version: ver,
+        source: 'app',
+      })
+      console.log('[e2ee] derive_friend_rel_key OK(app/version)', { fid, ver, len: last.length })
+    }
+    return last
+  })().finally(() => {
+    pendingFriendVersionKeys.delete(pendingKey)
+  })
+
+  pendingFriendVersionKeys.set(pendingKey, task)
   return task
 }

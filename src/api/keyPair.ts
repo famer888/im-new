@@ -30,18 +30,20 @@ export async function getKeyPair(
   baseUrl?: string,
 ): Promise<proto.GetKeyPairResp> {
   const base = baseUrl || getBaseUrl()
+  const reqData: Record<string, number> = {
+    targetId: Number(data.targetId),
+  }
+  if (data.flag !== undefined) reqData.flag = data.flag
+  if (data.webKeyVersion !== undefined) reqData.webKeyVersion = data.webKeyVersion
+  if (data.appKeyVersion !== undefined) reqData.appKeyVersion = data.appKeyVersion
+  if (data.groupKeyVersion !== undefined) reqData.groupKeyVersion = data.groupKeyVersion
+  if (data.channelKeyVersion !== undefined) reqData.channelKeyVersion = data.channelKeyVersion
+
   return requestProto({
     url: `${base}/sys/getKeyPair`,
     reqType: proto.GetKeyPairReq,
     respType: proto.GetKeyPairResp,
-    data: {
-      targetId: Number(data.targetId),
-      flag: data.flag ?? 0,
-      webKeyVersion: data.webKeyVersion ?? 0,
-      appKeyVersion: data.appKeyVersion ?? 0,
-      groupKeyVersion: data.groupKeyVersion ?? 0,
-      channelKeyVersion: data.channelKeyVersion ?? 0,
-    },
+    data: reqData,
   })
 }
 
