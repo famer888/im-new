@@ -120,6 +120,7 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
       :loading="isLoading"
       :has-more="messageStore.hasMore(conversationId)"
       :unread-count="sessionInitialUnread"
+      :align-top="isFileHelperChat"
       @load-more="handleLoadMore"
     />
     <MessageInput @send="handleSend" />
