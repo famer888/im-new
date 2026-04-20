@@ -421,7 +421,7 @@ function handleForwardConfirmCancel() {
 </script>
 
 <template>
-  <div class="main-layout">
+  <div class="main-layout" @contextmenu.prevent>
     <LoadingOverlay :visible="!isInitialized" :text="$t('正在加载...')" />
 
     <HomeTop />

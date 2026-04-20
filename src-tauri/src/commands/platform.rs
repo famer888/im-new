@@ -18,6 +18,31 @@ pub fn get_platform_info() -> PlatformInfo {
 }
 
 #[tauri::command]
+pub fn read_clipboard_text() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("pbpaste")
+            .output()
+            .map_err(|e| e.to_string())?;
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(String::new())
+    }
+}
+
+#[tauri::command]
 pub async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

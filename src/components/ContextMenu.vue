@@ -8,6 +8,7 @@ export interface MenuItem {
   icon?: string
   /** Right-side image URL (message menu, im layout) */
   iconSrc?: string
+  children?: MenuItem[]
   danger?: boolean
   disabled?: boolean
   divider?: boolean
@@ -20,7 +21,7 @@ const props = withDefaults(
     y: number
     items: MenuItem[]
     /** Align with legacy im message menu: label left, 16px icon right, row borders */
-    variant?: 'default' | 'im'
+    variant?: 'default' | 'im' | 'editor'
   }>(),
   { variant: 'default' },
 )
@@ -50,7 +51,7 @@ watch(() => [props.visible, props.x, props.y], () => {
 })
 
 function handleClick(item: MenuItem) {
-  if (item.disabled || item.divider) return
+  if (item.disabled || item.divider || item.children?.length) return
   emit('select', item.key)
   emit('update:visible', false)
 }
@@ -69,7 +70,13 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
       <div
         v-if="visible"
         ref="menuRef"
-        :class="['context-menu', { 'context-menu--im': variant === 'im' }]"
+        :class="[
+          'context-menu',
+          {
+            'context-menu--im': variant === 'im',
+            'context-menu--editor': variant === 'editor',
+          },
+        ]"
         :style="{ left: adjustedX + 'px', top: adjustedY + 'px' }"
         @click.stop
         @contextmenu.prevent
@@ -77,12 +84,26 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
         <template v-for="item in items" :key="item.key">
           <div v-if="item.divider" class="menu-divider" />
           <div
-            v-else-if="variant === 'im'"
-            :class="['menu-item', 'menu-item--im', { disabled: item.disabled }]"
+            v-else-if="variant === 'im' || variant === 'editor'"
+            :class="[
+              'menu-item',
+              variant === 'editor' ? 'menu-item--editor' : 'menu-item--im',
+              { disabled: item.disabled },
+            ]"
             @click="handleClick(item)"
           >
             <span class="menu-label">{{ item.label }}</span>
             <img v-if="item.iconSrc" class="menu-icon-img" :src="item.iconSrc" alt="" />
+            <div v-if="variant === 'editor' && item.children?.length" class="submenu">
+              <div
+                v-for="child in item.children"
+                :key="child.key"
+                :class="['submenu-item', { disabled: child.disabled }]"
+                @click.stop="handleClick(child)"
+              >
+                {{ child.label }}
+              </div>
+            </div>
           </div>
           <div
             v-else
@@ -169,6 +190,88 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
     width: 16px;
     height: 16px;
     object-fit: contain;
+  }
+}
+
+.context-menu--editor {
+  width: 160px;
+  min-width: 160px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+}
+
+.menu-item--editor {
+  position: relative;
+  justify-content: space-between;
+  gap: 8px;
+  height: auto;
+  min-height: 0;
+  padding: 10px;
+  color: #000;
+  font-size: 14px;
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: 0;
+    height: 1px;
+    background: #f0f0f0;
+  }
+
+  &:last-child::after {
+    background: none;
+  }
+
+  &:hover {
+    background: #fafafa;
+
+    .submenu {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
+  &.disabled {
+    color: #c0c4cc;
+    &:hover { background: transparent; }
+  }
+
+  .menu-label {
+    flex: 1;
+  }
+
+  .menu-icon-img {
+    flex-shrink: 0;
+    max-width: 16px;
+    max-height: 16px;
+    object-fit: contain;
+  }
+}
+
+.submenu {
+  position: absolute;
+  left: 160px;
+  top: 0;
+  min-width: 160px;
+  padding: 0 10px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.submenu-item {
+  padding: 10px 0;
+  cursor: pointer;
+
+  &.disabled {
+    color: #c0c4cc;
+    cursor: not-allowed;
   }
 }
 
