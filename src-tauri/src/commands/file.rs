@@ -19,6 +19,41 @@ pub struct DownloadProgress {
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
     pub status: String, // "downloading", "decrypting", "done", "error"
+    pub data_url: Option<String>,
+}
+
+fn sniff_image_mime(bytes: &[u8]) -> &'static str {
+    if bytes.len() >= 8
+        && bytes[0] == 0x89
+        && bytes[1] == b'P'
+        && bytes[2] == b'N'
+        && bytes[3] == b'G'
+    {
+        return "image/png";
+    }
+    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
+        return "image/jpeg";
+    }
+    if bytes.len() >= 6 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
+        return "image/gif";
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    if bytes.len() >= 2 && &bytes[..2] == b"BM" {
+        return "image/bmp";
+    }
+    if bytes.len() >= 12 && (&bytes[4..12] == b"ftypavif" || &bytes[4..12] == b"ftypavis") {
+        return "image/avif";
+    }
+    let head_len = bytes.len().min(200);
+    if let Ok(head) = std::str::from_utf8(&bytes[..head_len]) {
+        let trimmed = head.trim_start();
+        if trimmed.starts_with("<svg") || trimmed.starts_with("<?xml") {
+            return "image/svg+xml";
+        }
+    }
+    "image/png"
 }
 
 #[tauri::command]
@@ -69,6 +104,12 @@ pub async fn download_file(
                 .await
                 .map_err(|e| format!("Read body failed: {}", e))?;
 
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("Create cache dir failed: {}", e))?;
+            }
+
             let enc_path = path.with_extension("enc");
             tokio::fs::write(&enc_path, &bytes)
                 .await
@@ -85,12 +126,21 @@ pub async fn download_file(
             let meta = tokio::fs::metadata(&path)
                 .await
                 .map_err(|e| format!("Stat failed: {}", e))?;
-            Ok::<u64, String>(meta.len())
+            let decoded = tokio::fs::read(&path)
+                .await
+                .map_err(|e| format!("Read decrypted file failed: {}", e))?;
+            let mime = sniff_image_mime(&decoded);
+            let data_url = format!(
+                "data:{};base64,{}",
+                mime,
+                general_purpose::STANDARD.encode(decoded)
+            );
+            Ok::<(u64, String), String>((meta.len(), data_url))
         }
         .await;
 
         match download_result {
-            Ok(size) => {
+            Ok((size, data_url)) => {
                 let _ = app_clone.emit(
                     &format!("file:done:{}", msg_id_clone),
                     DownloadProgress {
@@ -99,6 +149,7 @@ pub async fn download_file(
                         total_bytes: size,
                         downloaded_bytes: size,
                         status: "done".to_string(),
+                        data_url: Some(data_url),
                     },
                 );
             }
@@ -122,6 +173,7 @@ pub async fn get_download_progress(msg_id: String) -> Result<DownloadProgress, S
         total_bytes: 0,
         downloaded_bytes: 0,
         status: "idle".to_string(),
+        data_url: None,
     })
 }
 
