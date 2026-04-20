@@ -18,10 +18,15 @@ import AtListDialog from './send/AtListDialog.vue'
 import CreateLinkDialog from './send/CreateLinkDialog.vue'
 import ScheduleDeletionDialog from './send/ScheduleDeletionDialog.vue'
 import FileUploadPreview from './FileUploadPreview.vue'
+import ContextMenu from '@/components/ContextMenu.vue'
+import type { MenuItem } from '@/components/ContextMenu.vue'
 import iconSmallActive from '@/assets/images/activeIcon/small-active.png'
 import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
 import replyPreviewIcon from '@/assets/images/menu/menu-reply-preview.svg'
+import menuCopy from '@/assets/images/menu/copy.png'
+import menuPaste from '@/assets/images/menu/paste.png'
+import menuMore from '@/assets/images/menu/more.png'
 
 const emit = defineEmits<{
   (e: 'send', content: string, msgType: number, extra?: Record<string, unknown>): void
@@ -45,6 +50,11 @@ const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
 const pendingFiles = ref<File[]>([])
 const showFilePreview = ref(false)
+const editorMenuVisible = ref(false)
+const editorMenuX = ref(0)
+const editorMenuY = ref(0)
+const savedSelection = ref<Range | null>(null)
+const selectedLinkText = ref('')
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
@@ -74,6 +84,16 @@ const showReadBurnTip = computed(() =>
 const readBurnTimeText = computed(() =>
   getReadBurnTimeText(currentContact.value?.msgCancelTime || 30),
 )
+const editorMenuItems = computed<MenuItem[]>(() => [
+  { key: 'copy', label: '复制', iconSrc: menuCopy },
+  { key: 'paste', label: '粘贴', iconSrc: menuPaste },
+  {
+    key: 'text_format',
+    label: '文本格式',
+    iconSrc: menuMore,
+    children: [{ key: 'create_link', label: '创建链接' }],
+  },
+])
 
 function formatReadBurnNotice(seconds: number, enabled: boolean) {
   const name = t('你')
@@ -172,6 +192,75 @@ function handleInput() {
   }
 }
 
+function saveEditorSelection() {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || !editorRef.value) return
+  const range = selection.getRangeAt(0)
+  if (editorRef.value.contains(range.commonAncestorContainer)) {
+    savedSelection.value = range.cloneRange()
+  }
+}
+
+function restoreEditorSelection() {
+  const range = savedSelection.value
+  if (!range || !editorRef.value) {
+    editorRef.value?.focus()
+    return
+  }
+  try {
+    const selection = window.getSelection()
+    editorRef.value.focus()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  } catch {
+    editorRef.value.focus()
+  }
+}
+
+function handleEditorContextMenu(e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  saveEditorSelection()
+  editorMenuX.value = e.clientX
+  editorMenuY.value = e.clientY
+  editorMenuVisible.value = true
+}
+
+async function handleEditorMenuSelect(key: string) {
+  restoreEditorSelection()
+  if (key === 'copy') {
+    const text = window.getSelection()?.toString() || ''
+    if (text) {
+      try { await navigator.clipboard.writeText(text) } catch { /* clipboard may be unavailable */ }
+    }
+    return
+  }
+  if (key === 'paste') {
+    const text = await readClipboardText()
+    if (text) {
+      document.execCommand('insertText', false, text)
+      handleInput()
+    }
+    return
+  }
+  if (key === 'create_link') {
+    selectedLinkText.value = window.getSelection()?.toString() || ''
+    showCreateLink.value = true
+  }
+}
+
+async function readClipboardText() {
+  if ((window as any).__TAURI_INTERNALS__) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      return String(await invoke('read_clipboard_text') || '')
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
 // 粘贴图片/文件
 function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
@@ -225,10 +314,21 @@ function handleAtSelect(member: { uid: string; name: string }) {
   if (editorRef.value) editorRef.value.textContent = content.value
 }
 
-function handleLinkConfirm(data: { linkText: string; linkValue: string }) {
+function handleLinkConfirm(data: { linkText: string; linkValue: string; selectText?: string }) {
   const linkHtml = `<a href="${data.linkValue}" target="_blank">${data.linkText}</a>`
-  content.value += linkHtml
-  if (editorRef.value) editorRef.value.innerHTML += linkHtml
+  restoreEditorSelection()
+  const selection = window.getSelection()
+  if (selection && selection.rangeCount > 0 && data.selectText) {
+    const range = selection.getRangeAt(0)
+    range.deleteContents()
+    const template = document.createElement('template')
+    template.innerHTML = linkHtml
+    range.insertNode(template.content)
+    selection.removeAllRanges()
+  } else if (editorRef.value) {
+    editorRef.value.innerHTML += linkHtml
+  }
+  if (editorRef.value) content.value = editorRef.value.innerHTML
 }
 
 function handleFileSelect() {
@@ -398,6 +498,19 @@ eventBus.on('editor:insert-at', handleAtSelect)
           @input="handleInput"
           @keydown="handleKeydown"
           @paste="handlePaste"
+          @mouseup="saveEditorSelection"
+          @keyup="saveEditorSelection"
+          @blur="saveEditorSelection"
+          @contextmenu.prevent.stop="handleEditorContextMenu"
+        />
+
+        <ContextMenu
+          v-model:visible="editorMenuVisible"
+          :x="editorMenuX"
+          :y="editorMenuY"
+          :items="editorMenuItems"
+          variant="editor"
+          @select="handleEditorMenuSelect"
         />
 
         <Transition name="popup">
@@ -429,6 +542,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
     <!-- 弹窗 -->
     <CreateLinkDialog
       :visible="showCreateLink"
+      :select-text="selectedLinkText"
       @close="showCreateLink = false"
       @confirm="handleLinkConfirm"
     />
