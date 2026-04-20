@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -78,7 +78,7 @@ onMounted(async () => {
     // Bootstrap: if no real conversations exist, seed from contacts/groups
     // (mirrors old im project's behavior of building the chat list from synced data)
     const hasRealConversations = chatStore.conversations.some(
-      (c) => c.targetId !== FILE_HELPER_TARGET_ID,
+      (c) => !isFileHelperTargetId(c.targetId),
     )
     if (!hasRealConversations) {
       for (const contact of contactStore.contacts) {
@@ -164,8 +164,7 @@ const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?
 /** 传输助手会话仅在侧栏「传输」选中时显示聊天窗，防止通讯录/消息下误显 */
 const showChatWindow = computed(() => {
   if (uiStore.detailView !== 'chat' || !chatStore.currentConversationId) return false
-  const isFileHelper =
-    chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID
+  const isFileHelper = isFileHelperTargetId(chatStore.currentConversation?.targetId)
   if (isFileHelper && uiStore.sidebarTab !== 'transfer') return false
   return true
 })

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -68,7 +68,7 @@ const list = computed((): ForwardItem[] => {
 
   // Recent conversations first
   for (const conv of chatStore.conversations) {
-    if (conv.targetId === FILE_HELPER_TARGET_ID) continue
+    if (isFileHelperTargetId(conv.targetId)) continue
     if (conv.type === ConversationType.Friend) {
       const contact = contactStore.getContact(conv.targetId)
       if (!contact) continue

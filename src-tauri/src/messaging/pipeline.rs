@@ -13,6 +13,7 @@
 use tracing::info;
 
 use crate::crypto::CryptoEngine;
+use crate::db::queries::FILE_HELPER_TARGET_ID;
 use crate::ws::{
     commands::{SEND_GROUP_MSG, SEND_PRIVATE_MSG},
     WsError, WsManager,
@@ -147,7 +148,8 @@ pub fn send_private_text(
         .get_latest_friend_key_with_version(sender_uid_str, "web")
         .map(|(v, k)| (v as i32, k));
 
-    if friend_app_key.is_none() && friend_web_key.is_none() {
+    let is_file_helper = friend_uid_str == FILE_HELPER_TARGET_ID;
+    if friend_app_key.is_none() && friend_web_key.is_none() && !is_file_helper {
         return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));
     }
 
