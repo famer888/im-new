@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAuthStore } from '@/stores/useAuthStore'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
@@ -50,17 +51,23 @@ async function handleLoginSuccess(session: {
 
 async function handleClose() {
   try {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window')
     await getCurrentWindow().close()
   } catch {
     window.close()
   }
 }
+
+function startWindowDrag(e: MouseEvent) {
+  if (e.button !== 0) return
+  getCurrentWindow().startDragging().catch((err) => {
+    console.warn('[window] start dragging failed:', err)
+  })
+}
 </script>
 
 <template>
   <div class="loginRegistContainer">
-    <div class="drag" data-tauri-drag-region></div>
+    <div class="drag" @mousedown="startWindowDrag"></div>
     <img
       v-if="!isMac"
       :src="top3Icon"
@@ -104,7 +111,8 @@ async function handleClose() {
     left: 0;
     top: 0;
     height: 30px;
-    -webkit-app-region: drag;
+    z-index: 2;
+    user-select: none;
   }
 
   .close {
