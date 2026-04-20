@@ -46,6 +46,24 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
     }
 }
 
+fn decrypt_group_attachment_key(
+    crypto: &crate::crypto::CryptoEngine,
+    group_id: &str,
+    attachment_key: &str,
+) -> Option<String> {
+    let raw = attachment_key.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let data = hex::decode(raw).ok()?;
+    let plain = crypto.decrypt_group_message(group_id, &data).ok()?;
+    String::from_utf8(plain)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// 20201 `SendGroupMessageResp` 解出来后派发到前端的结构。
 /// 与老 im `fnMsgSendSuccess(msg, 'group')` 的入参字段对齐：
 /// - `flag`          客户端自定义 id，对应本地 `Message.custom_msg_id`
@@ -315,6 +333,8 @@ impl MessageBatcher {
                 conversation_id,
                 decrypt_pending,
             );
+            let file_key =
+                decrypt_group_attachment_key(&crypto, &group_id_s, &gm.attachment_key);
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_MSG_RECEIVED,
                 msg_id: gm.msg_id.to_string(),
@@ -331,6 +351,8 @@ impl MessageBatcher {
                     "contentMd5": gm.content_md5,
                     "decryptPending": decrypt_pending,
                     "cipherHex": hex::encode(&gm.content),
+                    "attachmentKey": gm.attachment_key,
+                    "fileKey": file_key,
                 }),
             });
         }

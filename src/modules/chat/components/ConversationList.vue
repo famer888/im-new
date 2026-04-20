@@ -103,10 +103,30 @@ function showFriendOnlineDot(conv: Conversation): boolean {
   return Boolean(c.online)
 }
 
+function formatDigestText(digest: string): string {
+  const raw = digest.trim()
+  if (!raw) return ''
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (
+      parsed
+      && typeof parsed === 'object'
+      && (parsed.url || parsed.fileUrl || parsed.thumbnailUrl || parsed.thumbUrl)
+    ) {
+      return '[图片]'
+    }
+  } catch {
+    // 非 JSON 文本按原内容显示
+  }
+
+  return raw
+}
+
 function getDigest(conv: Conversation): string {
   if (conv.draft) return `[草稿] ${conv.draft}`
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
-    return conv.lastMsgDigest
+    return formatDigestText(conv.lastMsgDigest)
   }
 
   // 与 im 行为对齐：会话摘要为空时，兜底取已加载消息中的最后一条
@@ -118,7 +138,7 @@ function getDigest(conv: Conversation): string {
     if (latest.msgType === 2) return '[语音]'
     if (latest.msgType === 3) return '[视频]'
     if (latest.msgType === 7) return '[文件]'
-    if (raw) return raw
+    if (raw) return formatDigestText(raw)
   }
 
   return ''
