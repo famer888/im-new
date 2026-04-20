@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessageType, ConversationType } from '@/types'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
@@ -330,22 +330,6 @@ function handleScheduleDeletionConfirm(seconds: number) {
     // ignore update failure in UI layer
   })
 }
-
-// 截图快捷键 (Ctrl+Shift+A)
-function handleGlobalKeydown(e: KeyboardEvent) {
-  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
-    e.preventDefault()
-    // TODO: invoke('start_screenshot')
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', handleGlobalKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleGlobalKeydown)
-})
 
 function getQuoteDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Text) return (content || '').slice(0, 80)
