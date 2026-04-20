@@ -44,16 +44,17 @@ impl serde::Serialize for SendError {
     }
 }
 
-/// 发送一条群文本消息。
+/// 发送一条群消息。
 ///
 /// `flag` 需要调用方生成（与本地 `Message.custom_msg_id` 一致），用来匹配
 /// 服务端 20201 回执里带回的 flag，从而把本地 "sending" 消息升级为 "sent"。
-pub fn send_group_text(
+pub fn send_group_message(
     ws: &WsManager,
     crypto: &CryptoEngine,
     group_id_str: &str,
     sender_uid_str: &str,
-    text: &str,
+    msg_type: i32,
+    content: &str,
     send_time: i64,
     flag: i64,
     at_uids: Vec<i64>,
@@ -69,11 +70,11 @@ pub fn send_group_text(
         .get_group_key(group_id_str)
         .ok_or_else(|| SendError::MissingGroupKey(group_id_str.to_string()))?;
 
-    let content_plain = super::encode_text_obj(text);
+    let content_plain = super::encode_content_obj(msg_type, content);
     let payload = super::build_send_group_message_req(
         group_id,
         sender_uid,
-        0, // MessageType::Text
+        msg_type,
         &content_plain,
         &rel_key,
         send_time,
@@ -89,6 +90,30 @@ pub fn send_group_text(
         payload.len()
     );
     Ok(())
+}
+
+/// 发送一条群文本消息。
+pub fn send_group_text(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    group_id_str: &str,
+    sender_uid_str: &str,
+    text: &str,
+    send_time: i64,
+    flag: i64,
+    at_uids: Vec<i64>,
+) -> Result<(), SendError> {
+    send_group_message(
+        ws,
+        crypto,
+        group_id_str,
+        sender_uid_str,
+        0,
+        text,
+        send_time,
+        flag,
+        at_uids,
+    )
 }
 
 /// 发送一条单聊文本消息（10101）。

@@ -245,13 +245,44 @@ function handleFileSelect() {
   input.click()
 }
 
-function handleFileSend(payload: { text: string; files: File[] } | File[]) {
+function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+function getImageSize(src: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.naturalWidth || 0, height: img.naturalHeight || 0 })
+    img.onerror = () => resolve({ width: 0, height: 0 })
+    img.src = src
+  })
+}
+
+async function handleFileSend(payload: { text: string; files: File[] } | File[]) {
   const files = Array.isArray(payload) ? payload : payload.files
   const text = Array.isArray(payload) ? '' : (payload.text || '').trim()
 
   for (const file of files) {
     if (file.type.startsWith('image/')) {
-      emit('send', JSON.stringify({ name: file.name, size: file.size, path: '' }), MessageType.Image)
+      if (isGroup.value) {
+        const dataUrl = await fileToDataURL(file)
+        const { width, height } = await getImageSize(dataUrl)
+        emit('send', JSON.stringify({
+          url: dataUrl,
+          thumbnailUrl: dataUrl,
+          width,
+          height,
+          size: file.size,
+          name: file.name,
+        }), MessageType.Image)
+      } else {
+        emit('send', JSON.stringify({ name: file.name, size: file.size, path: '' }), MessageType.Image)
+      }
     } else {
       emit('send', JSON.stringify({ name: file.name, size: file.size, ext: file.name.split('.').pop() }), MessageType.File)
     }

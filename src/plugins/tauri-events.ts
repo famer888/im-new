@@ -284,6 +284,7 @@ export async function setupTauriListeners() {
                 const plain = await invoke<string>('decrypt_group_incoming', {
                   groupId,
                   ciphertextHex: cipherHex,
+                  msgType,
                 })
                 m.content = plain
                 if (m.extra && typeof m.extra === 'object') {
@@ -306,6 +307,7 @@ export async function setupTauriListeners() {
                 const plain = await invoke<string>('decrypt_group_incoming', {
                   groupId,
                   ciphertextHex: cipherHex,
+                  msgType,
                 })
                 m.content = plain
                 if (m.extra && typeof m.extra === 'object') {
