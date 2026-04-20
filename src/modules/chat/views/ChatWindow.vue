@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
-import { useChatStore, FILE_HELPER_TARGET_ID, isFileHelperTargetId } from '@/stores/useChatStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
 import ChatHeader from '../components/ChatHeader.vue'
@@ -20,14 +20,6 @@ const chatStore = useChatStore()
 const groupStore = useGroupStore()
 
 const conversationId = computed(() => (route.query.id as string) || chatStore.currentConversationId || '')
-
-const isFileHelperChat = computed(() => {
-  const id = conversationId.value
-  if (!id) return false
-  if (id === `0_${FILE_HELPER_TARGET_ID}`) return true
-  const conv = chatStore.conversations.find((c) => c.id === id)
-  return isFileHelperTargetId(conv?.targetId)
-})
 
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
@@ -120,7 +112,7 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
       :loading="isLoading"
       :has-more="messageStore.hasMore(conversationId)"
       :unread-count="sessionInitialUnread"
-      :align-top="isFileHelperChat"
+      align-top
       @load-more="handleLoadMore"
     />
     <MessageInput @send="handleSend" />
