@@ -4,7 +4,7 @@ use super::models::*;
 use super::DbError;
 
 /// 与前端单聊会话 id 规则一致：`0_{targetId}`；与旧 im「文件传输助手」占位用户 id 对齐
-pub const FILE_HELPER_TARGET_ID: &str = "9901";
+pub const FILE_HELPER_TARGET_ID: &str = "10008";
 
 /// 保证本地存在「文件传输助手」会话行（服务端未必下发）
 pub fn ensure_file_helper_conversation(conn: &Connection) -> Result<(), DbError> {
