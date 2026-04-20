@@ -16,6 +16,42 @@ function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
 }
 
+let screenshotShortcutBound = false
+let screenshotStarting = false
+
+function isMacPlatform(): boolean {
+  const text = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
+  return text.includes('mac')
+}
+
+function isScreenshotShortcut(e: KeyboardEvent): boolean {
+  const isA = e.key.toLowerCase() === 'a' || e.code === 'KeyA'
+  if (!isA || !e.shiftKey) return false
+  return isMacPlatform() ? e.metaKey : e.ctrlKey
+}
+
+function setupScreenshotShortcut() {
+  if (screenshotShortcutBound || !isTauri()) return
+  screenshotShortcutBound = true
+  window.addEventListener('keydown', async (e) => {
+    if (!isScreenshotShortcut(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.repeat || screenshotStarting) return
+    screenshotStarting = true
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('start_screenshot')
+    } catch (err) {
+      console.warn('[screenshot] start failed:', err)
+    } finally {
+      window.setTimeout(() => {
+        screenshotStarting = false
+      }, 600)
+    }
+  }, true)
+}
+
 export async function setupTauriListeners() {
   setupGlobalErrorHandler()
   let groupKeyWarmupPending: Promise<void> | null = null
@@ -34,6 +70,8 @@ export async function setupTauriListeners() {
     console.warn('[tauri-events] Not running in Tauri, skipping native event listeners')
     return
   }
+
+  setupScreenshotShortcut()
 
   const { listen } = await import('@tauri-apps/api/event')
 

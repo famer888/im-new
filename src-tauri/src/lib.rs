@@ -164,6 +164,7 @@ pub fn run() {
             commands::domain::mark_domain_error,
             commands::domain::get_first_normal_domain,
             commands::platform::get_platform_info,
+            commands::platform::start_screenshot,
             commands::platform::prevent_sleep,
             commands::platform::allow_sleep,
             commands::sentry::report_error,

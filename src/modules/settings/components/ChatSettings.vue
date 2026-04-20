@@ -15,6 +15,9 @@ const chatStore = useChatStore()
 const messageStore = useMessageStore()
 
 const sendShortcutKeyList = ['Enter', 'Ctrl+Enter'] as const
+const screenshotShortcutText = computed(() => (
+  navigator.platform.toLowerCase().includes('mac') ? 'command + shift + a' : 'ctrl + shift + a'
+))
 const sendShortcutKeyIndex = computed(() => {
   const i = sendShortcutKeyList.indexOf(
     settingStore.settings.sendShortcutKey as (typeof sendShortcutKeyList)[number],
@@ -87,7 +90,7 @@ async function confirmClearAll() {
       <dt>{{ $t('截屏') }}</dt>
       <dd>
         <div class="bg">
-          <span>ctrl + shift + a</span>
+          <span>{{ screenshotShortcutText }}</span>
         </div>
       </dd>
     </dl>
