@@ -14,6 +14,8 @@ const props = defineProps<{
   loading: boolean
   hasMore: boolean
   unreadCount?: number
+  /** 传输助手对齐旧 im：少量消息从顶部开始排列，不做吸底留白 */
+  alignTop?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -481,7 +483,7 @@ function onUnreadBannerClick() {
         <span>{{ $t('加载中...') }}</span>
       </div>
 
-      <div class="scroll-content">
+      <div class="scroll-content" :class="{ 'align-top': alignTop }">
         <template
           v-for="row in rowsForList"
           :key="row.kind === 'unread' ? row.key : row.entry.message.id"
@@ -575,6 +577,10 @@ function onUnreadBannerClick() {
   flex-direction: column;
   justify-content: flex-end;
   box-sizing: border-box;
+}
+
+.scroll-content.align-top {
+  justify-content: flex-start;
 }
 
 .message-row {
