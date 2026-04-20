@@ -376,7 +376,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if (convType === 1 && msgType === 0) {
+      if (convType === 1 && [0, 1].includes(msgType)) {
         await ensureWsConnected()
       }
       console.log('[send] invoking Rust send_message', { conversationId, msgType })
@@ -403,7 +403,7 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
-      const canRetryWs = convType === 1 && msgType === 0 && /Not connected/i.test(errText)
+      const canRetryWs = convType === 1 && [0, 1].includes(msgType) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')

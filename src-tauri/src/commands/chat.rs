@@ -305,6 +305,34 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
+        (1, 1) => {
+            if let Err(e) = pipeline::send_group_message(
+                &ws_mgr,
+                &crypto,
+                &target_id,
+                &uid,
+                request.msg_type,
+                &request.content,
+                now,
+                client_flag,
+                Vec::new(),
+            ) {
+                error!(
+                    "send_group_message failed conversation={} msg_type={} err={}",
+                    request.conversation_id, request.msg_type, e
+                );
+                let failed_id = msg_id.clone();
+                let _ = db.with_connection(&uid, |conn| {
+                    conn.execute(
+                        "UPDATE messages SET status = -1 WHERE id = ?1",
+                        rusqlite::params![failed_id],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    Ok(())
+                });
+                return Err(e.to_string());
+            }
+        }
         (1, _) => {
             warn!(
                 "group non-text message (type={}) send not implemented yet; kept local only",
@@ -504,6 +532,7 @@ pub fn decrypt_group_incoming(
     crypto: State<'_, CryptoEngine>,
     group_id: String,
     ciphertext_hex: String,
+    msg_type: Option<i32>,
 ) -> Result<String, String> {
     let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let key_cached = crypto.get_group_key(&group_id).is_some();
@@ -517,7 +546,19 @@ pub fn decrypt_group_incoming(
                 plain.len(),
                 key_cached,
             );
-            if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
+            if msg_type.unwrap_or(0) == 1 {
+                if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
+                    return Ok(serde_json::json!({
+                        "url": obj.url,
+                        "thumbnailUrl": obj.thumb_url,
+                        "width": obj.width,
+                        "height": obj.height,
+                        "size": obj.file_size,
+                        "sizeType": obj.size_type,
+                    })
+                    .to_string());
+                }
+            } else if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
                 return Ok(obj.content);
             }
             String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))

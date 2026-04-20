@@ -3,7 +3,7 @@ use prost::Message as _;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{Duration, Instant};
 use tracing::{error, info, warn};
-
+                
 use crate::crypto;
 use crate::proto::imweb;
 use crate::ws::commands as cmds;
@@ -23,6 +23,27 @@ pub struct DecodedMessage {
     pub status: i32,
     pub read_status: i32,
     pub extra: serde_json::Value,
+}
+
+fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
+    match msg_type {
+        1 => match imweb::ImageObj::decode(plain) {
+            Ok(obj) => serde_json::json!({
+                "url": obj.url,
+                "thumbnailUrl": obj.thumb_url,
+                "width": obj.width,
+                "height": obj.height,
+                "size": obj.file_size,
+                "sizeType": obj.size_type,
+            })
+            .to_string(),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
+        _ => match imweb::TextObj::decode(plain) {
+            Ok(obj) => obj.content,
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
+    }
 }
 
 /// 20201 `SendGroupMessageResp` 解出来后派发到前端的结构。
@@ -249,13 +270,7 @@ impl MessageBatcher {
             // 同步]"的现象。
             let (content, decrypt_pending) =
                 match crypto.decrypt_group_message(&group_id_s, &gm.content) {
-                    Ok(plain) => {
-                        let text = match imweb::TextObj::decode(plain.as_slice()) {
-                            Ok(obj) => obj.content,
-                            Err(_) => String::from_utf8_lossy(&plain).to_string(),
-                        };
-                        (text, false)
-                    }
+                    Ok(plain) => (decode_content_obj(gm.msg_type, plain.as_slice()), false),
                     Err(e) => {
                         // 兼容老客户端发来的明文消息（例如版本=0 或骰子/扑克等未加密类型）
                         if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
@@ -264,6 +279,12 @@ impl MessageBatcher {
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
                             (obj.content, false)
+                        } else if gm.msg_type == 1 && imweb::ImageObj::decode(gm.content.as_slice()).is_ok() {
+                            warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw ImageObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                            (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
                         } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
                             warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw UTF-8 parsed group_id={} msg_id={} msg_type={} err={}",
@@ -397,7 +418,7 @@ impl MessageBatcher {
                 if cipher.is_empty() {
                     continue;
                 }
-                
+
                 decrypted = crypto
                     .decrypt_friend_message(fid, *v, source, cipher)
                     .or_else(|_| {

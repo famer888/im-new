@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 
 const props = defineProps<{
@@ -8,28 +8,58 @@ const props = defineProps<{
 
 const isLoaded = ref(false)
 
-const imageData = computed(() => {
+const imageData = computed((): {
+  url: string
+  thumbnailUrl: string
+  width: number
+  height: number
+  size: number
+} => {
+  const raw = (props.message.content ?? '').trim()
+  if (!raw) return { url: '', thumbnailUrl: '', width: 0, height: 0, size: 0 }
+
   try {
-    return JSON.parse(props.message.content ?? '{}')
+    const parsed = JSON.parse(raw)
+    const url = parsed.url || parsed.fileUrl || parsed.path || ''
+    const thumbnailUrl = parsed.thumbnailUrl || parsed.thumbUrl || url
+    return {
+      url,
+      thumbnailUrl,
+      width: Number(parsed.width || 0),
+      height: Number(parsed.height || 0),
+      size: Number(parsed.size || parsed.fileSize || 0),
+    }
   } catch {
-    return {}
+    const [url = '', thumbUrl = '', size = '0'] = raw.split('||')
+    return {
+      url,
+      thumbnailUrl: thumbUrl || url,
+      width: 0,
+      height: 0,
+      size: Number(size || 0),
+    }
   }
 })
 
 const thumbnailUrl = computed(() => imageData.value.thumbnailUrl || imageData.value.url || '')
 const isVideo = computed(() => props.message.msgType === 3)
+
+watch(thumbnailUrl, () => {
+  isLoaded.value = false
+})
 </script>
 
 <template>
   <div class="image-message">
     <div class="image-wrapper" :style="{ maxWidth: '240px' }">
       <img
+        v-if="thumbnailUrl"
         v-show="isLoaded"
         :src="thumbnailUrl"
         alt=""
         @load="isLoaded = true"
       />
-      <div v-if="!isLoaded" class="skeleton" />
+      <div v-if="!thumbnailUrl || !isLoaded" class="skeleton" />
       <div v-if="isVideo" class="play-icon">▶</div>
     </div>
   </div>

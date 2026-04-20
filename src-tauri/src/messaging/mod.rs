@@ -31,6 +31,75 @@ pub fn encode_text_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将前端图片内容编码为旧 im 使用的 ImageObj protobuf。
+///
+/// 兼容两种输入：
+/// - 新项目 UI 的 JSON：`{ url, thumbnailUrl, width, height, size }`
+/// - 旧 im 解码后的内容串：`url||thumbUrl||fileSize||sizeType`
+pub fn encode_image_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (url, mut thumb_url, width, height, file_size, size_type) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let url = value
+                .get("url")
+                .or_else(|| value.get("fileUrl"))
+                .or_else(|| value.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let thumb_url = value
+                .get("thumbnailUrl")
+                .or_else(|| value.get("thumbUrl"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let width = value.get("width").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let height = value.get("height").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let file_size = value
+                .get("size")
+                .or_else(|| value.get("fileSize"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let size_type = value.get("sizeType").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            (url, thumb_url, width, height, file_size, size_type)
+        } else {
+            let parts: Vec<&str> = raw.split("||").collect();
+            let url = parts.get(0).copied().unwrap_or_default().to_string();
+            let thumb_url = parts.get(1).copied().unwrap_or_default().to_string();
+            let file_size = parts
+                .get(2)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            let size_type = parts
+                .get(3)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            (url, thumb_url, 0, 0, file_size, size_type)
+        };
+
+    if thumb_url.is_empty() {
+        thumb_url = url.clone();
+    }
+
+    let obj = imweb::ImageObj {
+        width,
+        height,
+        file_size,
+        url,
+        thumb_url,
+        r#ref: None,
+        size_type,
+    };
+    obj.encode_to_vec()
+}
+
+pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
+    match msg_type {
+        1 => encode_image_obj(content),
+        _ => encode_text_obj(content),
+    }
+}
+
 /// 用 relKey（群 / 频道 / 好友共享密钥）对 content protobuf 做 AES-128-ECB
 /// 加密。与老 im `_encrypt2(relKey, contentCode)` 等价。
 pub fn encrypt_with_rel_key(rel_key: &str, content: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -41,7 +110,7 @@ pub fn encrypt_with_rel_key(rel_key: &str, content: &[u8]) -> Result<Vec<u8>, Cr
 ///
 /// - `group_id`      目标群 id
 /// - `sender_uid`    当前登录人 uid
-/// - `msg_type`      `MessageType`（0=文本）
+/// - `msg_type`      `MessageType`（0=文本，1=图片等）
 /// - `content_plain` protobuf 编码后的内容（`encode_text_obj` 等的返回值）
 /// - `rel_key`       通过 `CryptoEngine::derive_group_key` 得到的群 relKey
 /// - `send_time`     本地发送时间戳（毫秒）
