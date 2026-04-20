@@ -2,7 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
+import {
+  GROUP_NOTIFICATION_TARGET_ID,
+  useChatStore,
+  isFileHelperTargetId,
+  type Conversation,
+} from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -34,7 +39,7 @@ import MemberInfoDialog from '@/components/MemberInfoDialog.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import type { MenuItem } from '@/components/ContextMenu.vue'
-import { MessageType } from '@/types'
+import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { ensureFriendRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
@@ -63,6 +68,30 @@ const forwardConfirmPayload = ref<{ msgType: number; content: string; extra?: Re
 
 const isInitialized = ref(false)
 
+function isConversationInCurrentRelations(conv: Conversation): boolean {
+  if (isFileHelperTargetId(conv.targetId)) return true
+  if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
+  if (conv.type === ConversationType.Friend) return Boolean(contactStore.getContact(conv.targetId))
+  if (conv.type === ConversationType.Group) return Boolean(groupStore.getGroup(conv.targetId))
+  if (conv.type === ConversationType.Channel) return Boolean(channelStore.getChannel(conv.targetId))
+  return false
+}
+
+function pruneUnknownConversations() {
+  const validConversations = chatStore.conversations.filter(isConversationInCurrentRelations)
+  if (validConversations.length === chatStore.conversations.length) return
+
+  chatStore.conversations = validConversations
+  if (
+    chatStore.currentConversationId
+    && !validConversations.some((conv) => conv.id === chatStore.currentConversationId)
+  ) {
+    chatStore.currentConversationId = null
+    uiStore.setDetailView('none')
+    uiStore.setRightPanel('none')
+  }
+}
+
 onMounted(async () => {
   await authStore.initSession()
   if (authStore.uid) {
@@ -74,11 +103,12 @@ onMounted(async () => {
       settingStore.loadSettings(),
     ])
     appLocale.value = settingStore.settings.language
+    pruneUnknownConversations()
 
     // Bootstrap: if no real conversations exist, seed from contacts/groups
     // (mirrors old im project's behavior of building the chat list from synced data)
     const hasRealConversations = chatStore.conversations.some(
-      (c) => !isFileHelperTargetId(c.targetId),
+      (c) => !isFileHelperTargetId(c.targetId) && c.targetId !== GROUP_NOTIFICATION_TARGET_ID,
     )
     if (!hasRealConversations) {
       for (const contact of contactStore.contacts) {

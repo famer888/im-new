@@ -196,7 +196,7 @@ export const useChatStore = defineStore('chat', () => {
         (c) => !isFileHelperTargetId(c.targetId),
       )
 
-      if (!hasRealConversations) {
+      if (!isTauri() && !hasRealConversations) {
         const cached = loadConversationsFromCache(uid)
         if (cached.length > 0) {
           loaded = cached
@@ -206,7 +206,7 @@ export const useChatStore = defineStore('chat', () => {
       conversations.value = loaded
     } catch (e) {
       console.error('[ChatStore] loadConversations failed:', e)
-      conversations.value = loadConversationsFromCache(uid)
+      conversations.value = isTauri() ? [] : loadConversationsFromCache(uid)
     } finally {
       ensureFileHelperConversationInMemory()
       ensureGroupNotificationConversation()
