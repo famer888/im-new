@@ -5,6 +5,7 @@
   "windows": ["main", "login", "chat_*"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "dialog:default",
     "dialog:allow-save"
   ]

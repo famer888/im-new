@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import top1Icon from '@/assets/images/system/top1.png'
 import top2Icon from '@/assets/images/system/top2.png'
 import top3Icon from '@/assets/images/system/top3.png'
@@ -11,8 +12,14 @@ onMounted(() => {
 })
 
 async function getTauriWindow() {
-  const { getCurrentWindow } = await import('@tauri-apps/api/window')
   return getCurrentWindow()
+}
+
+function startWindowDrag(e: MouseEvent) {
+  if (e.button !== 0) return
+  getCurrentWindow().startDragging().catch((err) => {
+    console.warn('[window] start dragging failed:', err)
+  })
 }
 
 async function minimize() {
@@ -43,7 +50,11 @@ async function close() {
 
 <template>
   <div class="manage">
-    <div class="max-box" :class="['drag', isMac && 'mac']" data-tauri-drag-region></div>
+    <div
+      class="max-box"
+      :class="['drag', isMac && 'mac']"
+      @mousedown="startWindowDrag"
+    ></div>
     <template v-if="!isMac">
       <div class="box" @click="minimize">
         <img :src="top1Icon" />
@@ -78,7 +89,7 @@ async function close() {
     height: 32px;
     line-height: 32px;
     z-index: 1;
-    -webkit-app-region: drag;
+    user-select: none;
 
     &.mac {
       width: 100%;
