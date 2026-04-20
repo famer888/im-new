@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { useChatStore } from './useChatStore'
+import { FILE_HELPER_TARGET_ID, useChatStore } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
-import { ensureFriendRelKey, ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 
 function isTauri(): boolean {
@@ -319,6 +319,7 @@ export const useMessageStore = defineStore('message', () => {
 
     const [typeRaw, targetId = ''] = conversationId.split('_')
     const convType = Number(typeRaw || 0)
+    const isFileHelperSend = convType === 0 && targetId === FILE_HELPER_TARGET_ID
 
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
     // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
@@ -364,7 +365,16 @@ export const useMessageStore = defineStore('message', () => {
         throw e
       }
     }
-    if (convType === 0 && targetId) {
+    if (isFileHelperSend) {
+      try {
+        await ensureOwnKeyPair(uid)
+        console.log('[send] ensureOwnKeyPair OK for file helper')
+      } catch (e) {
+        console.error('[send] ensureOwnKeyPair failed for file helper:', e)
+        updateMessageStatus(optimisticId, -1)
+        throw e
+      }
+    } else if (convType === 0 && targetId) {
       try {
         await ensureFriendRelKey(uid, targetId)
         console.log('[send] ensureFriendRelKey OK', { targetId })
@@ -376,7 +386,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if (convType === 1 && [0, 1].includes(msgType)) {
+      if ((convType === 1 && [0, 1].includes(msgType)) || (isFileHelperSend && msgType === 0)) {
         await ensureWsConnected()
       }
       console.log('[send] invoking Rust send_message', { conversationId, msgType })

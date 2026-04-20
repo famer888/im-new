@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, FILE_HELPER_TARGET_ID, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -125,7 +125,7 @@ watch(() => uiStore.sidebarTab, (tab) => {
   // 传输助手聊天仅在「传输」Tab 下展示；切到消息/通讯录时关闭右侧会话（与 im 一致）
   if (tab !== 'transfer') {
     const conv = chatStore.currentConversation
-    if (conv?.targetId === FILE_HELPER_TARGET_ID) {
+    if (isFileHelperTargetId(conv?.targetId)) {
       chatStore.setCurrentConversation(null)
       if (uiStore.detailView === 'chat') {
         uiStore.setDetailView('none')

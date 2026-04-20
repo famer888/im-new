@@ -10,8 +10,14 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
-/** 与旧 im 一致：系统占位好友 id，会话 id 为 `0_9901` */
-export const FILE_HELPER_TARGET_ID = '9901'
+/** 与旧 im 一致：系统占位好友 id，会话 id 为 `0_10008` */
+export const FILE_HELPER_TARGET_ID = '10008'
+const LEGACY_FILE_HELPER_TARGET_ID = '9901'
+
+export function isFileHelperTargetId(targetId: string | number | null | undefined): boolean {
+  const id = String(targetId ?? '')
+  return id === FILE_HELPER_TARGET_ID || id === LEGACY_FILE_HELPER_TARGET_ID
+}
 
 /** 群通知伪会话 id（与 im id:"invitation" type:"group" 一致） */
 export const GROUP_NOTIFICATION_TARGET_ID = 'invitation'
@@ -187,7 +193,7 @@ export const useChatStore = defineStore('chat', () => {
 
       // Check if we have real conversations beyond the auto-inserted file helper
       const hasRealConversations = loaded.some(
-        (c) => c.targetId !== FILE_HELPER_TARGET_ID,
+        (c) => !isFileHelperTargetId(c.targetId),
       )
 
       if (!hasRealConversations) {

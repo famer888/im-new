@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, FILE_HELPER_TARGET_ID, GROUP_NOTIFICATION_TARGET_ID, type Conversation } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId, GROUP_NOTIFICATION_TARGET_ID, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -25,7 +25,7 @@ const showArchive = ref(false)
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
 function isNotFileHelper(c: Conversation): boolean {
-  return c.targetId !== FILE_HELPER_TARGET_ID
+  return !isFileHelperTargetId(c.targetId)
 }
 
 const normalConversations = computed(() =>
@@ -97,7 +97,7 @@ function formatTime(ts: number): string {
 /** 与 im 会话列表 `&.online` 绿点一致：单聊好友在线且允许展示时显示 */
 function showFriendOnlineDot(conv: Conversation): boolean {
   if (conv.type !== ConversationType.Friend) return false
-  if (conv.targetId === FILE_HELPER_TARGET_ID) return false
+  if (isFileHelperTargetId(conv.targetId)) return false
   const c = contactStore.getContact(conv.targetId)
   if (!c || c.bfShowOnline === false) return false
   return Boolean(c.online)
