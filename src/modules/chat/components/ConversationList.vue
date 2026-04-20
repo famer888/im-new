@@ -28,21 +28,39 @@ function isNotFileHelper(c: Conversation): boolean {
   return !isFileHelperTargetId(c.targetId)
 }
 
+function isGroupNotification(conv: Conversation): boolean {
+  return conv.targetId === GROUP_NOTIFICATION_TARGET_ID
+}
+
+function isConversationInCurrentRelations(conv: Conversation): boolean {
+  if (isGroupNotification(conv)) return true
+  switch (conv.type) {
+    case ConversationType.Friend:
+      return Boolean(contactStore.getContact(conv.targetId))
+    case ConversationType.Group:
+      return Boolean(groupStore.getGroup(conv.targetId))
+    case ConversationType.Channel:
+      return Boolean(channelStore.getChannel(conv.targetId))
+    default:
+      return false
+  }
+}
+
 const normalConversations = computed(() =>
-  chatStore.conversations.filter(c => !c.isArchived && isNotFileHelper(c)),
+  chatStore.conversations.filter(
+    c => !c.isArchived && isNotFileHelper(c) && isConversationInCurrentRelations(c),
+  ),
 )
 
 const archivedConversations = computed(() =>
-  chatStore.conversations.filter(c => c.isArchived && isNotFileHelper(c)),
+  chatStore.conversations.filter(
+    c => c.isArchived && isNotFileHelper(c) && isConversationInCurrentRelations(c),
+  ),
 )
 
 const displayList = computed(() =>
   showArchive.value ? archivedConversations.value : normalConversations.value,
 )
-
-function isGroupNotification(conv: Conversation): boolean {
-  return conv.targetId === GROUP_NOTIFICATION_TARGET_ID
-}
 
 function getName(conv: Conversation): string {
   if (isGroupNotification(conv)) return t('群通知')
