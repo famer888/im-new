@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -6,6 +7,14 @@ pub struct PlatformInfo {
     pub os: String,
     pub arch: String,
     pub version: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFilePayload {
+    pub name: String,
+    pub mime: String,
+    pub data_base64: String,
 }
 
 #[tauri::command]
@@ -40,6 +49,214 @@ pub fn read_clipboard_text() -> Result<String, String> {
     {
         Ok(String::new())
     }
+}
+
+#[tauri::command]
+pub fn read_clipboard_files() -> Result<Vec<ClipboardFilePayload>, String> {
+    let paths = read_clipboard_file_paths()?;
+    let mut files = Vec::new();
+
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "clipboard-file".to_string());
+        let mime = mime_from_path(&path);
+        files.push(ClipboardFilePayload {
+            name,
+            mime,
+            data_base64: general_purpose::STANDARD.encode(data),
+        });
+    }
+
+    Ok(files)
+}
+
+fn read_clipboard_file_paths() -> Result<Vec<std::path::PathBuf>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        read_macos_clipboard_file_paths()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        read_windows_clipboard_file_paths()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_clipboard_file_paths() -> Result<Vec<std::path::PathBuf>, String> {
+    let mut paths = Vec::new();
+
+    let file_script = r#"
+try
+  set theFile to the clipboard as «class furl»
+  return POSIX path of theFile
+on error
+  return ""
+end try
+"#;
+    let file_output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(file_script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let file_text = String::from_utf8_lossy(&file_output.stdout).trim().to_string();
+    if !file_text.is_empty() {
+        paths.push(std::path::PathBuf::from(file_text));
+    }
+
+    let png_path = std::env::temp_dir().join(format!(
+        "ocs_clipboard_{}.png",
+        uuid::Uuid::new_v4()
+    ));
+    let png_path_text = png_path.to_string_lossy().to_string();
+    let image_script = format!(
+        r#"
+set outPath to "{}"
+try
+  set imageData to the clipboard as «class PNGf»
+on error
+  return ""
+end try
+set outFile to open for access POSIX file outPath with write permission
+set eof outFile to 0
+write imageData to outFile
+close access outFile
+return outPath
+"#,
+        png_path_text.replace('"', "\\\"")
+    );
+    let image_output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(image_script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let image_text = String::from_utf8_lossy(&image_output.stdout).trim().to_string();
+    if !image_text.is_empty() {
+        paths.push(std::path::PathBuf::from(image_text));
+        return Ok(paths);
+    }
+
+    let tiff_path = std::env::temp_dir().join(format!(
+        "ocs_clipboard_{}.tiff",
+        uuid::Uuid::new_v4()
+    ));
+    let tiff_path_text = tiff_path.to_string_lossy().to_string();
+    let tiff_script = format!(
+        r#"
+set outPath to "{}"
+try
+  set imageData to the clipboard as «class TIFF»
+on error
+  return ""
+end try
+set outFile to open for access POSIX file outPath with write permission
+set eof outFile to 0
+write imageData to outFile
+close access outFile
+return outPath
+"#,
+        tiff_path_text.replace('"', "\\\"")
+    );
+    let tiff_output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(tiff_script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let tiff_text = String::from_utf8_lossy(&tiff_output.stdout).trim().to_string();
+    if !tiff_text.is_empty() {
+        let converted_path = std::env::temp_dir().join(format!(
+            "ocs_clipboard_{}.png",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::process::Command::new("sips")
+            .args([
+                "-s",
+                "format",
+                "png",
+                &tiff_text,
+                "--out",
+                &converted_path.to_string_lossy(),
+            ])
+            .output();
+        if converted_path.exists() {
+            paths.push(converted_path);
+        } else {
+            paths.push(std::path::PathBuf::from(tiff_text));
+        }
+    }
+
+    Ok(paths)
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_clipboard_file_paths() -> Result<Vec<std::path::PathBuf>, String> {
+    let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+  foreach ($item in [System.Windows.Forms.Clipboard]::GetFileDropList()) {
+    Write-Output $item
+  }
+  exit
+}
+if ([System.Windows.Forms.Clipboard]::ContainsImage()) {
+  $path = Join-Path $env:TEMP ("ocs_clipboard_" + [guid]::NewGuid().ToString() + ".png")
+  $image = [System.Windows.Forms.Clipboard]::GetImage()
+  $image.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+  Write-Output $path
+}
+"#;
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", script])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(std::path::PathBuf::from)
+        .collect())
+}
+
+fn mime_from_path(path: &std::path::Path) -> String {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "tif" | "tiff" => "image/tiff",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 #[tauri::command]

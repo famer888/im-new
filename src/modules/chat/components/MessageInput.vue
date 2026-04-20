@@ -95,6 +95,12 @@ const editorMenuItems = computed<MenuItem[]>(() => [
   },
 ])
 
+interface ClipboardFilePayload {
+  name: string
+  mime: string
+  dataBase64: string
+}
+
 function formatReadBurnNotice(seconds: number, enabled: boolean) {
   const name = t('你')
   if (!enabled) return `${name}${t('关闭了阅后即焚')}`
@@ -236,6 +242,13 @@ async function handleEditorMenuSelect(key: string) {
     return
   }
   if (key === 'paste') {
+    const files = await readClipboardFiles()
+    if (files.length > 0) {
+      pendingFiles.value = files
+      showFilePreview.value = true
+      return
+    }
+
     const text = await readClipboardText()
     if (text) {
       document.execCommand('insertText', false, text)
@@ -259,6 +272,28 @@ async function readClipboardText() {
     }
   }
   return ''
+}
+
+async function readClipboardFiles() {
+  if (!(window as any).__TAURI_INTERNALS__) return []
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const items = await invoke<ClipboardFilePayload[]>('read_clipboard_files')
+    return items.map(clipboardPayloadToFile)
+  } catch {
+    return []
+  }
+}
+
+function clipboardPayloadToFile(payload: ClipboardFilePayload) {
+  const binary = atob(payload.dataBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new File([bytes], payload.name || 'clipboard-file', {
+    type: payload.mime || 'application/octet-stream',
+  })
 }
 
 // 粘贴图片/文件
