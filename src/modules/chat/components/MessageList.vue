@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useVirtualScroll } from '@/composables/useVirtualScroll'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
@@ -27,6 +26,7 @@ const authStore = useAuthStore()
 const searchStore = useSearchStore()
 
 const containerRef = ref<HTMLElement | null>(null)
+const floatDateRef = ref<HTMLElement | null>(null)
 
 /** 与旧 im 列表一致：按发送时间升序，再算「自然日」分隔 */
 const sortedMessages = computed(() =>
@@ -63,16 +63,16 @@ const unreadDividerIndex = computed(() => {
 })
 
 /**
- * 将「未读消息」条作为独立虚拟行，避免插在气泡旁导致总高度与虚拟列表不一致。
+ * 将「未读消息」条作为独立行，避免插在气泡旁影响整体消息流。
  */
-type ChatVirtualRow =
+type ChatListRow =
   | { kind: 'unread'; key: string }
   | { kind: 'msg'; entry: MessageListEntry }
 
-const rowsForVirtual = computed((): ChatVirtualRow[] => {
+const rowsForList = computed((): ChatListRow[] => {
   const entries = entriesWithDate.value
   const divIdx = unreadDividerIndex.value
-  const rows: ChatVirtualRow[] = []
+  const rows: ChatListRow[] = []
   for (let i = 0; i < entries.length; i++) {
     if (divIdx >= 0 && i === divIdx) {
       rows.push({ kind: 'unread', key: `unread-${i}` })
@@ -82,30 +82,28 @@ const rowsForVirtual = computed((): ChatVirtualRow[] => {
   return rows
 })
 
-const { visibleItems, totalHeight, offsetTop, scrollToBottom, updateItemHeight, indexAtScrollTop, scrollToItem } =
-  useVirtualScroll<ChatVirtualRow>({
-    items: rowsForVirtual,
-    estimatedItemHeight: 72,
-    bufferSize: 5,
-    containerRef,
-    getItemKey: (row) => (row.kind === 'unread' ? row.key : row.entry.message.id),
-  })
-
-/** 未读条占位高度（测量前兜底，避免 scrollToItem 偏差过大） */
-watch(
-  rowsForVirtual,
-  (rows) => {
-    for (const r of rows) {
-      if (r.kind === 'unread') updateItemHeight(r.key, 44)
-    }
-  },
-  { flush: 'post', deep: true },
-)
-
 /** 与旧 im `floatDate` / `floatDateVisible`：滚动时顶部固定提示当前所处日期 */
 const floatDate = ref('')
 const floatDateVisible = ref(false)
 let floatHideTimer: ReturnType<typeof setTimeout> | null = null
+
+function hasInlineDateBannerNearFloat(text: string): boolean {
+  const container = containerRef.value
+  const floatNode = floatDateRef.value
+  if (!container || !floatNode || !text) return false
+
+  const floatRect = floatNode.getBoundingClientRect()
+  const inlineBanners = container.querySelectorAll<HTMLElement>('.message-item .showtimeDay')
+  for (const banner of inlineBanners) {
+    if ((banner.textContent || '').trim() !== text) continue
+    const rect = banner.getBoundingClientRect()
+    const isVisible = rect.bottom > 0 && rect.top < window.innerHeight
+    if (isVisible && Math.abs(rect.top - floatRect.top) < 64) {
+      return true
+    }
+  }
+  return false
+}
 
 /**
  * 与 `im/chat-msg-list/index.vue::setTimeDayMsg` 一致：
@@ -124,15 +122,20 @@ function setTimeDayMsg() {
     return
   }
 
-  const idx = indexAtScrollTop(currentScrollTop)
-  const rows = rowsForVirtual.value
-  let row = rows[idx]
-  if (row?.kind === 'unread') {
-    row = rows[idx + 1]
-  }
-  if (row?.kind === 'msg') {
-    floatDate.value = row.entry.showTimeDay
-    floatDateVisible.value = true
+  const rowNodes = container.querySelectorAll<HTMLElement>('.message-row[data-show-time-day]')
+  for (const rowNode of rowNodes) {
+    const topTipsH = 32
+    const offsetTop = rowNode.offsetTop
+    const height = rowNode.offsetHeight
+    if (
+      currentScrollTop >= offsetTop - 32 &&
+      currentScrollTop <= offsetTop - topTipsH + height
+    ) {
+      const text = rowNode.dataset.showTimeDay || ''
+      floatDate.value = text
+      floatDateVisible.value = !hasInlineDateBannerNearFloat(text)
+      break
+    }
   }
 
   if (floatHideTimer) clearTimeout(floatHideTimer)
@@ -164,25 +167,75 @@ const isAtBottom = ref(true)
 /** 进入会话 / 首屏加载：吸底；用户上滑看历史后为 false，避免加载更多后跳回底部 */
 const stickToBottom = ref(true)
 const lastMessageId = ref<string>('')
+let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
+let isProgrammaticScroll = false
+
+function getBottomScrollTop(el: HTMLElement): number {
+  return Math.max(0, el.scrollHeight - el.clientHeight)
+}
+
+function setBottomState(el: HTMLElement) {
+  const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+  isAtBottom.value = gap < 50
+  stickToBottom.value = gap < 40
+}
+
+function cancelScrollAnimation() {
+  if (scrollAnimationTimer) {
+    clearTimeout(scrollAnimationTimer)
+    scrollAnimationTimer = null
+  }
+  isProgrammaticScroll = false
+}
+
+function scrollToBottomImmediate() {
+  const el = containerRef.value
+  if (!el) return
+  cancelScrollAnimation()
+  isProgrammaticScroll = true
+  el.scrollTop = getBottomScrollTop(el)
+  setBottomState(el)
+  requestAnimationFrame(() => {
+    isProgrammaticScroll = false
+  })
+}
+
+function scrollToBottomAnimated(steps = 12) {
+  const el = containerRef.value
+  if (!el) return
+  cancelScrollAnimation()
+  isProgrammaticScroll = true
+
+  const tick = (remaining: number) => {
+    const node = containerRef.value
+    if (!node) {
+      isProgrammaticScroll = false
+      return
+    }
+    const target = getBottomScrollTop(node)
+    const delta = (target - node.scrollTop) / remaining
+    node.scrollTop += delta
+    if (remaining > 1) {
+      scrollAnimationTimer = setTimeout(() => tick(remaining - 1), 15)
+    } else {
+      node.scrollTop = getBottomScrollTop(node)
+      setBottomState(node)
+      scrollAnimationTimer = null
+      isProgrammaticScroll = false
+    }
+  }
+
+  tick(Math.max(1, steps))
+}
 
 /** 用容器真实 scrollHeight 多次对齐底部，抵消虚拟列表首屏估算高度偏小导致的「停在顶部空白」 */
 async function flushScrollToBottom() {
-  const run = () => {
-    const el = containerRef.value
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
-    isAtBottom.value = gap < 50
-  }
   await nextTick()
-  run()
+  scrollToBottomImmediate()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  run()
+  scrollToBottomImmediate()
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
-  run()
-  setTimeout(run, 0)
-  setTimeout(run, 48)
-  setTimeout(run, 120)
+  scrollToBottomImmediate()
 }
 
 /** 有未读时优先滚到「未读消息」条，便于看到分割交互（与旧 im 一致） */
@@ -192,10 +245,8 @@ async function scrollUnreadBannerIntoView() {
     await flushScrollToBottom()
     return
   }
-  const bannerKey = `unread-${divIdx}`
   await nextTick()
-  updateItemHeight(bannerKey, 44)
-  scrollToItem(bannerKey)
+  scrollToRow(`unread-${divIdx}`)
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
   const el = containerRef.value
@@ -205,15 +256,15 @@ async function scrollUnreadBannerIntoView() {
   stickToBottom.value = false
 }
 
-async function pinToLatest() {
+async function pinToLatest(smooth = true) {
   await nextTick()
-  scrollToBottom(false)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      const el = containerRef.value
-      if (!el) return
-      el.scrollTop = el.scrollHeight
-      isAtBottom.value = true
+      if (smooth) {
+        scrollToBottomAnimated(12)
+      } else {
+        scrollToBottomImmediate()
+      }
     })
   })
 }
@@ -223,10 +274,12 @@ function handleScroll() {
   const { scrollTop, scrollHeight, clientHeight } = containerRef.value
   const gap = scrollHeight - scrollTop - clientHeight
   isAtBottom.value = gap < 50
-  if (gap > 100) {
-    stickToBottom.value = false
-  } else if (gap < 40) {
-    stickToBottom.value = true
+  if (!isProgrammaticScroll) {
+    if (gap > 100) {
+      stickToBottom.value = false
+    } else if (gap < 40) {
+      stickToBottom.value = true
+    }
   }
 
   if (scrollTop < 100 && props.hasMore && !props.loading) {
@@ -310,12 +363,13 @@ onMounted(async () => {
 
 function onClickScrollToLatest() {
   stickToBottom.value = true
-  void pinToLatest()
+  void pinToLatest(true)
 }
 
 onUnmounted(() => {
   if (floatHideTimer) clearTimeout(floatHideTimer)
   if (throttleTimer) clearTimeout(throttleTimer)
+  cancelScrollAnimation()
 })
 
 /**
@@ -364,7 +418,7 @@ watch(
 
     if (found) {
       for (let i = 0; i < 4; i++) {
-        scrollToItem(req.messageId)
+        scrollToRow(req.messageId)
         await nextTick()
         await new Promise<void>((r) => requestAnimationFrame(() => r()))
       }
@@ -382,19 +436,20 @@ watch(
 )
 
 function handleItemResize(messageId: string, height: number) {
-  updateItemHeight(messageId, height)
+  void messageId
+  void height
   if (stickToBottom.value || isAtBottom.value) {
-    void pinToLatest()
+    void pinToLatest(false)
   }
 }
 
-function onUnreadBannerResize(el: Element | ComponentPublicInstance | null) {
-  const node = el && '$el' in el ? (el as ComponentPublicInstance).$el : el
-  if (!node || !(node instanceof HTMLElement)) return
-  const h = node.getBoundingClientRect().height
-  if (h > 0) {
-    const divIdx = unreadDividerIndex.value
-    if (divIdx >= 0) updateItemHeight(`unread-${divIdx}`, h)
+function scrollToRow(key: string) {
+  const container = containerRef.value
+  if (!container) return
+  const rows = Array.from(container.querySelectorAll<HTMLElement>('.message-row'))
+  const target = rows.find((row) => row.dataset.rowKey === key)
+  if (target) {
+    container.scrollTop = target.offsetTop
   }
 }
 
@@ -411,37 +466,50 @@ function onUnreadBannerClick() {
 <template>
   <!-- 与旧 im `#chatMsgList > section`：浮动日期在滚动区外顶层，列表在下方绝对铺满 -->
   <div class="message-list-shell">
-    <p class="float-date showtimeDay" :class="{ 'day-show': floatDateVisible }">
+    <p ref="floatDateRef" class="float-date showtimeDay" :class="{ 'day-show': floatDateVisible }">
       {{ floatDate }}
     </p>
 
-    <div ref="containerRef" class="message-list" @scroll="handleScroll">
+    <div
+      ref="containerRef"
+      class="message-list"
+      @scroll="handleScroll"
+      @wheel.passive="cancelScrollAnimation"
+      @touchstart.passive="cancelScrollAnimation"
+    >
       <div v-if="loading" class="loading-indicator">
         <span>{{ $t('加载中...') }}</span>
       </div>
 
-      <div class="scroll-content" :style="{ height: totalHeight + 'px', position: 'relative' }">
-        <div :style="{ transform: `translateY(${offsetTop}px)` }">
-          <template v-for="{ item, key } in visibleItems" :key="key">
-            <div
-              v-if="item.kind === 'unread'"
-              :ref="onUnreadBannerResize"
-              class="unread-divider"
-              role="button"
-              tabindex="0"
-              @click.stop="onUnreadBannerClick"
-              @keydown.enter.prevent="onUnreadBannerClick"
-            >
-              <span class="unread-divider-label">{{ $t('未读消息') }}</span>
-            </div>
+      <div class="scroll-content">
+        <template
+          v-for="row in rowsForList"
+          :key="row.kind === 'unread' ? row.key : row.entry.message.id"
+        >
+          <div
+            v-if="row.kind === 'unread'"
+            class="message-row unread-divider"
+            :data-row-key="row.key"
+            role="button"
+            tabindex="0"
+            @click.stop="onUnreadBannerClick"
+            @keydown.enter.prevent="onUnreadBannerClick"
+          >
+            <span class="unread-divider-label">{{ $t('未读消息') }}</span>
+          </div>
+          <div
+            v-else
+            class="message-row"
+            :data-row-key="row.entry.message.id"
+            :data-show-time-day="row.entry.showTimeDay"
+          >
             <MessageItem
-              v-else
-              :message="item.entry.message"
-              :date-banner-text="item.entry.showTime ? item.entry.showTimeDay : null"
-              @resize="(h: number) => handleItemResize(item.entry.message.id, h)"
+              :message="row.entry.message"
+              :date-banner-text="row.entry.showTime ? row.entry.showTimeDay : null"
+              @resize="(h: number) => handleItemResize(row.entry.message.id, h)"
             />
-          </template>
-        </div>
+          </div>
+        </template>
       </div>
 
       <button
@@ -498,6 +566,19 @@ function onUnreadBannerClick() {
   min-height: 0;
   contain: strict;
   background: rgba(246, 246, 246);
+}
+
+.scroll-content {
+  min-height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  box-sizing: border-box;
+}
+
+.message-row {
+  flex: 0 0 auto;
 }
 
 .loading-indicator {
