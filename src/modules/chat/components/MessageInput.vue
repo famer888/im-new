@@ -118,13 +118,17 @@ function appendReadBurnNotice(seconds: number, enabled: boolean) {
   messageStore.appendLocalSystemNotice(convId, formatReadBurnNotice(seconds, enabled))
 }
 
-watch(currentContact, (contact) => {
-  if (!contact) {
-    scheduleDeletionTime.value = 0
-    return
-  }
-  scheduleDeletionTime.value = Number(contact.msgCancelTime || 30)
-}, { immediate: true })
+watch(
+  () => [currentContact.value?.id, currentContact.value?.msgCancelTime],
+  ([contactId, nextMsgCancelTime]) => {
+    if (!contactId) {
+      scheduleDeletionTime.value = 0
+      return
+    }
+    scheduleDeletionTime.value = Number(nextMsgCancelTime || 30)
+  },
+  { immediate: true },
+)
 
 // 草稿保存
 const draftMap = new Map<string, string>()
@@ -429,41 +433,60 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
   pendingFiles.value = []
 }
 
-function handleScheduleDeletionConfirm(seconds: number) {
+async function handleScheduleDeletionConfirm(seconds: number) {
   const contact = currentContact.value
   if (!contact) return
+  const previousEnabled = Boolean(contact.bfReadCancel)
+  const previousSeconds = Number(contact.msgCancelTime || 30)
   scheduleDeletionTime.value = seconds
   if (seconds === 0) {
-    updateContacts({
-      op: proto.ContactsOperator.READ_CANCEL,
-      param: {
-        contactsId: Number(contact.id),
-        bfReadCancel: false,
-      },
-    }).then(() => {
-      contactStore.patchContact(contact.id, { bfReadCancel: false })
-      appendReadBurnNotice(0, false)
-    }).catch(() => {
-      // ignore update failure in UI layer
+    contactStore.patchContact(contact.id, {
+      bfReadCancel: false,
+      msgCancelTime: previousSeconds,
     })
+    try {
+      const res = await updateContacts({
+        op: proto.ContactsOperator.READ_CANCEL,
+        param: {
+          contactsId: Number(contact.id),
+          bfReadCancel: false,
+        },
+      })
+      const errCode = Number((res as any)?.commonResult?.errCode || 200)
+      if (errCode !== 200) throw new Error('READ_CANCEL failed')
+      appendReadBurnNotice(0, false)
+    } catch {
+      scheduleDeletionTime.value = previousSeconds
+      contactStore.patchContact(contact.id, {
+        bfReadCancel: previousEnabled,
+        msgCancelTime: previousSeconds,
+      })
+    }
     return
   }
 
-  updateContacts({
-    op: proto.ContactsOperator.READ_CANCEL_TIME,
-    param: {
-      contactsId: Number(contact.id),
-      msgCancelTime: seconds,
-    },
-  }).then(() => {
-    contactStore.patchContact(contact.id, {
-      bfReadCancel: true,
-      msgCancelTime: seconds,
-    })
-    appendReadBurnNotice(seconds, true)
-  }).catch(() => {
-    // ignore update failure in UI layer
+  contactStore.patchContact(contact.id, {
+    bfReadCancel: true,
+    msgCancelTime: seconds,
   })
+  try {
+    const res = await updateContacts({
+      op: proto.ContactsOperator.READ_CANCEL_TIME,
+      param: {
+        contactsId: Number(contact.id),
+        msgCancelTime: seconds,
+      },
+    })
+    const errCode = Number((res as any)?.commonResult?.errCode || 200)
+    if (errCode !== 200) throw new Error('READ_CANCEL_TIME failed')
+    appendReadBurnNotice(seconds, true)
+  } catch {
+    scheduleDeletionTime.value = previousSeconds
+    contactStore.patchContact(contact.id, {
+      bfReadCancel: previousEnabled,
+      msgCancelTime: previousSeconds,
+    })
+  }
 }
 
 function getQuoteDigest(msgType: number, content: string | null): string {

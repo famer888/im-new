@@ -50,10 +50,10 @@ const pickerRef = ref<HTMLDivElement | null>(null)
 const ITEM_HEIGHT = 32
 
 watch(
-  () => props.visible,
-  async (visible) => {
+  () => [props.visible, props.currentTime],
+  async ([visible, currentTime]) => {
     if (!visible) return
-    selectedTime.value = props.currentTime || 30
+    selectedTime.value = Number(currentTime || 30)
     await nextTick()
     scrollToValue(selectedTime.value)
   },
