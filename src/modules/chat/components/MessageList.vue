@@ -6,8 +6,9 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
 import MessageItem from './MessageItem.vue'
+import readBurnBackUrl from '@/assets/images/chat/read-burn-back.png'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 切换会话时用于重置滚动（避免沿用上一会话的 scrollTop / 未触发 length 监听） */
   conversationId?: string
   messages: Message[]
@@ -16,7 +17,11 @@ const props = defineProps<{
   unreadCount?: number
   /** 对齐旧 im：少量消息从顶部开始排列，不做吸底留白 */
   alignTop?: boolean
-}>()
+  /** 仅在好友开启阅后即焚时显示中间背景图 */
+  showReadBurnBackground?: boolean
+}>(), {
+  showReadBurnBackground: false,
+})
 
 const emit = defineEmits<{
   (e: 'load-more'): void
@@ -471,6 +476,12 @@ function onUnreadBannerClick() {
     <p ref="floatDateRef" class="float-date showtimeDay" :class="{ 'day-show': floatDateVisible }">
       {{ floatDate }}
     </p>
+    <img
+      v-if="showReadBurnBackground"
+      class="read-burn-background"
+      :src="readBurnBackUrl"
+      alt=""
+    />
 
     <div
       ref="containerRef"
@@ -533,6 +544,18 @@ function onUnreadBannerClick() {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background: #f6f6f6;
+}
+
+.read-burn-background {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  height: 176px;
+  z-index: 1;
+  opacity: 0.1;
+  pointer-events: none;
 }
 
 /* 与旧 im `chat-msg-list/index.vue` 全局 `.showtimeDay`（浮动条）一致 */
@@ -567,7 +590,8 @@ function onUnreadBannerClick() {
   position: relative;
   min-height: 0;
   contain: strict;
-  background: rgba(246, 246, 246);
+  background: transparent;
+  z-index: 2;
 }
 
 .scroll-content {

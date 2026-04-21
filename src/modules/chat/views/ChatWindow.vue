@@ -4,7 +4,8 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { FILE_HELPER_TARGET_ID, useChatStore } from '@/stores/useChatStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
 import ChatHeader from '../components/ChatHeader.vue'
@@ -17,12 +18,24 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 const messageStore = useMessageStore()
 const chatStore = useChatStore()
+const contactStore = useContactStore()
 const groupStore = useGroupStore()
 
 const conversationId = computed(() => (route.query.id as string) || chatStore.currentConversationId || '')
+const conversation = computed(() =>
+  chatStore.conversations.find((c) => c.id === conversationId.value) ?? null,
+)
+const currentFriendContact = computed(() => {
+  const conv = conversation.value
+  if (!conv || conv.type !== ConversationType.Friend || conv.targetId === FILE_HELPER_TARGET_ID) {
+    return null
+  }
+  return contactStore.getContact(conv.targetId) ?? null
+})
 
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
+const showReadBurnBackground = computed(() => currentFriendContact.value?.bfReadCancel === true)
 
 /** 进入会话时的未读条数快照，供「未读消息」分隔条（markAsRead 后列表里会变成 0，故单独存） */
 const sessionInitialUnread = ref(0)
@@ -112,6 +125,7 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
       :loading="isLoading"
       :has-more="messageStore.hasMore(conversationId)"
       :unread-count="sessionInitialUnread"
+      :show-read-burn-background="showReadBurnBackground"
       align-top
       @load-more="handleLoadMore"
     />
