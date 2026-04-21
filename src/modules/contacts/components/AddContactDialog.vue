@@ -94,6 +94,7 @@ async function handleAdd() {
       msg: verifyMessage.value,
       type: 0,
       op: 0,
+      addToken: selectedUser.value.addToken,
     })
     const errCode = (resp as any).commonResult?.errCode
     if (errCode === 200 || errCode === 0) {
