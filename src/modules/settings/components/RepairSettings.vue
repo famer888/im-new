@@ -6,12 +6,22 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import Toast from '@/components/Toast.vue'
 
 const { t: $t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const messageStore = useMessageStore()
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+}
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -31,14 +41,14 @@ const resetConfirmVisible = ref(false)
 
 async function handleDecryptRepair() {
   if (!isTauri()) {
-    window.alert($t('仅桌面客户端支持此修复'))
+    showToast($t('仅桌面客户端支持此修复'), 'error')
     return
   }
   try {
     await tauriInvoke('repair_clear_crypto_keys')
-    window.alert($t('秘钥重置成功'))
+    showToast($t('秘钥重置成功'))
   } catch (e) {
-    window.alert(String(e))
+    showToast(String(e), 'error')
   }
 }
 
@@ -54,7 +64,7 @@ async function confirmResetCache() {
     try {
       await tauriInvoke('repair_reset_user_local_data', { uid })
     } catch (e) {
-      window.alert(String(e))
+      showToast(String(e), 'error')
       return
     }
     try {
@@ -101,6 +111,12 @@ async function confirmResetCache() {
       variant="im"
       :content="$t('确认退出，并重置缓存数据？')"
       @confirm="confirmResetCache"
+    />
+
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
     />
   </div>
 </template>
