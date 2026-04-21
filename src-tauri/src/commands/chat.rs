@@ -2,13 +2,15 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use prost::Message as _;
+use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use tracing::{error, warn};
 
 use crate::crypto::CryptoEngine;
 use crate::db::{models, queries, DbManager};
 use crate::messaging::pipeline;
-use crate::ws::WsManager;
+use crate::proto::imweb;
+use crate::ws::{commands as ws_cmds, WsManager};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SendMessageRequest {
@@ -16,6 +18,7 @@ pub struct SendMessageRequest {
     pub msg_type: i32,
     pub content: String,
     pub extra: Option<serde_json::Value>,
+    pub snapchat_time: Option<i32>,
     /// 前端生成的 customMsgId（对齐老 im 的 flag）。
     pub custom_msg_id: Option<String>,
 }
@@ -64,6 +67,41 @@ pub struct IncomingMessagePayload {
     pub version: Option<i64>,
     pub is_deleted: Option<bool>,
     pub extra: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledDeletion {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub expire_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadProcessingResult {
+    pub read_message_ids: Vec<String>,
+    pub scheduled_deletions: Vec<ScheduledDeletion>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadReceiptSyncPayload {
+    pub msg_id: i64,
+    pub send_uid: i64,
+    pub target_id: i64,
+    pub status: i32,
+    pub read_time: i64,
+    pub snapchat_time: Option<i32>,
+}
+
+#[derive(Debug)]
+struct ReadCandidate {
+    id: String,
+    sender_id: String,
+    msg_type: i32,
+    delete_delay_ms: i64,
+    snapchat_time: i32,
 }
 
 /// 入站消息落库（用于 WS 推送消息的本地历史持久化）。
@@ -209,6 +247,41 @@ fn parse_conversation_id(conversation_id: &str) -> Result<(i32, String), String>
     Ok((ty, target.to_string()))
 }
 
+fn extract_read_burn_meta(extra: Option<&str>) -> (i32, i64) {
+    let Some(raw) = extra else {
+        return (0, 0);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (0, 0);
+    };
+    let Some(obj) = value.as_object() else {
+        return (0, 0);
+    };
+
+    let mut snapchat_time = obj
+        .get("snapchatTime")
+        .or_else(|| obj.get("snapchat_time"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let mut delete_delay_ms = obj
+        .get("deleteSeconds")
+        .or_else(|| obj.get("delete_seconds"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    if delete_delay_ms <= 0 && snapchat_time > 0 {
+        delete_delay_ms = snapchat_time * 1000;
+    }
+    if snapchat_time <= 0 && delete_delay_ms > 0 {
+        snapchat_time = delete_delay_ms / 1000;
+    }
+
+    (
+        snapchat_time.max(0) as i32,
+        delete_delay_ms.max(0),
+    )
+}
+
 #[tauri::command]
 pub async fn send_message(
     db: State<'_, DbManager>,
@@ -218,6 +291,7 @@ pub async fn send_message(
     request: SendMessageRequest,
 ) -> Result<models::Message, String> {
     let (conv_type, target_id) = parse_conversation_id(&request.conversation_id)?;
+    let snapchat_time = request.snapchat_time.unwrap_or(0).max(0);
 
     // 对齐老 im：flag/customMsgId 由前端生成并贯穿本地消息 + 10201 + 20201 回执匹配。
     // 若前端未传，才退回本地毫秒时间戳。
@@ -230,6 +304,28 @@ pub async fn send_message(
     let msg_id = client_flag.to_string();
 
     // 先按 "sending" 状态入库（老 im UI 是乐观追加，之后靠 20201 回执更新）。
+    let mut extra_value = request.extra.unwrap_or(serde_json::Value::Null);
+    if snapchat_time > 0 {
+        let mut map = match extra_value {
+            serde_json::Value::Object(map) => map,
+            serde_json::Value::Null => serde_json::Map::new(),
+            other => {
+                let mut map = serde_json::Map::new();
+                map.insert("payload".to_string(), other);
+                map
+            }
+        };
+        map.entry("snapchatTime".to_string())
+            .or_insert(serde_json::Value::from(snapchat_time));
+        map.entry("deleteSeconds".to_string())
+            .or_insert(serde_json::Value::from(i64::from(snapchat_time) * 1000));
+        extra_value = serde_json::Value::Object(map);
+    }
+    let extra_json = match extra_value {
+        serde_json::Value::Null => None,
+        value => Some(value.to_string()),
+    };
+
     let message = models::Message {
         id: msg_id.clone(),
         custom_msg_id: Some(msg_id.clone()),
@@ -242,7 +338,7 @@ pub async fn send_message(
         read_status: 0,
         version: 0,
         is_deleted: false,
-        extra: request.extra.map(|e| e.to_string()),
+        extra: extra_json,
     };
     db.with_connection(&uid, |conn| queries::insert_message(conn, &message))
         .map_err(|e| e.to_string())?;
@@ -287,6 +383,7 @@ pub async fn send_message(
                 &request.content,
                 now,
                 client_flag,
+                snapchat_time,
             ) {
                 error!(
                     "send_private_text failed conversation={} err={}",
@@ -680,16 +777,225 @@ pub async fn mark_message_sent(
 #[tauri::command]
 pub async fn mark_as_read(
     db: State<'_, DbManager>,
+    ws_mgr: State<'_, WsManager>,
     uid: String,
     conversation_id: String,
-) -> Result<(), String> {
-    db.with_connection(&uid, |conn| {
+) -> Result<ReadProcessingResult, String> {
+    let (conv_type, target_id) = parse_conversation_id(&conversation_id)?;
+    let now = chrono::Utc::now().timestamp_millis();
+
+    let (result, receipts) = db.with_connection(&uid, |conn| {
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT id, sender_id, msg_type, extra
+                 FROM messages
+                 WHERE conversation_id = ?1
+                   AND sender_id != ?2
+                   AND is_deleted = 0
+                   AND read_status = 0
+                 ORDER BY send_time ASC",
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![conversation_id, uid], |row| {
+                let extra: Option<String> = row.get(3)?;
+                let (snapchat_time, delete_delay_ms) = extract_read_burn_meta(extra.as_deref());
+                Ok(ReadCandidate {
+                    id: row.get(0)?,
+                    sender_id: row.get(1)?,
+                    msg_type: row.get(2)?,
+                    delete_delay_ms,
+                    snapchat_time,
+                })
+            })
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        let candidates = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        if !candidates.is_empty() {
+            conn.execute(
+                "UPDATE messages
+                 SET read_status = 1
+                 WHERE conversation_id = ?1
+                   AND sender_id != ?2
+                   AND is_deleted = 0
+                   AND read_status = 0",
+                rusqlite::params![conversation_id, uid],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        }
+
         conn.execute(
             "UPDATE conversations SET unread_count = 0 WHERE id = ?1",
             rusqlite::params![conversation_id],
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        Ok(())
+
+        let scheduled_deletions = candidates
+            .iter()
+            .filter(|item| item.delete_delay_ms > 0)
+            .map(|item| ScheduledDeletion {
+                conversation_id: conversation_id.clone(),
+                message_id: item.id.clone(),
+                expire_at: now + item.delete_delay_ms,
+            })
+            .collect::<Vec<_>>();
+
+        let read_message_ids = candidates.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+
+        let receipts = if conv_type == 0 && target_id != queries::FILE_HELPER_TARGET_ID {
+            let target_uid = target_id.parse::<i64>().ok();
+            candidates
+                .iter()
+                .filter_map(|item| {
+                    let msg_id = item.id.parse::<i64>().ok()?;
+                    let send_uid = item.sender_id.parse::<i64>().ok()?;
+                    let target_uid = target_uid?;
+                    Some(imweb::ReceiptMessage {
+                        msg_id,
+                        r#type: imweb::ChatMessageType::OneToOne as i32,
+                        send_uid,
+                        group_id: 0,
+                        receipt_status: Some(imweb::MsgReceiptStatusBase {
+                            status: imweb::MsgReceiptStatus::Viewed as i32,
+                            time: now,
+                        }),
+                        message_type: item.msg_type,
+                        snapchat_time: item.snapchat_time,
+                        duration: 0,
+                        target_id: target_uid,
+                        source: imweb::MessageSource::Web as i32,
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        Ok((
+            ReadProcessingResult {
+                read_message_ids,
+                scheduled_deletions,
+            },
+            receipts,
+        ))
+    })
+    .map_err(|e| e.to_string())?;
+
+    if !receipts.is_empty() {
+        let req = imweb::SendReceiptMessageReq { receipts };
+        let payload = req.encode_to_vec();
+        if let Err(err) = ws_mgr.send_packet(ws_cmds::SEND_RECEIPT, now, &payload) {
+            warn!(
+                "mark_as_read send 10106 failed conversation={} err={}",
+                conversation_id, err
+            );
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn apply_friend_read_receipts(
+    db: State<'_, DbManager>,
+    uid: String,
+    receipts: Vec<ReadReceiptSyncPayload>,
+) -> Result<ReadProcessingResult, String> {
+    let login_uid = uid.parse::<i64>().unwrap_or_default();
+
+    db.with_connection(&uid, |conn| {
+        let mut read_message_ids = Vec::<String>::new();
+        let mut scheduled_deletions = Vec::<ScheduledDeletion>::new();
+
+        for receipt in receipts {
+            if receipt.status != imweb::MsgReceiptStatus::Viewed as i32 {
+                continue;
+            }
+            if receipt.target_id != login_uid || receipt.send_uid <= 0 || receipt.msg_id <= 0 {
+                continue;
+            }
+
+            let conversation_id = format!("0_{}", receipt.send_uid);
+            let boundary_send_time = conn
+                .query_row(
+                    "SELECT send_time
+                     FROM messages
+                     WHERE conversation_id = ?1 AND id = ?2 AND is_deleted = 0
+                     LIMIT 1",
+                    rusqlite::params![conversation_id, receipt.msg_id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            let Some(boundary_send_time) = boundary_send_time else {
+                continue;
+            };
+
+            let mut stmt = conn
+                .prepare_cached(
+                    "SELECT id, extra
+                     FROM messages
+                     WHERE conversation_id = ?1
+                       AND sender_id = ?2
+                       AND is_deleted = 0
+                       AND send_time <= ?3
+                       AND read_status = 0
+                     ORDER BY send_time ASC",
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![conversation_id, uid, boundary_send_time],
+                    |row| {
+                        let extra: Option<String> = row.get(1)?;
+                        let (_, delete_delay_ms) = extract_read_burn_meta(extra.as_deref());
+                        Ok((row.get::<_, String>(0)?, delete_delay_ms))
+                    },
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            let candidates = rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            if candidates.is_empty() {
+                continue;
+            }
+
+            conn.execute(
+                "UPDATE messages
+                 SET read_status = 1
+                 WHERE conversation_id = ?1
+                   AND sender_id = ?2
+                   AND is_deleted = 0
+                   AND send_time <= ?3
+                   AND read_status = 0",
+                rusqlite::params![conversation_id, uid, boundary_send_time],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            for (message_id, delete_delay_ms) in candidates {
+                read_message_ids.push(message_id.clone());
+                if delete_delay_ms > 0 {
+                    scheduled_deletions.push(ScheduledDeletion {
+                        conversation_id: conversation_id.clone(),
+                        message_id,
+                        expire_at: receipt.read_time.max(0) + delete_delay_ms,
+                    });
+                }
+            }
+        }
+
+        Ok(ReadProcessingResult {
+            read_message_ids,
+            scheduled_deletions,
+        })
     })
     .map_err(|e| e.to_string())
 }

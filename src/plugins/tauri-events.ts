@@ -5,6 +5,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSettingStore } from '@/stores/useSettingStore'
+import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
 import {
@@ -16,6 +17,15 @@ import {
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+}
+
+interface ReadProcessingResult {
+  readMessageIds: string[]
+  scheduledDeletions: Array<{
+    conversationId: string
+    messageId: string
+    expireAt: number
+  }>
 }
 
 function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): boolean {
@@ -96,6 +106,22 @@ export async function setupTauriListeners() {
   setupScreenshotShortcut()
 
   const { listen } = await import('@tauri-apps/api/event')
+  const scheduleDeletionStore = useScheduleDeletionStore()
+
+  scheduleDeletionStore.startCleanup((timer) => {
+    const messageStore = useMessageStore()
+    const authStore = useAuthStore()
+    messageStore.deleteMessage(timer.conversationId, timer.messageId)
+
+    const uid = String(authStore.uid || '')
+    if (!uid) return
+
+    import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('delete_message', { uid, messageId: timer.messageId }))
+      .catch((err) => {
+        console.warn('[read-burn] delete_message failed:', err)
+      })
+  })
 
   listen<string>('ws:status', (event) => {
     const networkStore = useNetworkStore()
@@ -397,6 +423,22 @@ export async function setupTauriListeners() {
       }
 
       messageStore.batchAppendMessages(normalized as Message[])
+      const chatStore = useChatStore()
+      const currentConversationId = chatStore.currentConversationId
+      const hasIncomingForActiveConversation = Boolean(
+        currentUid
+        && currentConversationId
+        && normalized.some((m: any) => {
+          const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+          const senderId = String(m?.senderId ?? m?.sender_id ?? '')
+          return convId === currentConversationId && senderId && senderId !== currentUid
+        }),
+      )
+      if (hasIncomingForActiveConversation) {
+        void chatStore.markAsRead(currentUid, currentConversationId!).catch((err: unknown) => {
+          console.warn('[read-burn] auto markAsRead failed:', err)
+        })
+      }
       if (shouldPlaySound) {
         void playNotificationSound()
       }
@@ -505,6 +547,43 @@ export async function setupTauriListeners() {
     messageStore.updateMessage(event.payload.messageId, {
       readStatus: 1,
     })
+  })
+
+  listen<Array<{
+    msgId: number
+    sendUid: number
+    targetId: number
+    status: number
+    readTime: number
+    snapchatTime: number
+  }>>('msg:read-receipt', async (event) => {
+    const authStore = useAuthStore()
+    const uid = String(authStore.uid || '')
+    if (!uid) return
+
+    const receipts = Array.isArray(event.payload) ? event.payload : []
+    if (receipts.length === 0) return
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const result = await invoke<ReadProcessingResult>('apply_friend_read_receipts', {
+        uid,
+        receipts,
+      })
+      const messageStore = useMessageStore()
+      if (Array.isArray(result?.readMessageIds) && result.readMessageIds.length > 0) {
+        messageStore.markMessagesRead(result.readMessageIds, 1)
+      }
+      for (const item of Array.isArray(result?.scheduledDeletions) ? result.scheduledDeletions : []) {
+        scheduleDeletionStore.addMessageTimer(
+          String(item.conversationId || ''),
+          String(item.messageId || ''),
+          Number(item.expireAt || 0),
+        )
+      }
+    } catch (err) {
+      console.warn('[read-burn] apply_friend_read_receipts failed:', err)
+    }
   })
 
   listen<{ version: string; title?: string; content?: string; url: string; flag?: number }>(
