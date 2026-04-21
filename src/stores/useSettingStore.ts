@@ -1,5 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { getUserInfo, updateUserInfo } from '@/api/imBase'
+import { proto } from '@/api/request'
+import { useAuthStore } from '@/stores/useAuthStore'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -9,6 +12,8 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<T>(cmd, args)
 }
+
+const FRIEND_VERIFY_PRIVACY_MASK = 4096
 
 /** 前端使用 camelCase；Rust / settings.json 为 snake_case */
 export interface AppSettings {
@@ -25,7 +30,7 @@ export interface AppSettings {
   keepHistoryOnLogout: boolean
   /** `Enter` 或 `Ctrl+Enter` */
   sendShortcutKey: string
-  /** 与 im：加我为朋友时需要验证 */
+  /** 与 im：加我为朋友时需要验证；本地只缓存，实际以后端 privacy 为准 */
   friendVerifyRequired: boolean
 }
 
@@ -101,35 +106,106 @@ function toRustPayload(s: AppSettings): Record<string, unknown> {
   }
 }
 
+function getCurrentUid(): number | null {
+  const authStore = useAuthStore()
+  const uid = Number(authStore.uid)
+  return Number.isFinite(uid) && uid > 0 ? uid : null
+}
+
+function isFriendVerifyRequiredFromPrivacy(privacy: unknown, fallback: boolean): boolean {
+  const value = typeof privacy === 'number' ? privacy : Number(privacy)
+  if (!Number.isFinite(value)) return fallback
+  return (value & FRIEND_VERIFY_PRIVACY_MASK) === FRIEND_VERIFY_PRIVACY_MASK
+}
+
+function assertCommonResultOk(resp: unknown, fallback: string) {
+  const commonResult = (resp as any)?.commonResult
+  const errCode = Number(commonResult?.errCode ?? 200)
+  if (errCode !== 200 && errCode !== 0) {
+    throw new Error(commonResult?.errMsg || fallback)
+  }
+}
+
 export const useSettingStore = defineStore('setting', () => {
   const settings = ref<AppSettings>({ ...defaultSettings })
   const loaded = ref(false)
 
-  async function loadSettings() {
-    if (!isTauri()) {
-      loaded.value = true
-      return
-    }
+  async function saveLocalSettings(nextSettings: AppSettings) {
+    if (!isTauri()) return
+    await tauriInvoke('update_settings', { settings: toRustPayload(nextSettings) })
+  }
+
+  async function syncFriendVerifyRequired(nextSettings: AppSettings): Promise<AppSettings> {
+    const uid = getCurrentUid()
+    if (!uid) return nextSettings
+
     try {
-      const result = await tauriInvoke<Record<string, unknown>>('get_settings')
-      settings.value = fromRustRaw(result)
-      loaded.value = true
-      applyTheme(settings.value.theme)
-      applyFontSize(settings.value.fontSize)
+      const resp = await getUserInfo({ uid })
+      assertCommonResultOk(resp, 'load friend verify required failed')
+
+      const friendVerifyRequired = isFriendVerifyRequiredFromPrivacy(
+        (resp as any)?.privacy,
+        nextSettings.friendVerifyRequired,
+      )
+
+      if (friendVerifyRequired === nextSettings.friendVerifyRequired) {
+        return nextSettings
+      }
+
+      const syncedSettings = { ...nextSettings, friendVerifyRequired }
+      await saveLocalSettings(syncedSettings)
+      return syncedSettings
+    } catch (error) {
+      console.warn('[setting] sync friend verify required failed:', error)
+      return nextSettings
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      let nextSettings = { ...defaultSettings }
+
+      if (isTauri()) {
+        const result = await tauriInvoke<Record<string, unknown>>('get_settings')
+        nextSettings = fromRustRaw(result)
+      }
+
+      nextSettings = await syncFriendVerifyRequired(nextSettings)
+      settings.value = nextSettings
+      applyTheme(nextSettings.theme)
+      applyFontSize(nextSettings.fontSize)
     } catch {
       settings.value = { ...defaultSettings }
+      applyTheme(settings.value.theme)
+      applyFontSize(settings.value.fontSize)
+    } finally {
+      loaded.value = true
     }
   }
 
   async function updateSettings(partial: Partial<AppSettings>) {
     const updated = { ...settings.value, ...partial }
+
+    if (partial.friendVerifyRequired !== undefined) {
+      const uid = getCurrentUid()
+      if (uid) {
+        const resp = await updateUserInfo({
+          userParam: {
+            privacy: partial.friendVerifyRequired ? FRIEND_VERIFY_PRIVACY_MASK : 0,
+          },
+          ops: [proto.UserOperator.PRIVACY],
+        })
+        assertCommonResultOk(resp, 'update friend verify required failed')
+      }
+    }
+
     if (!isTauri()) {
       settings.value = updated
       if (partial.theme !== undefined) applyTheme(updated.theme)
       if (partial.fontSize !== undefined) applyFontSize(updated.fontSize)
       return
     }
-    await tauriInvoke('update_settings', { settings: toRustPayload(updated) })
+    await saveLocalSettings(updated)
     settings.value = updated
     if (partial.theme !== undefined) applyTheme(updated.theme)
     if (partial.fontSize !== undefined) applyFontSize(updated.fontSize)
