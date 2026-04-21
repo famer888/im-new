@@ -192,6 +192,19 @@ export async function getContactsApplyList(
 }
 
 /**
+ * Check app version.
+ * POST /sys/checkVersion
+ */
+export async function checkVersion(baseUrl?: string): Promise<proto.CheckVersionResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/sys/checkVersion`,
+    reqType: proto.CheckVersionReq,
+    respType: proto.CheckVersionResp,
+  })
+}
+
+/**
  * Handle contacts apply (accept/reject friend request).
  * POST /contacts/updateContactsApply
  */

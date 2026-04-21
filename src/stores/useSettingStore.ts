@@ -17,6 +17,8 @@ export interface AppSettings {
   notificationSound: boolean
   autoStart: boolean
   closeToTray: boolean
+  /** 与 im `isMessageReminderWhenMinimized` 一致 */
+  messageReminderWhenMinimized: boolean
   fontSize: number
   theme: string
   /** 对应 im：账户退出时是否保留聊天记录（为 true 表示保留） */
@@ -30,9 +32,10 @@ export interface AppSettings {
 const defaultSettings: AppSettings = {
   language: 'ch',
   notificationEnabled: true,
-  notificationSound: true,
+  notificationSound: false,
   autoStart: false,
   closeToTray: true,
+  messageReminderWhenMinimized: true,
   fontSize: 14,
   theme: 'light',
   keepHistoryOnLogout: true,
@@ -61,6 +64,10 @@ function fromRustRaw(raw: Record<string, unknown>): AppSettings {
     ),
     autoStart: bool(r.auto_start ?? r.autoStart, defaultSettings.autoStart),
     closeToTray: bool(r.close_to_tray ?? r.closeToTray, defaultSettings.closeToTray),
+    messageReminderWhenMinimized: bool(
+      r.message_reminder_when_minimized ?? r.messageReminderWhenMinimized,
+      defaultSettings.messageReminderWhenMinimized,
+    ),
     fontSize: num(r.font_size ?? r.fontSize, defaultSettings.fontSize),
     theme: str(r.theme, defaultSettings.theme),
     keepHistoryOnLogout: bool(
@@ -85,6 +92,7 @@ function toRustPayload(s: AppSettings): Record<string, unknown> {
     notification_sound: s.notificationSound,
     auto_start: s.autoStart,
     close_to_tray: s.closeToTray,
+    message_reminder_when_minimized: s.messageReminderWhenMinimized,
     font_size: s.fontSize,
     theme: s.theme,
     keep_history_on_logout: s.keepHistoryOnLogout,
