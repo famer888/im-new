@@ -185,8 +185,12 @@ async function loadGroupNotificationPreview() {
         Number(latest.updateTime || latest.createTime || 0),
         pendingCount,
       )
+    } else {
+      chatStore.removeGroupNotificationConversation()
     }
-  } catch { /* silent */ }
+  } catch {
+    /* silent */
+  }
 }
 
 const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?? '')
