@@ -74,6 +74,8 @@ function syncSidebarPreview(items: GroupReqItem[]) {
       latest.updateTime || latest.createTime,
       pendingCount,
     )
+  } else {
+    chatStore.removeGroupNotificationConversation()
   }
 }
 

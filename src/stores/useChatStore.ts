@@ -121,31 +121,6 @@ export const useChatStore = defineStore('chat', () => {
     sortConversations()
   }
 
-  function ensureGroupNotificationConversation() {
-    if (conversations.value.some((c) => c.targetId === GROUP_NOTIFICATION_TARGET_ID))
-      return
-    const now = Date.now()
-    const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
-    conversations.value.push({
-      id,
-      type: 1,
-      targetId: GROUP_NOTIFICATION_TARGET_ID,
-      lastMsgId: null,
-      lastMsgTime: 0,
-      lastMsgDigest: null,
-      unreadCount: 0,
-      isPinned: false,
-      isMuted: false,
-      isArchived: false,
-      draft: null,
-      senderName: null,
-      atMe: false,
-      scheduleDeletion: 0,
-      updatedAt: now,
-    })
-    sortConversations()
-  }
-
   function updateGroupNotificationConv(digest: string, time: number, pendingCount: number) {
     const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
     const idx = conversations.value.findIndex((c) => c.id === id)
@@ -159,7 +134,27 @@ export const useChatStore = defineStore('chat', () => {
         updatedAt: time || conv.updatedAt,
       }
       sortConversations()
+      return
     }
+
+    conversations.value.push({
+      id,
+      type: 1,
+      targetId: GROUP_NOTIFICATION_TARGET_ID,
+      lastMsgId: null,
+      lastMsgTime: time,
+      lastMsgDigest: digest,
+      unreadCount: pendingCount,
+      isPinned: false,
+      isMuted: false,
+      isArchived: false,
+      draft: null,
+      senderName: null,
+      atMe: false,
+      scheduleDeletion: 0,
+      updatedAt: time || Date.now(),
+    })
+    sortConversations()
   }
 
   function clearGroupNotificationUnread() {
@@ -167,6 +162,14 @@ export const useChatStore = defineStore('chat', () => {
     const idx = conversations.value.findIndex((c) => c.id === id)
     if (idx >= 0) {
       conversations.value[idx] = { ...conversations.value[idx], unreadCount: 0 }
+    }
+  }
+
+  function removeGroupNotificationConversation() {
+    const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    conversations.value = conversations.value.filter((c) => c.id !== id)
+    if (currentConversationId.value === id) {
+      currentConversationId.value = null
     }
   }
 
@@ -209,7 +212,6 @@ export const useChatStore = defineStore('chat', () => {
       conversations.value = isTauri() ? [] : loadConversationsFromCache(uid)
     } finally {
       ensureFileHelperConversationInMemory()
-      ensureGroupNotificationConversation()
       loading.value = false
     }
   }
@@ -352,8 +354,8 @@ export const useChatStore = defineStore('chat', () => {
     deleteConversation,
     clearAllLocalChatHistory,
     ensureFileHelperConversationInMemory,
-    ensureGroupNotificationConversation,
     updateGroupNotificationConv,
     clearGroupNotificationUnread,
+    removeGroupNotificationConversation,
   }
 })
