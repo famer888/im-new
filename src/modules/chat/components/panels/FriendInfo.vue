@@ -62,6 +62,7 @@ const blacklistConfirmVisible = ref(false)
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
+let detailRequestVersion = 0
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
@@ -80,17 +81,21 @@ function formatReadBurnNotice(seconds: number, enabled: boolean) {
   return `${name} ${t('设置了消息已读XX后销毁').replace('XX', timeText)}`
 }
 
-function appendReadBurnNotice(seconds: number, enabled: boolean) {
-  if (!conv.value) return
-  messageStore.appendLocalSystemNotice(conv.value.id, formatReadBurnNotice(seconds, enabled))
+function appendReadBurnNotice(seconds: number, enabled: boolean, conversationId?: string) {
+  const currentConversationId = conversationId || conv.value?.id
+  if (!currentConversationId) return
+  messageStore.appendLocalSystemNotice(currentConversationId, formatReadBurnNotice(seconds, enabled))
 }
 
 watch(contact, async (nextContact) => {
   readBurn.value = Boolean(nextContact?.bfReadCancel)
   inBlacklist.value = Boolean(nextContact?.bfMyBlack)
   if (!nextContact) return
+  const requestVersion = ++detailRequestVersion
+  const targetContactId = nextContact.id
   try {
     const resp = await getContactsDetail({ targetUid: Number(nextContact.id) })
+    if (requestVersion !== detailRequestVersion || contact.value?.id !== targetContactId) return
     const detail = (resp as any).contactsDetailBase
     if (!detail) return
     const patch: Partial<typeof nextContact> = {
@@ -98,17 +103,21 @@ watch(contact, async (nextContact) => {
       bfMyBlack: Boolean(detail.bfMyBlack),
       msgCancelTime: Number(detail.msgCancelTime || 30),
     }
-    contactStore.patchContact(nextContact.id, patch)
+    contactStore.patchContact(targetContactId, patch)
   } catch {
     // ignore details failures, use current in-memory state
   }
 }, { immediate: true })
 
-watch(contact, (nextContact) => {
-  readBurn.value = Boolean(nextContact?.bfReadCancel)
-  msgCancelTime.value = Number(nextContact?.msgCancelTime || 30)
-  inBlacklist.value = Boolean(nextContact?.bfMyBlack)
-})
+watch(
+  () => [contact.value?.bfReadCancel, contact.value?.msgCancelTime, contact.value?.bfMyBlack],
+  ([nextReadBurn, nextMsgCancelTime, nextInBlacklist]) => {
+    readBurn.value = Boolean(nextReadBurn)
+    msgCancelTime.value = Number(nextMsgCancelTime || 30)
+    inBlacklist.value = Boolean(nextInBlacklist)
+  },
+  { immediate: true },
+)
 
 async function copyId() {
   if (!contact.value?.id) return
@@ -131,23 +140,40 @@ async function toggleMute() {
 
 async function toggleReadBurn() {
   if (!contact.value || working.value) return
+  detailRequestVersion += 1
   working.value = true
+  const targetContactId = contact.value.id
+  const targetConversationId = conv.value?.id
   const next = !readBurn.value
+  const previous = readBurn.value
+  const currentSeconds = msgCancelTime.value
+  readBurn.value = next
+  if (!next) showTimeMenu.value = false
+  contactStore.patchContact(targetContactId, {
+    bfReadCancel: next,
+    msgCancelTime: currentSeconds,
+  })
   try {
-    await updateContacts({
+    const res = await updateContacts({
       op: proto.ContactsOperator.READ_CANCEL,
       param: {
-        contactsId: Number(contact.value.id),
+        contactsId: Number(targetContactId),
         bfReadCancel: next,
-        msgCancelTime: msgCancelTime.value,
+        msgCancelTime: currentSeconds,
       },
     })
-    readBurn.value = next
-    contactStore.patchContact(contact.value.id, {
-      bfReadCancel: next,
-      msgCancelTime: msgCancelTime.value,
+    const errCode = Number((res as any)?.commonResult?.errCode || 200)
+    if (errCode !== 200) {
+      throw new Error((res as any)?.commonResult?.errMsg || (res as any)?.errorDesc || t('操作失败'))
+    }
+    appendReadBurnNotice(currentSeconds, next, targetConversationId)
+  } catch (error) {
+    readBurn.value = previous
+    contactStore.patchContact(targetContactId, {
+      bfReadCancel: previous,
+      msgCancelTime: currentSeconds,
     })
-    appendReadBurnNotice(msgCancelTime.value, next)
+    showToast((error as Error)?.message || t('操作失败'), 'error')
   } finally {
     working.value = false
   }
@@ -175,7 +201,7 @@ async function updateReadBurnTime(seconds: number) {
 
 function handleOpenTimeMenu(e: MouseEvent) {
   e.stopPropagation()
-  if (!readBurn.value) return
+  if (!readBurn.value || working.value) return
   showTimeMenu.value = !showTimeMenu.value
 }
 
@@ -315,7 +341,7 @@ async function deleteContactItem() {
       </li>
       <li>
         <span>{{ t('阅后即焚') }}</span>
-        <AppSwitch :model-value="readBurn" @update:model-value="toggleReadBurn" />
+        <AppSwitch :model-value="readBurn" :disabled="working" @update:model-value="toggleReadBurn" />
       </li>
       <li v-if="readBurn">
         <span>{{ t('消息销毁时间') }}</span>
