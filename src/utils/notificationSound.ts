@@ -1,3 +1,5 @@
+import { useSettingStore } from '@/stores/useSettingStore'
+
 let lastPlayAt = 0
 
 const PLAY_COOLDOWN_MS = 350
@@ -7,6 +9,9 @@ function isTauri(): boolean {
 }
 
 export async function playNotificationSound(): Promise<void> {
+  const settingStore = useSettingStore()
+  if (!settingStore.settings.notificationSound) return
+
   const now = Date.now()
   if (now - lastPlayAt < PLAY_COOLDOWN_MS) return
 
