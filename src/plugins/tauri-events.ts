@@ -4,7 +4,9 @@ import { useChatStore, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useSettingStore } from '@/stores/useSettingStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
+import { playNotificationSound } from '@/utils/notificationSound'
 import {
   ensureFriendRelKey,
   ensureFriendRelKeyForVersion,
@@ -14,6 +16,26 @@ import {
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+}
+
+function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): boolean {
+  if (!currentUid) return false
+
+  const settingStore = useSettingStore()
+  if (!settingStore.settings.notificationSound) return false
+
+  const chatStore = useChatStore()
+  return messages.some((item) => {
+    const convId = String(item?.conversationId ?? item?.conversation_id ?? '')
+    const senderId = String(item?.senderId ?? item?.sender_id ?? '')
+    if (!convId.includes('_') || !senderId || senderId === currentUid) return false
+    if (Boolean(item?.isDeleted ?? item?.is_deleted ?? false)) return false
+
+    const conv = chatStore.conversations.find((row) => row.id === convId)
+    if (conv?.isMuted) return false
+
+    return true
+  })
 }
 
 let screenshotShortcutBound = false
@@ -220,6 +242,7 @@ export async function setupTauriListeners() {
     }
 
     if (valid.length > 0) {
+      const shouldPlaySound = shouldPlayIncomingMessageSound(valid, currentUid)
       const normalized: any[] = [...valid]
       if (authStore.uid) {
         const uid = String(authStore.uid)
@@ -374,6 +397,9 @@ export async function setupTauriListeners() {
       }
 
       messageStore.batchAppendMessages(normalized as Message[])
+      if (shouldPlaySound) {
+        void playNotificationSound()
+      }
       if (authStore.uid) {
         const incoming = normalized.map((m: any) => ({
           id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
