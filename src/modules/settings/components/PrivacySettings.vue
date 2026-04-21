@@ -1,18 +1,42 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingStore } from '@/stores/useSettingStore'
 import AppSwitch from '@/components/AppSwitch.vue'
+import Toast from '@/components/Toast.vue'
 
 const { t: $t } = useI18n()
 const settingStore = useSettingStore()
+const saving = ref(false)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 
 onMounted(() => {
   if (!settingStore.loaded) void settingStore.loadSettings()
 })
 
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+}
+
 async function onFriendVerifyChange(v: boolean) {
-  await settingStore.updateSettings({ friendVerifyRequired: v })
+  if (saving.value) return
+
+  saving.value = true
+  try {
+    await settingStore.updateSettings({ friendVerifyRequired: v })
+    showToast($t('修改成功'))
+  } catch (error) {
+    const message = error instanceof Error && error.message
+      ? error.message
+      : $t('修改失败')
+    showToast(message, 'error')
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 
@@ -24,10 +48,17 @@ async function onFriendVerifyChange(v: boolean) {
       <dd>
         <AppSwitch
           :model-value="settingStore.settings.friendVerifyRequired"
+          :disabled="saving"
           @update:model-value="onFriendVerifyChange"
         />
       </dd>
     </dl>
+
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </div>
 </template>
 
