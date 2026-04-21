@@ -111,7 +111,7 @@ export async function getContactsList(
  * POST /contacts/contactsRelation
  */
 export async function contactsRelation(
-  data: { targetUid: number; msg: string; op: number; type?: number },
+  data: { targetUid: number; msg: string; op: number; type?: number; addToken?: string },
   baseUrl?: string,
 ): Promise<proto.ContactsRelationResp> {
   const base = baseUrl || getBaseUrl()

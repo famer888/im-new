@@ -19,6 +19,7 @@ type FoundContact = {
   uid: string
   nickname: string
   avatar: string
+  addToken: string
   isFriend: boolean
 }
 
@@ -124,6 +125,7 @@ async function handleSearch() {
         uid: String(userInfo.uid || ''),
         nickname: userInfo.nickName || userInfo.nickname || '',
         avatar: userInfo.icon || userInfo.avatar || '',
+        addToken: item.addToken || '',
         isFriend: !!userInfo.friendRelation?.bfFriend,
       }
     })
@@ -175,6 +177,7 @@ async function handleAdd() {
       msg: verifyMessage.value,
       type: 0,
       op: 0,
+      addToken: selectedUser.value.addToken,
     })
     const errCode = (resp as any).commonResult?.errCode
     sendResult.value = errCode === 200 || errCode === 0 ? 'success' : 'fail'
