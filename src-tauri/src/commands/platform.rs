@@ -26,6 +26,37 @@ pub fn get_platform_info() -> PlatformInfo {
     }
 }
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn NSBeep();
+}
+
+#[tauri::command]
+pub fn system_beep() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        NSBeep();
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "[console]::Beep(800,180)"])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        use std::io::Write as _;
+        print!("\x07");
+        std::io::stdout().flush().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub fn read_clipboard_text() -> Result<String, String> {
     #[cfg(target_os = "macos")]
