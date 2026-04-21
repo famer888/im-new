@@ -7,6 +7,14 @@ fn default_keep_history_on_logout() -> bool {
     true
 }
 
+fn default_notification_sound() -> bool {
+    false
+}
+
+fn default_message_reminder_when_minimized() -> bool {
+    true
+}
+
 fn default_send_shortcut_key() -> String {
     "Enter".to_string()
 }
@@ -19,9 +27,13 @@ fn default_friend_verify_required() -> bool {
 pub struct AppSettings {
     pub language: String,
     pub notification_enabled: bool,
+    #[serde(default = "default_notification_sound")]
     pub notification_sound: bool,
     pub auto_start: bool,
     pub close_to_tray: bool,
+    /// 与 im `isMessageReminderWhenMinimized` 一致
+    #[serde(default = "default_message_reminder_when_minimized")]
+    pub message_reminder_when_minimized: bool,
     pub font_size: i32,
     pub theme: String,
     /// 与 im「账户退出，保留聊天记录」一致：为 true 时退出登录保留本地记录
@@ -40,9 +52,10 @@ impl Default for AppSettings {
         Self {
             language: "ch".to_string(),
             notification_enabled: true,
-            notification_sound: true,
+            notification_sound: default_notification_sound(),
             auto_start: false,
             close_to_tray: true,
+            message_reminder_when_minimized: default_message_reminder_when_minimized(),
             font_size: 14,
             theme: "light".to_string(),
             keep_history_on_logout: default_keep_history_on_logout(),
