@@ -126,6 +126,7 @@ pub fn send_private_text(
     text: &str,
     send_time: i64,
     flag: i64,
+    snapchat_time: i32,
 ) -> Result<(), SendError> {
     let friend_uid: i64 = friend_uid_str
         .parse()
@@ -165,6 +166,7 @@ pub fn send_private_text(
         own_web_key,
         send_time,
         flag,
+        snapchat_time,
     )?;
 
     ws.send_packet(SEND_PRIVATE_MSG, flag, &payload)?;

@@ -118,6 +118,18 @@ function appendReadBurnNotice(seconds: number, enabled: boolean) {
   messageStore.appendLocalSystemNotice(convId, formatReadBurnNotice(seconds, enabled))
 }
 
+function withReadBurnExtra(extra?: Record<string, unknown>) {
+  const nextExtra = extra ? { ...extra } : {}
+  if (currentContact.value?.bfReadCancel) {
+    const snapchatTime = Number(currentContact.value.msgCancelTime || 30)
+    if (snapchatTime > 0) {
+      nextExtra.snapchatTime = snapchatTime
+      nextExtra.deleteSeconds = snapchatTime * 1000
+    }
+  }
+  return Object.keys(nextExtra).length > 0 ? nextExtra : undefined
+}
+
 watch(
   () => [currentContact.value?.id, currentContact.value?.msgCancelTime],
   ([contactId, nextMsgCancelTime]) => {
@@ -163,7 +175,7 @@ function handleSend() {
     uiStore.clearQuoteMessage()
   }
 
-  emit('send', text, MessageType.Text, Object.keys(extra).length > 0 ? extra : undefined)
+  emit('send', text, MessageType.Text, withReadBurnExtra(Object.keys(extra).length > 0 ? extra : undefined))
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
   if (convId.value) draftMap.delete(convId.value)
@@ -418,16 +430,16 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           height,
           size: file.size,
           name: file.name,
-        }), MessageType.Image)
+        }), MessageType.Image, withReadBurnExtra())
       } else {
-        emit('send', JSON.stringify({ name: file.name, size: file.size, path: '' }), MessageType.Image)
+        emit('send', JSON.stringify({ name: file.name, size: file.size, path: '' }), MessageType.Image, withReadBurnExtra())
       }
     } else {
-      emit('send', JSON.stringify({ name: file.name, size: file.size, ext: file.name.split('.').pop() }), MessageType.File)
+      emit('send', JSON.stringify({ name: file.name, size: file.size, ext: file.name.split('.').pop() }), MessageType.File, withReadBurnExtra())
     }
   }
   if (text) {
-    emit('send', text, MessageType.Text)
+    emit('send', text, MessageType.Text, withReadBurnExtra())
   }
   showFilePreview.value = false
   pendingFiles.value = []

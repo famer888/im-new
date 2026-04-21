@@ -60,6 +60,15 @@ export interface Conversation {
   updatedAt: number
 }
 
+interface ReadProcessingResult {
+  readMessageIds: string[]
+  scheduledDeletions: Array<{
+    conversationId: string
+    messageId: string
+    expireAt: number
+  }>
+}
+
 export const useChatStore = defineStore('chat', () => {
   const conversations = ref<Conversation[]>([])
   const currentConversationId = ref<string | null>(null)
@@ -293,8 +302,35 @@ export const useChatStore = defineStore('chat', () => {
 
   async function markAsRead(uid: string, conversationId: string) {
     if (!isTauri()) return
-    await tauriInvoke('mark_as_read', { uid, conversationId })
+    const result = await tauriInvoke<ReadProcessingResult>('mark_as_read', { uid, conversationId })
     updateConversation({ id: conversationId, unreadCount: 0, atMe: false })
+
+    const readMessageIds = Array.isArray(result?.readMessageIds) ? result.readMessageIds : []
+    const scheduledDeletions = Array.isArray(result?.scheduledDeletions)
+      ? result.scheduledDeletions
+      : []
+
+    if (readMessageIds.length > 0 || scheduledDeletions.length > 0) {
+      const [{ useMessageStore }, { useScheduleDeletionStore }] = await Promise.all([
+        import('./useMessageStore'),
+        import('./useScheduleDeletionStore'),
+      ])
+      const messageStore = useMessageStore()
+      const scheduleDeletionStore = useScheduleDeletionStore()
+
+      if (readMessageIds.length > 0) {
+        messageStore.markMessagesRead(readMessageIds, 1)
+      }
+      for (const item of scheduledDeletions) {
+        scheduleDeletionStore.addMessageTimer(
+          String(item.conversationId || conversationId),
+          String(item.messageId || ''),
+          Number(item.expireAt || 0),
+        )
+      }
+    }
+
+    return result
   }
 
   async function archiveConversation(uid: string, conversationId: string, archived: boolean) {

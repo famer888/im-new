@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 interface DeletionTimer {
+  conversationId: string
   messageId: string
   expireAt: number
 }
@@ -23,19 +24,32 @@ export const useScheduleDeletionStore = defineStore('scheduleDeletion', () => {
     return conversationSettings.value.get(conversationId) || 0
   }
 
-  function addMessageTimer(messageId: string, seconds: number) {
-    const expireAt = Date.now() + seconds * 1000
-    timers.value.set(messageId, { messageId, expireAt })
+  function getTimerKey(conversationId: string, messageId: string) {
+    return `${conversationId}:${messageId}`
   }
 
-  function startCleanup(onExpire: (messageId: string) => void) {
+  function addMessageTimer(conversationId: string, messageId: string, expireAt: number) {
+    if (!conversationId || !messageId || !Number.isFinite(expireAt)) return
+    const key = getTimerKey(conversationId, messageId)
+    timers.value.set(key, {
+      conversationId,
+      messageId,
+      expireAt,
+    })
+  }
+
+  function removeMessageTimer(conversationId: string, messageId: string) {
+    timers.value.delete(getTimerKey(conversationId, messageId))
+  }
+
+  function startCleanup(onExpire: (timer: DeletionTimer) => void) {
     if (cleanupInterval) return
     cleanupInterval = setInterval(() => {
       const now = Date.now()
-      for (const [id, timer] of timers.value) {
+      for (const [key, timer] of timers.value) {
         if (now >= timer.expireAt) {
-          onExpire(id)
-          timers.value.delete(id)
+          onExpire(timer)
+          timers.value.delete(key)
         }
       }
     }, 1000)
@@ -54,6 +68,7 @@ export const useScheduleDeletionStore = defineStore('scheduleDeletion', () => {
     setConversationTimer,
     getConversationTimer,
     addMessageTimer,
+    removeMessageTimer,
     startCleanup,
     stopCleanup,
   }

@@ -117,11 +117,63 @@ export interface Message {
   version: number
   isDeleted: boolean
   extra: string | null
+  snapchatTime?: number
+  deleteSeconds?: number
   quoteMessage?: QuoteMessageInfo | null
 }
 
 const MAX_CACHED_MESSAGES = 500
 const PAGE_SIZE = 50
+
+function parseExtraObject(rawExtra: unknown): Record<string, unknown> | null {
+  if (!rawExtra) return null
+  if (typeof rawExtra === 'string') {
+    try {
+      const parsed = JSON.parse(rawExtra)
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    } catch {
+      return null
+    }
+  }
+  return typeof rawExtra === 'object' ? rawExtra as Record<string, unknown> : null
+}
+
+function stringifyExtra(rawExtra: unknown): string | null {
+  if (!rawExtra) return null
+  if (typeof rawExtra === 'string') return rawExtra
+  if (typeof rawExtra === 'object') {
+    try {
+      return JSON.stringify(rawExtra)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function extractReadBurnMeta(raw: any, extraObj?: Record<string, unknown> | null) {
+  const snapchatTime = Number(
+    raw?.snapchatTime ??
+    raw?.snapchat_time ??
+    extraObj?.snapchatTime ??
+    extraObj?.snapchat_time ??
+    0,
+  )
+  const deleteSeconds = Number(
+    raw?.deleteSeconds ??
+    raw?.delete_seconds ??
+    extraObj?.deleteSeconds ??
+    0,
+  )
+  const normalizedSnapchatTime = snapchatTime > 0 ? snapchatTime : undefined
+  const normalizedDeleteSeconds = deleteSeconds > 0
+    ? deleteSeconds
+    : (normalizedSnapchatTime ? normalizedSnapchatTime * 1000 : undefined)
+  return {
+    snapchatTime: normalizedSnapchatTime,
+    deleteSeconds: normalizedDeleteSeconds,
+  }
+}
 
 export const useMessageStore = defineStore('message', () => {
   const chatStore = useChatStore()
@@ -199,14 +251,13 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function normalizeMessage(raw: any): Message {
+    const extraObj = parseExtraObject(raw.extra)
+    const extraStr = stringifyExtra(raw.extra)
     let quoteMessage: QuoteMessageInfo | null = raw.quoteMessage ?? null
-    const extraStr: string | null = raw.extra ?? null
-    if (!quoteMessage && extraStr) {
-      try {
-        const parsed = JSON.parse(extraStr)
-        if (parsed?.quoteMessage) quoteMessage = parsed.quoteMessage
-      } catch { /* not JSON */ }
+    if (!quoteMessage && extraObj?.quoteMessage) {
+      quoteMessage = extraObj.quoteMessage as QuoteMessageInfo
     }
+    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(raw, extraObj)
     return {
       id: String(raw.id ?? raw.msgId ?? raw.msg_id ?? ''),
       customMsgId: raw.customMsgId ?? raw.custom_msg_id ?? null,
@@ -220,6 +271,8 @@ export const useMessageStore = defineStore('message', () => {
       version: Number(raw.version ?? 0),
       isDeleted: Boolean(raw.isDeleted ?? raw.is_deleted ?? false),
       extra: extraStr,
+      snapchatTime,
+      deleteSeconds,
       quoteMessage,
     }
   }
@@ -293,6 +346,7 @@ export const useMessageStore = defineStore('message', () => {
   ) {
     const quoteMsg = (extra?.quoteMessage as QuoteMessageInfo) ?? null
     const extraJson = extra && Object.keys(extra).length > 0 ? JSON.stringify(extra) : null
+    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(extra)
 
     if (!isTauri()) {
       const now = Date.now()
@@ -310,6 +364,8 @@ export const useMessageStore = defineStore('message', () => {
         version: 0,
         isDeleted: false,
         extra: extraJson,
+        snapchatTime,
+        deleteSeconds,
         quoteMessage: quoteMsg,
       }
       appendMessage(conversationId, localMsg)
@@ -339,6 +395,8 @@ export const useMessageStore = defineStore('message', () => {
       version: 0,
       isDeleted: false,
       extra: extraJson,
+      snapchatTime,
+      deleteSeconds,
       quoteMessage: quoteMsg,
     }
     appendMessage(conversationId, optimistic)
@@ -398,6 +456,7 @@ export const useMessageStore = defineStore('message', () => {
           content,
           extra: extraJson,
           custom_msg_id: optimisticId,
+          snapchat_time: snapchatTime ?? 0,
         },
       })
       console.log('[send] Rust send_message result:', result)
@@ -426,6 +485,7 @@ export const useMessageStore = defineStore('message', () => {
               content,
               extra: extraJson,
               custom_msg_id: optimisticId,
+              snapchat_time: snapchatTime ?? 0,
             },
           })
           const normalized = normalizeMessage(retry)
@@ -458,7 +518,15 @@ export const useMessageStore = defineStore('message', () => {
       (m) => m.id === message.id || (m.customMsgId && m.customMsgId === message.customMsgId),
     )
     if (existIndex >= 0) {
-      list[existIndex] = message
+      const previous = list[existIndex]
+      list[existIndex] = {
+        ...previous,
+        ...message,
+        extra: message.extra ?? previous.extra,
+        quoteMessage: message.quoteMessage ?? previous.quoteMessage,
+        snapchatTime: message.snapchatTime ?? previous.snapchatTime,
+        deleteSeconds: message.deleteSeconds ?? previous.deleteSeconds,
+      }
     } else {
       list.push(message)
     }
@@ -539,6 +607,28 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function markMessagesRead(messageIds: string[], readStatus = 1) {
+    if (!Array.isArray(messageIds) || messageIds.length === 0) return
+    const idSet = new Set(messageIds.filter(Boolean).map(String))
+    if (idSet.size === 0) return
+
+    for (const [convId, list] of messageMap.value.entries()) {
+      let changed = false
+      const next = list.map((item) => {
+        const matched = idSet.has(String(item.id)) || (item.customMsgId && idSet.has(String(item.customMsgId)))
+        if (!matched || item.readStatus === readStatus) return item
+        changed = true
+        return {
+          ...item,
+          readStatus,
+        }
+      })
+      if (changed) {
+        messageMap.value.set(convId, next)
+      }
+    }
+  }
+
   function applySendFailed(params: {
     flag: number | string
     conversationId?: string
@@ -609,11 +699,10 @@ export const useMessageStore = defineStore('message', () => {
 
   function deleteMessage(conversationId: string, messageId: string) {
     const list = messageMap.value.get(conversationId)
-    if (list) {
-      const index = list.findIndex((m) => m.id === messageId)
-      if (index >= 0) {
-        list.splice(index, 1)
-      }
+    if (!list) return
+    const next = list.filter((m) => m.id !== messageId && m.customMsgId !== messageId)
+    if (next.length !== list.length) {
+      messageMap.value.set(conversationId, next)
     }
   }
 
@@ -641,6 +730,7 @@ export const useMessageStore = defineStore('message', () => {
     appendLocalSystemNotice,
     updateMessageStatus,
     updateMessage,
+    markMessagesRead,
     applySendReceipt,
     applySendFailed,
     deleteMessage,

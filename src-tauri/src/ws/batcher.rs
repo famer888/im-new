@@ -93,6 +93,17 @@ pub struct MsgSendFailedEvent {
     pub conversation_id: String,
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MsgReadReceiptEvent {
+    pub msg_id: i64,
+    pub send_uid: i64,
+    pub target_id: i64,
+    pub status: i32,
+    pub read_time: i64,
+    pub snapchat_time: i32,
+}
+
 pub struct MessageBatcher {
     buffer: Vec<DecodedMessage>,
     last_flush: Instant,
@@ -167,6 +178,12 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::RECEIPT_PUSH => {
+                if let Err(e) = self.emit_receipt_push(&decoded_payload) {
+                    error!("20104 decode/emit failed: {}", e);
+                }
+                return;
+            }
             // 20601 用户上下线推送（与 im `PushUserOnOrOffLineMessageResp` 一致）
             cmds::USER_ONLINE_STATUS_PUSH => {
                 match imweb::PushUserOnOrOffLineMessageResp::decode(decoded_payload.as_slice()) {
@@ -238,7 +255,6 @@ impl MessageBatcher {
             cmds::GROUP_REQ_NUM_PUSH
             | cmds::GROUP_REQ_MSG_PUSH
             | cmds::GROUP_READ_RECEIPT_PUSH
-            | cmds::RECEIPT_PUSH
             | 20001 => {
                 return;
             }
@@ -349,6 +365,8 @@ impl MessageBatcher {
                     "groupId": group_id,
                     "version": gm.version,
                     "contentMd5": gm.content_md5,
+                    "snapchatTime": gm.snapchat_time,
+                    "deleteSeconds": if gm.snapchat_time > 0 { i64::from(gm.snapchat_time) * 1000 } else { 0 },
                     "decryptPending": decrypt_pending,
                     "cipherHex": hex::encode(&gm.content),
                     "attachmentKey": gm.attachment_key,
@@ -517,6 +535,8 @@ impl MessageBatcher {
             extra: serde_json::json!({
                 "receiveUid": om.receive_uid,
                 "version": om.version,
+                "snapchatTime": om.snapchat_time,
+                "deleteSeconds": if om.snapchat_time > 0 { i64::from(om.snapchat_time) * 1000 } else { 0 },
                 "decryptPending": decrypt_pending,
                 "friendIdCandidates": candidate_ids,
                 "cipherHex": primary_cipher_hex,
@@ -662,6 +682,38 @@ impl MessageBatcher {
         self.app_handle
             .emit("msg:send-failed", &evt)
             .map_err(|e| format!("emit msg:send-failed: {}", e))?;
+        Ok(())
+    }
+
+    fn emit_receipt_push(&self, payload: &[u8]) -> Result<(), String> {
+        let resp = imweb::PushReceiptMessageResp::decode(payload)
+            .map_err(|e| format!("decode PushReceiptMessageResp: {}", e))?;
+        let events = resp
+            .receipts
+            .into_iter()
+            .map(|item| MsgReadReceiptEvent {
+                msg_id: item.msg_id,
+                send_uid: item.send_uid,
+                target_id: item.target_id,
+                status: item
+                    .receipt_status
+                    .as_ref()
+                    .map(|status| status.status)
+                    .unwrap_or_default(),
+                read_time: item
+                    .receipt_status
+                    .as_ref()
+                    .map(|status| status.time)
+                    .unwrap_or_default(),
+                snapchat_time: item.snapchat_time,
+            })
+            .collect::<Vec<_>>();
+
+        if !events.is_empty() {
+            self.app_handle
+                .emit("msg:read-receipt", &events)
+                .map_err(|e| format!("emit msg:read-receipt: {}", e))?;
+        }
         Ok(())
     }
 }

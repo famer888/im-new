@@ -9,6 +9,7 @@ import { useSearchStore } from '@/stores/useSearchStore'
 import { MessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
+import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
 
 const TextMessage = defineAsyncComponent(() => import('./messages/TextMessage.vue'))
 const ImageMessage = defineAsyncComponent(() => import('./messages/ImageMessage.vue'))
@@ -127,6 +128,7 @@ const showAvatar = computed(
   // 对齐 im：仅群聊的他人消息显示头像；单聊/传输助手不显示头像
   () => isGroupChat.value && !displayAsSelf.value,
 )
+const showReadBurnFire = computed(() => Boolean(props.message.deleteSeconds))
 
 function handleContextMenu(e: MouseEvent) {
   if (uiStore.selectionMode) return
@@ -167,7 +169,7 @@ onMounted(() => {
 <template>
   <div
     ref="itemRef"
-    v-memo="[message.status, message.readStatus, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText, isSearchHighlighted]"
+    v-memo="[message.status, message.readStatus, message.deleteSeconds, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText, isSearchHighlighted]"
     :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
   >
     <span v-if="dateBannerText" class="showtimeDay">{{ dateBannerText }}</span>
@@ -191,20 +193,23 @@ onMounted(() => {
       />
       <div class="bubble-area" @contextmenu.stop="handleContextMenu">
         <span v-if="showAvatar" class="sender-name" style="cursor: pointer;" @click="uiStore.openMemberInfo(message.senderId)">{{ senderName }}</span>
-        <!-- In-bubble quote block (matches im's msg/quote.vue) -->
-        <div v-if="message.quoteMessage" class="inline-quote-block">
-          <h3 class="inline-quote-sender">{{ message.quoteMessage.senderName }}</h3>
-          <p class="inline-quote-content">{{ getQuoteContentDigest(message.quoteMessage.msgType, message.quoteMessage.content) }}</p>
-        </div>
-        <!-- 文本/default：时间与状态在 TextMessage 气泡内（对齐旧 im）；媒体等在容器右下角叠加 -->
-        <component
-          v-if="!useOuterTimeOverlay"
-          :is="messageComponent"
-          :message="message"
-        />
-        <div v-else class="non-text-bubble-host">
-          <component :is="messageComponent" :message="message" />
-          <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
+        <div class="message-content-host">
+          <!-- In-bubble quote block (matches im's msg/quote.vue) -->
+          <div v-if="message.quoteMessage" class="inline-quote-block">
+            <h3 class="inline-quote-sender">{{ message.quoteMessage.senderName }}</h3>
+            <p class="inline-quote-content">{{ getQuoteContentDigest(message.quoteMessage.msgType, message.quoteMessage.content) }}</p>
+          </div>
+          <!-- 文本/default：时间与状态在 TextMessage 气泡内（对齐旧 im）；媒体等在容器右下角叠加 -->
+          <component
+            v-if="!useOuterTimeOverlay"
+            :is="messageComponent"
+            :message="message"
+          />
+          <div v-else class="non-text-bubble-host">
+            <component :is="messageComponent" :message="message" />
+            <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
+          </div>
+          <img v-if="showReadBurnFire" class="read-burn-fire" :src="readDeleteFireUrl" alt="" />
         </div>
       </div>
     </div>
@@ -303,6 +308,12 @@ onMounted(() => {
   min-width: 0;
 }
 
+.message-content-host {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+}
+
 .inline-quote-block {
   padding-left: 7px;
   border-left: 2px solid #3369fe;
@@ -349,5 +360,20 @@ onMounted(() => {
   display: inline-block;
   max-width: 100%;
   vertical-align: top;
+}
+
+.read-burn-fire {
+  position: absolute;
+  top: 50%;
+  right: -28px;
+  width: 20px;
+  height: 20px;
+  transform: translateY(-50%);
+  pointer-events: none;
+
+  .is-self & {
+    left: -28px;
+    right: auto;
+  }
 }
 </style>

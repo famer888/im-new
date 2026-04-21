@@ -174,6 +174,7 @@ pub fn build_send_private_message_req(
     own_web_key: Option<(i32, String)>,
     send_time: i64,
     flag: i64,
+    snapchat_time: i32,
 ) -> Result<Vec<u8>, CryptoError> {
     let mut hasher = Md5::new();
     hasher.update(content_plain);
@@ -210,7 +211,7 @@ pub fn build_send_private_message_req(
         content_md5,
         attachment_key: String::new(),
         send_user: None,
-        snapchat_time: 0,
+        snapchat_time,
         // 对齐老 im：桌面/web 侧统一按 WEB 来源发包。
         source: 1,
         app_content,
