@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
 import {
   GROUP_NOTIFICATION_TARGET_ID,
@@ -37,7 +38,8 @@ import UpVersionDialog from '@/components/UpVersionDialog.vue'
 import MemberInfoDialog from '@/components/MemberInfoDialog.vue'
 
 import ContextMenu from '@/components/ContextMenu.vue'
-import LoadingOverlay from '@/components/LoadingOverlay.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import InitLoadingScreen from '@/components/InitLoadingScreen.vue'
 import type { MenuItem } from '@/components/ContextMenu.vue'
 import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
@@ -58,6 +60,7 @@ const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const settingStore = useSettingStore()
+const router = useRouter()
 const { locale: appLocale, t } = useI18n()
 const uiStore = useUIStore()
 const networkStore = useNetworkStore()
@@ -67,6 +70,37 @@ const forwardTargetConvId = ref('')
 const forwardConfirmPayload = ref<{ msgType: number; content: string; extra?: Record<string, unknown> } | null>(null)
 
 const isInitialized = ref(false)
+const initText = ref('')
+const initResetConfirmVisible = ref(false)
+const resettingInitData = ref(false)
+const initReloadVisible = ref(false)
+let initReloadTimer: number | null = null
+
+function setInitText(text: string) {
+  initText.value = text
+}
+
+function startInitReloadTimer() {
+  clearInitReloadTimer()
+  initReloadVisible.value = false
+
+  // 对齐老 im 初始化页：若初始化长时间卡住，显式给用户一个“重新加载”的兜底操作。
+  initReloadTimer = window.setTimeout(() => {
+    if (!isInitialized.value) {
+      initReloadVisible.value = true
+    }
+  }, 15000)
+}
+
+function clearInitReloadTimer() {
+  if (initReloadTimer === null) return
+  window.clearTimeout(initReloadTimer)
+  initReloadTimer = null
+}
+
+function reloadInitPage() {
+  window.location.reload()
+}
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return true
@@ -93,82 +127,165 @@ function pruneUnknownConversations() {
 }
 
 onMounted(async () => {
-  await authStore.initSession()
-  if (authStore.uid) {
-    await Promise.all([
-      chatStore.loadConversations(authStore.uid),
-      contactStore.loadContacts(authStore.uid),
-      groupStore.loadGroups(authStore.uid),
-      channelStore.loadChannels(authStore.uid),
-      settingStore.loadSettings(),
-    ])
-    appLocale.value = settingStore.settings.language
-    pruneUnknownConversations()
+  startInitReloadTimer()
 
-    // Bootstrap: if no real conversations exist, seed from contacts/groups
-    // (mirrors old im project's behavior of building the chat list from synced data)
-    const hasRealConversations = chatStore.conversations.some(
-      (c) => !isFileHelperTargetId(c.targetId) && c.targetId !== GROUP_NOTIFICATION_TARGET_ID,
-    )
-    if (!hasRealConversations) {
-      for (const contact of contactStore.contacts) {
-        if (contact.id && contact.status > 0) {
-          chatStore.ensureConversation(0, contact.id)
-        }
-      }
-      for (const group of groupStore.groups) {
-        if (group.id) {
-          chatStore.ensureConversation(1, group.id)
-        }
-      }
-      for (const channel of channelStore.channels) {
-        if (channel.id) {
-          chatStore.ensureConversation(2, channel.id)
-        }
-      }
+  try {
+    setInitText(t('加载中'))
+    await authStore.initSession()
+    if (!authStore.uid) {
+      isInitialized.value = true
+      clearInitReloadTimer()
+      await router.replace('/login')
+      return
     }
 
-    try {
-      if ((window as any).__TAURI_INTERNALS__) {
-        const { invoke } = await import('@tauri-apps/api/core')
-        const uid = String(authStore.uid || '').trim()
-        if (uid) {
-          try {
-            // 对齐老 im：先保证自身私钥与联系人 relKey 已就绪，再连 WS，避免首批私聊下行解密失败。
-            await ensureOwnKeyPair(uid)
-            for (const contact of contactStore.contacts) {
-              if (!contact.id || contact.status <= 0) continue
-              try {
-                await ensureFriendRelKey(uid, contact.id)
-              } catch {
-                // ignore single-contact key prewarm failure
-              }
-            }
-          } catch {
-            // key prewarm best effort; do not block WS connect forever
+    if (authStore.uid) {
+      setInitText(t('数据载入'))
+      await Promise.all([
+        chatStore.loadConversations(authStore.uid),
+        contactStore.loadContacts(authStore.uid),
+        groupStore.loadGroups(authStore.uid),
+        channelStore.loadChannels(authStore.uid),
+        settingStore.loadSettings(),
+      ])
+      setInitText(t('数据已载入'))
+      appLocale.value = settingStore.settings.language
+      pruneUnknownConversations()
+
+      // Bootstrap: if no real conversations exist, seed from contacts/groups
+      // (mirrors old im project's behavior of building the chat list from synced data)
+      const hasRealConversations = chatStore.conversations.some(
+        (c) => !isFileHelperTargetId(c.targetId) && c.targetId !== GROUP_NOTIFICATION_TARGET_ID,
+      )
+      if (!hasRealConversations) {
+        for (const contact of contactStore.contacts) {
+          if (contact.id && contact.status > 0) {
+            chatStore.ensureConversation(0, contact.id)
           }
         }
-        const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
-        const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
-        const sessionId = String(authStore.session?.sessionId || '').trim()
-        const installCode = ''
-        if (wsUrl && aesKey) {
-          await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
-        } else {
-          networkStore.setWsStatus('disconnected')
-          console.warn('[ws] skipped connect: missing ws config')
+        for (const group of groupStore.groups) {
+          if (group.id) {
+            chatStore.ensureConversation(1, group.id)
+          }
+        }
+        for (const channel of channelStore.channels) {
+          if (channel.id) {
+            chatStore.ensureConversation(2, channel.id)
+          }
         }
       }
-    } catch (err) {
-      networkStore.setWsStatus('disconnected')
-      console.warn('[ws] connect failed:', err)
+
+      try {
+        if ((window as any).__TAURI_INTERNALS__) {
+          const { invoke } = await import('@tauri-apps/api/core')
+          const uid = String(authStore.uid || '').trim()
+          if (uid) {
+            try {
+              setInitText(t('加密检测'))
+
+              // 对齐老 im：先保证自身私钥与联系人 relKey 已就绪，再连 WS，避免首批私聊下行解密失败。
+              await ensureOwnKeyPair(uid)
+              for (const contact of contactStore.contacts) {
+                if (!contact.id || contact.status <= 0) continue
+                try {
+                  await ensureFriendRelKey(uid, contact.id)
+                } catch {
+                  // ignore single-contact key prewarm failure
+                }
+              }
+            } catch {
+              // key prewarm best effort; do not block WS connect forever
+            }
+          }
+          const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
+          const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
+          const sessionId = String(authStore.session?.sessionId || '').trim()
+          const installCode = ''
+          if (wsUrl && aesKey) {
+            await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
+          } else {
+            networkStore.setWsStatus('disconnected')
+            console.warn('[ws] skipped connect: missing ws config')
+          }
+        }
+      } catch (err) {
+        networkStore.setWsStatus('disconnected')
+        console.warn('[ws] connect failed:', err)
+      }
+
+      loadGroupNotificationPreview()
     }
 
-    loadGroupNotificationPreview()
+    setInitText(t('完成'))
+    chatStore.ensureFileHelperConversationInMemory()
+    isInitialized.value = true
+    clearInitReloadTimer()
+  } catch (err) {
+    initReloadVisible.value = true
+    console.warn('[init] bootstrap failed:', err)
   }
-  chatStore.ensureFileHelperConversationInMemory()
-  isInitialized.value = true
 })
+
+onBeforeUnmount(() => {
+  clearInitReloadTimer()
+})
+
+function openInitResetConfirm() {
+  if (resettingInitData.value) return
+  initResetConfirmVisible.value = true
+}
+
+async function confirmInitReset() {
+  if (resettingInitData.value) return
+  resettingInitData.value = true
+
+  const currentUid = String(authStore.uid || localStorage.getItem('current-uid') || '').trim()
+  const remainingAccounts = authStore.accounts.filter((item) => item.id !== currentUid)
+
+  // 对齐老 im 初始化页：放弃当前账号本地数据后，移除该账号并重启到登录态。
+  if ((window as any).__TAURI_INTERNALS__ && currentUid) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('repair_reset_user_local_data', { uid: currentUid })
+      await invoke('disconnect_ws')
+    } catch (err) {
+      console.warn('[init] reset local data failed:', err)
+    }
+  }
+
+  try {
+    localStorage.clear()
+  } catch {
+    // ignore storage cleanup failure
+  }
+  if (remainingAccounts.length > 0) {
+    localStorage.setItem('login-account-list', JSON.stringify(remainingAccounts))
+  }
+
+  chatStore.enablePersistence('')
+  chatStore.currentConversationId = null
+  chatStore.conversations = []
+  messageStore.clearAllMessageCaches()
+  contactStore.contacts = []
+  contactStore.searchResults = []
+  groupStore.groups = []
+  groupStore.memberMap = new Map()
+  channelStore.channels = []
+  uiStore.setDetailView('none')
+  uiStore.setRightPanel('none')
+  uiStore.setSidebarTab('chats')
+
+  authStore.accounts = remainingAccounts
+  await authStore.logout()
+
+  if ((window as any).__TAURI_INTERNALS__) {
+    window.location.reload()
+    return
+  }
+
+  resettingInitData.value = false
+  await router.replace('/login')
+}
 
 async function loadGroupNotificationPreview() {
   try {
@@ -456,7 +573,15 @@ function handleForwardConfirmCancel() {
 
 <template>
   <div class="main-layout" @contextmenu.prevent>
-    <LoadingOverlay :visible="!isInitialized" :text="$t('正在加载...')" />
+    <InitLoadingScreen
+      :visible="!isInitialized"
+      :text="initText"
+      :resetting="resettingInitData"
+      :offline="!networkStore.isOnline"
+      :show-reload="initReloadVisible"
+      @reset="openInitResetConfirm"
+      @reload="reloadInitPage"
+    />
 
     <HomeTop />
 
@@ -553,6 +678,13 @@ function handleForwardConfirmCancel() {
       :variant="contextMenuVariant"
       :items="contextMenuItems"
       @select="handleContextMenuSelect"
+    />
+
+    <ConfirmDialog
+      v-model:visible="initResetConfirmVisible"
+      variant="im"
+      :content="$t('确认退出，并重置缓存数据？')"
+      @confirm="confirmInitReset"
     />
   </div>
 </template>
