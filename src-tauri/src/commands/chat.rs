@@ -1002,19 +1002,42 @@ pub async fn apply_friend_read_receipts(
 
 #[tauri::command]
 pub async fn delete_message(
+    app: AppHandle,
     db: State<'_, DbManager>,
     uid: String,
     message_id: String,
 ) -> Result<(), String> {
-    db.with_connection(&uid, |conn| {
+    let conversation_id = db.with_connection(&uid, |conn| {
+        let conversation_id = conn
+            .query_row(
+                "SELECT conversation_id FROM messages WHERE id = ?1 LIMIT 1",
+                rusqlite::params![message_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
         conn.execute(
             "UPDATE messages SET is_deleted = 1 WHERE id = ?1",
             rusqlite::params![message_id],
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        Ok(())
+        if let Some(conv_id) = conversation_id.as_deref() {
+            queries::refresh_conversation_summary(conn, conv_id)?;
+        }
+        Ok(conversation_id)
     })
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    if let Some(conv_id) = conversation_id {
+        if let Ok(Some(conv)) =
+            db.with_connection(&uid, |conn| queries::get_conversation_by_id(conn, &conv_id))
+        {
+            let _ = app.emit("conv:update", &conv);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

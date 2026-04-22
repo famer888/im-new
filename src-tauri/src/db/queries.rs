@@ -254,6 +254,45 @@ pub fn batch_insert_messages(conn: &Connection, msgs: &[Message]) -> Result<(), 
     Ok(())
 }
 
+pub fn refresh_conversation_summary(conn: &Connection, conversation_id: &str) -> Result<(), DbError> {
+    conn.execute(
+        "UPDATE conversations
+         SET last_msg_id = (
+                 SELECT m.id
+                 FROM messages m
+                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 ORDER BY m.send_time DESC
+                 LIMIT 1
+             ),
+             last_msg_time = COALESCE((
+                 SELECT m.send_time
+                 FROM messages m
+                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 ORDER BY m.send_time DESC
+                 LIMIT 1
+             ), 0),
+             last_msg_digest = (
+                 SELECT m.content
+                 FROM messages m
+                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 ORDER BY m.send_time DESC
+                 LIMIT 1
+             ),
+             updated_at = COALESCE((
+                 SELECT m.send_time
+                 FROM messages m
+                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 ORDER BY m.send_time DESC
+                 LIMIT 1
+             ), updated_at)
+         WHERE id = ?1",
+        params![conversation_id],
+    )
+    .map_err(|e| DbError::SqliteError(e.to_string()))?;
+
+    Ok(())
+}
+
 // ─── Search ───
 
 pub fn search_messages(
