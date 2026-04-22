@@ -1023,6 +1023,7 @@ pub async fn delete_message(
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         if let Some(conv_id) = conversation_id.as_deref() {
+            // 删除消息后把会话摘要回退到最新的未删除消息，供左侧列表即时刷新。
             queries::refresh_conversation_summary(conn, conv_id)?;
         }
         Ok(conversation_id)

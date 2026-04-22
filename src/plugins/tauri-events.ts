@@ -453,6 +453,7 @@ export async function setupTauriListeners() {
           extra: m?.extra ?? null,
         }))
         try {
+          // 先落库，再 auto markAsRead；Rust 才能基于刚收到的消息注册阅后即焚定时器。
           const { invoke } = await import('@tauri-apps/api/core')
           await invoke('upsert_incoming_messages', {
             uid: authStore.uid,
