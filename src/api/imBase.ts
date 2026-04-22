@@ -1,13 +1,145 @@
 /**
  * Login & base API endpoints using the binary protobuf+AES pipeline.
  */
-import { requestProto, proto } from './request'
-import { getBaseUrl } from './config'
+import { requestProto, proto, getDeviceConfig } from './request'
+import { API_CONFIG, getBaseUrl } from './config'
 import {
   GroupMemberOnLineStatusListReq,
   GroupMemberOnLineStatusListResp,
   type IGroupMemberOnLineStatusListResp,
 } from './groupOnlineStatusProto'
+import { aesDecrypt, aesEncrypt, aesEncryptString } from '@/utils/crypto'
+import { ungzip } from 'pako'
+
+function getSessionIdFromStorage(): string {
+  try {
+    const currentUid = localStorage.getItem('current-uid') || ''
+    const accountListText = localStorage.getItem('login-account-list')
+    const accountList = accountListText ? JSON.parse(accountListText) : []
+    if (currentUid && Array.isArray(accountList)) {
+      const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
+      if (current?.sessionId) return String(current.sessionId)
+    }
+    if (Array.isArray(accountList) && accountList.length > 0) {
+      const lastWithSession = [...accountList].reverse().find((item: any) => item?.sessionId)
+      if (lastWithSession?.sessionId) return String(lastWithSession.sessionId)
+    }
+    const browserSessionText = localStorage.getItem('browser-session')
+    if (browserSessionText) {
+      const browserSession = JSON.parse(browserSessionText)
+      if (browserSession?.sessionId) return String(browserSession.sessionId)
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return ''
+}
+
+function getPlatformSysModel(): string {
+  const ua = (navigator.userAgent || '').toLowerCase()
+  if (ua.includes('mac')) return 'MAC'
+  return 'WINDOWS'
+}
+
+function getSignedJsonClientInfo() {
+  const device = getDeviceConfig()
+  return {
+    sessionId: getSessionIdFromStorage(),
+    appVer: 168,
+    packageCode: 7100,
+    language: API_CONFIG.language,
+    plat: 4,
+    sysModel: getPlatformSysModel(),
+    sysMac: device.sysMac,
+  }
+}
+
+function getUint32Bytes(num: number): Uint8Array {
+  const buf = new ArrayBuffer(4)
+  const view = new DataView(buf)
+  view.setUint32(0, num)
+  return new Uint8Array(buf)
+}
+
+function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
+  const totalLen = arrays.reduce((sum, arr) => sum + arr.length, 0)
+  const result = new Uint8Array(totalLen)
+  let offset = 0
+  for (const arr of arrays) {
+    result.set(arr, offset)
+    offset += arr.length
+  }
+  return result
+}
+
+function getSignedJsonHeaders() {
+  const client = getSignedJsonClientInfo()
+  const clientStr = JSON.stringify(client)
+  const timestamp = Date.now()
+  const tenOrigin = `${clientStr}//${timestamp}`
+  const oneOrigin = `${API_CONFIG.secretName},${timestamp}`
+  return {
+    'X-one': aesEncryptString(oneOrigin, API_CONFIG.headAesKey),
+    'X-ten': aesEncryptString(tenOrigin, API_CONFIG.headAesKey),
+    'X-ten-origin': JSON.stringify(tenOrigin),
+  }
+}
+
+function encodeSignedJsonPacket(data: unknown): Uint8Array {
+  const plain = new TextEncoder().encode(JSON.stringify(data))
+  const encrypted = aesEncrypt(API_CONFIG.secretKey, plain)
+  return concatUint8Arrays(Uint8Array.from([0xC1, 0x80]), getUint32Bytes(encrypted.length), encrypted)
+}
+
+function decodeSignedJsonPacket(buffer: ArrayBuffer): any {
+  const raw = new Uint8Array(buffer)
+  if (raw.byteLength < 6) {
+    throw new Error(`signed json response too short: ${raw.byteLength}`)
+  }
+
+  try {
+    let encrypted = raw.slice(6)
+    if (raw[1] === 0xC0) {
+      encrypted = ungzip(encrypted)
+    }
+    const plain = aesDecrypt(encrypted, API_CONFIG.secretKey)
+    return JSON.parse(new TextDecoder().decode(plain))
+  } catch (error) {
+    const text = new TextDecoder().decode(raw)
+    try {
+      return JSON.parse(text)
+    } catch {
+      throw error
+    }
+  }
+}
+
+async function requestSignedJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
+  const base = getBaseUrl()
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      Accept: 'application/json',
+      ...getSignedJsonHeaders(),
+    },
+    body: encodeSignedJsonPacket(data).buffer as ArrayBuffer,
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  return decodeSignedJsonPacket(await response.arrayBuffer()) as T
+}
+
+export interface CheckUidListResp {
+  code: number
+  msg?: string
+  data?: {
+    checkList?: Array<number | string>
+  }
+}
 
 /**
  * Get QR code login token from the server.
@@ -368,7 +500,7 @@ export async function disableGroup(
     url: `${base}/group/disableGroup`,
     reqType: proto.DisableGroupReq,
     respType: proto.DisableGroupResp,
-    data: { groupId: Number(data.groupId) },
+    data: { groupId: data.groupId },
   })
 }
 
@@ -381,7 +513,7 @@ export async function groupExit(
     url: `${base}/group/groupExit`,
     reqType: proto.GroupExitReq,
     respType: proto.GroupExitResp,
-    data: { groupId: Number(data.groupId) },
+    data: { groupId: data.groupId },
   })
 }
 
@@ -396,8 +528,8 @@ export async function groupMember(
     respType: proto.GroupMemberResp,
     data: {
       op: data.op,
-      groupId: Number(data.groupId),
-      members: data.members.map(Number),
+      groupId: data.groupId,
+      members: data.members,
     },
   })
 }
@@ -424,7 +556,7 @@ export async function getGroupDetail(
     url: `${base}/group/groupDetail`,
     reqType: proto.GroupDetailReq,
     respType: proto.GroupDetailResp,
-    data: { groupId: Number(data.groupId) },
+    data: { groupId: data.groupId },
   })
 }
 
@@ -437,6 +569,14 @@ export async function groupQrCode(
     url: `${base}/group/groupQrCode`,
     reqType: proto.GroupQrCodeReq,
     respType: proto.GroupQrCodeResp,
-    data: { groupId: Number(data.groupId), force: data.force ?? false },
+    data: { groupId: data.groupId, force: data.force ?? false },
+  })
+}
+
+export async function checkUidList(
+  data: { groupId: number | string },
+): Promise<CheckUidListResp> {
+  return requestSignedJson<CheckUidListResp>('/group/groupReq/checkUidList', {
+    groupId: data.groupId,
   })
 }
