@@ -250,6 +250,24 @@ export const useMessageStore = defineStore('message', () => {
     })
   }
 
+  function refreshConversationSummary(conversationId: string, messages?: Message[]) {
+    if (!conversationId || !conversationId.includes('_')) return
+    const existing = chatStore.conversations.find((c) => c.id === conversationId)
+    if (!existing) return
+
+    const list = messages ?? getMessages(conversationId)
+    const latest = list.length > 0 ? list[list.length - 1] : null
+    const digest = latest ? getDigestByMessage(latest.msgType, latest.content) : null
+
+    chatStore.addOrUpdateConversation({
+      ...existing,
+      lastMsgId: latest?.id || null,
+      lastMsgTime: latest?.sendTime || 0,
+      lastMsgDigest: digest || null,
+      updatedAt: latest?.sendTime || existing.updatedAt,
+    })
+  }
+
   function normalizeMessage(raw: any): Message {
     const extraObj = parseExtraObject(raw.extra)
     const extraStr = stringifyExtra(raw.extra)
@@ -703,6 +721,7 @@ export const useMessageStore = defineStore('message', () => {
     const next = list.filter((m) => m.id !== messageId && m.customMsgId !== messageId)
     if (next.length !== list.length) {
       messageMap.value.set(conversationId, next)
+      refreshConversationSummary(conversationId, next)
     }
   }
 
