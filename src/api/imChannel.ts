@@ -6,6 +6,7 @@
 import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
 import { API_CONFIG, getRawBaseUrl } from './config'
 import { getDeviceConfig } from './request'
+import { ungzip } from 'pako'
 
 function getSessionIdFromStorage(): string {
   try {
@@ -35,13 +36,20 @@ function getClientInfoForSign() {
   const device = getDeviceConfig()
   return {
     sessionId: getSessionIdFromStorage(),
-    appVer: API_CONFIG.appVer,
-    packageCode: API_CONFIG.packageCode,
+    // 频道接口签名必须和老 im 的 getSignHeader 对齐，否则服务端会把请求判成异常。
+    appVer: 168,
+    packageCode: 7100,
     language: API_CONFIG.language,
-    plat: API_CONFIG.plat,
-    sysModel: device.sysModel,
+    plat: 4,
+    sysModel: getPlatformSysModel(),
     sysMac: device.sysMac,
   }
+}
+
+function getPlatformSysModel(): string {
+  const ua = (navigator.userAgent || '').toLowerCase()
+  if (ua.includes('mac')) return 'MAC'
+  return 'WINDOWS'
 }
 
 function getUint32Bytes(num: number): Uint8Array {
@@ -72,7 +80,18 @@ function encodePacketWithAesJson(data: unknown, aesKey: string): Uint8Array {
 }
 
 function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
-  const encrypted = new Uint8Array(buffer.slice(6))
+  const raw = new Uint8Array(buffer)
+  let encrypted = raw.slice(6)
+
+  // 老 im 的频道接口响应有时会走 gzip 压缩，这里要和 requestAxios 的兼容行为保持一致。
+  if (raw[1] === 0xC0) {
+    try {
+      encrypted = ungzip(encrypted)
+    } catch (err) {
+      console.warn('[ChannelAPI] gzip decode failed, fallback to raw payload:', err)
+    }
+  }
+
   const plain = aesDecrypt(encrypted, aesKey)
   const json = new TextDecoder().decode(plain)
   return JSON.parse(json)
@@ -155,6 +174,7 @@ async function requestChannelJson<T>(path: string, data: Record<string, unknown>
     hasSessionId: !!signClient.sessionId,
   })
 
+  // 频道接口不是 protobuf，而是“固定头 + AES(JSON)”这一条老协议，不能复用通用 requestProto。
   const packet = encodePacketWithAesJson(data, API_CONFIG.secretKey)
   const res = await fetch(url, {
     method: 'POST',
