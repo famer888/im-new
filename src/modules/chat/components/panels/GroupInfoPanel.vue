@@ -85,10 +85,16 @@ function openRemoveMember() {
   removeMemberVisible.value = true
 }
 
-async function handleInvited() {
-  // 邀请成功后刷新成员列表
-  if (conv.value?.targetId && authStore.uid) {
-    await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+async function handleInvited(payload?: { message?: string; type?: 'success' | 'error' }) {
+  try {
+    // 邀请成功后刷新成员列表
+    if (conv.value?.targetId && authStore.uid) {
+      await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+    }
+  } finally {
+    if (payload?.message) {
+      showToast(payload.message, payload.type ?? 'success')
+    }
   }
 }
 

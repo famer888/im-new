@@ -1,48 +1,63 @@
 <template>
   <div v-if="visible" class="invite-friend-dialog">
     <div class="dialog-mask" @click="$emit('close')" />
-    <div class="dialog-body">
-      <div class="dialog-header">
-        <span>{{ $t('邀请好友入群') }}</span>
-        <span class="close-btn" @click="$emit('close')">✕</span>
-      </div>
-      <div class="dialog-content">
-        <SearchInput v-model="searchKey" :placeholder="$t('搜索好友')" />
-        <div class="friend-list">
-          <div
-            v-for="friend in filteredFriends"
-            :key="friend.id"
-            :class="['friend-item', { selected: selectedIds.has(friend.id), disabled: existingMemberIds.has(friend.id) }]"
-            @click="toggleSelect(friend)"
-          >
-            <AppCheckbox
-              :modelValue="selectedIds.has(friend.id) || existingMemberIds.has(friend.id)"
-              :disabled="existingMemberIds.has(friend.id)"
-            />
-            <TextAvatar :name="friend.nickname || friend.id" :src="friend.avatar" :size="32" />
-            <span class="friend-name ellipsis">{{ friend.nickname || friend.id }}</span>
-            <span v-if="existingMemberIds.has(friend.id)" class="in-group-tag">{{ $t('已在群中') }}</span>
-          </div>
+    <div class="content">
+      <div class="top">
+        <div class="head">
+          <span class="title">{{ $t('邀请好友') }}</span>
+          <img class="close" src="@/assets/images/common/close-icon.png" @click="$emit('close')" />
+        </div>
+        <SearchInput v-model="searchKey" :placeholder="$t('搜索')" class="search" />
+        <div class="form-link" @click="copyGroupInviteLink">
+          <img src="@/assets/images/system/link.png" />
+          <span class="title">{{ $t('通过邀请链接加入群组') }}</span>
         </div>
       </div>
-      <div class="dialog-footer">
-        <button class="btn-cancel" @click="$emit('close')">{{ $t('取消') }}</button>
-        <button class="btn-primary" :disabled="selectedIds.size === 0" @click="handleInvite">
-          {{ $t('邀请') }}({{ selectedIds.size }})
-        </button>
-      </div>
+
+      <ul class="friend-list">
+        <li
+          v-for="friend in filteredFriends"
+          :key="friend.id"
+          :class="['friend-item', { disable: pendingAuditIds.has(friend.id) }]"
+          @click="selectFriend(friend)"
+        >
+          <div class="left">
+            <TextAvatar
+              :name="displayName(friend)"
+              :src="friend.avatar"
+              :size="38"
+              rounded
+              class="member-avatar"
+            />
+            <span class="name">{{ displayName(friend) }}</span>
+            <div v-if="pendingAuditIds.has(friend.id)" class="pending-tag">{{ $t('进群审核中') }}</div>
+          </div>
+          <AppCheckbox :modelValue="selectedIds.has(friend.id)" :disabled="pendingAuditIds.has(friend.id)" />
+        </li>
+      </ul>
+
+      <div class="primaryBtn" @click="handleInvite">{{ $t('完成') }}</div>
     </div>
+
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      :duration="toastDuration"
+      @update:visible="toastVisible = $event"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useContactStore } from '@/stores/useContactStore'
+import { useContactStore, type Contact } from '@/stores/useContactStore'
 import SearchInput from '@/components/SearchInput.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import AppCheckbox from '@/components/AppCheckbox.vue'
-import { groupMember } from '@/api/imBase'
+import Toast from '@/components/Toast.vue'
+import { checkUidList, groupMember, groupQrCode } from '@/api/imBase'
 
 const { t: $t } = useI18n()
 const contactStore = useContactStore()
@@ -55,45 +70,148 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'invited'): void
+  (e: 'invited', payload?: { message?: string; type?: 'success' | 'error' }): void
 }>()
 
 const searchKey = ref('')
 const selectedIds = reactive(new Set<string>())
+const pendingAuditIds = ref(new Set<string>())
+
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+const toastDuration = ref(2000)
+
+function showToast(msg: string, type: 'success' | 'error' = 'success', duration = 2000) {
+  toastMessage.value = msg
+  toastType.value = type
+  toastDuration.value = duration
+  toastVisible.value = true
+}
+
+function displayName(friend: Contact) {
+  return friend.remark || friend.nickname || friend.id
+}
+
+async function loadPendingAuditIds() {
+  try {
+    const res = await checkUidList({ groupId: props.groupId })
+    if (Number(res?.code) === 200) {
+      pendingAuditIds.value = new Set((res.data?.checkList || []).map((id) => String(id)))
+      return
+    }
+  } catch (error) {
+    console.warn('[InviteFriendDialog] load pending audit ids failed:', error)
+  }
+  pendingAuditIds.value = new Set()
+}
+
+watch(
+  () => props.visible,
+  async (visible) => {
+    searchKey.value = ''
+    selectedIds.clear()
+    if (visible) {
+      await loadPendingAuditIds()
+    } else {
+      pendingAuditIds.value = new Set()
+    }
+  },
+  { immediate: true },
+)
 
 const filteredFriends = computed(() => {
-  const key = searchKey.value.toLowerCase()
-  if (!key) return contactStore.contacts
-  return contactStore.contacts.filter(f =>
-    (f.nickname || f.id).toLowerCase().includes(key),
-  )
+  const key = searchKey.value.trim().toLowerCase()
+  return contactStore.contacts.filter((friend) => {
+    if (!friend.id) return false
+    if (props.existingMemberIds.has(friend.id)) return false
+    if (friend.nickname === '账号已注销') return false
+    if (!key) return true
+    return [
+      displayName(friend),
+      friend.nickname || '',
+      friend.id,
+    ].some((value) => value.toLowerCase().includes(key))
+  })
 })
 
-function toggleSelect(friend: { id: string }) {
-  if (props.existingMemberIds.has(friend.id)) return
-  if (selectedIds.has(friend.id)) selectedIds.delete(friend.id)
-  else selectedIds.add(friend.id)
+function selectFriend(friend: Contact) {
+  if (pendingAuditIds.value.has(friend.id)) return
+  if (selectedIds.has(friend.id)) {
+    selectedIds.delete(friend.id)
+  } else {
+    selectedIds.add(friend.id)
+  }
+}
+
+function getNeedCheckMessage(ids: Array<number | string>) {
+  const names = ids
+    .map((id) => contactStore.getContact(String(id)))
+    .filter((friend): friend is Contact => Boolean(friend))
+    .map((friend) => displayName(friend))
+    .filter(Boolean)
+    .join('、')
+
+  if (names) {
+    return `${names}${$t('开启了入群需审核，对方同意后才会进入群聊')}`
+  }
+  return $t('开启了入群需审核，对方同意后才会进入群聊')
 }
 
 async function handleInvite() {
-  if (selectedIds.size === 0) return
+  if (selectedIds.size === 0) {
+    showToast($t('请选择邀请的好友'), 'error')
+    return
+  }
+
   try {
     const res = await groupMember({
       op: 0,
       groupId: props.groupId,
-      members: Array.from(selectedIds)
+      members: Array.from(selectedIds),
     })
-    const code = (res as any)?.commonResult?.errCode
+    const code = Number((res as any)?.commonResult?.errCode || 0)
     if (code === 200) {
-      if ((res as any)?.needCheckUids?.length > 0) {
-        // TODO: show toast about need check
+      const needCheckUids = Array.isArray((res as any)?.needCheckUids)
+        ? ((res as any).needCheckUids as Array<number | string>)
+        : []
+
+      if (needCheckUids.length > 0) {
+        pendingAuditIds.value = new Set([
+          ...Array.from(pendingAuditIds.value),
+          ...needCheckUids.map((id) => String(id)),
+        ])
       }
-      emit('invited')
-      emit('close')
+
+      emit('invited', {
+        message: needCheckUids.length > 0 ? getNeedCheckMessage(needCheckUids) : $t('邀请成功'),
+        type: 'success',
+      })
       selectedIds.clear()
+      emit('close')
+      return
     }
-  } catch (e) {
-    console.error('Invite failed:', e)
+
+    showToast((res as any)?.commonResult?.errMsg || (res as any)?.errorDesc || $t('邀请失败'), 'error')
+  } catch (error) {
+    console.error('Invite failed:', error)
+    showToast($t('邀请失败'), 'error')
+  }
+}
+
+async function copyGroupInviteLink() {
+  try {
+    const res = await groupQrCode({ groupId: props.groupId, force: false })
+    const inviteLink = res.shortLink || res.qrUrl || ''
+    if (!inviteLink) {
+      showToast($t('获取邀请链接失败'), 'error')
+      return
+    }
+    await navigator.clipboard.writeText(inviteLink)
+    showToast($t('链接已复制在剪贴板'))
+  } catch (error) {
+    console.error('[InviteFriendDialog] copy invite link failed:', error)
+    showToast($t('获取邀请链接失败'), 'error')
   }
 }
 </script>
@@ -111,74 +229,144 @@ async function handleInvite() {
 .dialog-mask {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.2);
 }
 
-.dialog-body {
-  position: relative;
-  width: 400px;
+.content {
   background: #fff;
+  position: relative;
   border-radius: 8px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
 }
 
-.dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  font-size: 16px;
-  font-weight: 500;
-  border-bottom: 1px solid #f0f0f0;
+.close {
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
 
-  .close-btn { cursor: pointer; color: #999; &:hover { color: #333; } }
+  &:hover {
+    opacity: 0.8;
+  }
 }
 
-.dialog-content {
-  padding: 16px 20px;
+.top {
+  width: 100%;
+  padding: 10px;
+  box-sizing: border-box;
+  border-bottom: 1px solid #f2f2f2;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  .title {
+    font-size: 16px;
+    color: #787878;
+  }
+}
+
+.search {
+  margin-top: 10px;
+}
+
+.form-link {
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+  cursor: pointer;
+  user-select: none;
+
+  > img {
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+  }
+
+  .title {
+    font-size: 14px;
+    color: #178AFF;
+  }
 }
 
 .friend-list {
-  max-height: 300px;
+  width: 100%;
+  height: 260px;
+  margin: 0;
+  padding: 0;
   overflow-y: auto;
-  margin-top: 10px;
+  list-style: none;
 }
 
 .friend-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px;
-  border-radius: 4px;
+  justify-content: space-between;
+  padding: 10px 16px;
+  box-sizing: border-box;
   cursor: pointer;
 
-  &:hover { background: #f5f5f5; }
-  &.selected { background: #eff4ff; }
-  &.disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  &:hover {
+    background: #f5f5f5;
   }
 
-  .friend-name { flex: 1; font-size: 14px; color: #333; }
-  .in-group-tag { font-size: 11px; color: #999; }
+  .left {
+    display: flex;
+    align-items: center;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+
+  .member-avatar {
+    margin-right: 10px;
+  }
+
+  .name {
+    font-size: 14px;
+    color: #494949;
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
 }
 
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 12px 20px;
-  border-top: 1px solid #f0f0f0;
+.disable {
+  opacity: 0.5;
+  pointer-events: none;
+}
 
-  .btn-cancel {
-    padding: 0 16px;
-    height: 32px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background: #fff;
-    cursor: pointer;
-    font-size: 13px;
-    &:hover { background: #f5f5f5; }
+.pending-tag {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f5f5f5;
+  color: #999;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.primaryBtn {
+  width: 206px;
+  height: 32px;
+  margin: 16px 0;
+  background: #3369FE;
+  color: #fff;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.9;
   }
 }
 </style>
