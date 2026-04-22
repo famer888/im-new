@@ -63,7 +63,7 @@ pub fn run() {
             // Setup tray
             window::tray::setup_tray(app)?;
 
-            // Create login window with platform-specific settings
+            // Create the login window eagerly so packaged builds land on a stable first screen.
             {
                 let mut builder = WebviewWindowBuilder::new(
                     app,

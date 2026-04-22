@@ -5,6 +5,7 @@ import App from './App.vue'
 import { router } from './router'
 import { setupTauriListeners } from './plugins/tauri-events'
 import { initDomainPool, initDomainPoolFromApi, initDomainPoolFromOss, startPolling } from '@/utils/domainPool'
+import { ErrorType, sendErrToSentry } from '@/utils/sentry'
 import './assets/styles/global.scss'
 
 import en from '@/locales/en.json'
@@ -22,6 +23,22 @@ const i18n = createI18n({
 
 const app = createApp(App)
 const pinia = createPinia()
+
+app.config.errorHandler = (error, instance, info) => {
+  const rawType = (instance as any)?.$?.type
+  const componentName = rawType && typeof rawType === 'object'
+    ? String(rawType.name || rawType.__name || 'AnonymousComponent')
+    : 'AnonymousComponent'
+  void sendErrToSentry(
+    ErrorType.App,
+    error instanceof Error ? error : new Error(String(error)),
+    [
+      { key: 'vue_info', value: info },
+      { key: 'vue_component', value: componentName },
+    ],
+  )
+  console.error('[Vue error]', info, error)
+}
 
 app.use(pinia)
 app.use(router)

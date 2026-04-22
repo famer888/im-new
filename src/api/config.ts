@@ -3,7 +3,7 @@ function isTauri(): boolean {
 }
 
 const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
-const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'http://test-domain-api.68chat.co'
+const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
 
 export const API_CONFIG = {
   rawBaseUrl: RAW_BASE_URL,
