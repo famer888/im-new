@@ -228,6 +228,7 @@ function handleExitGroup() {
 }
 
 function handleOnlineTime(member: any) {
+  if (member.online) return t('在线')
   const dateNow = Date.now()
   const minute = 1000 * 60
   const hour = minute * 60

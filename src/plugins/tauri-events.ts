@@ -2,6 +2,7 @@ import { useNetworkStore, type WsStatus } from '@/stores/useNetworkStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useChatStore, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
+import { useGroupStore } from '@/stores/useGroupStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSettingStore } from '@/stores/useSettingStore'
@@ -171,8 +172,10 @@ export async function setupTauriListeners() {
     Array<{ uid: string; online: boolean; createTime: number; bfShow?: boolean }>
   >('user:online-status', (event) => {
     const contactStore = useContactStore()
+    const groupStore = useGroupStore()
     const raw = Array.isArray(event.payload) ? event.payload : []
     contactStore.applyOnlineStatusUpdates(raw)
+    groupStore.applyOnlineStatusUpdates(raw)
   })
 
   listen<Message[]>('msg:batch', async (event) => {

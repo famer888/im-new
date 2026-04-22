@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getGroupContactList, getGroupMemberList } from '@/api/imBase'
+import { getGroupContactList, getGroupMemberList, groupMemberOnLineStatusList } from '@/api/imBase'
+
+const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
+const memberLoadRequestMap = new Map<string, Promise<GroupMember[]>>()
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -29,12 +32,20 @@ export interface GroupMember {
   /** 头像 URL，与 proto UserBase.icon 一致 */
   avatar?: string | null
   role: number
+  online?: boolean
+  createTime?: number
 }
 
 export const useGroupStore = defineStore('group', () => {
   const groups = ref<Group[]>([])
   const memberMap = ref<Map<string, GroupMember[]>>(new Map())
   const loading = ref(false)
+
+  function setGroupMembers(groupId: string, members: GroupMember[]) {
+    const next = new Map(memberMap.value)
+    next.set(groupId, members)
+    memberMap.value = next
+  }
 
   function normalizeGroup(item: any): Group {
     return {
@@ -81,29 +92,37 @@ export const useGroupStore = defineStore('group', () => {
   }
 
   async function loadMembers(uid: string, groupId: string) {
-    if (isTauri()) {
-      try {
-        const localMembers = await tauriInvoke<any[]>('get_group_members', { uid, groupId })
-        if (Array.isArray(localMembers) && localMembers.length > 0) {
-          const normalizedMembers = localMembers.map((item: any) => ({
-            // 兼容 tauri 侧 snake_case 与前端 camelCase
-            groupId: String(item.groupId ?? item.group_id ?? groupId),
-            userId: String(item.userId ?? item.user_id ?? ''),
-            nickname: item.nickname ?? null,
-            avatar: item.avatar ?? item.icon ?? null,
-            role: Number(item.role ?? item.type ?? 0),
-          }))
-          memberMap.value.set(groupId, normalizedMembers)
-          return normalizedMembers
-        }
-      } catch (e) {
-        console.error('[GroupStore] local loadMembers failed:', e)
-      }
-    }
+    const existingRequest = memberLoadRequestMap.get(groupId)
+    if (existingRequest) return existingRequest
 
-    const members = await loadMembersViaApi(groupId)
-    memberMap.value.set(groupId, members)
-    return members
+    const request = (async () => {
+      let members: GroupMember[] | null = null
+
+      if (isTauri()) {
+        try {
+          const localMembers = await tauriInvoke<any[]>('get_group_members', { uid, groupId })
+          if (Array.isArray(localMembers) && localMembers.length > 0) {
+            members = localMembers.map((item: any) => normalizeMember(item, groupId))
+          }
+        } catch (e) {
+          console.error('[GroupStore] local loadMembers failed:', e)
+        }
+      }
+
+      if (!members) {
+        members = await loadMembersViaApi(groupId)
+      }
+
+      members = mergeMembersWithExistingStatuses(groupId, members)
+      members = await loadMemberOnlineStatuses(groupId, members)
+      setGroupMembers(groupId, members)
+      return members
+    })().finally(() => {
+      memberLoadRequestMap.delete(groupId)
+    })
+
+    memberLoadRequestMap.set(groupId, request)
+    return request
   }
 
   async function loadMembersViaApi(groupId: string): Promise<GroupMember[]> {
@@ -123,14 +142,7 @@ export const useGroupStore = defineStore('group', () => {
         })
         const list = resp.members || []
         for (const item of list as any[]) {
-          const user = item.user || {}
-          allMembers.push({
-            groupId: String(item.groupId || groupId),
-            userId: String(user.uid || ''),
-            nickname: user.nickName || null,
-            avatar: user.icon || null,
-            role: Number(item.type ?? 0),
-          })
+          allMembers.push(normalizeMember(item, groupId))
         }
 
         hasMore = list.length >= pageSize
@@ -141,7 +153,139 @@ export const useGroupStore = defineStore('group', () => {
       }
     }
 
-    return allMembers
+    return sortMembersForDisplay(allMembers)
+  }
+
+  function normalizeMember(item: any, groupId: string): GroupMember {
+    const user = item.user || {}
+    const userOnlineStatus = user.userOnOrOffline || item.userOnOrOffline || {}
+    return {
+      groupId: String(item.groupId ?? item.group_id ?? groupId),
+      userId: String(item.userId ?? item.user_id ?? user.uid ?? ''),
+      nickname: item.nickname ?? user.nickName ?? null,
+      avatar: item.avatar ?? item.icon ?? user.icon ?? null,
+      role: Number(item.role ?? item.type ?? 0),
+      online:
+        typeof item.online === 'boolean'
+          ? item.online
+          : (typeof userOnlineStatus.online === 'boolean' ? userOnlineStatus.online : undefined),
+      createTime: Number(item.createTime ?? userOnlineStatus.createTime ?? 0) || undefined,
+    }
+  }
+
+  function mergeMembersWithExistingStatuses(groupId: string, members: GroupMember[]): GroupMember[] {
+    const existing = memberMap.value.get(groupId) ?? []
+    if (!existing.length) return sortMembersForDisplay(members)
+
+    const existingMap = new Map(existing.map((member) => [member.userId, member]))
+    return sortMembersForDisplay(
+      members.map((member) => {
+        const prev = existingMap.get(member.userId)
+        if (!prev) return member
+        return {
+          ...prev,
+          ...member,
+          online: member.online ?? prev.online,
+          createTime: member.createTime ?? prev.createTime,
+        }
+      }),
+    )
+  }
+
+  async function loadMemberOnlineStatuses(groupId: string, members: GroupMember[]): Promise<GroupMember[]> {
+    if (!members.length) return members
+
+    const batches: string[][] = []
+    for (let i = 0; i < members.length; i += MEMBER_ONLINE_STATUS_BATCH_SIZE) {
+      const uids = members.slice(i, i + MEMBER_ONLINE_STATUS_BATCH_SIZE)
+        .map((member) => member.userId)
+        .filter(Boolean)
+      if (uids.length) batches.push(uids)
+    }
+
+    if (!batches.length) return sortMembersForDisplay(members)
+
+    const results = await Promise.allSettled(
+      batches.map((uids) => groupMemberOnLineStatusList({ groupId, uids })),
+    )
+    const onlineMap = new Map<string, Pick<GroupMember, 'online' | 'createTime'>>()
+
+    for (const result of results) {
+      if (result.status !== 'fulfilled') {
+        console.error('[GroupStore] loadMemberOnlineStatuses batch failed:', result.reason)
+        continue
+      }
+
+      for (const row of result.value.userOnLineStatusList || []) {
+        const uid = String(row.uid ?? '')
+        if (!uid) continue
+        onlineMap.set(uid, {
+          online: Boolean(row.online),
+          createTime: Number(row.createTime || 0) || undefined,
+        })
+      }
+    }
+
+    const merged = members.map((member) => {
+      const onlinePatch = onlineMap.get(member.userId)
+      return onlinePatch ? { ...member, ...onlinePatch } : member
+    })
+
+    return sortMembersForDisplay(merged)
+  }
+
+  function applyOnlineStatusUpdates(
+    rows: Array<{ uid: string; online: boolean; createTime: number; bfShow?: boolean }>,
+  ) {
+    if (!rows.length || !memberMap.value.size) return
+
+    const patchMap = new Map(
+      rows
+        .filter((row) => row.uid)
+        .map((row) => [
+          String(row.uid),
+          {
+            online: row.online,
+            createTime: row.createTime || undefined,
+          },
+        ]),
+    )
+
+    if (!patchMap.size) return
+
+    const next = new Map(memberMap.value)
+    let changed = false
+
+    for (const [groupId, members] of next.entries()) {
+      let groupChanged = false
+      const updatedMembers = members.map((member) => {
+        const patch = patchMap.get(member.userId)
+        if (!patch) return member
+        if (member.online === patch.online && member.createTime === patch.createTime) return member
+        groupChanged = true
+        return {
+          ...member,
+          ...patch,
+        }
+      })
+
+      if (groupChanged) {
+        next.set(groupId, sortMembersForDisplay(updatedMembers))
+        changed = true
+      }
+    }
+
+    if (changed) {
+      memberMap.value = next
+    }
+  }
+
+  function sortMembersForDisplay(members: GroupMember[]): GroupMember[] {
+    return [...members].sort((a, b) => {
+      const roleDiff = a.role - b.role
+      if (roleDiff !== 0) return roleDiff
+      return Number(Boolean(b.online)) - Number(Boolean(a.online))
+    })
   }
 
   function getGroup(id: string): Group | undefined {
@@ -160,5 +304,6 @@ export const useGroupStore = defineStore('group', () => {
     loadMembers,
     getGroup,
     getMembers,
+    applyOnlineStatusUpdates,
   }
 })
