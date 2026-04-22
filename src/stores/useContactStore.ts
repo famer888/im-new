@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getContactsList } from '@/api/imBase'
+import { getContactsDetail, getContactsList } from '@/api/imBase'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -36,6 +36,9 @@ export const useContactStore = defineStore('contact', () => {
   const contacts = ref<Contact[]>([])
   const searchResults = ref<Contact[]>([])
   const loading = ref(false)
+  const loadedDetailIds = new Set<string>()
+  const detailRequestMap = new Map<string, Promise<void>>()
+  const detailRevisionMap = new Map<string, number>()
 
   async function loadContacts(uid: string) {
     loading.value = true
@@ -133,15 +136,77 @@ export const useContactStore = defineStore('contact', () => {
     return contact?.remark || contact?.nickname || id
   }
 
-  function patchContact(id: string, patch: Partial<Contact>) {
+  function patchContact(
+    id: string,
+    patch: Partial<Contact>,
+    options?: { source?: 'local' | 'remote'; markDetailLoaded?: boolean },
+  ) {
+    const touchesDetailFields =
+      Object.prototype.hasOwnProperty.call(patch, 'bfReadCancel')
+      || Object.prototype.hasOwnProperty.call(patch, 'bfMyBlack')
+      || Object.prototype.hasOwnProperty.call(patch, 'msgCancelTime')
+
+    if (touchesDetailFields) {
+      if (options?.markDetailLoaded || options?.source !== 'remote') {
+        loadedDetailIds.add(id)
+      }
+      if (options?.source !== 'remote') {
+        detailRevisionMap.set(id, (detailRevisionMap.get(id) || 0) + 1)
+      }
+    }
+
     const target = contacts.value.find((c) => c.id === id)
-    if (!target) return
-    Object.assign(target, patch)
+    if (target) {
+      Object.assign(target, patch)
+    }
+    const searchTarget = searchResults.value.find((c) => c.id === id)
+    if (searchTarget) {
+      Object.assign(searchTarget, patch)
+    }
+  }
+
+  async function ensureContactDetailLoaded(id: string, options?: { force?: boolean }) {
+    const targetId = String(id || '')
+    if (!targetId || !getContact(targetId)) return
+    if (!options?.force && loadedDetailIds.has(targetId)) return
+
+    const pendingRequest = detailRequestMap.get(targetId)
+    if (pendingRequest) return pendingRequest
+    const requestRevision = detailRevisionMap.get(targetId) || 0
+
+    const request = (async () => {
+      try {
+        const resp = await getContactsDetail({ targetUid: Number(targetId) })
+        const detail = (resp as any)?.contactsDetailBase
+        if (!detail) return
+        if ((detailRevisionMap.get(targetId) || 0) !== requestRevision) {
+          return
+        }
+        patchContact(targetId, {
+          bfReadCancel: Boolean(detail.bfReadCancel),
+          bfMyBlack: Boolean(detail.bfMyBlack),
+          msgCancelTime: Number(detail.msgCancelTime || 30),
+        }, {
+          source: 'remote',
+          markDetailLoaded: true,
+        })
+      } catch (e) {
+        console.warn('[ContactStore] load detail failed:', targetId, e)
+      } finally {
+        detailRequestMap.delete(targetId)
+      }
+    })()
+
+    detailRequestMap.set(targetId, request)
+    return request
   }
 
   function removeContact(id: string) {
     contacts.value = contacts.value.filter((c) => c.id !== id)
     searchResults.value = searchResults.value.filter((c) => c.id !== id)
+    loadedDetailIds.delete(id)
+    detailRequestMap.delete(id)
+    detailRevisionMap.delete(id)
   }
 
   /** 与 im 20601 `PushUserOnOrOffLineMessageResp` / 好友列表刷新一致 */
@@ -170,6 +235,7 @@ export const useContactStore = defineStore('contact', () => {
     getContact,
     getDisplayName,
     patchContact,
+    ensureContactDetailLoaded,
     removeContact,
     applyOnlineStatusUpdates,
   }

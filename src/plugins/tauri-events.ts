@@ -424,21 +424,16 @@ export async function setupTauriListeners() {
 
       messageStore.batchAppendMessages(normalized as Message[])
       const chatStore = useChatStore()
-      const currentConversationId = chatStore.currentConversationId
+      const activeConversationId = chatStore.currentConversationId
       const hasIncomingForActiveConversation = Boolean(
         currentUid
-        && currentConversationId
+        && activeConversationId
         && normalized.some((m: any) => {
           const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
           const senderId = String(m?.senderId ?? m?.sender_id ?? '')
-          return convId === currentConversationId && senderId && senderId !== currentUid
+          return convId === activeConversationId && senderId && senderId !== currentUid
         }),
       )
-      if (hasIncomingForActiveConversation) {
-        void chatStore.markAsRead(currentUid, currentConversationId!).catch((err: unknown) => {
-          console.warn('[read-burn] auto markAsRead failed:', err)
-        })
-      }
       if (shouldPlaySound) {
         void playNotificationSound()
       }
@@ -457,16 +452,20 @@ export async function setupTauriListeners() {
           isDeleted: Boolean(m?.isDeleted ?? m?.is_deleted ?? false),
           extra: m?.extra ?? null,
         }))
-        import('@tauri-apps/api/core')
-          .then(({ invoke }) =>
-            invoke('upsert_incoming_messages', {
-              uid: authStore.uid,
-              messages: incoming,
-            }),
-          )
-          .catch((err) => {
-            console.warn('[msg:batch] upsert_incoming_messages failed:', err)
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('upsert_incoming_messages', {
+            uid: authStore.uid,
+            messages: incoming,
           })
+        } catch (err) {
+          console.warn('[msg:batch] upsert_incoming_messages failed:', err)
+        }
+      }
+      if (hasIncomingForActiveConversation && activeConversationId && chatStore.currentConversationId === activeConversationId) {
+        void chatStore.markAsRead(currentUid, activeConversationId).catch((err: unknown) => {
+          console.warn('[read-burn] auto markAsRead failed:', err)
+        })
       }
     }
   })

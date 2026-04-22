@@ -32,6 +32,7 @@ const currentFriendContact = computed(() => {
   }
   return contactStore.getContact(conv.targetId) ?? null
 })
+const friendConversationTargetId = computed(() => currentFriendContact.value?.id ?? '')
 
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
@@ -70,6 +71,15 @@ function loadGroupMembersIfNeeded(convId: string) {
     groupStore.loadMembers(authStore.uid, conv.targetId).catch(() => {})
   }
 }
+
+watch(
+  friendConversationTargetId,
+  (targetId) => {
+    if (!targetId) return
+    void contactStore.ensureContactDetailLoaded(targetId)
+  },
+  { immediate: true },
+)
 
 watch(
   conversationId,

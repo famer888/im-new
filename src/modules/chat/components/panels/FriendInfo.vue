@@ -5,7 +5,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import Toast from '@/components/Toast.vue'
-import { contactsRelation, getContactsDetail, updateBlackContacts, updateContacts } from '@/api/imBase'
+import { contactsRelation, updateBlackContacts, updateContacts } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
@@ -62,7 +62,6 @@ const blacklistConfirmVisible = ref(false)
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
-let detailRequestVersion = 0
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
@@ -87,27 +86,14 @@ function appendReadBurnNotice(seconds: number, enabled: boolean, conversationId?
   messageStore.appendLocalSystemNotice(currentConversationId, formatReadBurnNotice(seconds, enabled))
 }
 
-watch(contact, async (nextContact) => {
-  readBurn.value = Boolean(nextContact?.bfReadCancel)
-  inBlacklist.value = Boolean(nextContact?.bfMyBlack)
-  if (!nextContact) return
-  const requestVersion = ++detailRequestVersion
-  const targetContactId = nextContact.id
-  try {
-    const resp = await getContactsDetail({ targetUid: Number(nextContact.id) })
-    if (requestVersion !== detailRequestVersion || contact.value?.id !== targetContactId) return
-    const detail = (resp as any).contactsDetailBase
-    if (!detail) return
-    const patch: Partial<typeof nextContact> = {
-      bfReadCancel: Boolean(detail.bfReadCancel),
-      bfMyBlack: Boolean(detail.bfMyBlack),
-      msgCancelTime: Number(detail.msgCancelTime || 30),
-    }
-    contactStore.patchContact(targetContactId, patch)
-  } catch {
-    // ignore details failures, use current in-memory state
-  }
-}, { immediate: true })
+watch(
+  () => contact.value?.id,
+  (contactId) => {
+    if (!contactId) return
+    void contactStore.ensureContactDetailLoaded(contactId)
+  },
+  { immediate: true },
+)
 
 watch(
   () => [contact.value?.bfReadCancel, contact.value?.msgCancelTime, contact.value?.bfMyBlack],
@@ -140,7 +126,6 @@ async function toggleMute() {
 
 async function toggleReadBurn() {
   if (!contact.value || working.value) return
-  detailRequestVersion += 1
   working.value = true
   const targetContactId = contact.value.id
   const targetConversationId = conv.value?.id
