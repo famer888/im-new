@@ -2,10 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop capability",
-  "windows": ["main", "login", "chat_*"],
+  "windows": ["main", "login", "chat_*", "notification_*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "notification:default",
     "dialog:default",
     "dialog:allow-save"
   ]

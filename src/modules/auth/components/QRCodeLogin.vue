@@ -254,11 +254,13 @@ onBeforeUnmount(() => {
     </div>
     <section @click="handleReGetQrCodeUrl">
       <qrcode-vue
+        v-if="loginToken"
         class="ecode"
         :value="qrCodeValue"
         level="H"
         :size="160"
       />
+      <div v-else class="ecode ecode-placeholder" />
       <p v-if="showOverlay">
         <img
           :src="freshIcon"
@@ -302,6 +304,15 @@ onBeforeUnmount(() => {
     .ecode {
       display: block;
       margin: 0 auto;
+    }
+
+    .ecode-placeholder {
+      width: 160px;
+      height: 160px;
+      border-radius: 12px;
+      background:
+        linear-gradient(135deg, rgba(51, 105, 254, 0.08), rgba(51, 105, 254, 0.16));
+      border: 1px solid rgba(51, 105, 254, 0.12);
     }
 
     > p {
