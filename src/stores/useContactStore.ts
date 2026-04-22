@@ -141,6 +141,7 @@ export const useContactStore = defineStore('contact', () => {
     patch: Partial<Contact>,
     options?: { source?: 'local' | 'remote'; markDetailLoaded?: boolean },
   ) {
+    // 详情接口可能比本地 toggle/save 晚回来，revision 用来挡住过期覆盖。
     const touchesDetailFields =
       Object.prototype.hasOwnProperty.call(patch, 'bfReadCancel')
       || Object.prototype.hasOwnProperty.call(patch, 'bfMyBlack')

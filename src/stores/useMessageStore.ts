@@ -255,6 +255,7 @@ export const useMessageStore = defineStore('message', () => {
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
     if (!existing) return
 
+    // 最后一条消息被阅后即焚/本地删除后，左侧会话预览要回退到仍可见的最后一条。
     const list = messages ?? getMessages(conversationId)
     const latest = list.length > 0 ? list[list.length - 1] : null
     const digest = latest ? getDigestByMessage(latest.msgType, latest.content) : null

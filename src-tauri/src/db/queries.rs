@@ -255,6 +255,7 @@ pub fn batch_insert_messages(conn: &Connection, msgs: &[Message]) -> Result<(), 
 }
 
 pub fn refresh_conversation_summary(conn: &Connection, conversation_id: &str) -> Result<(), DbError> {
+    // 会话摘要始终跟随“最后一条未删除消息”，避免左侧列表残留已销毁内容。
     conn.execute(
         "UPDATE conversations
          SET last_msg_id = (
