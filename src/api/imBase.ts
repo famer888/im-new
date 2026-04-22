@@ -3,6 +3,11 @@
  */
 import { requestProto, proto } from './request'
 import { getBaseUrl } from './config'
+import {
+  GroupMemberOnLineStatusListReq,
+  GroupMemberOnLineStatusListResp,
+  type IGroupMemberOnLineStatusListResp,
+} from './groupOnlineStatusProto'
 
 /**
  * Get QR code login token from the server.
@@ -291,6 +296,26 @@ export async function getGroupMemberList(
       pageNum: data.pageNum,
       pageSize: data.pageSize,
       time: data.time ?? 0,
+    },
+  })
+}
+
+/**
+ * Get group member online statuses.
+ * POST /group/groupMemberOnLineStatusList
+ */
+export async function groupMemberOnLineStatusList(
+  data: { groupId: number | string; uids: Array<number | string> },
+  baseUrl?: string,
+): Promise<IGroupMemberOnLineStatusListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupMemberOnLineStatusList`,
+    reqType: GroupMemberOnLineStatusListReq,
+    respType: GroupMemberOnLineStatusListResp,
+    data: {
+      groupId: data.groupId,
+      uids: data.uids,
     },
   })
 }
