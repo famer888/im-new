@@ -58,7 +58,10 @@ import menuForward from '@/assets/images/menu/menu-forward.svg'
 import menuSave from '@/assets/images/menu/save.png'
 import menuOpenDir from '@/assets/images/menu/open_dir.png'
 import menuMore from '@/assets/images/menu/more.png'
+import hasReadUrl from '@/assets/images/message/has-read.png'
+import hasReceiveUrl from '@/assets/images/message/has-resive.png'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
+import { formatTimeStamp } from '@/utils/formatTimeStamp'
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -419,26 +422,29 @@ function getGroupReadTotal(data: Record<string, unknown>): number {
 }
 
 function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
-  const items: MenuItem[] = [
-    { key: 'group_read_submenu_title', label: t('谁已读'), disabled: true, tone: 'title' },
-  ]
-
   const extra = parseMessageExtra(data)
   const rawUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
   if (!rawUsers.length) {
-    items.push({
-      key: 'group_read_submenu_loading',
-      label: t('加载中...'),
-      disabled: true,
-      tone: 'muted',
-    })
-    return items
+    return [
+      {
+        key: 'group_read_submenu_loading',
+        label: '群成员加载中',
+        disabled: true,
+        tone: 'muted',
+      },
+    ]
   }
 
   const groupId = String(chatStore.currentConversation?.targetId || '').trim()
   const groupMembers = groupId ? groupStore.getMembers(groupId) : []
   const groupMemberMap = new Map(groupMembers.map((member) => [member.userId, member]))
-  const readUsers = new Map<string, { userId: string; name: string; readTime: number }>()
+  const readUsers = new Map<string, {
+    userId: string
+    name: string
+    avatarSrc: string | null
+    readState: number
+    readTime: number
+  }>()
 
   for (const rawUser of rawUsers) {
     if (!rawUser || typeof rawUser !== 'object') continue
@@ -451,33 +457,43 @@ function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
 
     const readTime = Number(user.readTime || 0)
     const member = groupMemberMap.get(userId)
+    const contact = contactStore.getContact(userId)
     const name = member?.nickname?.trim() || contactStore.getDisplayName(userId) || userId
+    const avatarSrc = member?.avatar || contact?.avatar || null
     const previous = readUsers.get(userId)
     if (!previous || readTime >= previous.readTime) {
-      readUsers.set(userId, { userId, name, readTime })
+      readUsers.set(userId, {
+        userId,
+        name,
+        avatarSrc,
+        readState,
+        readTime,
+      })
     }
   }
 
   const sortedUsers = [...readUsers.values()].sort((a, b) => b.readTime - a.readTime)
   if (!sortedUsers.length) {
-    items.push({
-      key: 'group_read_submenu_loading',
-      label: t('加载中...'),
-      disabled: true,
-      tone: 'muted',
-    })
-    return items
+    return [
+      {
+        key: 'group_read_submenu_loading',
+        label: '群成员加载中',
+        disabled: true,
+        tone: 'muted',
+      },
+    ]
   }
 
-  items.push(
-    ...sortedUsers.map((user) => ({
+  return sortedUsers.map((user) => ({
       key: `group_read_user_${user.userId}`,
       label: user.name,
+      avatarName: user.name,
+      avatarSrc: user.avatarSrc,
+      avatarType: 'friend',
+      secondaryLabel: formatTimeStamp(user.readTime, appLocale.value, t),
+      secondaryIconSrc: user.readState === 1 ? hasReadUrl : hasReceiveUrl,
       disabled: true,
-    })),
-  )
-
-  return items
+    }))
 }
 
 function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
