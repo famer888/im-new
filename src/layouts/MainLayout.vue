@@ -330,6 +330,87 @@ function messageSupportsCopy(msgType: unknown): boolean {
   return t === MessageType.Text || t === MessageType.Html2
 }
 
+function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
+  return chatStore.currentConversation?.type === ConversationType.Group
+    && Number(data.msgType) === MessageType.Image
+    && typeof data.imageSrc === 'string'
+    && data.imageSrc.trim().length > 0
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('blob read failed'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+function blobToPng(blob: Blob): Promise<Blob> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const src = await blobToDataUrl(blob)
+      const image = new Image()
+      image.onload = () => {
+        const canvas = document.createElement('canvas')
+        const width = image.naturalWidth || image.width
+        const height = image.naturalHeight || image.height
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('canvas context unavailable'))
+          return
+        }
+        ctx.drawImage(image, 0, 0, width, height)
+        canvas.toBlob((pngBlob) => {
+          if (!pngBlob) {
+            reject(new Error('png conversion failed'))
+            return
+          }
+          resolve(pngBlob)
+        }, 'image/png')
+      }
+      image.onerror = () => reject(new Error('image decode failed'))
+      image.src = src
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('png conversion failed'))
+    }
+  })
+}
+
+async function copyImageToClipboard(src: string) {
+  const response = await fetch(src)
+  if (!response.ok) {
+    throw new Error(`image fetch failed: ${response.status}`)
+  }
+
+  let blob = await response.blob()
+  let mime = blob.type || 'image/png'
+
+  if (mime !== 'image/png') {
+    blob = await blobToPng(blob)
+    mime = 'image/png'
+  }
+
+  if ((window as any).__TAURI_INTERNALS__) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const dataUrl = await blobToDataUrl(blob)
+    const dataBase64 = dataUrl.split(',', 2)[1] || ''
+    if (!dataBase64) {
+      throw new Error('image base64 encode failed')
+    }
+    await invoke('write_clipboard_image', { dataBase64 })
+    return
+  }
+
+  const ClipboardItemCtor = window.ClipboardItem
+  if (!ClipboardItemCtor || !navigator.clipboard?.write) {
+    throw new Error('clipboard image write unsupported')
+  }
+  await navigator.clipboard.write([new ClipboardItemCtor({ [mime]: blob })])
+}
+
 const contextMenuVariant = computed(() =>
   uiStore.contextMenuData.type === 'message' ? 'im' : 'default',
 )
@@ -352,7 +433,7 @@ const contextMenuItems = computed((): MenuItem[] => {
     const isSelf = Boolean(data.isSelf)
     const items: MenuItem[] = []
 
-    if (messageSupportsCopy(data.msgType)) {
+    if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data)) {
       items.push({ key: 'copy', label: '复制', iconSrc: menuCopy })
     }
 
@@ -405,6 +486,12 @@ async function handleContextMenuSelect(key: string) {
     const convId = chatStore.currentConversationId
     switch (key) {
       case 'copy': {
+        if (messageSupportsImageCopy(data)) {
+          const imageSrc = String(data.imageSrc || '').trim()
+          if (!imageSrc) break
+          try { await copyImageToClipboard(imageSrc) } catch { /* clipboard may be unavailable */ }
+          break
+        }
         const text = data.content as string
         try { await navigator.clipboard.writeText(text) } catch { /* fallback */ }
         break

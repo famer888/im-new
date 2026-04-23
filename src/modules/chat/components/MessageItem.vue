@@ -133,6 +133,12 @@ const showReadBurnFire = computed(() => Boolean(props.message.deleteSeconds))
 function handleContextMenu(e: MouseEvent) {
   if (uiStore.selectionMode) return
   e.preventDefault()
+  const imageEl = e.currentTarget instanceof HTMLElement
+    ? e.currentTarget.querySelector('.image-message .image-wrapper img')
+    : null
+  const imageSrc = imageEl instanceof HTMLImageElement
+    ? (imageEl.currentSrc || imageEl.src || '')
+    : ''
   uiStore.showContextMenu(e.clientX, e.clientY, {
     type: 'message',
     messageId: props.message.id,
@@ -141,6 +147,7 @@ function handleContextMenu(e: MouseEvent) {
     msgType: props.message.msgType,
     content: props.message.content,
     extra: props.message.extra,
+    imageSrc,
   })
 }
 
