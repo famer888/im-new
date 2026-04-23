@@ -526,6 +526,15 @@ function messageSupportsImageOpenDirectory(data: Record<string, unknown>): boole
   return !!(window as any).__TAURI_INTERNALS__ && messageSupportsImageSave(data)
 }
 
+function deleteEveryoneLabelForConversation(): string {
+  const conv = chatStore.currentConversation
+  if (!conv) return '为所有人删除'
+  if (conv.type !== 0) return '为所有人删除'
+
+  const targetName = contactStore.getDisplayName(conv.targetId) || conv.targetId || '对方'
+  return `从本地和${targetName}删除`
+}
+
 function imageCacheSafeName(name: string): string {
   return name.replace(/[^\w.-]/g, '_') || 'image'
 }
@@ -798,11 +807,9 @@ const contextMenuItems = computed((): MenuItem[] => {
     }
 
     if (isSelf) {
-      const everyoneLabel =
-        convType === 0 ? '为双方删除' : '为所有人删除'
       items.push({
         key: 'delete_everyone',
-        label: everyoneLabel,
+        label: deleteEveryoneLabelForConversation(),
         iconSrc: menuDelete,
       })
     }
