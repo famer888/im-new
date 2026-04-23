@@ -36,6 +36,7 @@ import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.v
 import GroupQRCode from '@/modules/chat/components/panels/GroupQRCode.vue'
 import UpVersionDialog from '@/components/UpVersionDialog.vue'
 import MemberInfoDialog from '@/components/MemberInfoDialog.vue'
+import Toast from '@/components/Toast.vue'
 
 import ContextMenu from '@/components/ContextMenu.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -53,6 +54,8 @@ import menuDelete from '@/assets/images/menu/menu-delete.svg'
 import menuSelect from '@/assets/images/menu/menu-select.svg'
 import menuReply from '@/assets/images/menu/menu-reply.svg'
 import menuForward from '@/assets/images/menu/menu-forward.svg'
+import menuSave from '@/assets/images/menu/save.png'
+import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -68,6 +71,9 @@ const messageStore = useMessageStore()
 const forwardConfirmVisible = ref(false)
 const forwardTargetConvId = ref('')
 const forwardConfirmPayload = ref<{ msgType: number; content: string; extra?: Record<string, unknown> } | null>(null)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 
 const isInitialized = ref(false)
 const initText = ref('')
@@ -78,6 +84,12 @@ let initReloadTimer: number | null = null
 
 function setInitText(text: string) {
   initText.value = text
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
 }
 
 function startInitReloadTimer() {
@@ -337,6 +349,13 @@ function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
     && data.imageSrc.trim().length > 0
 }
 
+function messageSupportsImageSave(data: Record<string, unknown>): boolean {
+  return chatStore.currentConversation?.type === ConversationType.Group
+    && Number(data.msgType) === MessageType.Image
+    && typeof data.imageSrc === 'string'
+    && data.imageSrc.trim().length > 0
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -411,6 +430,68 @@ async function copyImageToClipboard(src: string) {
   await navigator.clipboard.write([new ClipboardItemCtor({ [mime]: blob })])
 }
 
+function normalizeImageFileName(fileName: string): string {
+  const sanitized = String(fileName || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim()
+    .replace(/\.[^.]+$/, '')
+
+  return `${sanitized || 'image'}.png`
+}
+
+function suggestImageSaveName(data: Record<string, unknown>): string {
+  const rawContent = String(data.content || '').trim()
+  if (!rawContent) return normalizeImageFileName(String(data.messageId || 'image'))
+
+  try {
+    const parsed = JSON.parse(rawContent) as Record<string, unknown>
+    const explicitName = String(parsed.name || '').trim()
+    if (explicitName) return normalizeImageFileName(explicitName)
+
+    const rawUrl = String(parsed.url || parsed.fileUrl || parsed.thumbnailUrl || parsed.thumbUrl || '').trim()
+    if (rawUrl) {
+      const fileName = rawUrl.split('?')[0].split('/').pop() || ''
+      if (fileName) return normalizeImageFileName(fileName)
+    }
+  } catch {
+    // ignore invalid image payload
+  }
+
+  return normalizeImageFileName(String(data.messageId || 'image'))
+}
+
+async function saveImageAs(src: string, suggestedName: string) {
+  const response = await fetch(src)
+  if (!response.ok) {
+    throw new Error(`image fetch failed: ${response.status}`)
+  }
+
+  let blob = await response.blob()
+  if ((blob.type || 'image/png') !== 'image/png') {
+    blob = await blobToPng(blob)
+  }
+
+  const dataUrl = await blobToDataUrl(blob)
+
+  if ((window as any).__TAURI_INTERNALS__) {
+    const { filePath, canceled } = await userSelectSavePath(suggestedName)
+    if (!filePath || canceled) return
+    const finalPath = filePath.toLowerCase().endsWith('.png') ? filePath : `${filePath}.png`
+    const err = await exportBase64ImgToLocal(dataUrl, finalPath)
+    if (err) {
+      throw err
+    }
+    showToast(t('保存成功'))
+    return
+  }
+
+  const link = document.createElement('a')
+  link.download = suggestedName
+  link.href = dataUrl
+  link.click()
+  showToast(t('保存成功'))
+}
+
 const contextMenuVariant = computed(() =>
   uiStore.contextMenuData.type === 'message' ? 'im' : 'default',
 )
@@ -435,6 +516,10 @@ const contextMenuItems = computed((): MenuItem[] => {
 
     if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data)) {
       items.push({ key: 'copy', label: '复制', iconSrc: menuCopy })
+    }
+
+    if (messageSupportsImageSave(data)) {
+      items.push({ key: 'save_as', label: '另存为', iconSrc: menuSave })
     }
 
     if (isSelf) {
@@ -494,6 +579,18 @@ async function handleContextMenuSelect(key: string) {
         }
         const text = data.content as string
         try { await navigator.clipboard.writeText(text) } catch { /* fallback */ }
+        break
+      }
+      case 'save_as': {
+        if (!messageSupportsImageSave(data)) break
+        const imageSrc = String(data.imageSrc || '').trim()
+        if (!imageSrc) break
+        try {
+          await saveImageAs(imageSrc, suggestImageSaveName(data))
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          showToast(t('保存失败详情', { detail }), 'error')
+        }
         break
       }
       case 'delete_everyone':
@@ -757,6 +854,13 @@ function handleForwardConfirmCancel() {
     />
 
     <MemberInfoDialog />
+
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      @update:visible="toastVisible = $event"
+    />
 
     <ContextMenu
       v-model:visible="uiStore.contextMenuVisible"
