@@ -104,6 +104,12 @@ const useOuterTimeOverlay = computed(() => {
   }
 })
 
+const isImageLikeBubble = computed(() =>
+  props.message.msgType === MessageType.Image ||
+  props.message.msgType === MessageType.DynamicImage ||
+  props.message.msgType === MessageType.Video,
+)
+
 function getQuoteContentDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Text) return (content || '').slice(0, 60)
   if (msgType === MessageType.Image) return '[图片]'
@@ -212,7 +218,7 @@ onMounted(() => {
             :is="messageComponent"
             :message="message"
           />
-          <div v-else class="non-text-bubble-host">
+          <div v-else :class="['non-text-bubble-host', { 'image-like-bubble-host': isImageLikeBubble }]">
             <component :is="messageComponent" :message="message" />
             <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
           </div>
@@ -367,6 +373,10 @@ onMounted(() => {
   display: inline-block;
   max-width: 100%;
   vertical-align: top;
+}
+
+.image-like-bubble-host {
+  padding-bottom: 25px;
 }
 
 .read-burn-fire {
