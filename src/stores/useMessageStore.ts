@@ -131,6 +131,14 @@ function parseExtraObject(rawExtra: unknown): Record<string, unknown> | null {
   if (typeof rawExtra === 'string') {
     try {
       const parsed = JSON.parse(rawExtra)
+      if (typeof parsed === 'string') {
+        try {
+          const nested = JSON.parse(parsed)
+          return nested && typeof nested === 'object' ? nested as Record<string, unknown> : null
+        } catch {
+          return null
+        }
+      }
       return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
     } catch {
       return null
@@ -474,7 +482,7 @@ export const useMessageStore = defineStore('message', () => {
           conversation_id: conversationId,
           msg_type: msgType,
           content,
-          extra: extraJson,
+          extra: extra ?? null,
           custom_msg_id: optimisticId,
           snapchat_time: snapchatTime ?? 0,
         },
@@ -503,7 +511,7 @@ export const useMessageStore = defineStore('message', () => {
               conversation_id: conversationId,
               msg_type: msgType,
               content,
-              extra: extraJson,
+              extra: extra ?? null,
               custom_msg_id: optimisticId,
               snapchat_time: snapchatTime ?? 0,
             },
