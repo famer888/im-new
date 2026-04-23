@@ -9,6 +9,7 @@ export interface MenuItem {
   /** Right-side image URL (message menu, im layout) */
   iconSrc?: string
   children?: MenuItem[]
+  tone?: 'default' | 'title' | 'muted'
   danger?: boolean
   disabled?: boolean
   divider?: boolean
@@ -34,6 +35,7 @@ const emit = defineEmits<{
 const menuRef = ref<HTMLElement | null>(null)
 const adjustedX = ref(0)
 const adjustedY = ref(0)
+const VIEWPORT_PADDING = 4
 
 watch(() => [props.visible, props.x, props.y], () => {
   if (props.visible) {
@@ -43,8 +45,21 @@ watch(() => [props.visible, props.x, props.y], () => {
     requestAnimationFrame(() => {
       if (menuRef.value) {
         const rect = menuRef.value.getBoundingClientRect()
-        if (rect.right > window.innerWidth) adjustedX.value = window.innerWidth - rect.width - 4
-        if (rect.bottom > window.innerHeight) adjustedY.value = window.innerHeight - rect.height - 4
+        const nextX = rect.right > window.innerWidth - VIEWPORT_PADDING
+          ? props.x - rect.width
+          : props.x
+        const nextY = rect.bottom > window.innerHeight - VIEWPORT_PADDING
+          ? props.y - rect.height
+          : props.y
+
+        adjustedX.value = Math.max(
+          VIEWPORT_PADDING,
+          Math.min(nextX, window.innerWidth - rect.width - VIEWPORT_PADDING),
+        )
+        adjustedY.value = Math.max(
+          VIEWPORT_PADDING,
+          Math.min(nextY, window.innerHeight - rect.height - VIEWPORT_PADDING),
+        )
       }
     })
   }
@@ -94,11 +109,18 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
           >
             <span class="menu-label">{{ item.label }}</span>
             <img v-if="item.iconSrc" class="menu-icon-img" :src="item.iconSrc" alt="" />
-            <div v-if="variant === 'editor' && item.children?.length" class="submenu">
+            <div v-if="item.children?.length" class="submenu">
               <div
                 v-for="child in item.children"
                 :key="child.key"
-                :class="['submenu-item', { disabled: child.disabled }]"
+                :class="[
+                  'submenu-item',
+                  {
+                    disabled: child.disabled,
+                    'submenu-item--title': child.tone === 'title',
+                    'submenu-item--muted': child.tone === 'muted',
+                  },
+                ]"
                 @click.stop="handleClick(child)"
               >
                 {{ child.label }}
@@ -158,6 +180,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 }
 
 .menu-item--im {
+  position: relative;
   justify-content: space-between;
   gap: 8px;
   height: auto;
@@ -173,6 +196,11 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 
   &:hover {
     background: #fafafa;
+
+    .submenu {
+      opacity: 1;
+      pointer-events: auto;
+    }
   }
 
   &.disabled {
@@ -254,9 +282,12 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 
 .submenu {
   position: absolute;
+  z-index: 1;
   left: 160px;
   top: 0;
   min-width: 160px;
+  max-height: 280px;
+  overflow-y: auto;
   padding: 0 10px;
   background: #fff;
   border-radius: 8px;
@@ -265,14 +296,52 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
   pointer-events: none;
 }
 
+.context-menu--im .submenu {
+  left: calc(100% - 1px);
+  top: -1px;
+  min-width: 176px;
+  padding: 0 12px;
+  border: 1px solid #f0f0f0;
+  box-shadow: none;
+}
+
+.context-menu--im .menu-item--im:last-child .submenu {
+  top: auto;
+  bottom: -1px;
+}
+
 .submenu-item {
   padding: 10px 0;
   cursor: pointer;
+  font-size: 14px;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 
   &.disabled {
     color: #c0c4cc;
     cursor: not-allowed;
   }
+}
+
+.submenu-item--title {
+  font-weight: 600;
+  color: #000;
+  cursor: default;
+}
+
+.submenu-item--muted {
+  color: #999;
+  cursor: default;
+}
+
+.submenu-item.disabled.submenu-item--title {
+  color: #000;
+}
+
+.submenu-item.disabled.submenu-item--muted {
+  color: #999;
 }
 
 .menu-enter-active, .menu-leave-active { transition: all 0.15s ease; }
