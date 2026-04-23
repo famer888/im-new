@@ -82,6 +82,7 @@ pub struct ScheduledDeletion {
 pub struct ReadProcessingResult {
     pub read_message_ids: Vec<String>,
     pub scheduled_deletions: Vec<ScheduledDeletion>,
+    pub group_read_updates: Vec<GroupReadReceiptUpdate>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -121,6 +122,7 @@ struct ReadCandidate {
     msg_type: i32,
     delete_delay_ms: i64,
     snapchat_time: i32,
+    extra: Option<String>,
 }
 
 /// 入站消息落库（用于 WS 推送消息的本地历史持久化）。
@@ -845,6 +847,7 @@ pub async fn mark_as_read(
                     msg_type: row.get(2)?,
                     delete_delay_ms,
                     snapchat_time,
+                    extra,
                 })
             })
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
@@ -883,6 +886,65 @@ pub async fn mark_as_read(
             .collect::<Vec<_>>();
 
         let read_message_ids = candidates.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+
+        let mut group_read_updates = Vec::<GroupReadReceiptUpdate>::new();
+
+        if conv_type == 1 {
+            for item in &candidates {
+                let mut extra_map = parse_extra_map(item.extra.as_deref());
+                let existing_total = extra_map
+                    .get("readTotal")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or_default();
+                let existing_users = extra_map
+                    .get("readUsers")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let old_known_count = existing_users.len() as i64;
+                let already_known = existing_users
+                    .iter()
+                    .any(|entry| read_user_id(entry) == uid.parse::<i64>().ok());
+
+                let mut read_users = existing_users
+                    .into_iter()
+                    .filter(|entry| read_user_id(entry) != uid.parse::<i64>().ok())
+                    .collect::<Vec<_>>();
+                read_users.push(serde_json::json!({
+                    "userId": uid.parse::<i64>().unwrap_or_default(),
+                    "readTime": now,
+                    "readState": imweb::MsgReceiptStatus::Viewed as i32,
+                }));
+
+                let baseline_total = existing_total.max(old_known_count);
+                let read_total = if already_known {
+                    baseline_total.max(read_users.len() as i64)
+                } else if existing_total > old_known_count {
+                    baseline_total + 1
+                } else {
+                    read_users.len() as i64
+                };
+
+                extra_map.insert("readUsers".to_string(), serde_json::Value::Array(read_users));
+                extra_map.insert("readTotal".to_string(), serde_json::Value::from(read_total));
+                let next_extra = serde_json::Value::Object(extra_map).to_string();
+
+                conn.execute(
+                    "UPDATE messages
+                     SET extra = ?1, read_status = 1
+                     WHERE conversation_id = ?2 AND id = ?3",
+                    rusqlite::params![next_extra, conversation_id, item.id],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                group_read_updates.push(GroupReadReceiptUpdate {
+                    conversation_id: conversation_id.clone(),
+                    message_id: item.id.clone(),
+                    read_status: 1,
+                    extra: Some(next_extra),
+                });
+            }
+        }
 
         let receipts = if conv_type == 0 && target_id != queries::FILE_HELPER_TARGET_ID {
             let target_uid = target_id.parse::<i64>().ok();
@@ -942,6 +1004,7 @@ pub async fn mark_as_read(
             ReadProcessingResult {
                 read_message_ids,
                 scheduled_deletions,
+                group_read_updates,
             },
             receipts,
         ))
@@ -1058,6 +1121,7 @@ pub async fn apply_friend_read_receipts(
         Ok(ReadProcessingResult {
             read_message_ids,
             scheduled_deletions,
+            group_read_updates: Vec::new(),
         })
     })
     .map_err(|e| e.to_string())
@@ -1087,10 +1151,9 @@ pub async fn apply_group_read_receipts(
                      FROM messages
                      WHERE conversation_id = ?1
                        AND id = ?2
-                       AND sender_id = ?3
                        AND is_deleted = 0
                      LIMIT 1",
-                    rusqlite::params![conversation_id, receipt.msg_id.to_string(), uid],
+                    rusqlite::params![conversation_id, receipt.msg_id.to_string()],
                     |row| {
                         Ok((
                             row.get::<_, Option<String>>(0)?,
