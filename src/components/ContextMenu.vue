@@ -55,9 +55,9 @@ watch(() => [props.visible, props.x, props.y, props.variant, props.items], () =>
         const shouldReserveSubmenuSpace =
           props.variant === 'im' && props.items.some((item) => item.children?.length)
         const reservedSubmenuWidth = shouldReserveSubmenuSpace ? SUBMENU_WIDTH : 0
-        const nextX = rect.right + reservedSubmenuWidth > window.innerWidth - VIEWPORT_PADDING
-          ? props.x - rect.width - reservedSubmenuWidth
-          : props.x
+        const maxVisibleX =
+          window.innerWidth - rect.width - reservedSubmenuWidth - VIEWPORT_PADDING
+        const nextX = Math.min(props.x, maxVisibleX)
         const nextY = rect.bottom > window.innerHeight - VIEWPORT_PADDING
           ? props.y - rect.height
           : props.y
