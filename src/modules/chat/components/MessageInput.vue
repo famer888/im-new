@@ -167,6 +167,7 @@ function handleSend() {
   if (uiStore.quoteMessage) {
     extra.quoteMessage = {
       id: uiStore.quoteMessage.id,
+      customMsgId: uiStore.quoteMessage.customMsgId ?? null,
       senderId: uiStore.quoteMessage.senderId,
       senderName: uiStore.quoteMessage.senderName,
       msgType: uiStore.quoteMessage.msgType,

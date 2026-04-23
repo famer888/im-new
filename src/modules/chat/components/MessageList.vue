@@ -424,8 +424,9 @@ watch(
     if (searchStore.chatMsgListSearchScrollRequest?.requestId !== rid) return
 
     if (found) {
+      const targetMessageId = found.id || req.messageId
       for (let i = 0; i < 4; i++) {
-        scrollToRow(req.messageId)
+        scrollToRow(targetMessageId)
         await nextTick()
         await new Promise<void>((r) => requestAnimationFrame(() => r()))
       }
@@ -433,7 +434,7 @@ watch(
       if (el) {
         el.scrollTop = Math.max(0, el.scrollTop - 50)
       }
-      searchStore.setSearchMessageHighlight(req.messageId)
+      searchStore.setSearchMessageHighlight(targetMessageId)
     }
 
     if (searchStore.chatMsgListSearchScrollRequest?.requestId === rid) {

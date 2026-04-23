@@ -98,6 +98,7 @@ async function resolveWsConnectConfig(): Promise<{
 
 export interface QuoteMessageInfo {
   id: string
+  customMsgId?: string | null
   senderId: string
   senderName: string
   msgType: number
