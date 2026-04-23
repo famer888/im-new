@@ -418,6 +418,68 @@ function getGroupReadTotal(data: Record<string, unknown>): number {
   return Math.max(readUsers.length, readTotal)
 }
 
+function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
+  const items: MenuItem[] = [
+    { key: 'group_read_submenu_title', label: t('谁已读'), disabled: true, tone: 'title' },
+  ]
+
+  const extra = parseMessageExtra(data)
+  const rawUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
+  if (!rawUsers.length) {
+    items.push({
+      key: 'group_read_submenu_loading',
+      label: t('加载中...'),
+      disabled: true,
+      tone: 'muted',
+    })
+    return items
+  }
+
+  const groupId = String(chatStore.currentConversation?.targetId || '').trim()
+  const groupMembers = groupId ? groupStore.getMembers(groupId) : []
+  const groupMemberMap = new Map(groupMembers.map((member) => [member.userId, member]))
+  const readUsers = new Map<string, { userId: string; name: string; readTime: number }>()
+
+  for (const rawUser of rawUsers) {
+    if (!rawUser || typeof rawUser !== 'object') continue
+    const user = rawUser as Record<string, unknown>
+    const userId = String(user.userId ?? user.uid ?? '').trim()
+    if (!userId) continue
+
+    const readState = Number(user.readState ?? user.status ?? 0)
+    if (readState <= 0) continue
+
+    const readTime = Number(user.readTime || 0)
+    const member = groupMemberMap.get(userId)
+    const name = member?.nickname?.trim() || contactStore.getDisplayName(userId) || userId
+    const previous = readUsers.get(userId)
+    if (!previous || readTime >= previous.readTime) {
+      readUsers.set(userId, { userId, name, readTime })
+    }
+  }
+
+  const sortedUsers = [...readUsers.values()].sort((a, b) => b.readTime - a.readTime)
+  if (!sortedUsers.length) {
+    items.push({
+      key: 'group_read_submenu_loading',
+      label: t('加载中...'),
+      disabled: true,
+      tone: 'muted',
+    })
+    return items
+  }
+
+  items.push(
+    ...sortedUsers.map((user) => ({
+      key: `group_read_user_${user.userId}`,
+      label: user.name,
+      disabled: true,
+    })),
+  )
+
+  return items
+}
+
 function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
   return chatStore.currentConversation?.type === ConversationType.Group
     && Boolean(data.isSelf)
@@ -722,7 +784,12 @@ const contextMenuItems = computed((): MenuItem[] => {
     )
 
     if (messageSupportsGroupReadCount(data)) {
-      items.push({ key: 'group_read_count', label: groupReadCountLabel(data), iconSrc: menuMore })
+      items.push({
+        key: 'group_read_count',
+        label: groupReadCountLabel(data),
+        iconSrc: menuMore,
+        children: getGroupReadUserMenuItems(data),
+      })
     }
     return items
   }
