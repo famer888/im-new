@@ -56,6 +56,8 @@ import menuSelect from '@/assets/images/menu/menu-select.svg'
 import menuReply from '@/assets/images/menu/menu-reply.svg'
 import menuForward from '@/assets/images/menu/menu-forward.svg'
 import menuSave from '@/assets/images/menu/save.png'
+import menuOpenDir from '@/assets/images/menu/open_dir.png'
+import menuMore from '@/assets/images/menu/more.png'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 
 const authStore = useAuthStore()
@@ -397,6 +399,132 @@ function messageSupportsImageSave(data: Record<string, unknown>): boolean {
     && data.imageSrc.trim().length > 0
 }
 
+function parseMessageExtra(data: Record<string, unknown>): Record<string, unknown> {
+  const raw = data.extra
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw as Record<string, unknown>
+  try {
+    const parsed = JSON.parse(String(raw))
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function getGroupReadTotal(data: Record<string, unknown>): number {
+  const extra = parseMessageExtra(data)
+  const readUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
+  const readTotal = Number(extra.readTotal || 0)
+  return Math.max(readUsers.length, readTotal)
+}
+
+function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
+  return chatStore.currentConversation?.type === ConversationType.Group
+    && Boolean(data.isSelf)
+    && getGroupReadTotal(data) > 0
+}
+
+function groupReadCountLabel(data: Record<string, unknown>): string {
+  return `${getGroupReadTotal(data)}个已读`
+}
+
+function messageSupportsImageOpenDirectory(data: Record<string, unknown>): boolean {
+  return !!(window as any).__TAURI_INTERNALS__ && messageSupportsImageSave(data)
+}
+
+function imageCacheSafeName(name: string): string {
+  return name.replace(/[^\w.-]/g, '_') || 'image'
+}
+
+function imageExtFromMime(src: string): string {
+  const matched = src.match(/^data:image\/([^;,]+)[;,]/i)
+  const mime = matched?.[1]?.toLowerCase() || ''
+  if (mime === 'jpeg' || mime === 'jpg') return '.jpg'
+  if (mime === 'png') return '.png'
+  if (mime === 'gif') return '.gif'
+  if (mime === 'webp') return '.webp'
+  if (mime === 'bmp') return '.bmp'
+  if (mime === 'avif') return '.avif'
+  if (mime === 'svg+xml') return '.svg'
+  return '.png'
+}
+
+function resolveImageCacheExt(data: Record<string, unknown>): string {
+  const rawContent = String(data.content || '').trim()
+  if (rawContent) {
+    try {
+      const parsed = JSON.parse(rawContent) as Record<string, unknown>
+      const rawUrl = String(parsed.url || parsed.fileUrl || parsed.thumbnailUrl || parsed.thumbUrl || '').trim()
+      const fromUrl = rawUrl.split('?')[0].match(/\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i)
+      if (fromUrl?.[0]) return fromUrl[0].toLowerCase()
+    } catch {
+      // ignore invalid image payload
+    }
+  }
+
+  return imageExtFromMime(String(data.imageSrc || '').trim())
+}
+
+async function tauriFileExists(path: string): Promise<boolean> {
+  if (!(window as any).__TAURI_INTERNALS__) return false
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<boolean>('file_exists', { path })
+  } catch {
+    return false
+  }
+}
+
+async function resolveImageCacheFilePath(data: Record<string, unknown>): Promise<string> {
+  const existingPath = String(data.imagePath || '').trim()
+  if (existingPath) return existingPath
+
+  if (!(window as any).__TAURI_INTERNALS__) return ''
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const baseDir = await appDataDir()
+  const messageId = imageCacheSafeName(String(data.messageId || data.msgId || 'image'))
+  return join(baseDir, 'image-cache', `${messageId}${resolveImageCacheExt(data)}`)
+}
+
+async function ensureImageCacheFile(data: Record<string, unknown>): Promise<string> {
+  const filePath = await resolveImageCacheFilePath(data)
+  if (!filePath) {
+    throw new Error('image cache path unavailable')
+  }
+
+  if (await tauriFileExists(filePath)) {
+    return filePath
+  }
+
+  const imageSrc = String(data.imageSrc || '').trim()
+  if (!imageSrc) {
+    throw new Error('image source unavailable')
+  }
+
+  const response = await fetch(imageSrc)
+  if (!response.ok) {
+    throw new Error(`image fetch failed: ${response.status}`)
+  }
+
+  const dataUrl = await blobToDataUrl(await response.blob())
+  const err = await exportBase64ImgToLocal(dataUrl, filePath)
+  if (err) {
+    throw err
+  }
+
+  return filePath
+}
+
+async function openImageDirectory(data: Record<string, unknown>) {
+  const filePath = await ensureImageCacheFile(data)
+  const [{ dirname }, { open }] = await Promise.all([
+    import('@tauri-apps/api/path'),
+    import('@tauri-apps/plugin-shell'),
+  ])
+  const directoryPath = await dirname(filePath)
+  await open(directoryPath)
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -571,6 +699,10 @@ const contextMenuItems = computed((): MenuItem[] => {
       items.push({ key: 'save_as', label: '另存为', iconSrc: menuSave })
     }
 
+    if (messageSupportsImageOpenDirectory(data)) {
+      items.push({ key: 'open_directory', label: '打开目录', iconSrc: menuOpenDir })
+    }
+
     if (isSelf) {
       const everyoneLabel =
         convType === 0 ? '为双方删除' : '为所有人删除'
@@ -588,6 +720,10 @@ const contextMenuItems = computed((): MenuItem[] => {
       { key: 'forward', label: '转发', iconSrc: menuForward },
       { key: 'copy_msg_info', label: '复制消息信息', iconSrc: menuCopy },
     )
+
+    if (messageSupportsGroupReadCount(data)) {
+      items.push({ key: 'group_read_count', label: groupReadCountLabel(data), iconSrc: menuMore })
+    }
     return items
   }
   return []
@@ -642,6 +778,16 @@ async function handleContextMenuSelect(key: string) {
         }
         break
       }
+      case 'open_directory': {
+        if (!messageSupportsImageOpenDirectory(data)) break
+        try {
+          await openImageDirectory(data)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          showToast(t('打开目录失败详情', { detail }), 'error')
+        }
+        break
+      }
       case 'delete_everyone':
         await chatStore.recallMessage(authStore.uid, msgId)
         if (convId) messageStore.deleteMessage(convId, msgId)
@@ -687,6 +833,8 @@ async function handleContextMenuSelect(key: string) {
         try { await navigator.clipboard.writeText(info) } catch { /* fallback */ }
         break
       }
+      case 'group_read_count':
+        break
     }
   }
 }

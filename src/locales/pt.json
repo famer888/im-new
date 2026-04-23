@@ -201,6 +201,7 @@
   "保存成功": "Guardado com sucesso",
   "保存失败无画布": "Falha ao guardar: não foi possível capturar o código QR",
   "保存失败详情": "Falha ao guardar: {detail}",
+  "打开目录失败详情": "Falha ao abrir a pasta: {detail}",
   "文件已存在替换标题": "“{name}” já existe. Deseja substituí-lo?",
   "文件已存在替换说明": "Já existe um arquivo ou pasta com o mesmo nome na pasta “{dir}”. Se substituir, o conteúdo atual será sobrescrito.",
   "清理缓存": "Limpar Cache",

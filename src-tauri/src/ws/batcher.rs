@@ -104,6 +104,16 @@ pub struct MsgReadReceiptEvent {
     pub snapchat_time: i32,
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMsgReadReceiptEvent {
+    pub msg_id: i64,
+    pub group_id: i64,
+    pub send_uid: i64,
+    pub status: i32,
+    pub read_time: i64,
+}
+
 pub struct MessageBatcher {
     buffer: Vec<DecodedMessage>,
     last_flush: Instant,
@@ -184,6 +194,12 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::GROUP_READ_RECEIPT_PUSH => {
+                if let Err(e) = self.emit_group_read_receipt_push(&decoded_payload) {
+                    error!("20403 decode/emit failed: {}", e);
+                }
+                return;
+            }
             // 20601 用户上下线推送（与 im `PushUserOnOrOffLineMessageResp` 一致）
             cmds::USER_ONLINE_STATUS_PUSH => {
                 match imweb::PushUserOnOrOffLineMessageResp::decode(decoded_payload.as_slice()) {
@@ -254,7 +270,6 @@ impl MessageBatcher {
             // 这些命令不是聊天正文，不进消息列表，避免干扰日志与 UI。
             cmds::GROUP_REQ_NUM_PUSH
             | cmds::GROUP_REQ_MSG_PUSH
-            | cmds::GROUP_READ_RECEIPT_PUSH
             | 20001 => {
                 return;
             }
@@ -713,6 +728,37 @@ impl MessageBatcher {
             self.app_handle
                 .emit("msg:read-receipt", &events)
                 .map_err(|e| format!("emit msg:read-receipt: {}", e))?;
+        }
+        Ok(())
+    }
+
+    fn emit_group_read_receipt_push(&self, payload: &[u8]) -> Result<(), String> {
+        let resp = imweb::PushGroupMsgReceiptMessage::decode(payload)
+            .map_err(|e| format!("decode PushGroupMsgReceiptMessage: {}", e))?;
+        let events = resp
+            .receipt_message
+            .into_iter()
+            .map(|item| GroupMsgReadReceiptEvent {
+                msg_id: item.msg_id,
+                group_id: item.group_id,
+                send_uid: item.send_uid,
+                status: item
+                    .receipt_status
+                    .as_ref()
+                    .map(|status| status.status)
+                    .unwrap_or_default(),
+                read_time: item
+                    .receipt_status
+                    .as_ref()
+                    .map(|status| status.time)
+                    .unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+
+        if !events.is_empty() {
+            self.app_handle
+                .emit("msg:group-read-receipt", &events)
+                .map_err(|e| format!("emit msg:group-read-receipt: {}", e))?;
         }
         Ok(())
     }

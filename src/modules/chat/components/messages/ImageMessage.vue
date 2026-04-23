@@ -12,6 +12,7 @@ const authStore = useAuthStore()
 const isLoaded = ref(false)
 const loadError = ref(false)
 const activeSrc = ref('')
+const localFilePath = ref('')
 const showPreview = ref(false)
 let downloadToken = 0
 let stopDownloadEvents: Array<() => void> = []
@@ -77,6 +78,7 @@ watch([thumbnailUrl, fileKey, attachmentKey], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
+  localFilePath.value = ''
   if ((fileKey.value || attachmentKey.value) && /^https?:\/\//i.test(imageData.value.url)) {
     downloadAndDecryptImage()
     return
@@ -154,6 +156,7 @@ async function downloadAndDecryptImage() {
     const baseDir = await appDataDir()
     const id = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
     const savePath = await join(baseDir, 'image-cache', `${id}${imageExt(url)}`)
+    localFilePath.value = savePath
     const doneEvent = `file:done:${id}`
     const errorEvent = `file:error:${id}`
 
@@ -204,6 +207,7 @@ onBeforeUnmount(() => {
       <img
         v-if="activeSrc && !loadError"
         :src="activeSrc"
+        :data-local-path="localFilePath || undefined"
         alt=""
         @load="isLoaded = true"
         @error="handleError"

@@ -648,6 +648,35 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function applyGroupReadReceiptPatches(patches: Array<{
+    conversationId: string
+    messageId: string
+    readStatus: number
+    extra?: string | null
+  }>) {
+    if (!Array.isArray(patches) || patches.length === 0) return
+
+    for (const patch of patches) {
+      const convId = String(patch.conversationId || '')
+      const messageId = String(patch.messageId || '')
+      if (!convId || !messageId) continue
+
+      const list = messageMap.value.get(convId)
+      if (!list) continue
+
+      const idx = list.findIndex((m) => m.id === messageId || m.customMsgId === messageId)
+      if (idx < 0) continue
+
+      const next = [...list]
+      next[idx] = {
+        ...next[idx],
+        readStatus: Number(patch.readStatus || 0),
+        extra: patch.extra ?? next[idx].extra,
+      }
+      messageMap.value.set(convId, next)
+    }
+  }
+
   function applySendFailed(params: {
     flag: number | string
     conversationId?: string
@@ -751,6 +780,7 @@ export const useMessageStore = defineStore('message', () => {
     updateMessageStatus,
     updateMessage,
     markMessagesRead,
+    applyGroupReadReceiptPatches,
     applySendReceipt,
     applySendFailed,
     deleteMessage,

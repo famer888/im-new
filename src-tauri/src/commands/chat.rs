@@ -95,6 +95,25 @@ pub struct ReadReceiptSyncPayload {
     pub snapchat_time: Option<i32>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupReadReceiptSyncPayload {
+    pub msg_id: i64,
+    pub group_id: i64,
+    pub send_uid: i64,
+    pub status: i32,
+    pub read_time: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupReadReceiptUpdate {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub read_status: i32,
+    pub extra: Option<String>,
+}
+
 #[derive(Debug)]
 struct ReadCandidate {
     id: String,
@@ -280,6 +299,25 @@ fn extract_read_burn_meta(extra: Option<&str>) -> (i32, i64) {
         snapchat_time.max(0) as i32,
         delete_delay_ms.max(0),
     )
+}
+
+fn parse_extra_map(extra: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
+    let Some(raw) = extra else {
+        return serde_json::Map::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return serde_json::Map::new();
+    };
+    match value {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    }
+}
+
+fn read_user_id(value: &serde_json::Value) -> Option<i64> {
+    value
+        .get("userId")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok())))
 }
 
 #[tauri::command]
@@ -871,6 +909,31 @@ pub async fn mark_as_read(
                     })
                 })
                 .collect::<Vec<_>>()
+        } else if conv_type == 1 {
+            let group_id = target_id.parse::<i64>().ok();
+            candidates
+                .iter()
+                .filter_map(|item| {
+                    let msg_id = item.id.parse::<i64>().ok()?;
+                    let send_uid = item.sender_id.parse::<i64>().ok()?;
+                    let group_id = group_id?;
+                    Some(imweb::ReceiptMessage {
+                        msg_id,
+                        r#type: imweb::ChatMessageType::Group as i32,
+                        send_uid,
+                        group_id,
+                        receipt_status: Some(imweb::MsgReceiptStatusBase {
+                            status: imweb::MsgReceiptStatus::Viewed as i32,
+                            time: now,
+                        }),
+                        message_type: item.msg_type,
+                        snapchat_time: item.snapchat_time,
+                        duration: 0,
+                        target_id: group_id,
+                        source: imweb::MessageSource::Web as i32,
+                    })
+                })
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -996,6 +1059,113 @@ pub async fn apply_friend_read_receipts(
             read_message_ids,
             scheduled_deletions,
         })
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_group_read_receipts(
+    db: State<'_, DbManager>,
+    uid: String,
+    receipts: Vec<GroupReadReceiptSyncPayload>,
+) -> Result<Vec<GroupReadReceiptUpdate>, String> {
+    db.with_connection(&uid, |conn| {
+        let mut updates = Vec::<GroupReadReceiptUpdate>::new();
+
+        for receipt in receipts {
+            if receipt.status != imweb::MsgReceiptStatus::Viewed as i32 {
+                continue;
+            }
+            if receipt.group_id <= 0 || receipt.send_uid <= 0 || receipt.msg_id <= 0 {
+                continue;
+            }
+
+            let conversation_id = format!("1_{}", receipt.group_id);
+            let row = conn
+                .query_row(
+                    "SELECT extra, read_status
+                     FROM messages
+                     WHERE conversation_id = ?1
+                       AND id = ?2
+                       AND sender_id = ?3
+                       AND is_deleted = 0
+                     LIMIT 1",
+                    rusqlite::params![conversation_id, receipt.msg_id.to_string(), uid],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, i32>(1)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            let Some((extra, current_read_status)) = row else {
+                continue;
+            };
+
+            let mut extra_map = parse_extra_map(extra.as_deref());
+            let existing_total = extra_map
+                .get("readTotal")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            let existing_users = extra_map
+                .get("readUsers")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let old_known_count = existing_users.len() as i64;
+            let already_known = existing_users
+                .iter()
+                .any(|item| read_user_id(item) == Some(receipt.send_uid));
+
+            let mut read_users = existing_users
+                .into_iter()
+                .filter(|item| read_user_id(item) != Some(receipt.send_uid))
+                .collect::<Vec<_>>();
+            read_users.push(serde_json::json!({
+                "userId": receipt.send_uid,
+                "readTime": receipt.read_time,
+                "readState": receipt.status,
+            }));
+
+            let baseline_total = existing_total.max(old_known_count);
+            let read_total = if already_known {
+                baseline_total.max(read_users.len() as i64)
+            } else if existing_total > old_known_count {
+                baseline_total + 1
+            } else {
+                read_users.len() as i64
+            };
+
+            extra_map.insert("readUsers".to_string(), serde_json::Value::Array(read_users));
+            extra_map.insert("readTotal".to_string(), serde_json::Value::from(read_total));
+            let next_extra = serde_json::Value::Object(extra_map).to_string();
+            let next_read_status = current_read_status.max(1);
+
+            conn.execute(
+                "UPDATE messages
+                 SET extra = ?1, read_status = ?2
+                 WHERE conversation_id = ?3 AND id = ?4",
+                rusqlite::params![
+                    next_extra,
+                    next_read_status,
+                    conversation_id,
+                    receipt.msg_id.to_string(),
+                ],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            updates.push(GroupReadReceiptUpdate {
+                conversation_id,
+                message_id: receipt.msg_id.to_string(),
+                read_status: next_read_status,
+                extra: Some(next_extra),
+            });
+        }
+
+        Ok(updates)
     })
     .map_err(|e| e.to_string())
 }
