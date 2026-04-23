@@ -418,13 +418,30 @@ function getGroupReadTotal(data: Record<string, unknown>): number {
   const extra = parseMessageExtra(data)
   const readUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
   const readTotal = Number(extra.readTotal || 0)
-  return Math.max(readUsers.length, readTotal)
+  const fallbackReadCount =
+    !Boolean(data.isSelf) && Number(data.readStatus || 0) > 0 ? 1 : 0
+  return Math.max(readUsers.length, readTotal, fallbackReadCount)
 }
 
 function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
   const extra = parseMessageExtra(data)
   const rawUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
   if (!rawUsers.length) {
+    if (!Boolean(data.isSelf) && Number(data.readStatus || 0) > 0) {
+      const selfName = authStore.nickname || t('你') || authStore.uid || 'User'
+      return [
+        {
+          key: `group_read_user_${authStore.uid || 'self'}`,
+          label: selfName,
+          avatarName: selfName,
+          avatarSrc: authStore.avatar || null,
+          avatarType: 'friend',
+          secondaryLabel: t('标记已读'),
+          secondaryIconSrc: hasReadUrl,
+          disabled: true,
+        },
+      ]
+    }
     return [
       {
         key: 'group_read_submenu_loading',
@@ -498,7 +515,6 @@ function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
 
 function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
   return chatStore.currentConversation?.type === ConversationType.Group
-    && Boolean(data.isSelf)
     && getGroupReadTotal(data) > 0
 }
 

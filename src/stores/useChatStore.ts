@@ -67,6 +67,12 @@ interface ReadProcessingResult {
     messageId: string
     expireAt: number
   }>
+  groupReadUpdates?: Array<{
+    conversationId: string
+    messageId: string
+    readStatus: number
+    extra?: string | null
+  }>
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -309,8 +315,11 @@ export const useChatStore = defineStore('chat', () => {
     const scheduledDeletions = Array.isArray(result?.scheduledDeletions)
       ? result.scheduledDeletions
       : []
+    const groupReadUpdates = Array.isArray(result?.groupReadUpdates)
+      ? result.groupReadUpdates
+      : []
 
-    if (readMessageIds.length > 0 || scheduledDeletions.length > 0) {
+    if (readMessageIds.length > 0 || scheduledDeletions.length > 0 || groupReadUpdates.length > 0) {
       const [{ useMessageStore }, { useScheduleDeletionStore }] = await Promise.all([
         import('./useMessageStore'),
         import('./useScheduleDeletionStore'),
@@ -320,6 +329,9 @@ export const useChatStore = defineStore('chat', () => {
 
       if (readMessageIds.length > 0) {
         messageStore.markMessagesRead(readMessageIds, 1)
+      }
+      if (groupReadUpdates.length > 0) {
+        messageStore.applyGroupReadReceiptPatches(groupReadUpdates)
       }
       for (const item of scheduledDeletions) {
         scheduleDeletionStore.addMessageTimer(
