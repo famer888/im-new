@@ -42,8 +42,9 @@ const menuRef = ref<HTMLElement | null>(null)
 const adjustedX = ref(0)
 const adjustedY = ref(0)
 const VIEWPORT_PADDING = 4
+const SUBMENU_WIDTH = 152
 
-watch(() => [props.visible, props.x, props.y], () => {
+watch(() => [props.visible, props.x, props.y, props.variant, props.items], () => {
   if (props.visible) {
     adjustedX.value = props.x
     adjustedY.value = props.y
@@ -51,8 +52,11 @@ watch(() => [props.visible, props.x, props.y], () => {
     requestAnimationFrame(() => {
       if (menuRef.value) {
         const rect = menuRef.value.getBoundingClientRect()
-        const nextX = rect.right > window.innerWidth - VIEWPORT_PADDING
-          ? props.x - rect.width
+        const shouldReserveSubmenuSpace =
+          props.variant === 'im' && props.items.some((item) => item.children?.length)
+        const reservedSubmenuWidth = shouldReserveSubmenuSpace ? SUBMENU_WIDTH : 0
+        const nextX = rect.right + reservedSubmenuWidth > window.innerWidth - VIEWPORT_PADDING
+          ? props.x - rect.width - reservedSubmenuWidth
           : props.x
         const nextY = rect.bottom > window.innerHeight - VIEWPORT_PADDING
           ? props.y - rect.height
