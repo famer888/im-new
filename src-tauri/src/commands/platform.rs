@@ -83,6 +83,29 @@ pub fn read_clipboard_text() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn write_clipboard_image(data_base64: String) -> Result<(), String> {
+    let bytes = general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        return write_clipboard_image_macos(&bytes);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return write_clipboard_image_windows(&bytes);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = bytes;
+        Err("clipboard image write is not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn read_clipboard_files() -> Result<Vec<ClipboardFilePayload>, String> {
     let paths = read_clipboard_file_paths()?;
     let mut files = Vec::new();
@@ -288,6 +311,76 @@ fn mime_from_path(path: &std::path::Path) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn write_clipboard_image_macos(bytes: &[u8]) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!(
+        "ocs_clipboard_write_{}.png",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+
+    let path_text = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        r#"
+set imageFile to POSIX file "{}"
+set the clipboard to (read imageFile as «class PNGf»)
+"#,
+        path_text
+    );
+
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&path);
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn write_clipboard_image_windows(bytes: &[u8]) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!(
+        "ocs_clipboard_write_{}.png",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+
+    let path_text = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$path = "{}"
+$image = [System.Drawing.Image]::FromFile($path)
+try {{
+  [System.Windows.Forms.Clipboard]::SetImage($image)
+}} finally {{
+  $image.Dispose()
+}}
+"#,
+        path_text
+    );
+
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-Sta", "-Command", &script])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&path);
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 #[tauri::command]
