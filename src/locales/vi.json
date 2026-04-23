@@ -201,6 +201,7 @@
   "保存成功": "Đã lưu",
   "保存失败无画布": "Lưu thất bại: không lấy được canvas mã QR",
   "保存失败详情": "Lưu thất bại: {detail}",
+  "打开目录失败详情": "Mở thư mục thất bại: {detail}",
   "文件已存在替换标题": "“{name}” đã tồn tại. Bạn có muốn thay thế không?",
   "文件已存在替换说明": "Đã có tệp hoặc thư mục trùng tên trong thư mục “{dir}”. Nếu thay thế, nội dung hiện tại sẽ bị ghi đè.",
   "清理缓存": "Xóa bộ nhớ đệm",

@@ -29,6 +29,13 @@ interface ReadProcessingResult {
   }>
 }
 
+interface GroupReadReceiptUpdate {
+  conversationId: string
+  messageId: string
+  readStatus: number
+  extra?: string | null
+}
+
 function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): boolean {
   if (!currentUid) return false
 
@@ -586,6 +593,33 @@ export async function setupTauriListeners() {
       }
     } catch (err) {
       console.warn('[read-burn] apply_friend_read_receipts failed:', err)
+    }
+  })
+
+  listen<Array<{
+    msgId: number
+    groupId: number
+    sendUid: number
+    status: number
+    readTime: number
+  }>>('msg:group-read-receipt', async (event) => {
+    const authStore = useAuthStore()
+    const uid = String(authStore.uid || '')
+    if (!uid) return
+
+    const receipts = Array.isArray(event.payload) ? event.payload : []
+    if (receipts.length === 0) return
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const updates = await invoke<GroupReadReceiptUpdate[]>('apply_group_read_receipts', {
+        uid,
+        receipts,
+      })
+      const messageStore = useMessageStore()
+      messageStore.applyGroupReadReceiptPatches(Array.isArray(updates) ? updates : [])
+    } catch (err) {
+      console.warn('[group-read] apply_group_read_receipts failed:', err)
     }
   })
 

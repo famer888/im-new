@@ -145,6 +145,9 @@ function handleContextMenu(e: MouseEvent) {
   const imageSrc = imageEl instanceof HTMLImageElement
     ? (imageEl.currentSrc || imageEl.src || '')
     : ''
+  const imagePath = imageEl instanceof HTMLImageElement
+    ? (imageEl.dataset.localPath || '')
+    : ''
   uiStore.showContextMenu(e.clientX, e.clientY, {
     type: 'message',
     messageId: props.message.id,
@@ -154,6 +157,7 @@ function handleContextMenu(e: MouseEvent) {
     content: props.message.content,
     extra: props.message.extra,
     imageSrc,
+    imagePath,
   })
 }
 
@@ -182,7 +186,7 @@ onMounted(() => {
 <template>
   <div
     ref="itemRef"
-    v-memo="[message.status, message.readStatus, message.deleteSeconds, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText, isSearchHighlighted]"
+    v-memo="[message.status, message.readStatus, message.extra, message.deleteSeconds, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText, isSearchHighlighted]"
     :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
   >
     <span v-if="dateBannerText" class="showtimeDay">{{ dateBannerText }}</span>
