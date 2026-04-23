@@ -36,6 +36,7 @@ import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.v
 import GroupQRCode from '@/modules/chat/components/panels/GroupQRCode.vue'
 import UpVersionDialog from '@/components/UpVersionDialog.vue'
 import MemberInfoDialog from '@/components/MemberInfoDialog.vue'
+import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import Toast from '@/components/Toast.vue'
 
 import ContextMenu from '@/components/ContextMenu.vue'
@@ -55,7 +56,7 @@ import menuSelect from '@/assets/images/menu/menu-select.svg'
 import menuReply from '@/assets/images/menu/menu-reply.svg'
 import menuForward from '@/assets/images/menu/menu-forward.svg'
 import menuSave from '@/assets/images/menu/save.png'
-import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
+import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -74,6 +75,9 @@ const forwardConfirmPayload = ref<{ msgType: number; content: string; extra?: Re
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
+const imageOverwriteVisible = ref(false)
+const imageOverwriteFileName = ref('')
+const imageOverwriteDirectoryName = ref('')
 
 const isInitialized = ref(false)
 const initText = ref('')
@@ -81,6 +85,7 @@ const initResetConfirmVisible = ref(false)
 const resettingInitData = ref(false)
 const initReloadVisible = ref(false)
 let initReloadTimer: number | null = null
+let imageOverwriteResolver: ((value: boolean) => void) | null = null
 
 function setInitText(text: string) {
   initText.value = text
@@ -90,6 +95,38 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
   toastVisible.value = true
+}
+
+function pathBaseName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || filePath
+}
+
+function pathDirectoryName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments.length > 1 ? segments[segments.length - 2] : pathBaseName(filePath)
+}
+
+function resolveImageOverwrite(result: boolean) {
+  imageOverwriteVisible.value = false
+  const resolver = imageOverwriteResolver
+  imageOverwriteResolver = null
+  resolver?.(result)
+}
+
+function promptImageOverwrite(filePath: string): Promise<boolean> {
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
+
+  imageOverwriteFileName.value = pathBaseName(filePath)
+  imageOverwriteDirectoryName.value = pathDirectoryName(filePath)
+  imageOverwriteVisible.value = true
+
+  return new Promise((resolve) => {
+    imageOverwriteResolver = resolve
+  })
 }
 
 function startInitReloadTimer() {
@@ -240,6 +277,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearInitReloadTimer()
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
 })
 
 function openInitResetConfirm() {
@@ -474,9 +515,17 @@ async function saveImageAs(src: string, suggestedName: string) {
   const dataUrl = await blobToDataUrl(blob)
 
   if ((window as any).__TAURI_INTERNALS__) {
-    const { filePath, canceled } = await userSelectSavePath(suggestedName)
+    const {
+      filePath,
+      canceled,
+      needsOverwriteConfirm,
+    } = await userSelectPngSavePathWithOverwrite(suggestedName)
     if (!filePath || canceled) return
     const finalPath = filePath.toLowerCase().endsWith('.png') ? filePath : `${filePath}.png`
+    if (needsOverwriteConfirm) {
+      const confirmed = await promptImageOverwrite(finalPath)
+      if (!confirmed) return
+    }
     const err = await exportBase64ImgToLocal(dataUrl, finalPath)
     if (err) {
       throw err
@@ -860,6 +909,14 @@ function handleForwardConfirmCancel() {
       :message="toastMessage"
       :type="toastType"
       @update:visible="toastVisible = $event"
+    />
+
+    <ImageOverwriteDialog
+      v-model:visible="imageOverwriteVisible"
+      :file-name="imageOverwriteFileName"
+      :directory-name="imageOverwriteDirectoryName"
+      @confirm="resolveImageOverwrite(true)"
+      @cancel="resolveImageOverwrite(false)"
     />
 
     <ContextMenu

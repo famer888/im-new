@@ -201,3 +201,8 @@ pub async fn save_base64_image(file_path: String, base64_data: String) -> Result
 
     Ok(())
 }
+
+#[tauri::command]
+pub async fn file_exists(path: String) -> Result<bool, String> {
+    Ok(tokio::fs::metadata(PathBuf::from(path)).await.is_ok())
+}
