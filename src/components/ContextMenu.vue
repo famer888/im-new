@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TextAvatar from '@/components/TextAvatar.vue'
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 
 export interface MenuItem {
@@ -9,6 +10,11 @@ export interface MenuItem {
   /** Right-side image URL (message menu, im layout) */
   iconSrc?: string
   children?: MenuItem[]
+  avatarName?: string
+  avatarSrc?: string | null
+  avatarType?: 'friend' | 'group' | 'channel' | 'member' | 'text'
+  secondaryLabel?: string
+  secondaryIconSrc?: string
   tone?: 'default' | 'title' | 'muted'
   danger?: boolean
   disabled?: boolean
@@ -117,13 +123,33 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
                   'submenu-item',
                   {
                     disabled: child.disabled,
+                    'submenu-item--rich': child.avatarName,
                     'submenu-item--title': child.tone === 'title',
                     'submenu-item--muted': child.tone === 'muted',
                   },
                 ]"
                 @click.stop="handleClick(child)"
               >
-                {{ child.label }}
+                <template v-if="child.avatarName">
+                  <TextAvatar
+                    class="submenu-avatar"
+                    :name="child.avatarName"
+                    :src="child.avatarSrc || undefined"
+                    :size="28"
+                    :avatar-type="child.avatarType || 'friend'"
+                    rounded
+                  />
+                  <div class="submenu-info">
+                    <span class="submenu-name">{{ child.label }}</span>
+                    <span v-if="child.secondaryLabel" class="submenu-meta">
+                      <img v-if="child.secondaryIconSrc" class="submenu-meta-icon" :src="child.secondaryIconSrc" alt="" />
+                      {{ child.secondaryLabel }}
+                    </span>
+                  </div>
+                </template>
+                <template v-else>
+                  {{ child.label }}
+                </template>
               </div>
             </div>
           </div>
@@ -299,8 +325,8 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 .context-menu--im .submenu {
   left: calc(100% - 1px);
   top: -1px;
-  min-width: 176px;
-  padding: 0 12px;
+  min-width: 130px;
+  padding: 10px;
   border: 1px solid #f0f0f0;
   box-shadow: none;
 }
@@ -325,6 +351,57 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
   }
 }
 
+.context-menu--im .submenu-item {
+  padding: 0;
+}
+
+.context-menu--im .submenu-item + .submenu-item {
+  margin-top: 10px;
+}
+
+.submenu-item--rich {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: normal;
+}
+
+.submenu-avatar {
+  flex-shrink: 0;
+}
+
+.submenu-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.submenu-name {
+  width: 80px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #000;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.submenu-meta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #999;
+  white-space: nowrap;
+}
+
+.submenu-meta-icon {
+  height: 12px;
+  width: auto;
+}
+
 .submenu-item--title {
   font-weight: 600;
   color: #000;
@@ -342,6 +419,11 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 
 .submenu-item.disabled.submenu-item--muted {
   color: #999;
+}
+
+.submenu-item.disabled.submenu-item--rich {
+  color: inherit;
+  cursor: default;
 }
 
 .menu-enter-active, .menu-leave-active { transition: all 0.15s ease; }
