@@ -907,6 +907,7 @@ async function handleContextMenuSelect(key: string) {
           : contactStore.getDisplayName(data.senderId as string)
         uiStore.setQuoteMessage({
           id: msgId,
+          customMsgId: String(data.customMsgId || '') || null,
           senderId: data.senderId as string,
           senderName,
           msgType: data.msgType as number,

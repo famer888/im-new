@@ -151,6 +151,7 @@ function handleContextMenu(e: MouseEvent) {
   uiStore.showContextMenu(e.clientX, e.clientY, {
     type: 'message',
     messageId: props.message.id,
+    customMsgId: props.message.customMsgId,
     senderId: props.message.senderId,
     isSelf: isSelf.value,
     msgType: props.message.msgType,
@@ -170,6 +171,38 @@ function handleClick() {
       isSelf: isSelf.value,
     })
   }
+}
+
+const canJumpToQuote = computed(() =>
+  Boolean(props.message.quoteMessage?.id || props.message.quoteMessage?.customMsgId),
+)
+
+function handleQuoteClick() {
+  if (uiStore.selectionMode || !canJumpToQuote.value) return
+  const quote = props.message.quoteMessage
+  const conversationId = props.message.conversationId || chatStore.currentConversationId
+  if (!quote || !conversationId) return
+
+  const currentConversation = chatStore.currentConversation
+  const type = currentConversation?.type === 1
+    ? 'group'
+    : currentConversation?.type === 2
+      ? 'channel'
+      : 'friend'
+  const targetId = currentConversation?.targetId || conversationId.split('_').slice(1).join('_')
+
+  searchStore.requestChatMsgListSearchScrollTo({
+    id: targetId,
+    type,
+    pic: undefined,
+    name: currentConversation?.senderName || quote.senderName || '',
+    searchMsgInfo: null,
+    customMsgId: quote.customMsgId ?? null,
+    sendTime: props.message.sendTime,
+    comType: 'chat',
+    conversationId,
+    messageId: quote.id || quote.customMsgId || '',
+  })
 }
 
 onMounted(() => {
@@ -213,7 +246,15 @@ onMounted(() => {
         <span v-if="showAvatar" class="sender-name" style="cursor: pointer;" @click="uiStore.openMemberInfo(message.senderId)">{{ senderName }}</span>
         <div class="message-content-host">
           <!-- In-bubble quote block (matches im's msg/quote.vue) -->
-          <div v-if="message.quoteMessage" class="inline-quote-block">
+          <div
+            v-if="message.quoteMessage"
+            class="inline-quote-block"
+            :role="canJumpToQuote ? 'button' : undefined"
+            :tabindex="canJumpToQuote ? 0 : undefined"
+            @click.stop="handleQuoteClick"
+            @keydown.enter.prevent="handleQuoteClick"
+            @keydown.space.prevent="handleQuoteClick"
+          >
             <h3 class="inline-quote-sender">{{ message.quoteMessage.senderName }}</h3>
             <p class="inline-quote-content">{{ getQuoteContentDigest(message.quoteMessage.msgType, message.quoteMessage.content) }}</p>
           </div>
