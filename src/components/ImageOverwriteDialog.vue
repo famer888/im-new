@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import overwriteRefresh from '@/assets/images/dialog/overwrite-refresh.png'
+import overwriteWarningIcon from '@/assets/images/dialog/overwrite-warning-icon.png'
 
 const props = defineProps<{
   visible: boolean
@@ -64,22 +64,7 @@ onBeforeUnmount(() => {
       <div v-if="visible" class="overwrite-overlay">
         <div class="overwrite-dialog" role="dialog" aria-modal="true" :aria-label="titleText">
           <div class="overwrite-icon" aria-hidden="true">
-            <svg class="overwrite-warning" viewBox="0 0 86 80" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M43 4.5C45.8 4.5 48.38 5.96 49.82 8.35L81.4 60.7C84.41 65.69 80.81 72 75.01 72H10.99C5.19 72 1.59 65.69 4.6 60.7L36.18 8.35C37.62 5.96 40.2 4.5 43 4.5Z"
-                fill="#FFCC10"
-                stroke="#F6F8FC"
-                stroke-width="4"
-              />
-              <path
-                d="M43 23C45.9 23 48.25 25.36 48.25 28.26V41.48C48.25 44.38 45.9 46.74 43 46.74C40.1 46.74 37.75 44.38 37.75 41.48V28.26C37.75 25.36 40.1 23 43 23Z"
-                fill="#FFFFFF"
-              />
-              <circle cx="43" cy="56.45" r="4.65" fill="#FFFFFF" />
-            </svg>
-            <span class="overwrite-badge">
-              <img :src="overwriteRefresh" alt="" />
-            </span>
+            <img class="overwrite-warning" :src="overwriteWarningIcon" alt="" />
           </div>
 
           <p class="overwrite-title">{{ titleText }}</p>
@@ -115,43 +100,21 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   padding: 18px 14px 14px;
   border-radius: 10px;
-  background: #fff;
+  background: rgba(224, 224, 223);
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18);
   text-align: center;
 }
 
 .overwrite-icon {
-  position: relative;
-  width: 86px;
-  height: 80px;
-  margin: 0 auto 14px;
+  width: 84px;
+  height: 74px;
+  margin: 0 auto 10px;
 }
 
 .overwrite-warning {
   display: block;
-  width: 86px;
-  height: 80px;
-}
-
-.overwrite-badge {
-  position: absolute;
-  right: 6px;
-  bottom: 2px;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #2e3542;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 12px rgba(16, 20, 28, 0.18);
-
-  img {
-    width: 16px;
-    height: 16px;
-    display: block;
-    filter: brightness(0) invert(1);
-  }
+  width: 77px;
+  height: 74px;
 }
 
 .overwrite-title {
@@ -165,7 +128,7 @@ onBeforeUnmount(() => {
 
 .overwrite-description {
   margin: 10px 0 0;
-  color: #666b76;
+  color:rgba(133, 137, 144);
   font-size: 12px;
   line-height: 1.55;
   word-break: break-word;
