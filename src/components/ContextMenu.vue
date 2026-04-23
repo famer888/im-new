@@ -200,6 +200,10 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 .menu-icon { font-size: 14px; width: 18px; text-align: center; }
 .menu-divider { height: 1px; background: #ebeef5; margin: 4px 0; }
 
+.menu-label {
+  font-weight: 900;
+}
+
 .context-menu--im {
   min-width: 180px;
   width: 180px;
@@ -344,6 +348,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
   padding: 10px 0;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 600;
   color: #333;
   white-space: nowrap;
   overflow: hidden;
@@ -383,6 +388,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 .submenu-name {
   width: 80px;
   font-size: 12px;
+  font-weight: 600;
   line-height: 1.2;
   color: #000;
   white-space: nowrap;
