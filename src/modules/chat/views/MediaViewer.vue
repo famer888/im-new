@@ -23,8 +23,36 @@ function ensureMediaSrc(src: string): string {
   return raw
 }
 
-const imageSrc = computed(() => ensureMediaSrc(payload.value?.filePath || payload.value?.src || ''))
-const canOpenWithDefaultApp = computed(() => Boolean(String(payload.value?.filePath || '').trim()))
+function fileUrlToLocalPath(src: string): string {
+  const raw = String(src || '').trim()
+  if (!/^file:/i.test(raw)) return raw
+  try {
+    const parsed = new URL(raw)
+    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
+    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return raw.replace(/^file:\/\/?/i, '')
+  }
+}
+
+function imageExtFromDataUrl(src: string): string {
+  const matched = String(src || '').match(/^data:image\/([^;,]+)[;,]/i)
+  const mime = matched?.[1]?.toLowerCase() || ''
+  if (mime === 'jpeg' || mime === 'jpg') return '.jpg'
+  if (mime === 'png') return '.png'
+  if (mime === 'gif') return '.gif'
+  if (mime === 'webp') return '.webp'
+  if (mime === 'bmp') return '.bmp'
+  if (mime === 'avif') return '.avif'
+  if (mime === 'svg+xml') return '.svg'
+  return '.png'
+}
+
+const imageSrc = computed(() => ensureMediaSrc(payload.value?.src || payload.value?.filePath || ''))
+const canOpenWithDefaultApp = computed(() =>
+  Boolean(String(payload.value?.filePath || payload.value?.src || '').trim()),
+)
 
 let unsubscribe: (() => void) | null = null
 let unlistenWindowEvents: Array<() => void> = []
@@ -87,9 +115,25 @@ async function closeWindow() {
 
 async function openWithDefaultApp() {
   const filePath = String(payload.value?.filePath || '').trim()
-  if (!filePath) return
+  const src = String(payload.value?.src || '').trim()
+  let target = filePath || fileUrlToLocalPath(src)
+  if (filePath && /\.img$/i.test(filePath)) {
+    if (/^data:image\//i.test(src)) {
+      try {
+        const fixedPath = filePath.replace(/\.img$/i, imageExtFromDataUrl(src))
+        await invoke('save_base64_image', { filePath: fixedPath, base64Data: src })
+        target = fixedPath
+      } catch (error) {
+        console.warn('[media-viewer] repair .img cache failed:', error)
+        target = fileUrlToLocalPath(src) || filePath
+      }
+    } else {
+      target = fileUrlToLocalPath(src) || filePath
+    }
+  }
+  if (!target) return
   try {
-    await open(filePath)
+    await open(target)
   } catch (error) {
     console.warn('[media-viewer] openWithDefaultApp failed:', error)
   }
@@ -161,9 +205,9 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="media-footer">
+    <div class="bottom-actions">
       <button
-        class="rotate-btn"
+        class="action-btn"
         type="button"
         title="Rotate"
         @click="rotateImage"
@@ -179,10 +223,15 @@ onUnmounted(() => {
       </button>
       <button
         v-if="canOpenWithDefaultApp"
-        class="default-open-btn"
+        class="action-btn-text"
         type="button"
         @click="openWithDefaultApp"
       >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            d="M10 3.778a6.222 6.222 0 1 0 3.726 11.205l-4.869-4.869v2.208a.889.889 0 0 1-1.778 0V7.968c0-.49.398-.889.89-.889h4.353a.889.889 0 0 1 0 1.778h-2.208l4.87 4.87A6.193 6.193 0 0 0 16.221 10 6.222 6.222 0 0 0 10 3.778ZM2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Z"
+          />
+        </svg>
         使用默认应用打开
       </button>
     </div>
@@ -342,30 +391,30 @@ onUnmounted(() => {
   -webkit-user-drag: none;
 }
 
-.media-footer {
+.bottom-actions {
   position: fixed;
   right: 16px;
   bottom: 16px;
-  z-index: 20;
+  z-index: 100;
   display: flex;
   gap: 8px;
 }
 
-.rotate-btn {
+.action-btn {
   width: 40px;
   height: 40px;
   border: none;
-  border-radius: 50%;
   background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 
   svg {
+    stroke: #aaa;
     width: 20px;
     height: 20px;
-    stroke: #aaa;
   }
 
   &:hover {
@@ -377,19 +426,32 @@ onUnmounted(() => {
   }
 }
 
-.default-open-btn {
-  min-height: 36px;
-  padding: 0 14px;
+.action-btn-text {
+  padding: 8px 12px;
   border: none;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 12px;
-  font-weight: 600;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #aaa;
+  font-size: 12px;
+
+  svg {
+    width: 16px;
+    height: 16px;
+    fill: #aaa;
+    flex-shrink: 0;
+  }
 
   &:hover {
-    background: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+
+  &:hover svg {
+    fill: #fff;
   }
 }
 </style>

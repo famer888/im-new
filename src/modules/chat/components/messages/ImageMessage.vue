@@ -158,8 +158,10 @@ function cleanupDownloadEvents() {
 }
 
 function imageExt(url: string): string {
-  const matched = url.split('?')[0].match(/\.(png|jpe?g|gif|webp|bmp)$/i)
-  return matched ? matched[0] : '.img'
+  const matched = url.split('?')[0].match(/\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i)
+  if (!matched?.[0]) return '.png'
+  const ext = matched[0].toLowerCase()
+  return ext === '.jpeg' ? '.jpg' : ext
 }
 
 function safeName(name: string): string {
