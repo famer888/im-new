@@ -4,6 +4,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
+import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
+import minimizeIcon from '@/assets/windows_control_icons/min-w-30.png'
+import squareIcon from '@/assets/windows_control_icons/max-w-30.png'
+import restoreIcon from '@/assets/windows_control_icons/restore-w-30.png'
 
 const payload = ref<MediaViewerPayload | null>(null)
 const isMaximized = ref(false)
@@ -183,14 +187,28 @@ onUnmounted(() => {
       <span class="media-title">{{ payload?.title || '图片' }}</span>
       <div class="media-actions">
         <button class="titlebar-btn" type="button" @click.stop="minimize">
-          <span class="line"></span>
+          <span
+            class="line"
+            :style="{ backgroundImage: `url(${minimizeIcon})` }"
+          ></span>
         </button>
         <button class="titlebar-btn" type="button" @click.stop="maximize">
-          <span v-if="!isMaximized" class="square"></span>
-          <span v-else class="restore"></span>
+          <span
+            v-if="!isMaximized"
+            class="square"
+            :style="{ backgroundImage: `url(${squareIcon})` }"
+          ></span>
+          <span
+            v-else
+            class="restore"
+            :style="{ backgroundImage: `url(${restoreIcon})` }"
+          ></span>
         </button>
         <button class="titlebar-btn close" type="button" @click.stop="closeWindow">
-          <span class="close-x"></span>
+          <span
+            class="close-x"
+            :style="{ backgroundImage: `url(${closeIcon})` }"
+          ></span>
         </button>
       </div>
     </div>
@@ -316,56 +334,35 @@ onUnmounted(() => {
 }
 
 .line {
-  width: 10px;
-  height: 1.5px;
-  background: currentColor;
+  width: 12px;
+  height: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 .square {
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid currentColor;
+  width: 12px;
+  height: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 .restore {
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid currentColor;
-
-  &::before {
-    content: '';
-    position: absolute;
-    width: 10px;
-    height: 10px;
-    border: 1.5px solid currentColor;
-    left: -4px;
-    top: 4px;
-    background: transparent;
-  }
+  width: 12px;
+  height: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 .close-x {
   width: 12px;
   height: 12px;
-
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: 0;
-    width: 1.5px;
-    height: 12px;
-    background: currentColor;
-  }
-
-  &::before {
-    transform: rotate(45deg);
-  }
-
-  &::after {
-    transform: rotate(-45deg);
-  }
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 .media-stage {
