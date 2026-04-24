@@ -50,13 +50,8 @@ function startWindowDrag(e: MouseEvent) {
 }
 
 async function syncMaximizedState() {
-  const currentWindow = currentMediaWindow()
-  if (!currentWindow) {
-    isMaximized.value = false
-    return
-  }
   try {
-    isMaximized.value = await currentWindow.isMaximized()
+    isMaximized.value = await invoke<boolean>('media_window_is_maximized')
   } catch {
     isMaximized.value = false
   }
