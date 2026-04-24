@@ -238,6 +238,7 @@ async function confirmBlacklist() {
 }
 
 const clearMsgTypeList = ref<string[]>([])
+const deleteConfirmVisible = ref(false)
 
 const isFileHelper = computed(() => conv.value?.targetId === FILE_HELPER_TARGET_ID)
 
@@ -281,19 +282,31 @@ function handleClearSubmit(index: number) {
   clearMsgTypeList.value = []
 }
 
-async function deleteContactItem() {
-  if (!contact.value) return
-  const targetId = contact.value.id
-  await contactsRelation({
-    targetUid: Number(targetId),
-    msg: '',
-    op: 1,
-  })
-  contactStore.removeContact(targetId)
-  if (conv.value) {
-    await chatStore.deleteConversation(authStore.uid, conv.value.id)
+function openDeleteConfirm() {
+  deleteConfirmVisible.value = true
+}
+
+async function confirmDeleteContact() {
+  if (!contact.value || working.value) return
+  working.value = true
+  try {
+    const targetId = contact.value.id
+    await contactsRelation({
+      targetUid: Number(targetId),
+      msg: '',
+      op: 1,
+    })
+    contactStore.removeContact(targetId)
+    if (conv.value) {
+      await chatStore.deleteConversation(authStore.uid, conv.value.id)
+    }
+    uiStore.setRightPanel('none')
+    showToast(t('删除成功'))
+  } catch (error) {
+    showToast((error as Error)?.message || t('删除失败'), 'error')
+  } finally {
+    working.value = false
   }
-  uiStore.setRightPanel('none')
 }
 </script>
 
@@ -350,7 +363,7 @@ async function deleteContactItem() {
         <AppSwitch :model-value="inBlacklist" @update:model-value="handleBlacklistToggle" />
       </li>
       <li class="danger friend-left" @click="openClearDialog">{{ t('清空聊天记录') }}</li>
-      <li class="danger friend-left" @click="deleteContactItem">{{ t('删除联系人') }}</li>
+      <li class="danger friend-left" @click="openDeleteConfirm">{{ t('删除联系人') }}</li>
     </ul>
 
     <ConfirmDialog
@@ -358,6 +371,16 @@ async function deleteContactItem() {
       variant="im"
       :content="blacklistConfirmContent"
       @confirm="confirmBlacklist"
+    />
+
+    <ConfirmDialog
+      v-model:visible="deleteConfirmVisible"
+      variant="im"
+      :content="t('删除该联系人,会同时删除与该联系人的聊天记录')"
+      :confirm-text="t('删除')"
+      :cancel-text="t('取消')"
+      type="danger"
+      @confirm="confirmDeleteContact"
     />
 
     <RadioSelectDialog
