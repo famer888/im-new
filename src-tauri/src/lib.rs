@@ -155,6 +155,7 @@ pub fn run() {
             commands::media::media_window_minimize,
             commands::media::media_window_toggle_maximize,
             commands::media::media_window_close,
+            commands::media::media_window_is_maximized,
             commands::window::open_chat_window,
             commands::window::close_chat_window,
             commands::window::toggle_side_bar,
