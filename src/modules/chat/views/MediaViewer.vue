@@ -298,13 +298,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 34px 16px 72px;
-  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .media-image {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
