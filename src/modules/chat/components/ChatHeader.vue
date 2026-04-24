@@ -90,6 +90,10 @@ const isFriendChat = computed(
   () => conversation.value?.type === ConversationType.Friend && !isFileHelper.value,
 )
 
+const canOpenHeaderMenu = computed(
+  () => conversation.value?.type === ConversationType.Friend || conversation.value?.type === ConversationType.Group,
+)
+
 const editingRemark = ref(false)
 const remarkDraft = ref('')
 const remarkInputRef = ref<HTMLInputElement | null>(null)
@@ -255,7 +259,11 @@ function handleSearch() {
         <img class="file-helper-v" :src="userIconV" alt="" />
       </template>
       <template v-else>
-        <div class="header-title-cluster">
+        <div
+          class="header-title-cluster"
+          :class="{ clickable: canOpenHeaderMenu }"
+          @click="canOpenHeaderMenu && !editingRemark && toggleRightPanel()"
+        >
           <TextAvatar
             class="header-avatar"
             :name="title || conversation?.targetId || '?'"
@@ -281,7 +289,7 @@ function handleSearch() {
                 class="friend-edit-icon"
                 :src="editIcon"
                 alt=""
-                @click="startEditRemark"
+                @click.stop="startEditRemark"
               />
             </div>
             <div v-if="friendOnlineSubtitle" class="friend-status-line">{{ friendOnlineSubtitle }}</div>
@@ -385,6 +393,10 @@ function handleSearch() {
   align-items: center;
   min-width: 0;
   flex: 1;
+
+  &.clickable {
+    cursor: pointer;
+  }
 }
 
 .header-text-block {
