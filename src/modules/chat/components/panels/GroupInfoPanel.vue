@@ -178,19 +178,25 @@ function openClearDialog() {
   ]
 }
 
-function handleClearSubmit(index: number) {
+async function handleClearSubmit(index: number) {
   if (index === -1 || !conv.value) {
     clearMsgTypeList.value = []
     return
   }
-  messageStore.clearConversationMessages(conv.value.id)
-  chatStore.updateConversation({
-    id: conv.value.id,
-    lastMsgDigest: null,
-    lastMsgId: null,
-    unreadCount: 0,
-  })
-  clearMsgTypeList.value = []
+  try {
+    await messageStore.clearConversationHistory(conv.value.id, index === 1)
+    chatStore.updateConversation({
+      id: conv.value.id,
+      lastMsgDigest: null,
+      lastMsgId: null,
+      unreadCount: 0,
+    })
+  } catch (error) {
+    console.error('[GroupInfoPanel] clear conversation failed:', error)
+    showToast(t('操作失败'), 'error')
+  } finally {
+    clearMsgTypeList.value = []
+  }
 }
 
 function handleDisbandGroup() {
