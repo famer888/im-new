@@ -23,6 +23,8 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import iconSmallActive from '@/assets/images/activeIcon/small-active.png'
 import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
+import forwardPreviewIcon from '@/assets/images/forward.png'
+import clearIcon from '@/assets/images/message/icon-clear.png'
 import replyPreviewIcon from '@/assets/images/menu/menu-reply-preview.svg'
 import menuCopy from '@/assets/images/menu/copy.png'
 import menuPaste from '@/assets/images/menu/paste.png'
@@ -81,6 +83,12 @@ const currentContact = computed(() => {
 const showReadBurnTip = computed(() =>
   Boolean(currentContact.value?.bfReadCancel),
 )
+const currentForwardDraftItems = computed(() => (
+  convId.value && uiStore.forwardDraftTargetId === convId.value
+    ? uiStore.forwardDraftItems
+    : []
+))
+const hasForwardDraft = computed(() => currentForwardDraftItems.value.length > 0)
 const readBurnTimeText = computed(() =>
   getReadBurnTimeText(currentContact.value?.msgCancelTime || 30),
 )
@@ -161,7 +169,7 @@ watch(convId, (newId, oldId) => {
 function handleSend() {
   showEmoji.value = false
   const text = content.value.trim()
-  if (!text) return
+  if (!text && !hasForwardDraft.value) return
 
   const extra: Record<string, unknown> = {}
   if (uiStore.quoteMessage) {
@@ -176,7 +184,16 @@ function handleSend() {
     uiStore.clearQuoteMessage()
   }
 
-  emit('send', text, MessageType.Text, withReadBurnExtra(Object.keys(extra).length > 0 ? extra : undefined))
+  for (const item of currentForwardDraftItems.value) {
+    emit('send', item.content, item.msgType, item.extra)
+  }
+  if (hasForwardDraft.value) {
+    uiStore.clearForwardDraft()
+  }
+
+  if (text) {
+    emit('send', text, MessageType.Text, withReadBurnExtra(Object.keys(extra).length > 0 ? extra : undefined))
+  }
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
   if (convId.value) draftMap.delete(convId.value)
@@ -184,6 +201,10 @@ function handleSend() {
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
+    if (hasForwardDraft.value) {
+      uiStore.clearForwardDraft()
+      return
+    }
     if (uiStore.quoteMessage) {
       uiStore.clearQuoteMessage()
       return
@@ -514,6 +535,18 @@ function getQuoteDigest(msgType: number, content: string | null): string {
   return (content || '').slice(0, 80)
 }
 
+function getForwardDigest(msgType: number, content: string | null): string {
+  if (msgType === MessageType.Text) return (content || '').slice(0, 80)
+  if (msgType === MessageType.Image) return '[图片]'
+  if (msgType === MessageType.Audio) return '[语音]'
+  if (msgType === MessageType.Video) return '[视频]'
+  if (msgType === MessageType.File) return '[文件]'
+  if (msgType === MessageType.Location) return '[位置]'
+  if (msgType === MessageType.NameCard) return '[名片]'
+  if (msgType === MessageType.RedPacket) return '[红包]'
+  return (content || '').slice(0, 80)
+}
+
 eventBus.on('editor:focus', () => {
   nextTick(() => editorRef.value?.focus())
 })
@@ -529,6 +562,37 @@ eventBus.on('editor:insert-at', handleAtSelect)
     </div>
 
     <template v-else>
+      <div v-if="hasForwardDraft" class="forward-preview-bar">
+        <img class="forward-preview-icon" :src="forwardPreviewIcon" alt="" />
+        <div class="forward-preview-body">
+          <template v-if="currentForwardDraftItems.length === 1">
+            <div class="forward-preview-info">
+              <h3 class="forward-preview-sender">{{ currentForwardDraftItems[0].senderName }}</h3>
+              <p class="forward-preview-text">
+                {{ getForwardDigest(currentForwardDraftItems[0].msgType, currentForwardDraftItems[0].content) }}
+              </p>
+            </div>
+          </template>
+          <template v-else>
+            <div class="forward-preview-info multiple">
+              <div class="forward-preview-list">
+                <span
+                  v-for="(item, index) in currentForwardDraftItems.slice(0, 3)"
+                  :key="`${item.senderName}-${index}`"
+                  class="forward-preview-chip"
+                >
+                  {{ getForwardDigest(item.msgType, item.content) }}
+                </span>
+              </div>
+              <p class="forward-preview-text">{{ $t('总计') }}: {{ currentForwardDraftItems.length }}</p>
+            </div>
+          </template>
+        </div>
+        <button class="forward-preview-close" type="button" @click.stop="uiStore.clearForwardDraft()">
+          <img :src="clearIcon" alt="" />
+        </button>
+      </div>
+
       <!-- Quote reply preview (matches im's quote-info.vue) -->
       <div v-if="uiStore.quoteMessage" class="quote-preview-bar">
         <img class="quote-reply-icon" :src="replyPreviewIcon" alt="" />
@@ -603,7 +667,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
             <img :src="readBurnTimeIcon" alt="" />
             <span>{{ readBurnTimeText }}</span>
           </span>
-          <button class="send-btn" :disabled="!content.trim()" @click="handleSend">
+          <button class="send-btn" :disabled="!content.trim() && !hasForwardDraft" @click="handleSend">
             {{ $t('发送') }}
           </button>
         </div>
@@ -644,6 +708,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
   position: relative;
 }
 
+.forward-preview-bar,
 .quote-preview-bar {
   position: relative;
   height: 60px;
@@ -654,6 +719,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
   z-index: 9;
 }
 
+.forward-preview-icon,
 .quote-reply-icon {
   position: absolute;
   left: 20px;
@@ -664,6 +730,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
   z-index: 1;
 }
 
+.forward-preview-body,
 .quote-preview-body {
   padding-left: 60px;
   height: 100%;
@@ -676,6 +743,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
   &:hover { background: #efefef; }
 }
 
+.forward-preview-info,
 .quote-preview-info {
   display: flex;
   flex-direction: column;
@@ -683,6 +751,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
   min-width: 0;
 }
 
+.forward-preview-sender,
 .quote-preview-sender {
   margin: 0;
   padding: 0;
@@ -692,6 +761,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
   color: #3369fe;
 }
 
+.forward-preview-text,
 .quote-preview-text {
   font-size: 12px;
   color: #555;
@@ -700,6 +770,51 @@ eventBus.on('editor:insert-at', handleAtSelect)
   text-overflow: ellipsis;
   overflow: hidden;
   margin: 0;
+}
+
+.forward-preview-close {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.8;
+  flex-shrink: 0;
+
+  &:hover { opacity: 1; }
+
+  img {
+    display: block;
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.forward-preview-info.multiple {
+  gap: 4px;
+}
+
+.forward-preview-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 86%;
+  overflow: hidden;
+}
+
+.forward-preview-chip {
+  font-size: 12px;
+  color: #333;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .quote-preview-close {

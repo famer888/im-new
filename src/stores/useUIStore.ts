@@ -6,6 +6,13 @@ export type SidebarTab = 'chats' | 'contacts' | 'transfer'
 export type RightPanelType = 'none' | 'friend-info' | 'group-info' | 'channel-info' | 'group-members' | 'group-notice' | 'group-manage' | 'channel-notice' | 'channel-manage'
 export type DetailViewType = 'none' | 'chat' | 'friend-detail' | 'group-detail' | 'channel-detail' | 'add-contact' | 'friend-examine' | 'group-invitation' | 'channel-notice-list'
 
+export interface ForwardDraftItem {
+  msgType: number
+  content: string
+  extra?: Record<string, unknown>
+  senderName: string
+}
+
 export const useUIStore = defineStore('ui', () => {
   const sidebarTab = ref<SidebarTab>('chats')
   const rightPanel = ref<RightPanelType>('none')
@@ -40,6 +47,8 @@ export const useUIStore = defineStore('ui', () => {
 
   // Quote reply
   const quoteMessage = ref<QuoteMessageInfo | null>(null)
+  const forwardDraftItems = ref<ForwardDraftItem[]>([])
+  const forwardDraftTargetId = ref('')
 
   // Multi-select mode
   const selectionMode = ref(false)
@@ -134,6 +143,16 @@ export const useUIStore = defineStore('ui', () => {
     quoteMessage.value = null
   }
 
+  function setForwardDraft(targetId: string, items: ForwardDraftItem[]) {
+    forwardDraftTargetId.value = targetId
+    forwardDraftItems.value = items
+  }
+
+  function clearForwardDraft() {
+    forwardDraftTargetId.value = ''
+    forwardDraftItems.value = []
+  }
+
   function enterSelectionMode(item?: { id: string; msgId: string; isSelf: boolean }) {
     selectionMode.value = true
     if (item) {
@@ -214,6 +233,8 @@ export const useUIStore = defineStore('ui', () => {
     openMemberInfo,
     closeMemberInfo,
     quoteMessage,
+    forwardDraftItems,
+    forwardDraftTargetId,
     selectionMode,
     selectedMessageIds,
     selectedMessageItems,
@@ -221,6 +242,8 @@ export const useUIStore = defineStore('ui', () => {
     hideContextMenu,
     setQuoteMessage,
     clearQuoteMessage,
+    setForwardDraft,
+    clearForwardDraft,
     enterSelectionMode,
     exitSelectionMode,
     toggleMessageSelection,

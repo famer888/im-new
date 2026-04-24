@@ -13,7 +13,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useSettingStore } from '@/stores/useSettingStore'
-import { useUIStore } from '@/stores/useUIStore'
+import { useUIStore, type ForwardDraftItem } from '@/stores/useUIStore'
 import { useNetworkStore } from '@/stores/useNetworkStore'
 
 import HomeTop from '@/modules/chat/components/HomeTop.vue'
@@ -29,7 +29,6 @@ import GroupInvitation from '@/modules/groups/views/GroupInvitation.vue'
 import SettingsDialog from '@/modules/settings/views/SettingsDialog.vue'
 import AddContactDialog from '@/modules/contacts/components/AddContactDialog.vue'
 import ForwardSelectDialog from '@/modules/chat/components/ForwardSelectDialog.vue'
-import ForwardConfirmDialog from '@/modules/chat/components/ForwardConfirmDialog.vue'
 import FileImport from '@/modules/auth/components/FileImport.vue'
 import CreateGroupDialog from '@/modules/groups/components/CreateGroupDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
@@ -74,9 +73,6 @@ const { locale: appLocale, t } = useI18n()
 const uiStore = useUIStore()
 const networkStore = useNetworkStore()
 const messageStore = useMessageStore()
-const forwardConfirmVisible = ref(false)
-const forwardTargetConvId = ref('')
-const forwardConfirmPayload = ref<{ msgType: number; content: string; extra?: Record<string, unknown> } | null>(null)
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
@@ -946,115 +942,74 @@ async function handleContextMenuSelect(key: string) {
   }
 }
 
-async function handleForward(targetConvId: string) {
-  if (!authStore.uid) return
+function getForwardSenderName(senderId: string) {
+  if (!senderId) return ''
+  if (senderId === authStore.uid) return '我'
+  return contactStore.getDisplayName(senderId) || senderId
+}
 
+function getCurrentConversationForwardSenderName() {
+  const conv = chatStore.currentConversation
+  if (!conv) return '我'
+  if (conv.type === ConversationType.Friend) {
+    return contactStore.getDisplayName(conv.targetId) || conv.targetId || '我'
+  }
+  if (conv.type === ConversationType.Group) {
+    return groupStore.getGroup(conv.targetId)?.name || conv.targetId || '我'
+  }
+  if (conv.type === ConversationType.Channel) {
+    const channel = channelStore.getChannel(conv.targetId)
+    return channel?.channelName || channel?.name || conv.targetId || '我'
+  }
+  return conv.targetId || '我'
+}
+
+function buildForwardDraftItems(): ForwardDraftItem[] {
   if (uiStore.forwardMessagePayload) {
-    forwardConfirmPayload.value = uiStore.forwardMessagePayload
-    forwardTargetConvId.value = targetConvId
-    forwardConfirmVisible.value = true
-    uiStore.closeForwardDialog()
-    return
+    return [{
+      msgType: uiStore.forwardMessagePayload.msgType,
+      content: uiStore.forwardMessagePayload.content,
+      extra: uiStore.forwardMessagePayload.extra,
+      senderName: getCurrentConversationForwardSenderName(),
+    }]
   }
 
   const msgId = uiStore.forwardMessageId
-  if (!msgId) return
-
   const convId = chatStore.currentConversationId
-  if (!convId) return
+  if (!msgId || !convId) return []
 
   const messages = messageStore.getMessages(convId)
   const selectedIds = uiStore.selectedMessageIds
-
   const msgsToForward = selectedIds.size > 0
     ? messages.filter(m => selectedIds.has(m.id))
     : messages.filter(m => m.id === msgId)
 
-  for (const msg of msgsToForward) {
-    await messageStore.sendMessage(
-      authStore.uid,
-      targetConvId,
-      msg.msgType,
-      msg.content ?? '',
-    )
-  }
+  return msgsToForward.map((msg) => ({
+    msgType: msg.msgType,
+    content: msg.content ?? '',
+    extra: (() => {
+      if (!msg.extra) return undefined
+      try {
+        return JSON.parse(msg.extra)
+      } catch {
+        return undefined
+      }
+    })(),
+    senderName: getForwardSenderName(msg.senderId),
+  }))
+}
 
+async function handleForward(targetConvId: string) {
+  const drafts = buildForwardDraftItems()
+  if (drafts.length === 0) return
+  uiStore.clearQuoteMessage()
+  uiStore.setForwardDraft(targetConvId, drafts)
   uiStore.exitSelectionMode()
   uiStore.closeForwardDialog()
 
   chatStore.setCurrentConversation(targetConvId)
   uiStore.setDetailView('chat')
-}
-
-function fileToDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-}
-
-async function handleForwardConfirmSubmit(data: { text: string; files: File[] }) {
-  if (!authStore.uid || !forwardTargetConvId.value) return
-  const targetConvId = forwardTargetConvId.value
-
-  // 群二维码主图先发
-  if (forwardConfirmPayload.value) {
-    await messageStore.sendMessage(
-      authStore.uid,
-      targetConvId,
-      forwardConfirmPayload.value.msgType,
-      forwardConfirmPayload.value.content,
-      forwardConfirmPayload.value.extra,
-    )
-  }
-
-  // 附加文件（与旧版文件弹窗体验保持一致）
-  for (const file of data.files) {
-    if (file.type.startsWith('image/')) {
-      const dataUrl = await fileToDataURL(file)
-      await messageStore.sendMessage(
-        authStore.uid,
-        targetConvId,
-        MessageType.Image,
-        JSON.stringify({
-          name: file.name,
-          url: dataUrl,
-          thumbnailUrl: dataUrl,
-        }),
-      )
-    } else {
-      await messageStore.sendMessage(
-        authStore.uid,
-        targetConvId,
-        MessageType.File,
-        JSON.stringify({
-          name: file.name,
-          size: file.size,
-          ext: file.name.split('.').pop() || '',
-        }),
-      )
-    }
-  }
-
-  if (data.text) {
-    await messageStore.sendMessage(authStore.uid, targetConvId, MessageType.Text, data.text)
-  }
-
-  forwardConfirmVisible.value = false
-  forwardTargetConvId.value = ''
-  forwardConfirmPayload.value = null
-  uiStore.closeForwardDialog()
-  chatStore.setCurrentConversation(targetConvId)
-  uiStore.setDetailView('chat')
-}
-
-function handleForwardConfirmCancel() {
-  forwardConfirmVisible.value = false
-  forwardTargetConvId.value = ''
-  forwardConfirmPayload.value = null
-  uiStore.closeForwardDialog()
+  eventBus.emit('editor:focus')
 }
 
 </script>
@@ -1124,12 +1079,6 @@ function handleForwardConfirmCancel() {
       v-model:visible="uiStore.forwardDialogVisible"
       :message-id="uiStore.forwardMessageId"
       @forward="handleForward"
-    />
-    <ForwardConfirmDialog
-      :visible="forwardConfirmVisible"
-      :payload="forwardConfirmPayload"
-      @confirm="handleForwardConfirmSubmit"
-      @cancel="handleForwardConfirmCancel"
     />
     <FileImport
       :visible="uiStore.fileImportVisible"
