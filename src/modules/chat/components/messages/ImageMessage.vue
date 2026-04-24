@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
+import { mediaViewerState } from '@/utils/mediaViewerState'
 
 const props = defineProps<{
   message: Message
@@ -97,9 +98,58 @@ function handleError() {
   isLoaded.value = true
 }
 
-function openPreview() {
+async function openPreview() {
   if (!previewSrc.value || loadError.value) return
-  showPreview.value = true
+  if (!(window as any).__TAURI_INTERNALS__) {
+    showPreview.value = true
+    return
+  }
+  try {
+    const [{ invoke }, windowApi] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/window') as Promise<any>,
+    ])
+    const currentWindow = windowApi.getCurrentWindow()
+    const [position, size] = await Promise.all([
+      typeof currentWindow.outerPosition === 'function'
+        ? currentWindow.outerPosition()
+        : currentWindow.innerPosition?.(),
+      typeof currentWindow.outerSize === 'function'
+        ? currentWindow.outerSize()
+        : currentWindow.innerSize?.(),
+    ])
+
+    mediaViewerState.send({
+      title: '图片',
+      mediaType: 'image',
+      src: previewSrc.value,
+      filePath: localFilePath.value || null,
+      width: imageData.value.width || undefined,
+      height: imageData.value.height || undefined,
+    })
+
+    await invoke('open_media_window', {
+      title: '图片',
+      x: typeof position?.x === 'number' ? Math.round(position.x) : null,
+      y: typeof position?.y === 'number' ? Math.round(position.y) : null,
+      width: typeof size?.width === 'number' ? Math.round(size.width) : null,
+      height: typeof size?.height === 'number' ? Math.round(size.height) : null,
+    })
+  } catch (error) {
+    console.warn('[image] open media window failed:', error)
+    showPreview.value = true
+  }
+}
+
+async function openWithDefaultApp() {
+  const filePath = String(localFilePath.value || '').trim()
+  if (!filePath) return
+  try {
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(filePath)
+  } catch (error) {
+    console.warn('[image] openWithDefaultApp failed:', error)
+  }
 }
 
 function cleanupDownloadEvents() {
@@ -218,8 +268,24 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div v-if="showPreview" class="image-preview" @click="showPreview = false">
-        <img :src="previewSrc" alt="" @click.stop />
+      <div v-if="showPreview" class="image-preview">
+        <div class="preview-titlebar">
+          <span class="preview-title">图片</span>
+          <button class="preview-close" type="button" @click="showPreview = false">×</button>
+        </div>
+        <div class="preview-stage" @click="showPreview = false">
+          <img :src="previewSrc" alt="" @click.stop />
+        </div>
+        <div class="preview-actions">
+          <button
+            v-if="localFilePath"
+            class="preview-action-btn"
+            type="button"
+            @click="openWithDefaultApp"
+          >
+            使用默认应用打开
+          </button>
+        </div>
       </div>
     </Teleport>
   </div>
@@ -283,17 +349,81 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: 3000;
-  background: rgba(0, 0, 0, 0.78);
+  background: rgba(0, 0, 0, 0.82);
+}
+
+.preview-titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 12px;
+  box-sizing: border-box;
+}
+
+.preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.preview-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+}
+
+.preview-stage {
+  position: absolute;
+  inset: 34px 0 68px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: zoom-out;
 
   img {
-    max-width: 92vw;
-    max-height: 92vh;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 118px);
     object-fit: contain;
     cursor: default;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+}
+
+.preview-actions {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+}
+
+.preview-action-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.18);
   }
 }
 

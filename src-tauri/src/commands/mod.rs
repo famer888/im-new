@@ -5,6 +5,7 @@ pub mod contacts;
 pub mod domain;
 pub mod file;
 pub mod groups;
+pub mod media;
 pub mod ntp;
 pub mod platform;
 pub mod repair;
