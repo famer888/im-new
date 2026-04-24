@@ -141,6 +141,7 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.82);
   color: #fff;
   overflow: hidden;
+  border-radius: 5px;
 }
 
 .media-titlebar {
@@ -184,7 +185,7 @@ onUnmounted(() => {
   height: 34px;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(136, 136, 136) !important;
   cursor: pointer;
   position: relative;
 
@@ -194,6 +195,7 @@ onUnmounted(() => {
 
   &.close:hover {
     background: #e81123;
+    color: #fff !important;
   }
 }
 
@@ -205,12 +207,15 @@ onUnmounted(() => {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+  color: rgba(136, 136, 136);
+
 }
 
 .line {
   width: 10px;
   height: 1.5px;
   background: currentColor;
+  color: rgba(136, 136, 136);
 }
 
 .square {
