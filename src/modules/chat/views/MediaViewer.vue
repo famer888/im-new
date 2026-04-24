@@ -207,7 +207,7 @@ onUnmounted(() => {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  color: rgba(136, 136, 136);
+  color: inherit;
 
 }
 
@@ -215,7 +215,6 @@ onUnmounted(() => {
   width: 10px;
   height: 1.5px;
   background: currentColor;
-  color: rgba(136, 136, 136);
 }
 
 .square {
