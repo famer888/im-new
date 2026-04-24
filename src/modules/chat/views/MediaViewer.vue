@@ -7,6 +7,7 @@ import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerSt
 
 const payload = ref<MediaViewerPayload | null>(null)
 const isMaximized = ref(false)
+const rotation = ref(0)
 
 function ensureMediaSrc(src: string): string {
   const raw = String(src || '').trim()
@@ -35,6 +36,7 @@ function currentMediaWindow() {
 
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   payload.value = nextPayload
+  rotation.value = 0
   if (nextPayload?.title) {
     document.title = nextPayload.title
   }
@@ -93,6 +95,10 @@ async function openWithDefaultApp() {
   }
 }
 
+function rotateImage() {
+  rotation.value += 90
+}
+
 onMounted(async () => {
   applyPayload(mediaViewerState.get())
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
@@ -146,10 +152,31 @@ onUnmounted(() => {
     </div>
 
     <div class="media-stage">
-      <img v-if="imageSrc" :src="imageSrc" alt="" class="media-image" />
+      <div
+        v-if="imageSrc"
+        class="media-image-wrap"
+        :style="{ transform: `rotate(${rotation}deg)` }"
+      >
+        <img :src="imageSrc" alt="" class="media-image" />
+      </div>
     </div>
 
     <div class="media-footer">
+      <button
+        class="rotate-btn"
+        type="button"
+        title="Rotate"
+        @click="rotateImage"
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M11.5 20.5C6.80558 20.5 3 16.6944 3 12C3 7.30558 6.80558 3.5 11.5 3.5C16.1944 3.5 20 7.30558 20 12C20 13.5433 19.5887 14.9905 18.8698 16.238M22.5 15L18.8698 16.238M17.1747 12.3832L18.5289 16.3542L18.8698 16.238"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
       <button
         v-if="canOpenWithDefaultApp"
         class="default-open-btn"
@@ -301,6 +328,12 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.media-image-wrap {
+  width: 100%;
+  height: 100%;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 .media-image {
   width: 100%;
   height: 100%;
@@ -314,6 +347,34 @@ onUnmounted(() => {
   right: 16px;
   bottom: 16px;
   z-index: 20;
+  display: flex;
+  gap: 8px;
+}
+
+.rotate-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  svg {
+    width: 20px;
+    height: 20px;
+    stroke: #aaa;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  &:hover svg {
+    stroke: #fff;
+  }
 }
 
 .default-open-btn {
