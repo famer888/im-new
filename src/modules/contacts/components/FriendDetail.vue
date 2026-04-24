@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
-import { updateContacts } from '@/api/imBase'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import { updateContacts, contactsRelation } from '@/api/imBase'
 import { proto } from '@/api/request'
 import editIcon from '@/assets/images/message/edit-icon.png'
 
 const props = defineProps<{ contactId: string }>()
 const { t } = useI18n()
+const authStore = useAuthStore()
 const contactStore = useContactStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
@@ -23,6 +26,8 @@ const editingDepict = ref(false)
 const savingRemark = ref(false)
 const savingDepict = ref(false)
 const copyToastVisible = ref(false)
+const deleteConfirmVisible = ref(false)
+const deleting = ref(false)
 let copyToastTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(contact, (val) => {
@@ -126,6 +131,35 @@ async function saveDepict() {
     savingDepict.value = false
   }
 }
+
+async function handleDeleteContact() {
+  if (!contact.value || deleting.value) return
+  const contactId = contact.value.id
+  deleting.value = true
+  try {
+    const res = await contactsRelation({
+      targetUid: Number(contactId),
+      msg: '',
+      op: 1,
+    })
+    const { errCode } = (res as any)?.commonResult || {}
+    if (errCode === 200) {
+      contactStore.removeContact(contactId)
+      const conv = chatStore.conversations.find((c) => c.targetId === contactId)
+      if (conv && authStore.uid) {
+        await chatStore.deleteConversation(authStore.uid, conv.id)
+      }
+      uiStore.setDetailView('none')
+    } else {
+      console.warn('[FriendDetail] delete contact failed:', errCode)
+    }
+  } catch (error) {
+    console.warn('[FriendDetail] delete contact failed:', error)
+  } finally {
+    deleting.value = false
+    deleteConfirmVisible.value = false
+  }
+}
 </script>
 
 <template>
@@ -191,9 +225,22 @@ async function saveDepict() {
         </div>
       </div>
 
-      <div class="primaryBtn small" @click="startChat">{{ t('发送消息') }}</div>
+      <div class="button-group">
+        <div class="primaryBtn small" @click="startChat">{{ t('发送消息') }}</div>
+        <div class="primaryBtn small danger" @click="deleteConfirmVisible = true">{{ t('删除联系人') }}</div>
+      </div>
     </div>
     <div v-if="copyToastVisible" class="copy-toast">{{ t('复制成功') }}</div>
+
+    <ConfirmDialog
+      v-model:visible="deleteConfirmVisible"
+      variant="im"
+      :content="t('删除该联系人,会同时删除与该联系人的聊天记录')"
+      :confirm-text="t('删除')"
+      :cancel-text="t('取消')"
+      type="danger"
+      @confirm="handleDeleteContact"
+    />
   </div>
 </template>
 
@@ -314,6 +361,16 @@ async function saveDepict() {
       }
     }
 
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+
+      .primaryBtn {
+        margin-top: 0;
+      }
+    }
+
     .primaryBtn {
       color: #fff;
       background-color: #3369fe;
@@ -329,6 +386,15 @@ async function saveDepict() {
 
       &.small {
         margin-top: 10px;
+      }
+
+      &.danger {
+        background-color: #f44e5a;
+        border-color: #f44e5a;
+
+        &:hover {
+          background-color: #f78989;
+        }
       }
 
       &:hover {
