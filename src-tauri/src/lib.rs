@@ -151,6 +151,7 @@ pub fn run() {
             commands::file::get_download_progress,
             commands::file::save_base64_image,
             commands::file::file_exists,
+            commands::media::open_media_window,
             commands::window::open_chat_window,
             commands::window::close_chat_window,
             commands::window::toggle_side_bar,

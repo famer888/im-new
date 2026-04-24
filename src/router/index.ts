@@ -30,6 +30,11 @@ const routes: RouteRecordRaw[] = [
     props: (route) => ({ id: route.query.id }),
   },
   {
+    path: '/media',
+    name: 'MediaViewer',
+    component: () => import('@/modules/chat/views/MediaViewer.vue'),
+  },
+  {
     path: '/notification',
     name: 'Notification',
     component: () => import('@/modules/chat/views/NotificationView.vue'),
