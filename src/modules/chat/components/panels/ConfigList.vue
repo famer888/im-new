@@ -51,23 +51,22 @@ function openClearDialog() {
   }
 }
 
-function handleClearSubmit(index: number) {
+async function handleClearSubmit(index: number) {
   if (index === -1 || !conv.value) {
     clearMsgTypeList.value = []
     return
   }
   const isRemoteDeletion = index === 1
-  messageStore.clearConversationMessages(conv.value.id)
-  chatStore.updateConversation({
-    id: conv.value.id,
-    lastMsgDigest: null,
-    lastMsgId: null,
-    unreadCount: 0,
-  })
-  if (isRemoteDeletion) {
-    const targetId = Number(conv.value.targetId)
-    const chatType = isGroup.value ? 'group' : isChannel.value ? 'channel' : 'friend'
-    console.log('[ConfigList] remote clear request:', { targetId, type: chatType, clear: 1, clearTime: Date.now() })
+  try {
+    await messageStore.clearConversationHistory(conv.value.id, isRemoteDeletion)
+    chatStore.updateConversation({
+      id: conv.value.id,
+      lastMsgDigest: null,
+      lastMsgId: null,
+      unreadCount: 0,
+    })
+  } catch (error) {
+    console.error('[ConfigList] clear conversation failed:', error)
   }
   clearMsgTypeList.value = []
 }

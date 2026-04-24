@@ -769,6 +769,23 @@ export const useMessageStore = defineStore('message', () => {
     hasMoreMap.value.delete(conversationId)
   }
 
+  async function clearConversationHistory(conversationId: string, remote = false) {
+    clearConversationMessages(conversationId)
+
+    if (!isTauri()) return
+
+    const authStore = useAuthStore()
+    if (!authStore.uid) return
+
+    await tauriInvoke('clear_conversation_history', {
+      uid: authStore.uid,
+      request: {
+        conversationId,
+        remote,
+      },
+    })
+  }
+
   function clearAllMessageCaches() {
     messageMap.value = new Map()
     loadingMap.value = new Map()
@@ -794,6 +811,7 @@ export const useMessageStore = defineStore('message', () => {
     applySendFailed,
     deleteMessage,
     clearConversationMessages,
+    clearConversationHistory,
     clearAllMessageCaches,
   }
 })

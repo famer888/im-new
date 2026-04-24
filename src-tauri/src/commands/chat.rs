@@ -23,6 +23,13 @@ pub struct SendMessageRequest {
     pub custom_msg_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearConversationHistoryRequest {
+    pub conversation_id: String,
+    pub remote: Option<bool>,
+}
+
 #[tauri::command]
 pub async fn get_conversations(
     db: State<'_, DbManager>,
@@ -1346,6 +1353,83 @@ pub async fn recall_message(
     .map_err(|e| e.to_string())?;
 
     // TODO: send recall command via WebSocket
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_conversation_history(
+    app: AppHandle,
+    db: State<'_, DbManager>,
+    ws_mgr: State<'_, WsManager>,
+    uid: String,
+    request: ClearConversationHistoryRequest,
+) -> Result<(), String> {
+    let remote = request.remote.unwrap_or(false);
+    let (conv_type, target_id) = parse_conversation_id(&request.conversation_id)?;
+    let target_id_i64 = target_id
+        .parse::<i64>()
+        .map_err(|_| format!("invalid target id '{}'", target_id))?;
+
+    db.with_connection(&uid, |conn| {
+        conn.execute(
+            "UPDATE messages SET is_deleted = 1 WHERE conversation_id = ?1",
+            rusqlite::params![request.conversation_id],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        queries::refresh_conversation_summary(conn, &request.conversation_id)?;
+        conn.execute(
+            "UPDATE conversations SET unread_count = 0 WHERE id = ?1",
+            rusqlite::params![request.conversation_id],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())?;
+
+    if let Ok(Some(conv)) =
+        db.with_connection(&uid, |conn| queries::get_conversation_by_id(conn, &request.conversation_id))
+    {
+        let _ = app.emit("conv:update", &conv);
+    }
+
+    if remote {
+        let now = chrono::Utc::now().timestamp_millis();
+        let recall = imweb::RecallMessage {
+            msg_id: -1,
+            msg_target_id: target_id_i64,
+            channel_name: String::new(),
+            clear: 1,
+            clear_time: now,
+        };
+
+        match conv_type {
+            1 => {
+                let req = imweb::SendRecallGroupMessageReq {
+                    recall_group_message: Some(recall),
+                };
+                ws_mgr
+                    .send_packet(ws_cmds::RECALL_GROUP_MSG, now, &req.encode_to_vec())
+                    .map_err(|e| e.to_string())?;
+            }
+            2 => {
+                let req = imweb::SendRecallChannelMessage {
+                    recall_channel_message: Some(recall),
+                };
+                ws_mgr
+                    .send_packet(ws_cmds::RECALL_CHANNEL_MSG, now, &req.encode_to_vec())
+                    .map_err(|e| e.to_string())?;
+            }
+            _ => {
+                let req = imweb::SendRecallOneToOneMessageReq {
+                    recall_one_to_one_message: Some(recall),
+                };
+                ws_mgr
+                    .send_packet(ws_cmds::RECALL_PRIVATE_MSG, now, &req.encode_to_vec())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
 
     Ok(())
 }

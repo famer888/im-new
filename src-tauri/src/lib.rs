@@ -121,6 +121,7 @@ pub fn run() {
             commands::chat::mute_conversation,
             commands::chat::archive_conversation,
             commands::chat::recall_message,
+            commands::chat::clear_conversation_history,
             commands::chat::delete_conversation,
             commands::chat::search_messages,
             commands::chat::clear_all_local_chat_history,
