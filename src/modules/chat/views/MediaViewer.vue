@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
@@ -25,6 +26,12 @@ const imageSrc = computed(() => ensureMediaSrc(payload.value?.filePath || payloa
 const canOpenWithDefaultApp = computed(() => Boolean(String(payload.value?.filePath || '').trim()))
 
 let unsubscribe: (() => void) | null = null
+let unlistenWindowEvents: Array<() => void> = []
+
+function currentMediaWindow() {
+  if (!(window as any).__TAURI_INTERNALS__) return null
+  return getCurrentWindow()
+}
 
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   payload.value = nextPayload
@@ -35,14 +42,29 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
 
 function startWindowDrag(e: MouseEvent) {
   if (e.button !== 0) return
-  getCurrentWindow().startDragging().catch((err) => {
+  const currentWindow = currentMediaWindow()
+  if (!currentWindow) return
+  currentWindow.startDragging().catch((err) => {
     console.warn('[media-viewer] start dragging failed:', err)
   })
 }
 
+async function syncMaximizedState() {
+  const currentWindow = currentMediaWindow()
+  if (!currentWindow) {
+    isMaximized.value = false
+    return
+  }
+  try {
+    isMaximized.value = await currentWindow.isMaximized()
+  } catch {
+    isMaximized.value = false
+  }
+}
+
 async function minimize() {
   try {
-    await getCurrentWindow().minimize()
+    await invoke('media_window_minimize')
   } catch {
     // browser noop
   }
@@ -50,14 +72,7 @@ async function minimize() {
 
 async function maximize() {
   try {
-    const win = getCurrentWindow()
-    if (await win.isMaximized()) {
-      await win.unmaximize()
-      isMaximized.value = false
-    } else {
-      await win.maximize()
-      isMaximized.value = true
-    }
+    isMaximized.value = await invoke<boolean>('media_window_toggle_maximize')
   } catch {
     // browser noop
   }
@@ -65,10 +80,12 @@ async function maximize() {
 
 async function closeWindow() {
   try {
-    await getCurrentWindow().close()
+    await invoke('media_window_close')
+    return
   } catch {
-    window.close()
+    // fallback below
   }
+  window.close()
 }
 
 async function openWithDefaultApp() {
@@ -86,32 +103,48 @@ onMounted(async () => {
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
     applyPayload(nextPayload)
   })
-  try {
-    isMaximized.value = await getCurrentWindow().isMaximized()
-  } catch {
+
+  const currentWindow = currentMediaWindow()
+  if (!currentWindow) {
     isMaximized.value = false
+    return
   }
+
+  await syncMaximizedState()
+  unlistenWindowEvents = await Promise.all([
+    currentWindow.onResized(() => {
+      void syncMaximizedState()
+    }),
+    currentWindow.onMoved(() => {
+      void syncMaximizedState()
+    }),
+    currentWindow.onScaleChanged(() => {
+      void syncMaximizedState()
+    }),
+  ])
 })
 
 onUnmounted(() => {
   unsubscribe?.()
+  unlistenWindowEvents.forEach((unlisten) => unlisten())
+  unlistenWindowEvents = []
 })
 </script>
 
 <template>
   <div class="media-viewer">
     <div class="media-titlebar">
-      <div class="media-drag-layer" @mousedown="startWindowDrag"></div>
+      <div class="media-drag-layer" @mousedown="startWindowDrag" @dblclick="maximize"></div>
       <span class="media-title">{{ payload?.title || '图片' }}</span>
       <div class="media-actions">
-        <button class="titlebar-btn" type="button" @click="minimize">
+        <button class="titlebar-btn" type="button" @click.stop="minimize">
           <span class="line"></span>
         </button>
-        <button class="titlebar-btn" type="button" @click="maximize">
+        <button class="titlebar-btn" type="button" @click.stop="maximize">
           <span v-if="!isMaximized" class="square"></span>
           <span v-else class="restore"></span>
         </button>
-        <button class="titlebar-btn close" type="button" @click="closeWindow">
+        <button class="titlebar-btn close" type="button" @click.stop="closeWindow">
           <span class="close-x"></span>
         </button>
       </div>
