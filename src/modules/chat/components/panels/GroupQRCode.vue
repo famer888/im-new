@@ -55,16 +55,25 @@
       :type="toastType"
       @update:visible="toastVisible = $event"
     />
+
+    <ImageOverwriteDialog
+      v-model:visible="imageOverwriteVisible"
+      :file-name="imageOverwriteFileName"
+      :directory-name="imageOverwriteDirectoryName"
+      @confirm="resolveImageOverwrite(true)"
+      @cancel="resolveImageOverwrite(false)"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import QrcodeVue from 'qrcode.vue'
 import { groupQrCode } from '@/api/imBase'
 import Toast from '@/components/Toast.vue'
-import { exportBase64ImgToLocal, userSelectSavePath } from '@/utils/fileTools'
+import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
+import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import { useUIStore } from '@/stores/useUIStore'
 
 const { t: $t, locale } = useI18n()
@@ -121,11 +130,47 @@ const qrcodeWrapRef = ref<HTMLElement | null>(null)
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
+const imageOverwriteVisible = ref(false)
+const imageOverwriteFileName = ref('')
+const imageOverwriteDirectoryName = ref('')
+let imageOverwriteResolver: ((value: boolean) => void) | null = null
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
   toastType.value = type
   toastVisible.value = true
+}
+
+function pathBaseName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || filePath
+}
+
+function pathDirectoryName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments.length > 1 ? segments[segments.length - 2] : pathBaseName(filePath)
+}
+
+function resolveImageOverwrite(result: boolean) {
+  imageOverwriteVisible.value = false
+  const resolver = imageOverwriteResolver
+  imageOverwriteResolver = null
+  resolver?.(result)
+}
+
+function promptImageOverwrite(filePath: string): Promise<boolean> {
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
+
+  imageOverwriteFileName.value = pathBaseName(filePath)
+  imageOverwriteDirectoryName.value = pathDirectoryName(filePath)
+  imageOverwriteVisible.value = true
+
+  return new Promise((resolve) => {
+    imageOverwriteResolver = resolve
+  })
 }
 
 function resolveQrCanvas(): HTMLCanvasElement | null {
@@ -139,6 +184,13 @@ function resolveQrCanvas(): HTMLCanvasElement | null {
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
+
+onBeforeUnmount(() => {
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
+})
 
 watch(() => props.visible, async (v) => {
   if (v && props.groupId) {
@@ -275,9 +327,17 @@ async function handleExportQrCode(qrCodeBase64: string) {
   }
 
   try {
-    const { filePath, canceled } = await userSelectSavePath(fileName)
+    const {
+      filePath,
+      canceled,
+      needsOverwriteConfirm,
+    } = await userSelectPngSavePathWithOverwrite(fileName)
     if (!filePath || canceled) return
     const finalPath = filePath.endsWith(suffix) ? filePath : `${filePath}${suffix}`
+    if (needsOverwriteConfirm) {
+      const confirmed = await promptImageOverwrite(finalPath)
+      if (!confirmed) return
+    }
     const err = await exportBase64ImgToLocal(qrCodeBase64, finalPath)
     if (err) {
       showToast($t('保存失败详情', { detail: err.message }), 'error')
