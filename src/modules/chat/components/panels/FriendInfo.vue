@@ -109,6 +109,7 @@ async function copyId() {
   if (!contact.value?.id) return
   try {
     await navigator.clipboard.writeText(contact.value.id)
+    showToast(t('复制成功'))
   } catch {
     // ignore clipboard failure
   }
