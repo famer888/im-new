@@ -20,7 +20,11 @@
         </div>
         <h3>{{ $t('二维码长期有效') }}</h3>
         <p @click="handleGroupQrCodeGet">
-          <img class="refresh-icon" src="@/assets/images/common/refresh.png" />
+          <img
+            class="refresh-icon"
+            :class="{ spinning: refreshing }"
+            src="@/assets/images/common/refresh.png"
+          />
           {{ $t('重置二维码') }}
         </p>
       </template>
@@ -125,6 +129,7 @@ defineEmits<{ (e: 'close'): void }>()
 
 const qrUrl = ref('')
 const loading = ref(false)
+const refreshing = ref(false)
 const qrcodeWrapRef = ref<HTMLElement | null>(null)
 
 const toastVisible = ref(false)
@@ -214,7 +219,8 @@ watch(() => props.visible, async (v) => {
 })
 
 async function handleGroupQrCodeGet() {
-  if (!props.groupId) return
+  if (!props.groupId || refreshing.value) return
+  refreshing.value = true
   try {
     const res = await groupQrCode({ groupId: props.groupId, force: true })
     const { qrUrl: resQrUrl, shortLink } = res || {}
@@ -226,6 +232,8 @@ async function handleGroupQrCodeGet() {
   } catch (e) {
     console.error('reset group qrcode failed:', e)
     showToast($t('二维码获取失败'), 'error')
+  } finally {
+    refreshing.value = false
   }
 }
 
@@ -435,6 +443,10 @@ async function handleExportQrCode(qrCodeBase64: string) {
       .refresh-icon {
         height: 18px;
         margin-right: 4px;
+
+        &.spinning {
+          animation: qr-refresh-spin 0.8s linear;
+        }
       }
     }
 
@@ -503,6 +515,15 @@ async function handleExportQrCode(qrCodeBase64: string) {
       word-wrap: break-word;
       overflow-wrap: break-word;
     }
+  }
+}
+
+@keyframes qr-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>
