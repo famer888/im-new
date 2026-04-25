@@ -47,6 +47,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { ensureFriendRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 
+import { API_CONFIG } from '@/api/config'
 import { getGroupReqList } from '@/api/imBase'
 import emptyBrandImg from '@/assets/images/login/dock.png'
 import menuCopy from '@/assets/images/menu/copy.png'
@@ -59,6 +60,7 @@ import menuOpenDir from '@/assets/images/menu/open_dir.png'
 import menuMore from '@/assets/images/menu/more.png'
 import hasReadUrl from '@/assets/images/message/has-read.png'
 import hasReceiveUrl from '@/assets/images/message/has-resive.png'
+import { chatPageDateformat } from '@/utils/chatMessageDate'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import { formatTimeStamp } from '@/utils/formatTimeStamp'
 
@@ -385,8 +387,7 @@ function messageSupportsCopy(msgType: unknown): boolean {
 }
 
 function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
-  return chatStore.currentConversation?.type === ConversationType.Group
-    && Number(data.msgType) === MessageType.Image
+  return Number(data.msgType) === MessageType.Image
     && typeof data.imageSrc === 'string'
     && data.imageSrc.trim().length > 0
 }
@@ -404,10 +405,47 @@ function parseMessageExtra(data: Record<string, unknown>): Record<string, unknow
   if (typeof raw === 'object') return raw as Record<string, unknown>
   try {
     const parsed = JSON.parse(String(raw))
+    if (typeof parsed === 'string') {
+      const nested = JSON.parse(parsed)
+      return nested && typeof nested === 'object' ? nested as Record<string, unknown> : {}
+    }
     return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
   } catch {
     return {}
   }
+}
+
+function normalizeCopyTextContent(rawContent: unknown, extraData: Record<string, unknown>): string {
+  let content = String(rawContent || '')
+  content = content.replace(/<img[^>]+data-key="(\[.*?\])"[^>]*>/g, '$1')
+
+  const atUsers = Array.isArray(extraData.atUsers) ? extraData.atUsers : []
+  if (atUsers.length > 0 && content.includes('@')) {
+    for (const user of atUsers) {
+      const nickName = typeof user?.nickName === 'string' ? user.nickName : ''
+      const name = typeof user?.name === 'string' ? user.name : ''
+      if (nickName && name) {
+        content = content.replace(nickName, name)
+      }
+    }
+  }
+
+  return content
+}
+
+async function writeTextClipboard(text: string) {
+  const normalized = String(text ?? '')
+  const blob = new Blob([normalized], { type: 'text/plain' })
+  const ClipboardItemCtor = window.ClipboardItem
+  if (ClipboardItemCtor && navigator.clipboard?.write) {
+    await navigator.clipboard.write([new ClipboardItemCtor({ 'text/plain': blob })])
+    return
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(normalized)
+    return
+  }
+  throw new Error('clipboard text write unsupported')
 }
 
 function getGroupReadTotal(data: Record<string, unknown>): number {
@@ -512,6 +550,10 @@ function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
 function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
   return chatStore.currentConversation?.type === ConversationType.Group
     && getGroupReadTotal(data) > 0
+}
+
+function canCopyMessageInfo(): boolean {
+  return ['test', 'uat'].includes(String(API_CONFIG.env || '').toLowerCase())
 }
 
 function groupReadCountLabel(data: Record<string, unknown>): string {
@@ -698,6 +740,155 @@ async function copyImageToClipboard(src: string) {
   await navigator.clipboard.write([new ClipboardItemCtor({ [mime]: blob })])
 }
 
+async function copyMessageText(data: Record<string, unknown>) {
+  const text = normalizeCopyTextContent(data.content, parseMessageExtra(data))
+  await writeTextClipboard(text)
+}
+
+async function copyMessageImage(data: Record<string, unknown>) {
+  const imageSrc = String(data.imageSrc || '').trim()
+  if (!imageSrc) {
+    throw new Error('image source unavailable')
+  }
+  await copyImageToClipboard(imageSrc)
+}
+
+function formatCopyMessageInfoTime(timestamp: unknown): string {
+  const date = new Date(Number(timestamp || 0))
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+function parseRawContentObject(rawContent: unknown): Record<string, unknown> | null {
+  const text = String(rawContent || '').trim()
+  if (!text) return null
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function toLegacyIdValue(value: unknown): string | number {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  if (/^\d+$/.test(text)) {
+    const asNumber = Number(text)
+    if (Number.isSafeInteger(asNumber)) return asNumber
+  }
+  return text
+}
+
+function buildLegacyMessageUser(senderId: string): Record<string, unknown> | null {
+  if (!senderId) return null
+  const contact = contactStore.getContact(senderId)
+  const displayName = contactStore.getDisplayName(senderId) || senderId
+  const conv = chatStore.currentConversation
+  const groupId = conv?.type === ConversationType.Group ? conv.targetId : ''
+  const member = groupId
+    ? groupStore.getMembers(groupId).find((item) => item.userId === senderId)
+    : undefined
+
+  return {
+    uid: senderId,
+    nickName: member?.nickname || contact?.nickname || displayName,
+    identify: '--',
+    createTime: '',
+  }
+}
+
+function buildCopyMessageInfo(data: Record<string, unknown>): Record<string, unknown> {
+  const convId = String(chatStore.currentConversationId || '').trim()
+  const messageId = String(data.messageId || '').trim()
+  const sourceMessage = convId && messageId
+    ? messageStore.getMessages(convId).find((item) => item.id === messageId)
+    : null
+  const extraData = parseMessageExtra(sourceMessage ? { extra: sourceMessage.extra } : data)
+  const msgType = Number(sourceMessage?.msgType ?? data.msgType ?? 0)
+  const senderId = String(sourceMessage?.senderId ?? data.senderId ?? '').trim()
+  const isSelf = Boolean(data.isSelf ?? (sourceMessage ? sourceMessage.senderId === authStore.uid : senderId === authStore.uid))
+  const sendTime = Number(sourceMessage?.sendTime ?? data.sendTime ?? 0)
+  const rawContent = sourceMessage?.content ?? data.content ?? ''
+  const currentConversation = chatStore.currentConversation
+  const currentTargetId = String(currentConversation?.targetId || '').trim()
+  const currentType = currentConversation?.type
+  const currentTypeText =
+    currentType === ConversationType.Group
+      ? 'group'
+      : currentType === ConversationType.Channel
+        ? 'channel'
+        : 'friend'
+  const currentName =
+    currentType === ConversationType.Group
+      ? (groupStore.getGroup(currentTargetId)?.name || currentTargetId)
+      : currentType === ConversationType.Channel
+        ? (channelStore.getChannel(currentTargetId)?.channelName || channelStore.getChannel(currentTargetId)?.name || currentTargetId)
+        : (contactStore.getDisplayName(currentTargetId) || currentTargetId)
+  const legacyUser = buildLegacyMessageUser(senderId)
+  const msgIdValue = toLegacyIdValue(messageId || sourceMessage?.id || data.id || '')
+  const groupIdValue = currentType === ConversationType.Group ? toLegacyIdValue(currentTargetId) : undefined
+  const sendUidValue = toLegacyIdValue(senderId)
+  const atUsers = Array.isArray(extraData.atUsers) ? extraData.atUsers : []
+  const atUids = atUsers
+    .map((item) => item?.uid ?? item?.userId ?? item?.id)
+    .filter((item) => item != null && String(item).trim() !== '')
+    .map((item) => toLegacyIdValue(item))
+  const links = Array.isArray(extraData.links)
+    ? extraData.links
+    : Array.isArray(data.links)
+      ? data.links
+      : []
+
+  return {
+    msgType,
+    atUids,
+    atUsers,
+    links,
+    sendUid: sendUidValue,
+    groupId: groupIdValue,
+    content: rawContent,
+    sendTime,
+    msgId: msgIdValue,
+    sendMember: currentType === ConversationType.Group
+      ? {
+          user: legacyUser,
+          groupId: String(currentTargetId || ''),
+          score: data.sendMember && typeof data.sendMember === 'object'
+            ? (data.sendMember as Record<string, unknown>).score ?? undefined
+            : undefined,
+        }
+      : undefined,
+    version: Number(sourceMessage?.version ?? data.version ?? extraData.version ?? 1),
+    contentMd5: String(extraData.contentMd5 || ''),
+    groupName: currentType === ConversationType.Group ? currentName : undefined,
+    sentOverTime: Number(data.sentOverTime ?? sendTime),
+    customMsgId: String(sourceMessage?.customMsgId ?? data.customMsgId ?? ''),
+    MsgID: msgIdValue,
+    UserID: sendUidValue,
+    isSelf,
+    ChatType: msgType,
+    chatType: msgType,
+    id: currentType === ConversationType.Group || currentType === ConversationType.Channel
+      ? toLegacyIdValue(currentTargetId)
+      : sendUidValue,
+    name: currentName,
+    sendUserName: isSelf ? '' : `${legacyUser?.nickName || senderId}：`,
+    time: sendTime,
+    type: currentTypeText,
+    user: legacyUser,
+    showTimeDay: chatPageDateformat(sendTime, t, appLocale.value),
+    sendTimeStr: formatCopyMessageInfoTime(sendTime),
+    sendLog: `${String(sourceMessage?.customMsgId ?? data.customMsgId ?? '')}: ${String(msgIdValue)} | 无记录`,
+  }
+}
+
 function normalizeImageFileName(fileName: string): string {
   const sanitized = String(fileName || '')
     .replace(/[\\/:*?"<>|]/g, '_')
@@ -815,8 +1006,11 @@ const contextMenuItems = computed((): MenuItem[] => {
       { key: 'select', label: '选中', iconSrc: menuSelect },
       { key: 'reply', label: '回复', iconSrc: menuReply },
       { key: 'forward', label: '转发', iconSrc: menuForward },
-      { key: 'copy_msg_info', label: '复制消息信息', iconSrc: menuCopy },
     )
+
+    if (canCopyMessageInfo()) {
+      items.push({ key: 'copy_msg_info', label: '复制消息信息', iconSrc: menuCopy })
+    }
 
     if (messageSupportsGroupReadCount(data)) {
       items.push({
@@ -859,13 +1053,10 @@ async function handleContextMenuSelect(key: string) {
     switch (key) {
       case 'copy': {
         if (messageSupportsImageCopy(data)) {
-          const imageSrc = String(data.imageSrc || '').trim()
-          if (!imageSrc) break
-          try { await copyImageToClipboard(imageSrc) } catch { /* clipboard may be unavailable */ }
+          try { await copyMessageImage(data) } catch { /* clipboard may be unavailable */ }
           break
         }
-        const text = data.content as string
-        try { await navigator.clipboard.writeText(text) } catch { /* fallback */ }
+        try { await copyMessageText(data) } catch { /* clipboard may be unavailable */ }
         break
       }
       case 'save_as': {
@@ -923,17 +1114,14 @@ async function handleContextMenuSelect(key: string) {
         uiStore.openForwardDialog(msgId)
         break
       case 'copy_msg_info': {
-        const info = JSON.stringify(
-          {
-            id: data.messageId,
-            senderId: data.senderId,
-            msgType: data.msgType,
-            content: data.content,
-          },
-          null,
-          2,
-        )
-        try { await navigator.clipboard.writeText(info) } catch { /* fallback */ }
+        if (!canCopyMessageInfo()) break
+        const info = JSON.stringify(buildCopyMessageInfo(data))
+        try {
+          await writeTextClipboard(info)
+          showToast(t('复制成功'))
+        } catch {
+          /* clipboard may be unavailable */
+        }
         break
       }
       case 'group_read_count':

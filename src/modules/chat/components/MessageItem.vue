@@ -150,7 +150,9 @@ function handleContextMenu(e: MouseEvent) {
     : ''
   uiStore.showContextMenu(e.clientX, e.clientY, {
     type: 'message',
+    ...props.message,
     messageId: props.message.id,
+    msgId: props.message.id,
     customMsgId: props.message.customMsgId,
     senderId: props.message.senderId,
     isSelf: isSelf.value,
@@ -158,6 +160,7 @@ function handleContextMenu(e: MouseEvent) {
     readStatus: props.message.readStatus,
     content: props.message.content,
     extra: props.message.extra,
+    senderName: senderName.value,
     imageSrc,
     imagePath,
   })
