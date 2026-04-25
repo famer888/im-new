@@ -33,6 +33,7 @@ const groupAliasName = ref('')
 const notice = ref('')
 const qrUrl = ref('')
 const clearMsgTypeList = ref<string[]>([])
+const noticePreview = computed(() => notice.value.trim())
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -278,7 +279,7 @@ function handleOnlineTime(member: any) {
         <h3>{{ t('群简介') }}</h3>
         <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
       </div>
-      <p class="notice-preview" v-if="notice">{{ notice }}</p>
+      <p class="notice-preview" v-if="noticePreview">{{ noticePreview }}</p>
       <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
     </div>
 
