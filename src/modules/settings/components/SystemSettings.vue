@@ -45,12 +45,22 @@ function getVersionNumber(text: string): number {
   return Number(String(text || '').replace(/\./g, ''))
 }
 
+async function openVersionSite() {
+  const url = 'https://97chat.com'
+  if ((window as any).__TAURI_INTERNALS__) {
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(url)
+    return
+  }
+  window.open(url, '_blank')
+}
+
 async function handleVersionUpdate() {
   try {
     const res = await checkVersion()
     const errCode = Number((res as any)?.commonResult?.errCode ?? 200)
     if (errCode !== 200) {
-      showToast((res as any)?.commonResult?.errMsg || t('操作失败'), 'error')
+      await openVersionSite()
       return
     }
 
@@ -59,9 +69,13 @@ async function handleVersionUpdate() {
       return
     }
 
-    window.open(String(res.url || 'https://97chat.com'), '_blank')
+    await openVersionSite()
   } catch {
-    showToast(t('当前网络异常，请检查网络设置'), 'error')
+    try {
+      await openVersionSite()
+    } catch {
+      showToast(t('当前网络异常，请检查网络设置'), 'error')
+    }
   }
 }
 </script>
