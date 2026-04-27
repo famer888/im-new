@@ -63,6 +63,13 @@
         </div>
       </div>
     </div>
+
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      @update:visible="toastVisible = $event"
+    />
   </div>
 </template>
 
@@ -70,9 +77,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
+import Toast from '@/components/Toast.vue'
 import { updateUserInfo } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { exportAccountHistoryFile } from '@/utils/accountTransfer'
 
 const { t: $t } = useI18n()
 const authStore = useAuthStore()
@@ -87,12 +96,35 @@ const nicknameSaving = ref(false)
 const nicknameDraft = ref('')
 const nicknameInputRef = ref<HTMLInputElement | null>(null)
 const accountDialogRef = ref<HTMLElement | null>(null)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 const editIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwBAMAAAClLOS0AAAAJFBMVEUAAAAyMjIzMzMyMjIzMzMzMzMyMjIzMzMxMTE0NDQ1NTUzMzM8TXAkAAAAC3RSTlMAf5xb79mZc0M7Ikz8ah8AAAC7SURBVDjL1ZQxCsJAEAAXD4vYWduktwlYprexsbW38wOCD7CwsbH3CxpRYT8nWYOzYQVBEMw0R26Yg5DbyK+ZNOt2+KKon3tqixwUqnpj/BSZemHB2YK+Tt1RFuQmdpejAIFsrgIukNEpBogYIAgQQIAgQAABgiAViFZQVggCdhBNEEWy4K3Ig+CTBmF0RSTuT1uU3LgPIh71Ty8YBWMAqxuD4xnM7oyaZ6lzE5kG9sI4exbCD8Czlq94AETJjYyDbpR3AAAAAElFTkSuQmCC'
 
 const displayName = computed(() => authStore.nickname || authStore.uid || 'User')
 
-function handleExport() {
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+}
+
+async function handleExport() {
   if (password.value.length !== 4) return
+
+  if (!/^[0-9]+$/.test(password.value)) {
+    showToast($t('密码错误，必须为4位数字'), 'error')
+    return
+  }
+
+  try {
+    const result = await exportAccountHistoryFile(authStore.uid, password.value)
+    if (!result.canceled) {
+      showToast($t('保存成功'))
+    }
+  } catch (error) {
+    showToast((error as Error)?.message || $t('操作失败'), 'error')
+  }
 }
 
 function handleNicknameEdit() {

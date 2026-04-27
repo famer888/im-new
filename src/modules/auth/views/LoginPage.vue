@@ -92,7 +92,6 @@ function startWindowDrag(e: MouseEvent) {
     <FileImport
       :visible="showFileImport"
       @close="showFileImport = false"
-      @imported="router.push('/home')"
     />
   </div>
 </template>

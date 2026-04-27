@@ -1,3 +1,4 @@
+pub mod account_transfer;
 pub mod auth;
 pub mod channels;
 pub mod chat;

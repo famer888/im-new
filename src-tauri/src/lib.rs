@@ -107,6 +107,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::account_transfer::export_account_history_data,
+            commands::account_transfer::import_account_history_data,
             commands::auth::login,
             commands::auth::logout,
             commands::auth::get_session,
