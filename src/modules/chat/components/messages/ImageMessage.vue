@@ -54,9 +54,11 @@ const imageData = computed((): {
 const thumbnailUrl = computed(() => imageData.value.thumbnailUrl || imageData.value.url || '')
 const isVideo = computed(() => props.message.msgType === 3)
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
+const isSending = computed(() => Number(props.message.status) === 0)
 const showImageLoading = computed(() => !activeSrc.value || (!isLoaded.value && !loadError.value))
+const showImageOverlay = computed(() => !loadError.value && (showImageLoading.value || isSending.value))
 const imageBoxStyle = computed(() => {
-  if (showImageLoading.value) {
+  if (!activeSrc.value) {
     return {
       width: '120px',
       height: '150px',
@@ -294,7 +296,7 @@ onBeforeUnmount(() => {
         @load="isLoaded = true"
         @error="handleError"
       />
-      <div v-if="showImageLoading" class="image-loading">
+      <div v-if="showImageOverlay" class="image-loading">
         <div class="loading-mask"></div>
         <div class="loading-control">
           <div class="progress-ring spinning">
@@ -382,7 +384,6 @@ onBeforeUnmount(() => {
     z-index: 2;
     border-radius: 10px;
     overflow: hidden;
-    background: #bababa;
     pointer-events: none;
   }
 
