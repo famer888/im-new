@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import brandIcon from '@/assets/images/common/defalut-icon.png'
+import brandIcon from '@/assets/images/login/dock.png'
 
 defineProps<{
   visible: boolean
