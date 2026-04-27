@@ -390,8 +390,22 @@ pub async fn send_message(
     db.with_connection(&uid, |conn| queries::insert_message(conn, &message))
         .map_err(|e| e.to_string())?;
 
-    // 按会话类型分流，目前只有群文本走 WS。其余类型先只落本地（行为与之前一致），
-    // 等好友 / 频道 / 非文本分片链路补齐后再开。
+    let mark_failed_and_return = |reason: String| -> Result<models::Message, String> {
+        let failed_id = msg_id.clone();
+        let _ = db.with_connection(&uid, |conn| {
+            conn.execute(
+                "UPDATE messages SET status = -1 WHERE id = ?1",
+                rusqlite::params![failed_id],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            Ok(())
+        });
+        Err(reason)
+    };
+
+    // 按会话类型分流。当前群图片已实现；私聊图片因链路未完成，明确置失败，
+    // 避免前端一直停留在“发送中 / 加载中”的假成功状态。其余未实现类型先保持原来的
+    // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
         (1, 0) => {
             if let Err(e) = pipeline::send_group_text(
@@ -476,6 +490,14 @@ pub async fn send_message(
                 });
                 return Err(e.to_string());
             }
+        }
+        (0, 1) => {
+            let reason = format!(
+                "message send via WS not implemented yet for conv_type={} msg_type={}",
+                conv_type, request.msg_type
+            );
+            warn!("{}", reason);
+            return mark_failed_and_return(reason);
         }
         (1, _) => {
             warn!(

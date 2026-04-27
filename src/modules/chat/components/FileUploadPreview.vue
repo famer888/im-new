@@ -35,7 +35,12 @@ useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
+const MAX_IMAGE_SIZE_MB = 10
 const MAX_SIZE_MB = 50
+
+function getMaxSizeMb(file: File): number {
+  return file.type.startsWith('image/') ? MAX_IMAGE_SIZE_MB : MAX_SIZE_MB
+}
 
 function formatFileSize(size: number): string {
   const kb = size / 1024
@@ -46,13 +51,14 @@ function formatFileSize(size: number): string {
 function createPreview(file: File): PreviewItem {
   const isImage = file.type.startsWith('image/')
   const previewUrl = isImage ? URL.createObjectURL(new Blob([file])) : ''
+  const maxSizeMb = getMaxSizeMb(file)
   return {
     file,
     name: file.name,
     sizeLabel: formatFileSize(file.size),
     isImage,
     previewUrl,
-    isError: Math.ceil(file.size / 1024 / 1024) > MAX_SIZE_MB,
+    isError: Math.ceil(file.size / 1024 / 1024) > maxSizeMb,
   }
 }
 
@@ -185,7 +191,7 @@ function handleEmojiSelect(emoji: string) {
                 :class="{ 'is-error': item.isError }"
               >
                 <p v-if="item.isError" class="error-mask" @click="handleRemove(index)">
-                  {{ $t('上传/文件视频大小超过50M!') }}
+                  {{ $t('上传文件不能超过') }}{{ item.isImage ? MAX_IMAGE_SIZE_MB : MAX_SIZE_MB }}M
                 </p>
                 <picture>
                   <img v-if="item.isImage" :src="item.previewUrl" alt="" />
