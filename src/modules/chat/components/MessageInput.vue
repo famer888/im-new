@@ -20,6 +20,7 @@ import ScheduleDeletionDialog from './send/ScheduleDeletionDialog.vue'
 import FileUploadPreview from './FileUploadPreview.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import type { MenuItem } from '@/components/ContextMenu.vue'
+import Toast from '@/components/Toast.vue'
 import iconSmallActive from '@/assets/images/activeIcon/small-active.png'
 import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
@@ -57,6 +58,9 @@ const editorMenuX = ref(0)
 const editorMenuY = ref(0)
 const savedSelection = ref<Range | null>(null)
 const selectedLinkText = ref('')
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
@@ -102,6 +106,19 @@ const editorMenuItems = computed<MenuItem[]>(() => [
     children: [{ key: 'create_link', label: '创建链接' }],
   },
 ])
+
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
+const MAX_GROUP_IMAGE_DATA_URL_BYTES = 256 * 1024
+const GROUP_IMAGE_MAX_DIMENSION = 1600
+const GROUP_IMAGE_MIN_DIMENSION = 480
+const GROUP_IMAGE_MIN_QUALITY = 0.42
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+}
 
 interface ClipboardFilePayload {
   name: string
@@ -436,25 +453,145 @@ function getImageSize(src: string): Promise<{ width: number; height: number }> {
   })
 }
 
+function getFileSizeLimitBytes(file: File): number {
+  return file.type.startsWith('image/') ? MAX_IMAGE_SIZE_BYTES : MAX_FILE_SIZE_BYTES
+}
+
+function getDataUrlByteLength(dataUrl: string): number {
+  return new TextEncoder().encode(dataUrl).length
+}
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('load image failed'))
+    img.src = src
+  })
+}
+
+async function prepareGroupImagePayload(file: File): Promise<{
+  dataUrl: string
+  width: number
+  height: number
+  size: number
+}> {
+  const originalDataUrl = await fileToDataURL(file)
+  const originalSize = await getImageSize(originalDataUrl)
+  const originalBytes = getDataUrlByteLength(originalDataUrl)
+  const isAnimatedOrVector = /image\/gif$/i.test(file.type) || /image\/svg\+xml$/i.test(file.type)
+
+  if (originalBytes <= MAX_GROUP_IMAGE_DATA_URL_BYTES || isAnimatedOrVector) {
+    if (originalBytes > MAX_GROUP_IMAGE_DATA_URL_BYTES) {
+      throw new Error('群聊图片过大，请压缩后重试')
+    }
+    return {
+      dataUrl: originalDataUrl,
+      width: originalSize.width,
+      height: originalSize.height,
+      size: file.size,
+    }
+  }
+
+  const img = await loadImageElement(originalDataUrl)
+  let width = img.naturalWidth || originalSize.width || 0
+  let height = img.naturalHeight || originalSize.height || 0
+  if (width <= 0 || height <= 0) {
+    return {
+      dataUrl: originalDataUrl,
+      width: originalSize.width,
+      height: originalSize.height,
+      size: file.size,
+    }
+  }
+
+  const initialScale = Math.min(1, GROUP_IMAGE_MAX_DIMENSION / Math.max(width, height))
+  width = Math.max(1, Math.round(width * initialScale))
+  height = Math.max(1, Math.round(height * initialScale))
+
+  let quality = file.size > 6 * 1024 * 1024
+    ? 0.68
+    : file.size > 3 * 1024 * 1024
+      ? 0.74
+      : 0.82
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) break
+    ctx.drawImage(img, 0, 0, width, height)
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', quality)
+    })
+    if (!blob) break
+
+    const compressedDataUrl = await blobToDataURL(blob)
+    if (getDataUrlByteLength(compressedDataUrl) <= MAX_GROUP_IMAGE_DATA_URL_BYTES) {
+      return {
+        dataUrl: compressedDataUrl,
+        width,
+        height,
+        size: blob.size,
+      }
+    }
+
+    quality = Math.max(GROUP_IMAGE_MIN_QUALITY, quality - 0.08)
+    width = width > GROUP_IMAGE_MIN_DIMENSION
+      ? Math.max(GROUP_IMAGE_MIN_DIMENSION, Math.round(width * 0.85))
+      : width
+    height = height > GROUP_IMAGE_MIN_DIMENSION
+      ? Math.max(GROUP_IMAGE_MIN_DIMENSION, Math.round(height * 0.85))
+      : height
+  }
+
+  throw new Error('群聊图片过大，请压缩后重试')
+}
+
 async function handleFileSend(payload: { text: string; files: File[] } | File[]) {
   const files = Array.isArray(payload) ? payload : payload.files
   const text = Array.isArray(payload) ? '' : (payload.text || '').trim()
 
   for (const file of files) {
+    if (file.size > getFileSizeLimitBytes(file)) {
+      continue
+    }
     if (file.type.startsWith('image/')) {
-      if (isGroup.value) {
-        const dataUrl = await fileToDataURL(file)
-        const { width, height } = await getImageSize(dataUrl)
+      try {
+        const prepared = isGroup.value && !isFileHelperChat.value
+          ? await prepareGroupImagePayload(file)
+          : await (async () => {
+              const dataUrl = await fileToDataURL(file)
+              const { width, height } = await getImageSize(dataUrl)
+              return {
+                dataUrl,
+                width,
+                height,
+                size: file.size,
+              }
+            })()
         emit('send', JSON.stringify({
-          url: dataUrl,
-          thumbnailUrl: dataUrl,
-          width,
-          height,
-          size: file.size,
+          url: prepared.dataUrl,
+          thumbnailUrl: prepared.dataUrl,
+          width: prepared.width,
+          height: prepared.height,
+          size: prepared.size,
           name: file.name,
         }), MessageType.Image, withReadBurnExtra())
-      } else {
-        emit('send', JSON.stringify({ name: file.name, size: file.size, path: '' }), MessageType.Image, withReadBurnExtra())
+      } catch (error) {
+        console.error('[message-input] prepare image payload failed:', error)
+        showToast((error as Error)?.message || t('操作失败'), 'error')
       }
     } else {
       emit('send', JSON.stringify({ name: file.name, size: file.size, ext: file.name.split('.').pop() }), MessageType.File, withReadBurnExtra())
@@ -695,6 +832,12 @@ eventBus.on('editor:insert-at', handleAtSelect)
       :files="pendingFiles"
       @confirm="handleFileSend"
       @cancel="pendingFiles = []"
+    />
+
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
     />
   </div>
 </template>

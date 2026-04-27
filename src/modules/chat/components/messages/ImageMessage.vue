@@ -80,6 +80,11 @@ watch([thumbnailUrl, fileKey, attachmentKey], () => {
   loadError.value = false
   activeSrc.value = ''
   localFilePath.value = ''
+  if (!thumbnailUrl.value && !imageData.value.url && !fileKey.value && !attachmentKey.value) {
+    loadError.value = true
+    isLoaded.value = true
+    return
+  }
   if ((fileKey.value || attachmentKey.value) && /^https?:\/\//i.test(imageData.value.url)) {
     downloadAndDecryptImage()
     return
