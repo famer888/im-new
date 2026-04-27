@@ -31,6 +31,10 @@ export interface WsConnectConfig {
   aesKey: string
 }
 
+interface LogoutOptions {
+  keepHistoryOnLogout?: boolean
+}
+
 const ACCOUNT_LIST_KEY = 'login-account-list'
 const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'
@@ -43,6 +47,22 @@ function normalizeWsUrl(input: string): string {
   if (raw.startsWith('https://')) return `wss://${raw.slice('https://'.length)}`
   if (raw.startsWith('http://')) return `ws://${raw.slice('http://'.length)}`
   return `ws://${raw}`
+}
+
+function resolveCurrentUidForLogout(
+  sessionUid: string,
+  accounts: AccountInfo[],
+): string {
+  const normalizedSessionUid = String(sessionUid || '').trim()
+  if (normalizedSessionUid) return normalizedSessionUid
+
+  const storedUid = String(localStorage.getItem(CURRENT_UID_KEY) || '').trim()
+  if (storedUid) return storedUid
+
+  const accountWithSession = accounts.find((item) => String(item.sessionId || '').trim())
+  if (accountWithSession?.id) return String(accountWithSession.id)
+
+  return String(accounts[0]?.id || '').trim()
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -290,13 +310,28 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function logout() {
+  async function logout(options?: LogoutOptions) {
+    const currentUid = resolveCurrentUidForLogout(uid.value, accounts.value)
+    const keepHistoryOnLogout = options?.keepHistoryOnLogout ?? true
+
+    console.info('[auth] logout requested', {
+      currentUid,
+      keepHistoryOnLogout,
+      isTauri: isTauri(),
+    })
+
     if (isTauri()) {
       try {
-        await tauriInvoke('logout')
-      } catch { /* ignore in browser */ }
+        await tauriInvoke('logout', {
+          uid: currentUid || null,
+        })
+      } catch (error) {
+        console.warn('[auth] logout invoke failed:', error)
+      }
+    } else if (!keepHistoryOnLogout && currentUid) {
+      localStorage.removeItem(`${currentUid}-conversations`)
     }
-    const currentUid = uid.value
+
     session.value = null
     localStorage.removeItem(CURRENT_UID_KEY)
     localStorage.removeItem('browser-session')

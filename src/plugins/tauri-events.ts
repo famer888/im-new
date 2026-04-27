@@ -20,6 +20,15 @@ function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
 }
 
+const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
+
+function getLogoutClearedHistoryAt(uid: string): number {
+  if (!uid) return 0
+  const raw = localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${uid}`)
+  const value = Number(raw || 0)
+  return Number.isFinite(value) ? value : 0
+}
+
 interface ReadProcessingResult {
   readMessageIds: string[]
   scheduledDeletions: Array<{
@@ -189,6 +198,7 @@ export async function setupTauriListeners() {
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
     const currentUid = String(authStore.uid || '')
+    const logoutClearedHistoryAt = getLogoutClearedHistoryAt(currentUid)
     const raw = (Array.isArray(event.payload) ? event.payload : []).map((item: any) => {
       const m = { ...item }
       let extra = m?.extra
@@ -227,9 +237,23 @@ export async function setupTauriListeners() {
       const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
       return convId.includes('_')
     })
+    const filtered = logoutClearedHistoryAt > 0
+      ? valid.filter((m: any) => {
+          const sendTime = Number(m?.sendTime ?? m?.send_time ?? 0)
+          return !(sendTime > 0 && sendTime <= logoutClearedHistoryAt)
+        })
+      : valid
     if (valid.length !== raw.length) {
       console.warn('[msg:batch] dropped invalid items:', raw.length - valid.length)
     }
+    if (filtered.length !== valid.length) {
+      console.info('[msg:batch] dropped replayed messages after logout-clear', {
+        currentUid,
+        dropped: valid.length - filtered.length,
+        logoutClearedHistoryAt,
+      })
+    }
+    if (filtered.length === 0) return
 
     // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
     // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
@@ -238,7 +262,7 @@ export async function setupTauriListeners() {
       const uid = String(authStore.uid)
       const friendIds = Array.from(
         new Set(
-          valid
+          filtered
             .map((m: any) => String(m?.conversationId ?? m?.conversation_id ?? ''))
             .filter((convId) => convId.startsWith('0_') && convId.includes('_'))
             .map((convId) => convId.split('_')[1] || '')
@@ -247,7 +271,7 @@ export async function setupTauriListeners() {
       )
       for (const fid of friendIds) {
         try {
-          const forceRefresh = valid.some((m: any) => {
+          const forceRefresh = filtered.some((m: any) => {
             const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
             return convId === `0_${fid}` && Boolean(m?.extra?.decryptPending)
           })
@@ -259,7 +283,7 @@ export async function setupTauriListeners() {
 
       const pendingGroupIds = Array.from(
         new Set(
-          valid
+          filtered
             .filter((m: any) => Boolean(m?.extra?.decryptPending))
             .map((m: any) => {
               const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
@@ -277,9 +301,9 @@ export async function setupTauriListeners() {
       }
     }
 
-    if (valid.length > 0) {
-      const shouldPlaySound = shouldPlayIncomingMessageSound(valid, currentUid)
-      const normalized: any[] = [...valid]
+    if (filtered.length > 0) {
+      const shouldPlaySound = shouldPlayIncomingMessageSound(filtered, currentUid)
+      const normalized: any[] = [...filtered]
       if (authStore.uid) {
         const uid = String(authStore.uid)
         try {
@@ -541,6 +565,20 @@ export async function setupTauriListeners() {
 
   listen<Conversation>('conv:update', (event) => {
     const chatStore = useChatStore()
+    const authStore = useAuthStore()
+    const currentUid = String(authStore.uid || '')
+    const logoutClearedHistoryAt = getLogoutClearedHistoryAt(currentUid)
+    const payload: any = event.payload || {}
+    const lastMsgTime = Number(payload?.lastMsgTime ?? payload?.last_msg_time ?? 0)
+    if (logoutClearedHistoryAt > 0 && lastMsgTime > 0 && lastMsgTime <= logoutClearedHistoryAt) {
+      console.info('[conv:update] dropped replayed conversation after logout-clear', {
+        currentUid,
+        conversationId: String(payload?.id ?? ''),
+        lastMsgTime,
+        logoutClearedHistoryAt,
+      })
+      return
+    }
     chatStore.addOrUpdateConversation(event.payload)
   })
 

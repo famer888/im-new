@@ -78,6 +78,7 @@ const messageStore = useMessageStore()
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
+const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
@@ -192,6 +193,9 @@ onMounted(async () => {
     }
 
     if (authStore.uid) {
+      const skipBootstrapAfterLogoutClear = Boolean(
+        localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${authStore.uid}`),
+      )
       setInitText(t('数据载入'))
       await Promise.all([
         chatStore.loadConversations(authStore.uid),
@@ -209,7 +213,7 @@ onMounted(async () => {
       const hasRealConversations = chatStore.conversations.some(
         (c) => !isFileHelperTargetId(c.targetId) && c.targetId !== GROUP_NOTIFICATION_TARGET_ID,
       )
-      if (!hasRealConversations) {
+      if (!hasRealConversations && !skipBootstrapAfterLogoutClear) {
         for (const contact of contactStore.contacts) {
           if (contact.id && contact.status > 0) {
             chatStore.ensureConversation(0, contact.id)
@@ -226,7 +230,6 @@ onMounted(async () => {
           }
         }
       }
-
       try {
         if ((window as any).__TAURI_INTERNALS__) {
           const { invoke } = await import('@tauri-apps/api/core')
