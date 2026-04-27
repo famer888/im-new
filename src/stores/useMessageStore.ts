@@ -125,6 +125,14 @@ export interface Message {
 
 const MAX_CACHED_MESSAGES = 500
 const PAGE_SIZE = 50
+const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
+
+function getLogoutClearedHistoryAt(uid: string): number {
+  if (!uid) return 0
+  const raw = localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${uid}`)
+  const value = Number(raw || 0)
+  return Number.isFinite(value) ? value : 0
+}
 
 function parseExtraObject(rawExtra: unknown): Record<string, unknown> | null {
   if (!rawExtra) return null
@@ -181,6 +189,24 @@ function extractReadBurnMeta(raw: any, extraObj?: Record<string, unknown> | null
   return {
     snapchatTime: normalizedSnapchatTime,
     deleteSeconds: normalizedDeleteSeconds,
+  }
+}
+
+function filterMessagesHiddenByLogoutClear(uid: string, messages: Message[]) {
+  const logoutClearedHistoryAt = getLogoutClearedHistoryAt(uid)
+  if (logoutClearedHistoryAt <= 0) {
+    return {
+      messages,
+      hitLogoutClearBoundary: false,
+    }
+  }
+
+  const filtered = messages.filter((item) => !(item.sendTime > 0 && item.sendTime <= logoutClearedHistoryAt))
+  const latestFetchedSendTime = messages.length > 0 ? messages[messages.length - 1].sendTime : 0
+
+  return {
+    messages: filtered,
+    hitLogoutClearBoundary: latestFetchedSendTime > 0 && latestFetchedSendTime <= logoutClearedHistoryAt,
   }
 }
 
@@ -329,8 +355,12 @@ export const useMessageStore = defineStore('message', () => {
         limit: PAGE_SIZE,
       })
       const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
-      messageMap.value.set(conversationId, normalized)
-      hasMoreMap.value.set(conversationId, normalized.length >= PAGE_SIZE)
+      const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
+      messageMap.value.set(conversationId, filteredResult.messages)
+      hasMoreMap.value.set(
+        conversationId,
+        !filteredResult.hitLogoutClearBoundary && normalized.length >= PAGE_SIZE,
+      )
     } finally {
       loadingMap.value.set(conversationId, false)
     }
@@ -352,14 +382,18 @@ export const useMessageStore = defineStore('message', () => {
         limit: PAGE_SIZE,
       })
       const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
-      if (normalized.length > 0) {
-        const merged = [...normalized, ...existing]
+      const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
+      if (filteredResult.messages.length > 0) {
+        const merged = [...filteredResult.messages, ...existing]
         if (merged.length > MAX_CACHED_MESSAGES) {
           merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
         }
         messageMap.value.set(conversationId, merged)
       }
-      hasMoreMap.value.set(conversationId, normalized.length >= PAGE_SIZE)
+      hasMoreMap.value.set(
+        conversationId,
+        !filteredResult.hitLogoutClearBoundary && normalized.length >= PAGE_SIZE,
+      )
     } finally {
       loadingMap.value.set(conversationId, false)
     }
