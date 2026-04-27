@@ -6,6 +6,7 @@ import { useChatStore, FILE_HELPER_TARGET_ID, isFileHelperTargetId } from '@/sto
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useSettingStore } from '@/stores/useSettingStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
@@ -33,6 +34,7 @@ const uiStore = useUIStore()
 const searchStore = useSearchStore()
 const { t, locale } = useI18n()
 const authStore = useAuthStore()
+const settingStore = useSettingStore()
 const chatStore = useChatStore()
 const router = useRouter()
 
@@ -57,6 +59,7 @@ const settingsWrapRef = ref<HTMLElement | null>(null)
 const settingsMenuRef = ref<HTMLElement | null>(null)
 const navBarRef = ref<HTMLElement | null>(null)
 const logoutConfirmVisible = ref(false)
+const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const searchPlaceholder = computed(() => {
   void locale.value
   return addAction.value && uiStore.sidebarTab === 'contacts'
@@ -246,9 +249,21 @@ async function confirmLogout() {
   const contactStore = useContactStore()
   const groupStore = useGroupStore()
   const channelStore = useChannelStore()
+  const currentUid = authStore.uid
+  const keepHistoryOnLogout = settingStore.settings.keepHistoryOnLogout
 
   // Disable persistence before clearing so the localStorage cache is preserved for next login
   chatStore.enablePersistence('')
+
+  if (currentUid && !keepHistoryOnLogout) {
+    localStorage.setItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${currentUid}`, String(Date.now()))
+  } else if (currentUid) {
+    localStorage.removeItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${currentUid}`)
+  }
+
+  if (!(window as any).__TAURI_INTERNALS__ && currentUid && !keepHistoryOnLogout) {
+    await chatStore.clearAllLocalChatHistory(currentUid)
+  }
 
   chatStore.currentConversationId = null
   chatStore.conversations = []
@@ -265,7 +280,7 @@ async function confirmLogout() {
   uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')
 
-  await authStore.logout()
+  await authStore.logout({ keepHistoryOnLogout })
   await router.replace('/login')
   if (window.location.hash !== '#/login') {
     window.location.hash = '#/login'

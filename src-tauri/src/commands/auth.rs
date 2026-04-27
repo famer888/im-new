@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tracing::{info, warn};
 
+use crate::config::ConfigManager;
 use crate::db::DbManager;
 use crate::window::WindowManager;
 
@@ -46,10 +48,37 @@ pub async fn login(
 #[tauri::command]
 pub async fn logout(
     app: tauri::AppHandle,
+    config: State<'_, ConfigManager>,
+    db: State<'_, DbManager>,
     win_mgr: State<'_, WindowManager>,
     ws_mgr: State<'_, crate::ws::WsManager>,
+    uid: Option<String>,
 ) -> Result<(), String> {
+    info!("logout requested uid={:?}", uid);
     ws_mgr.disconnect().await;
+
+    if let Some(uid) = uid.as_deref().map(str::trim).filter(|uid| !uid.is_empty()) {
+        let keep_history = config
+            .get_settings()
+            .map_err(|e| e.to_string())?
+            .keep_history_on_logout;
+
+        info!(
+            "logout resolved uid={} keep_history_on_logout={}",
+            uid, keep_history
+        );
+
+        if keep_history {
+            info!("logout keep history enabled, closing db only uid={}", uid);
+            db.close(uid);
+        } else {
+            info!("logout keep history disabled, deleting user db uid={}", uid);
+            db.delete_user_database(uid).map_err(|e| e.to_string())?;
+        }
+    } else {
+        warn!("logout missing uid, skip local db cleanup");
+    }
+
     win_mgr
         .switch_to_login(&app)
         .map_err(|e| e.to_string())?;
