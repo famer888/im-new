@@ -54,6 +54,30 @@ const imageData = computed((): {
 const thumbnailUrl = computed(() => imageData.value.thumbnailUrl || imageData.value.url || '')
 const isVideo = computed(() => props.message.msgType === 3)
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
+const showImageLoading = computed(() => !activeSrc.value || (!isLoaded.value && !loadError.value))
+const imageBoxStyle = computed(() => {
+  if (showImageLoading.value) {
+    return {
+      width: '120px',
+      height: '150px',
+    }
+  }
+
+  const sourceWidth = imageData.value.width
+  const sourceHeight = imageData.value.height
+  const height = 150
+  const minWidth = 120
+  const maxWidth = 400
+  const ratio = sourceWidth > 0 && sourceHeight > 0
+    ? sourceWidth / sourceHeight
+    : 1
+  const width = Math.min(maxWidth, Math.max(minWidth, Math.round(height * ratio)))
+
+  return {
+    width: `${width}px`,
+    height: `${height}px`,
+  }
+})
 const extraData = computed((): Record<string, any> => {
   const raw = props.message.extra
   if (!raw) return {}
@@ -260,16 +284,45 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="image-message">
-    <div class="image-wrapper" :style="{ maxWidth: '240px' }" @click="openPreview">
+    <div class="image-wrapper" :style="imageBoxStyle" @click="openPreview">
       <img
         v-if="activeSrc && !loadError"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"
         alt=""
+        :class="{ loaded: isLoaded }"
         @load="isLoaded = true"
         @error="handleError"
       />
-      <div v-if="!activeSrc || (!isLoaded && !loadError)" class="skeleton" />
+      <div v-if="showImageLoading" class="image-loading">
+        <div class="loading-mask"></div>
+        <div class="loading-control">
+          <div class="progress-ring spinning">
+            <svg viewBox="0 0 48 48" aria-hidden="true">
+              <circle
+                class="ring-bg"
+                cx="24"
+                cy="24"
+                r="21"
+                fill="none"
+                stroke-width="2"
+              />
+              <circle
+                class="ring-progress"
+                cx="24"
+                cy="24"
+                r="21"
+                fill="none"
+                stroke-width="2"
+              />
+            </svg>
+          </div>
+          <div class="pause-icon" aria-hidden="true">
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </div>
       <div v-if="loadError" class="image-error">图片加载失败</div>
       <div v-if="isVideo" class="play-icon">▶</div>
     </div>
@@ -302,32 +355,112 @@ onBeforeUnmount(() => {
 .image-message {
   .image-wrapper {
     position: relative;
-    border-radius: 4px;
+    border-radius: 10px;
     overflow: hidden;
     cursor: pointer;
     min-width: 120px;
-    min-height: 90px;
+    min-height: 150px;
+    background: #bababa;
 
     img {
       width: 100%;
+      height: 100%;
       display: block;
-      border-radius: 4px;
+      object-fit: contain;
+      border-radius: 10px;
+      opacity: 0;
+
+      &.loaded {
+        opacity: 1;
+      }
     }
   }
 
-  .skeleton {
-    width: 200px;
-    height: 150px;
-    background: #e8e8e8;
-    border-radius: 4px;
-    animation: pulse 1.5s infinite;
+  .image-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #bababa;
+    pointer-events: none;
+  }
+
+  .loading-mask {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.27);
+  }
+
+  .loading-control {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: 3;
+    width: 48px;
+    height: 48px;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .progress-ring {
+    position: absolute;
+    width: 48px;
+    height: 48px;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 50%;
+    }
+
+    svg {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .ring-bg {
+      stroke: rgba(255, 255, 255, 0.3);
+    }
+
+    .ring-progress {
+      stroke: #fff;
+      stroke-dasharray: 40 92;
+      stroke-dashoffset: 0;
+      stroke-linecap: round;
+    }
+
+    &.spinning {
+      animation: image-loading-spin 1.2s linear infinite;
+    }
+  }
+
+  .pause-icon {
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+
+    span {
+      width: 4px;
+      height: 16px;
+      background: #fff;
+      border-radius: 1px;
+    }
   }
 
   .image-error {
-    width: 200px;
-    height: 150px;
-    background: #e8e8e8;
-    border-radius: 4px;
+    width: 100%;
+    height: 100%;
+    background: #b8babf;
+    border-radius: 10px;
     color: #999;
     font-size: 13px;
     display: flex;
@@ -349,6 +482,15 @@ onBeforeUnmount(() => {
     justify-content: center;
     color: #fff;
     font-size: 16px;
+  }
+}
+
+@keyframes image-loading-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
   }
 }
 
