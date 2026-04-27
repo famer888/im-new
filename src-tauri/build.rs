@@ -46,6 +46,11 @@ fn main() {
 
     // Re-run build if any proto file changes.
     println!("cargo:rerun-if-changed={}", proto_dir);
+    // Tauri app icons are embedded into macOS app metadata during build.
+    // Without watching these paths, Cargo may reuse stale build artifacts
+    // after only icon assets changed, leaving Dock/Finder icons outdated.
+    println!("cargo:rerun-if-changed=icons");
+    println!("cargo:rerun-if-changed=tauri.conf.json");
 
     tauri_build::build();
 }

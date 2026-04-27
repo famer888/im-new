@@ -58,6 +58,12 @@ if [[ -n "$TAURI_TARGET" ]]; then
   TAURI_ARGS+=(--target "$TAURI_TARGET")
 fi
 
+if [[ -n "$TAURI_TARGET" ]]; then
+  echo "Building macOS release artifacts for target: $TAURI_TARGET"
+else
+  echo "Building macOS release artifacts for native host target"
+fi
+
 CARGO_TARGET_DIR="$BUILD_TARGET_DIR" pnpm tauri "${TAURI_ARGS[@]}"
 
 if [[ -n "$TAURI_TARGET" ]]; then

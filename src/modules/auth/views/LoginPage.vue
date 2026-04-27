@@ -102,7 +102,7 @@ function startWindowDrag(e: MouseEvent) {
   position: absolute;
   left: 0;
   top: 0;
-  height: 400px;
+  height: 420px;
   width: 300px;
 
   .drag {

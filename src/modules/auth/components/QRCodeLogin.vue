@@ -271,7 +271,7 @@ onBeforeUnmount(() => {
     </section>
     <p>{{ t('使用手机版扫描二维码登录') }}</p>
     <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
-    <button class="primaryBtn" @click="emit('show-import')">
+    <button class="importBtn" @click="emit('show-import')">
       {{ t('载入账户设置') }}
     </button>
   </div>
@@ -374,18 +374,21 @@ onBeforeUnmount(() => {
     padding: 0 20px;
   }
 
-  > .primaryBtn {
+  > .importBtn {
     margin-top: 5px;
-    padding: 6px 16px;
-    background: none;
+    padding: 0 28px;
+    height: 32px;
+    line-height: 32px;
+    background-color: #3369fe;
     border: 1px solid #3369fe;
     border-radius: 4px;
-    color: #3369fe;
-    font-size: 13px;
+    color: #fff;
+    font-size: 12px;
     cursor: pointer;
+    display: inline-block;
 
     &:hover {
-      background: rgba(51, 105, 254, 0.05);
+      background-color: rgba(51, 105, 254, 0.9);
     }
   }
 }
