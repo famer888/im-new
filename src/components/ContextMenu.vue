@@ -174,7 +174,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 <style lang="scss" scoped>
 .context-menu {
   position: fixed;
-  z-index: 9800;
+  z-index: 11000;
   min-width: 140px;
   background: #fff;
   border-radius: 6px;
