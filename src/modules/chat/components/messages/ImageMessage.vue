@@ -18,6 +18,37 @@ const showPreview = ref(false)
 let downloadToken = 0
 let stopDownloadEvents: Array<() => void> = []
 
+type ImageDisplayCacheEntry = {
+  src: string
+  localFilePath: string
+  cachedAt: number
+}
+
+const IMAGE_DISPLAY_CACHE_MAX = 240
+const imageDisplayCache = new Map<string, ImageDisplayCacheEntry>()
+
+function getCachedImage(key: string) {
+  const entry = imageDisplayCache.get(key)
+  if (!entry) return null
+  imageDisplayCache.delete(key)
+  imageDisplayCache.set(key, entry)
+  return entry
+}
+
+function setCachedImage(key: string, entry: Omit<ImageDisplayCacheEntry, 'cachedAt'>) {
+  if (!key || !entry.src || entry.src.startsWith('blob:')) return
+  imageDisplayCache.delete(key)
+  imageDisplayCache.set(key, {
+    ...entry,
+    cachedAt: Date.now(),
+  })
+  while (imageDisplayCache.size > IMAGE_DISPLAY_CACHE_MAX) {
+    const oldestKey = imageDisplayCache.keys().next().value
+    if (!oldestKey) break
+    imageDisplayCache.delete(oldestKey)
+  }
+}
+
 function isLikelyBase64ImagePayload(value: string): boolean {
   const raw = value.trim()
   if (!raw || raw.length < 32 || raw.length % 4 !== 0) return false
@@ -139,8 +170,16 @@ const groupId = computed(() => {
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
+const imageCacheKey = computed(() => [
+  props.message.id || '',
+  props.message.customMsgId || '',
+  downloadUrl.value || imageData.value.url || '',
+  thumbnailUrl.value || '',
+  fileKey.value || '',
+  attachmentKey.value || '',
+].join('|'))
 
-watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey], () => {
+watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey, imageCacheKey], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
@@ -150,12 +189,28 @@ watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey], () => {
     isLoaded.value = true
     return
   }
+  const cached = getCachedImage(imageCacheKey.value)
+  if (cached) {
+    activeSrc.value = cached.src
+    localFilePath.value = cached.localFilePath
+    loadError.value = false
+    isLoaded.value = true
+    return
+  }
   if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
     downloadAndDecryptImage()
     return
   }
   activeSrc.value = thumbnailUrl.value
 }, { immediate: true })
+
+function handleLoad() {
+  isLoaded.value = true
+  setCachedImage(imageCacheKey.value, {
+    src: activeSrc.value,
+    localFilePath: localFilePath.value,
+  })
+}
 
 function handleError() {
   const originalUrl = imageData.value.url
@@ -294,6 +349,10 @@ async function downloadAndDecryptImage() {
       loadError.value = false
       isLoaded.value = false
       activeSrc.value = src
+      setCachedImage(imageCacheKey.value, {
+        src,
+        localFilePath: localFilePath.value,
+      })
     })
     const unlistenError = await listen(errorEvent, () => {
       if (token !== downloadToken) return
@@ -332,7 +391,7 @@ onBeforeUnmount(() => {
         :data-local-path="localFilePath || undefined"
         alt=""
         :class="{ loaded: isLoaded }"
-        @load="isLoaded = true"
+        @load="handleLoad"
         @error="handleError"
       />
       <div v-if="showImageOverlay" class="image-loading">
