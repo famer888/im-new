@@ -14,7 +14,7 @@
     "tauri:dev:uat": "tauri dev -- --mode uat",
     "tauri:dev:mac-app": "tauri build --debug --bundles app && open 'src-tauri/target/debug/bundle/macos/OCS Chat.app'",
     "tauri:build": "tauri build",
-    "tauri:build:mac": "tauri build --target universal-apple-darwin",
+    "tauri:build:mac": "TAURI_TARGET=universal-apple-darwin bash ./scripts/build-release-dist-macos.sh",
     "tauri:build:mac:uat": "tauri build --target universal-apple-darwin -- --mode uat",
     "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc",
     "tauri:build:win:uat": "tauri build --target x86_64-pc-windows-msvc -- --mode uat",
