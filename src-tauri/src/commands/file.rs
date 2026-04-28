@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, State};
 use base64::{engine::general_purpose, Engine as _};
 
@@ -52,6 +55,25 @@ pub struct ImageSendLogPayload {
     pub data: Option<serde_json::Value>,
 }
 
+static AUDIO_PLAYERS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
+
+fn audio_players() -> &'static Mutex<HashMap<String, Child>> {
+    AUDIO_PLAYERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stop_audio_children(players: &mut HashMap<String, Child>, keep_id: Option<&str>) {
+    let ids: Vec<String> = players.keys().cloned().collect();
+    for id in ids {
+        if keep_id == Some(id.as_str()) {
+            continue;
+        }
+        if let Some(mut child) = players.remove(&id) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[tauri::command]
 pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
     let data = payload
@@ -59,12 +81,71 @@ pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "{}".to_string());
 
-    match payload.level.as_deref().unwrap_or("info") {
-        "error" => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
-        "warn" => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
-        _ => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
+    let is_audio_log = payload.message.starts_with("[audio-message]");
+    match (is_audio_log, payload.level.as_deref().unwrap_or("info")) {
+        (true, "error") => tracing::error!(target: "audio-message", data = %data, "{}", payload.message),
+        (true, "warn") => tracing::warn!(target: "audio-message", data = %data, "{}", payload.message),
+        (true, _) => tracing::info!(target: "audio-message", data = %data, "{}", payload.message),
+        (false, "error") => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
+        (false, "warn") => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
+        (false, _) => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn play_audio_file(msg_id: String, file_path: String) -> Result<(), String> {
+    let path = PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err(format!("audio file not found: {}", file_path));
+    }
+
+    let mut players = audio_players()
+        .lock()
+        .map_err(|_| "audio player lock poisoned".to_string())?;
+    stop_audio_children(&mut players, None);
+
+    #[cfg(target_os = "macos")]
+    let child = Command::new("afplay")
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn afplay failed: {}", e))?;
+
+    #[cfg(not(target_os = "macos"))]
+    let child = {
+        return Err("audio playback is currently only implemented on macOS".to_string());
+    };
+
+    players.insert(msg_id.clone(), child);
+    tracing::info!(
+        target: "audio-message",
+        "play_audio_file started msg_id={} path={}",
+        msg_id,
+        file_path,
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_audio_file(msg_id: Option<String>) -> Result<(), String> {
+    let mut players = audio_players()
+        .lock()
+        .map_err(|_| "audio player lock poisoned".to_string())?;
+
+    if let Some(id) = msg_id {
+        if let Some(mut child) = players.remove(&id) {
+            let _ = child.kill();
+            let _ = child.wait();
+            tracing::info!(target: "audio-message", "stop_audio_file msg_id={}", id);
+        }
+    } else {
+        stop_audio_children(&mut players, None);
+        tracing::info!(target: "audio-message", "stop_audio_file all");
+    }
     Ok(())
 }
 
@@ -131,6 +212,15 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
         }
     }
     "image/png"
+}
+
+fn bytes_head_hex(bytes: &[u8], len: usize) -> String {
+    bytes
+        .iter()
+        .take(len)
+        .map(|byte| format!("{:02X}", byte))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[tauri::command]
@@ -254,18 +344,42 @@ pub async fn download_file(
     file_key: String,
     save_path: String,
     msg_id: String,
+    log_tag: Option<String>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&save_path);
+    let should_log_audio = log_tag.as_deref() == Some("audio");
+    if should_log_audio {
+        tracing::info!(
+            target: "audio-message",
+            "download_file request msg_id={} url_head={} save_path={} file_key_head={} file_key_len={}",
+            msg_id,
+            url.chars().take(120).collect::<String>(),
+            save_path,
+            file_key.chars().take(10).collect::<String>(),
+            file_key.len(),
+        );
+    }
 
     let app_clone = app.clone();
     let msg_id_clone = msg_id.clone();
+    let should_log_audio_clone = should_log_audio;
 
     tokio::spawn(async move {
         let download_result = async {
             if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                 let decoded = tokio::fs::read(&path)
                     .await
-                    .map_err(|e| format!("Read cached image failed: {}", e))?;
+                    .map_err(|e| format!("Read cached file failed: {}", e))?;
+                if should_log_audio_clone {
+                    tracing::info!(
+                        target: "audio-message",
+                        "download_file cache hit msg_id={} path={} bytes={} head_hex={}",
+                        msg_id_clone,
+                        path.to_string_lossy(),
+                        decoded.len(),
+                        bytes_head_hex(&decoded, 16),
+                    );
+                }
                 let mime = sniff_image_mime(&decoded);
                 let data_url = format!(
                     "data:{};base64,{}",
@@ -275,13 +389,51 @@ pub async fn download_file(
                 return Ok::<(u64, String), String>((decoded.len() as u64, data_url));
             }
 
+            if should_log_audio_clone {
+                tracing::info!(
+                    target: "audio-message",
+                    "download_file http start msg_id={} url_head={}",
+                    msg_id_clone,
+                    url.chars().take(120).collect::<String>(),
+                );
+            }
             let response = reqwest::get(&url)
                 .await
                 .map_err(|e| format!("Download failed: {}", e))?;
+            let status = response.status();
+            if should_log_audio_clone {
+                tracing::info!(
+                    target: "audio-message",
+                    "download_file http response msg_id={} status={} ok={}",
+                    msg_id_clone,
+                    status.as_u16(),
+                    status.is_success(),
+                );
+            }
+            if !status.is_success() {
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|e| format!("read error body failed: {}", e));
+                return Err(format!(
+                    "Download failed: HTTP {} body_head={}",
+                    status.as_u16(),
+                    body.chars().take(400).collect::<String>()
+                ));
+            }
             let bytes = response
                 .bytes()
                 .await
                 .map_err(|e| format!("Read body failed: {}", e))?;
+            if should_log_audio_clone {
+                tracing::info!(
+                    target: "audio-message",
+                    "download_file http body msg_id={} encrypted_bytes={} encrypted_head_hex={}",
+                    msg_id_clone,
+                    bytes.len(),
+                    bytes_head_hex(&bytes, 16),
+                );
+            }
 
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent)
@@ -294,6 +446,17 @@ pub async fn download_file(
                 .await
                 .map_err(|e| format!("Write encrypted file failed: {}", e))?;
 
+            if should_log_audio_clone {
+                tracing::info!(
+                    target: "audio-message",
+                    "download_file decrypt start msg_id={} enc_path={} out_path={} file_key_head={} file_key_len={}",
+                    msg_id_clone,
+                    enc_path.to_string_lossy(),
+                    path.to_string_lossy(),
+                    file_key.chars().take(10).collect::<String>(),
+                    file_key.len(),
+                );
+            }
             crypto::file_crypto::decrypt_file(
                 enc_path.to_str().unwrap_or_default(),
                 path.to_str().unwrap_or_default(),
@@ -308,6 +471,15 @@ pub async fn download_file(
             let decoded = tokio::fs::read(&path)
                 .await
                 .map_err(|e| format!("Read decrypted file failed: {}", e))?;
+            if should_log_audio_clone {
+                tracing::info!(
+                    target: "audio-message",
+                    "download_file decrypt done msg_id={} decoded_bytes={} decoded_head_hex={}",
+                    msg_id_clone,
+                    decoded.len(),
+                    bytes_head_hex(&decoded, 16),
+                );
+            }
             let mime = sniff_image_mime(&decoded);
             let data_url = format!(
                 "data:{};base64,{}",
@@ -320,6 +492,14 @@ pub async fn download_file(
 
         match download_result {
             Ok((size, data_url)) => {
+                if should_log_audio_clone {
+                    tracing::info!(
+                        target: "audio-message",
+                        "download_file emit done msg_id={} size={}",
+                        msg_id_clone,
+                        size,
+                    );
+                }
                 let _ = app_clone.emit(
                     &format!("file:done:{}", msg_id_clone),
                     DownloadProgress {
@@ -333,6 +513,14 @@ pub async fn download_file(
                 );
             }
             Err(e) => {
+                if should_log_audio_clone {
+                    tracing::error!(
+                        target: "audio-message",
+                        "download_file emit error msg_id={} error={}",
+                        msg_id_clone,
+                        e,
+                    );
+                }
                 let _ = app_clone.emit(
                     &format!("file:error:{}", msg_id_clone),
                     serde_json::json!({ "error": e }),

@@ -132,6 +132,16 @@ struct ReadCandidate {
     extra: Option<String>,
 }
 
+fn message_digest(msg_type: i32, content: Option<&str>) -> String {
+    match msg_type {
+        1 => "[图片]".to_string(),
+        2 => "[语音]".to_string(),
+        3 => "[视频]".to_string(),
+        7 => "[文件]".to_string(),
+        _ => content.unwrap_or_default().trim().chars().take(200).collect(),
+    }
+}
+
 /// 入站消息落库（用于 WS 推送消息的本地历史持久化）。
 ///
 /// 对齐列表未读角标：对「入库前不存在」且「发送者不是当前账号」的消息递增 `unread_count`，
@@ -220,7 +230,7 @@ pub async fn upsert_incoming_messages(
                     rusqlite::params![
                         msg.id,
                         msg.send_time,
-                        msg.content.clone().unwrap_or_default(),
+                        message_digest(msg.msg_type, msg.content.as_deref()),
                         msg.conversation_id,
                     ],
                 )
@@ -403,7 +413,7 @@ pub async fn send_message(
         Err(reason)
     };
 
-    // 按会话类型分流。文本和图片走 WS 发送链路，其余未实现类型先保持原来的
+    // 按会话类型分流。文本、图片、语音走 WS 发送链路，其余未实现类型先保持原来的
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
         (1, 0) => {
@@ -462,7 +472,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (1, 1) => {
+        (1, 1) | (1, 2) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -490,7 +500,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) => {
+        (0, 1) | (0, 2) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,

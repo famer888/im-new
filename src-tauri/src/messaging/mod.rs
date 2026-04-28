@@ -93,9 +93,55 @@ pub fn encode_image_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将前端音频内容编码为旧 im 使用的 AudioObj protobuf。
+///
+/// 兼容两种输入：
+/// - 新项目 UI 的 JSON：`{ url, duration, size, fileKey }`
+/// - 旧 im 解码后的内容串：`url||duration`
+pub fn encode_audio_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (url, duration, file_size) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let url = value
+                .get("url")
+                .or_else(|| value.get("fileUrl"))
+                .or_else(|| value.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let duration = value
+                .get("duration")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+            let file_size = value
+                .get("size")
+                .or_else(|| value.get("fileSize"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (url, duration, file_size)
+        } else {
+            let parts: Vec<&str> = raw.split("||").collect();
+            let url = parts.get(0).copied().unwrap_or_default().to_string();
+            let duration = parts
+                .get(1)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            (url, duration, 0)
+        };
+
+    let obj = imweb::AudioObj {
+        duration,
+        file_size,
+        url,
+        r#ref: None,
+    };
+    obj.encode_to_vec()
+}
+
 pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
+        2 => encode_audio_obj(content),
         _ => encode_text_obj(content),
     }
 }
@@ -148,6 +194,7 @@ pub fn build_send_group_message_req(
     send_time: i64,
     flag: i64,
     at_uids: Vec<i64>,
+    attachment_file_key: Option<&str>,
 ) -> Result<Vec<u8>, CryptoError> {
     let encrypted = encrypt_with_rel_key(rel_key, content_plain)?;
     let mut hasher = Md5::new();
@@ -166,7 +213,7 @@ pub fn build_send_group_message_req(
         // 加密版本：与老 im 群消息一致固定 1。
         version: 1,
         content_md5,
-        attachment_key: String::new(),
+        attachment_key: encrypt_attachment_key(rel_key, attachment_file_key)?,
         group_name: String::new(),
         snapchat_time: 0,
         at_users: Vec::new(),
@@ -281,6 +328,7 @@ mod tests {
         let plain = encode_text_obj("hi group");
         let req_bytes = build_send_group_message_req(
             10086, 88, 0, &plain, rel_key, 1_700_000_000_000, 42, vec![],
+            None,
         )
         .unwrap();
 
