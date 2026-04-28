@@ -44,6 +44,30 @@ pub struct OssPutObjectResult {
     pub body: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageSendLogPayload {
+    pub level: Option<String>,
+    pub message: String,
+    pub data: Option<serde_json::Value>,
+}
+
+#[tauri::command]
+pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
+    let data = payload
+        .data
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "{}".to_string());
+
+    match payload.level.as_deref().unwrap_or("info") {
+        "error" => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
+        "warn" => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
+        _ => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
+    }
+
+    Ok(())
+}
+
 fn hmac_sha1_base64(secret: &str, message: &str) -> String {
     let mut key = secret.as_bytes().to_vec();
     if key.len() > 64 {

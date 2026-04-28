@@ -6,6 +6,7 @@ import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
@@ -40,6 +41,7 @@ const chatStore = useChatStore()
 const groupStore = useGroupStore()
 const contactStore = useContactStore()
 const messageStore = useMessageStore()
+const authStore = useAuthStore()
 const settingStore = useSettingStore()
 const uiStore = useUIStore()
 const { t } = useI18n()
@@ -126,6 +128,18 @@ interface UploadedImagePayload {
   fileKey: string
 }
 
+interface ImageSendTrace {
+  id: string
+  startedAt: number
+}
+
+interface LocalImagePreview {
+  url: string
+  width: number
+  height: number
+  optimisticId: string
+}
+
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
@@ -139,10 +153,47 @@ function terminalLog(
 ) {
   const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
   log(`[image-send] ${message}`, data || {})
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message,
+        data: data || {},
+      },
+    }))
+    .catch(() => {})
 }
 
 function safeHead(value: string, length = 8): string {
   return value ? value.slice(0, length) : ''
+}
+
+function createImageTrace(): ImageSendTrace {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    startedAt: performance.now(),
+  }
+}
+
+function traceLog(
+  trace: ImageSendTrace,
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  terminalLog(message, {
+    traceId: trace.id,
+    elapsedMs: Math.round(performance.now() - trace.startedAt),
+    ...(data || {}),
+  }, level)
+}
+
+let localImageSeq = 0
+
+function createOptimisticImageId(): string {
+  localImageSeq = (localImageSeq + 1) % 1000
+  return String(Date.now() * 1000 + localImageSeq)
 }
 
 interface ClipboardFilePayload {
@@ -478,6 +529,50 @@ function getImageSize(src: string): Promise<{ width: number; height: number }> {
   })
 }
 
+async function appendLocalImagePreview(
+  file: File,
+  fileKey: string,
+  trace: ImageSendTrace,
+): Promise<LocalImagePreview | null> {
+  const conversationId = convId.value
+  const uid = authStore.uid
+  if (!conversationId || !uid) return null
+
+  const previewUrl = URL.createObjectURL(file)
+  const { width, height } = await getImageSize(previewUrl)
+  const optimisticId = createOptimisticImageId()
+  const extra = withReadBurnExtra({ fileKey, uploadPending: true, imageTraceId: trace.id })
+  messageStore.appendMessage(conversationId, {
+    id: optimisticId,
+    customMsgId: optimisticId,
+    conversationId,
+    senderId: uid,
+    msgType: MessageType.Image,
+    content: JSON.stringify({
+      url: previewUrl,
+      thumbnailUrl: previewUrl,
+      width,
+      height,
+      size: file.size,
+      name: file.name,
+      fileKey,
+    }),
+    sendTime: Date.now(),
+    status: 0,
+    readStatus: 0,
+    version: 0,
+    isDeleted: false,
+    extra: extra ? JSON.stringify(extra) : null,
+  })
+  traceLog(trace, 'local preview appended', {
+    optimisticId,
+    width,
+    height,
+    size: file.size,
+  })
+  return { url: previewUrl, width, height, optimisticId }
+}
+
 function getFileSizeLimitBytes(file: File): number {
   return file.type.startsWith('image/') ? MAX_IMAGE_SIZE_BYTES : MAX_FILE_SIZE_BYTES
 }
@@ -604,9 +699,13 @@ async function putObjectToOss(options: {
   securityToken: string
   body: Uint8Array
   contentType: string
+  trace?: ImageSendTrace
 }) {
   const contentType = options.contentType || 'application/octet-stream'
-  terminalLog('oss put start', {
+  const log = options.trace
+    ? (message: string, data: Record<string, unknown>, level?: 'info' | 'warn' | 'error') => traceLog(options.trace!, message, data, level)
+    : terminalLog
+  log('oss put start', {
     urlHost: (() => {
       try { return new URL(options.url).host } catch { return options.url.slice(0, 60) }
     })(),
@@ -634,7 +733,7 @@ async function putObjectToOss(options: {
         bodyBase64: bytesToBase64(options.body),
       },
     })
-    terminalLog('oss put response', {
+    log('oss put response', {
       ok: result.ok,
       status: result.status,
       body: result.body,
@@ -664,7 +763,7 @@ async function putObjectToOss(options: {
     },
     body: new Blob([bodyBuffer], { type: contentType }),
   })
-  terminalLog('oss put response', {
+  log('oss put response', {
     ok: response.ok,
     status: response.status,
     statusText: response.statusText,
@@ -674,17 +773,26 @@ async function putObjectToOss(options: {
   }
 }
 
-async function uploadImageLikeIm(file: File): Promise<UploadedImagePayload> {
-  terminalLog('upload start', {
+async function uploadImageLikeIm(
+  file: File,
+  options?: {
+    fileKey?: string
+    width?: number
+    height?: number
+    trace?: ImageSendTrace
+  },
+): Promise<UploadedImagePayload> {
+  const trace = options?.trace ?? createImageTrace()
+  traceLog(trace, 'upload start', {
     name: file.name,
     size: file.size,
     type: file.type,
   })
-  const fileKey = createFileKey()
+  const fileKey = options?.fileKey || createFileKey()
   const encrypted = await encryptFileForUpload(file, fileKey)
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
-  terminalLog('encrypt done', {
+  traceLog(trace, 'encrypt done', {
     originalBytes: file.size,
     encryptedBytes: encrypted.byteLength,
     suffix,
@@ -701,7 +809,7 @@ async function uploadImageLikeIm(file: File): Promise<UploadedImagePayload> {
     }),
     getUploadToken(),
   ])
-  terminalLog('upload api response', {
+  traceLog(trace, 'upload api response', {
     fileIdHead: safeHead(String(uploadUrlInfo.fileId || ''), 24),
     fileIdLen: String(uploadUrlInfo.fileId || '').length,
     responseUrlHost: (() => {
@@ -736,12 +844,13 @@ async function uploadImageLikeIm(file: File): Promise<UploadedImagePayload> {
     securityToken,
     body: encrypted,
     contentType,
+    trace,
   })
 
-  const dataUrl = await fileToDataURL(file)
-  const { width, height } = await getImageSize(dataUrl)
+  const width = options?.width ?? 0
+  const height = options?.height ?? 0
   const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
-  terminalLog('upload done', {
+  traceLog(trace, 'upload done', {
     finalUrlHost: (() => {
       try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
     })(),
@@ -859,8 +968,11 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
       continue
     }
     if (file.type.startsWith('image/')) {
+      let localPreview: LocalImagePreview | null = null
       try {
-        terminalLog('handle image file', {
+        const trace = createImageTrace()
+        const fileKey = createFileKey()
+        traceLog(trace, 'handle image file', {
           conversationId: convId.value,
           isGroup: isGroup.value,
           isFriend: isFriend.value,
@@ -882,9 +994,16 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             name: file.name,
           }), MessageType.Image, withReadBurnExtra())
         } else {
-          const uploaded = await uploadImageLikeIm(file)
-          terminalLog('emit uploaded image message', {
+          localPreview = await appendLocalImagePreview(file, fileKey, trace)
+          const uploaded = await uploadImageLikeIm(file, {
+            fileKey,
+            width: localPreview?.width,
+            height: localPreview?.height,
+            trace,
+          })
+          traceLog(trace, 'emit uploaded image message', {
             conversationId: convId.value,
+            optimisticId: localPreview?.optimisticId || '',
             urlHost: (() => {
               try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
             })(),
@@ -899,10 +1018,22 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             size: uploaded.size,
             name: uploaded.name,
             fileKey: uploaded.fileKey,
-          }), MessageType.Image, withReadBurnExtra({ fileKey: uploaded.fileKey }))
+          }), MessageType.Image, withReadBurnExtra({
+            fileKey: uploaded.fileKey,
+            ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
+          }))
+          if (localPreview?.url.startsWith('blob:')) {
+            window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
+          }
         }
       } catch (error) {
         console.error('[message-input] prepare image payload failed:', error)
+        if (localPreview?.optimisticId) {
+          messageStore.updateMessageStatus(localPreview.optimisticId, -1)
+        }
+        if (localPreview?.url.startsWith('blob:')) {
+          window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
+        }
         terminalLog('image send prepare/upload failed', {
           message: (error as Error)?.message || String(error),
           name: file.name,

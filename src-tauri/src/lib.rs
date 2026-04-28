@@ -151,6 +151,7 @@ pub fn run() {
             commands::channels::get_channel_info,
             commands::file::upload_file,
             commands::file::upload_oss_object,
+            commands::file::image_send_log,
             commands::file::download_file,
             commands::file::get_download_progress,
             commands::file::save_base64_image,
