@@ -28,15 +28,7 @@ pub struct DecodedMessage {
 fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
     match msg_type {
         1 => match imweb::ImageObj::decode(plain) {
-            Ok(obj) => serde_json::json!({
-                "url": obj.url,
-                "thumbnailUrl": obj.thumb_url,
-                "width": obj.width,
-                "height": obj.height,
-                "size": obj.file_size,
-                "sizeType": obj.size_type,
-            })
-            .to_string(),
+            Ok(obj) => image_obj_to_json(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
         _ => match imweb::TextObj::decode(plain) {
@@ -44,6 +36,18 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
     }
+}
+
+fn image_obj_to_json(obj: imweb::ImageObj) -> String {
+    serde_json::json!({
+        "url": obj.url,
+        "thumbnailUrl": obj.thumb_url,
+        "width": obj.width,
+        "height": obj.height,
+        "size": obj.file_size,
+        "sizeType": obj.size_type,
+    })
+    .to_string()
 }
 
 fn decrypt_group_attachment_key(
@@ -62,6 +66,44 @@ fn decrypt_group_attachment_key(
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn decrypt_friend_attachment_key(
+    crypto: &crate::crypto::CryptoEngine,
+    friend_id: &str,
+    version: i64,
+    source: &str,
+    attachment_key: &str,
+) -> Option<String> {
+    let raw = attachment_key.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let data = hex::decode(raw).ok()?;
+    crypto
+        .decrypt_friend_message(friend_id, version, source, &data)
+        .or_else(|_| {
+            let key = crypto
+                .get_latest_friend_key(friend_id, source)
+                .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+            crate::crypto::aes::decrypt_message(&data, &key)
+        })
+        .ok()
+        .and_then(|plain| String::from_utf8(plain).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn fallback_plain_file_key(attachment_key: &str) -> Option<String> {
+    let raw = attachment_key.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.len() <= 32 || !raw.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(raw.to_string());
+    }
+    None
 }
 
 /// 20201 `SendGroupMessageResp` 解出来后派发到前端的结构。
@@ -425,35 +467,40 @@ impl MessageBatcher {
         // 不是 MessageContent.version（接收端对应设备的 keyVersion）。
         // 桌面端优先尝试 webContent，和老 im `fnFriendMsgAdd` 保持一致。
         if let Some(web) = &om.web_content {
-            ciphertexts_to_try.push((ver, sender_source, web.content.as_slice()));
-            ciphertexts_to_try.push((web.version as i64, "web", web.content.as_slice()));
+            let attachment_key = if web.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { web.attachment_key.as_str() };
+            ciphertexts_to_try.push((ver, sender_source, web.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((web.version as i64, "web", web.content.as_slice(), attachment_key));
         }
         if let Some(app) = &om.app_content {
-            ciphertexts_to_try.push((ver, sender_source, app.content.as_slice()));
-            ciphertexts_to_try.push((app.version as i64, "app", app.content.as_slice()));
+            let attachment_key = if app.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { app.attachment_key.as_str() };
+            ciphertexts_to_try.push((ver, sender_source, app.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((app.version as i64, "app", app.content.as_slice(), attachment_key));
         }
         if let Some(mapp) = &om.myself_app_content {
-            ciphertexts_to_try.push((ver, sender_source, mapp.content.as_slice()));
-            ciphertexts_to_try.push((mapp.version as i64, "app", mapp.content.as_slice()));
+            let attachment_key = if mapp.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { mapp.attachment_key.as_str() };
+            ciphertexts_to_try.push((ver, sender_source, mapp.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((mapp.version as i64, "app", mapp.content.as_slice(), attachment_key));
         }
         if let Some(mweb) = &om.myself_web_content {
-            ciphertexts_to_try.push((ver, sender_source, mweb.content.as_slice()));
-            ciphertexts_to_try.push((mweb.version as i64, "web", mweb.content.as_slice()));
+            let attachment_key = if mweb.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { mweb.attachment_key.as_str() };
+            ciphertexts_to_try.push((ver, sender_source, mweb.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((mweb.version as i64, "web", mweb.content.as_slice(), attachment_key));
         }
         // Fallback for old/unencrypted messages that might still use `content`
         if !om.content.is_empty() {
-            ciphertexts_to_try.push((ver, sender_source, om.content.as_slice()));
-            ciphertexts_to_try.push((ver, "web", om.content.as_slice()));
-            ciphertexts_to_try.push((ver, "app", om.content.as_slice()));
+            ciphertexts_to_try.push((ver, sender_source, om.content.as_slice(), om.attachment_key.as_str()));
+            ciphertexts_to_try.push((ver, "web", om.content.as_slice(), om.attachment_key.as_str()));
+            ciphertexts_to_try.push((ver, "app", om.content.as_slice(), om.attachment_key.as_str()));
         }
         let cipher_candidates: Vec<serde_json::Value> = ciphertexts_to_try
             .iter()
-            .filter(|(_, _, cipher)| !cipher.is_empty())
-            .map(|(version, source, cipher)| {
+            .filter(|(_, _, cipher, _)| !cipher.is_empty())
+            .map(|(version, source, cipher, attachment_key)| {
                 serde_json::json!({
                     "version": *version,
                     "source": *source,
                     "cipherHex": hex::encode(*cipher),
+                    "attachmentKey": attachment_key,
                 })
             })
             .collect();
@@ -467,9 +514,11 @@ impl MessageBatcher {
         let mut decrypted: Result<Vec<u8>, crate::crypto::CryptoError> =
             Err(crate::crypto::CryptoError::KeyNotFound);
         let mut fallback_err = None;
+        let mut selected_attachment_key = String::new();
+        let mut selected_file_key = None;
 
         'outer: for fid in &candidate_ids {
-            for (v, source, cipher) in &ciphertexts_to_try {
+            for (v, source, cipher, attachment_key) in &ciphertexts_to_try {
                 if cipher.is_empty() {
                     continue;
                 }
@@ -484,6 +533,9 @@ impl MessageBatcher {
                     });
 
                 if decrypted.is_ok() {
+                    selected_attachment_key = (*attachment_key).to_string();
+                    selected_file_key = decrypt_friend_attachment_key(&crypto, fid, *v, source, attachment_key)
+                        .or_else(|| fallback_plain_file_key(attachment_key));
                     break 'outer;
                 } else if let Err(e) = &decrypted {
                     // Keep the first actual AES error instead of KeyNotFound
@@ -499,18 +551,36 @@ impl MessageBatcher {
 
         let mut decrypt_pending = false;
         let content = match decrypted {
-            Ok(plain) => match imweb::TextObj::decode(plain.as_slice()) {
-                Ok(obj) => obj.content,
-                Err(_) => String::from_utf8_lossy(&plain).to_string(),
-            },
+            Ok(plain) => decode_content_obj(om.msg_type, plain.as_slice()),
             Err(e) => {
                 // Determine which ciphertext to use for fallback parsing
                 let fallback_cipher = ciphertexts_to_try
                     .first()
-                    .map(|(_, _, c)| *c)
+                    .map(|(_, _, c, _)| *c)
                     .unwrap_or(om.content.as_slice());
 
-                if let Ok(obj) = imweb::TextObj::decode(fallback_cipher) {
+                if om.msg_type == 1 {
+                    if let Ok(obj) = imweb::ImageObj::decode(fallback_cipher) {
+                        warn!(
+                            "PRIVATE_MSG_RECEIVED decrypt failed but raw ImageObj parsed sender_uid={} msg_id={} err={}",
+                            om.send_uid, om.msg_id, e
+                        );
+                        image_obj_to_json(obj)
+                    } else if let Ok(s) = String::from_utf8(fallback_cipher.to_vec()) {
+                        warn!(
+                            "PRIVATE_MSG_RECEIVED decrypt failed but raw UTF-8 parsed sender_uid={} msg_id={} err={}",
+                            om.send_uid, om.msg_id, e
+                        );
+                        s
+                    } else {
+                        decrypt_pending = true;
+                        warn!(
+                            "PRIVATE_MSG_RECEIVED decrypt failed sender_uid={} msg_id={} err={}",
+                            om.send_uid, om.msg_id, e
+                        );
+                        "[加密消息，等待密钥同步]".to_string()
+                    }
+                } else if let Ok(obj) = imweb::TextObj::decode(fallback_cipher) {
                     warn!(
                         "PRIVATE_MSG_RECEIVED decrypt failed but raw TextObj parsed sender_uid={} msg_id={} err={}",
                         om.send_uid, om.msg_id, e
@@ -556,6 +626,9 @@ impl MessageBatcher {
                 "friendIdCandidates": candidate_ids,
                 "cipherHex": primary_cipher_hex,
                 "cipherCandidates": cipher_candidates,
+                "attachmentKey": om.attachment_key,
+                "fileKey": selected_file_key.unwrap_or_default(),
+                "messageContentAttachmentKey": selected_attachment_key,
             }),
         }])
     }

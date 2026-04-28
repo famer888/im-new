@@ -18,6 +18,30 @@ const showPreview = ref(false)
 let downloadToken = 0
 let stopDownloadEvents: Array<() => void> = []
 
+function isLikelyBase64ImagePayload(value: string): boolean {
+  const raw = value.trim()
+  if (!raw || raw.length < 32 || raw.length % 4 !== 0) return false
+  if (/^(https?:|blob:|file:|asset:|tauri:|\/)/i.test(raw)) return false
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) return false
+  return /^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR|Qk|AAAAIGZ0eXBhdmlm|PD94bWw|PHN2Z)/.test(raw)
+}
+
+function normalizeImageSrc(value: unknown, mimeType?: unknown): string {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^data:image\//i.test(raw)) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (isLikelyBase64ImagePayload(raw)) {
+    const mime = String(mimeType || 'image/png').trim() || 'image/png'
+    return `data:${mime};base64,${raw}`
+  }
+  return raw
+}
+
+function isRemoteImageSrc(src: string): boolean {
+  return /^https?:\/\//i.test(src)
+}
+
 const imageData = computed((): {
   url: string
   thumbnailUrl: string
@@ -30,8 +54,14 @@ const imageData = computed((): {
 
   try {
     const parsed = JSON.parse(raw)
-    const url = parsed.url || parsed.fileUrl || parsed.path || ''
-    const thumbnailUrl = parsed.thumbnailUrl || parsed.thumbUrl || url
+    const url = normalizeImageSrc(
+      parsed.url || parsed.fileUrl || parsed.path || parsed.dataUrl || parsed.data_url || parsed.base64 || '',
+      parsed.mimeType || parsed.mime_type || parsed.mime,
+    )
+    const thumbnailUrl = normalizeImageSrc(
+      parsed.thumbnailUrl || parsed.thumbUrl || parsed.thumbnail || parsed.thumbBase64 || parsed.thumb_base64 || url,
+      parsed.thumbMimeType || parsed.thumb_mime_type || parsed.mimeType || parsed.mime_type || parsed.mime,
+    )
     return {
       url,
       thumbnailUrl,
@@ -41,9 +71,11 @@ const imageData = computed((): {
     }
   } catch {
     const [url = '', thumbUrl = '', size = '0'] = raw.split('||')
+    const normalizedUrl = normalizeImageSrc(url)
+    const normalizedThumbUrl = normalizeImageSrc(thumbUrl)
     return {
-      url,
-      thumbnailUrl: thumbUrl || url,
+      url: normalizedUrl,
+      thumbnailUrl: normalizedThumbUrl || normalizedUrl,
       width: 0,
       height: 0,
       size: Number(size || 0),
@@ -52,6 +84,13 @@ const imageData = computed((): {
 })
 
 const thumbnailUrl = computed(() => imageData.value.thumbnailUrl || imageData.value.url || '')
+const downloadUrl = computed(() => {
+  const original = imageData.value.url
+  const thumbnail = thumbnailUrl.value
+  if (isRemoteImageSrc(original)) return original
+  if (isRemoteImageSrc(thumbnail)) return thumbnail
+  return ''
+})
 const isVideo = computed(() => props.message.msgType === 3)
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
 const isSending = computed(() => Number(props.message.status) === 0)
@@ -101,7 +140,7 @@ const groupId = computed(() => {
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
 
-watch([thumbnailUrl, fileKey, attachmentKey], () => {
+watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
@@ -111,7 +150,7 @@ watch([thumbnailUrl, fileKey, attachmentKey], () => {
     isLoaded.value = true
     return
   }
-  if ((fileKey.value || attachmentKey.value) && /^https?:\/\//i.test(imageData.value.url)) {
+  if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
     downloadAndDecryptImage()
     return
   }
@@ -219,7 +258,7 @@ async function resolveFileKey(): Promise<string> {
 }
 
 async function downloadAndDecryptImage() {
-  const url = imageData.value.url
+  const url = downloadUrl.value
   const key = await resolveFileKey()
   if (!url || !key) {
     loadError.value = true

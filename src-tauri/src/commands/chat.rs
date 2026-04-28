@@ -657,6 +657,7 @@ pub fn decrypt_private_incoming(
     peer_id: Option<String>,
     version: Option<i64>,
     ciphertext_hex: String,
+    msg_type: Option<i32>,
 ) -> Result<String, String> {
     let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let ver = version.unwrap_or(1);
@@ -687,6 +688,19 @@ pub fn decrypt_private_incoming(
         }
     }
     let plain = plain.ok_or_else(|| last_err.unwrap_or_else(|| "decrypt failed".to_string()))?;
+    if msg_type.unwrap_or(0) == 1 {
+        if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
+            return Ok(serde_json::json!({
+                "url": obj.url,
+                "thumbnailUrl": obj.thumb_url,
+                "width": obj.width,
+                "height": obj.height,
+                "size": obj.file_size,
+                "sizeType": obj.size_type,
+            })
+            .to_string());
+        }
+    }
     if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
         return Ok(obj.content);
     }
