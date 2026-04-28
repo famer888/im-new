@@ -8,6 +8,9 @@ defineProps<{
   resetting?: boolean
   offline?: boolean
   showReload?: boolean
+  progressMode?: boolean
+  friendProgress?: number
+  chatProgress?: number
 }>()
 
 const emit = defineEmits<{
@@ -33,15 +36,31 @@ const { t } = useI18n()
       <div class="init-center">
         <img class="brand-icon" :src="brandIcon" alt="" />
 
-        <div class="loading-dots" aria-hidden="true">
-          <span class="dot dot-1" />
-          <span class="dot dot-2" />
-          <span class="dot dot-3" />
+        <div v-if="progressMode && !offline" class="init-progress">
+          <h3>{{ t('首次数据初始化') }}</h3>
+          <ul>
+            <li>
+              <span>{{ t('好友') }} {{ (friendProgress ?? 0).toFixed(1) }}%</span>
+              <p :style="{ width: `${Math.min(100, Math.max(0, friendProgress ?? 0)).toFixed(1)}%` }"></p>
+            </li>
+            <li>
+              <span>{{ t('聊天窗口') }} {{ Math.round(chatProgress ?? 0) }}%</span>
+              <p :style="{ width: `${Math.min(100, Math.max(0, chatProgress ?? 0))}%` }"></p>
+            </li>
+          </ul>
         </div>
 
-        <p class="loading-text" :class="{ 'loading-text--error': offline }">
-          {{ offline ? t('当前网络异常，请检查网络设置') : text || t('加载中') }}
-        </p>
+        <template v-else>
+          <div class="loading-dots" aria-hidden="true">
+            <span class="dot dot-1" />
+            <span class="dot dot-2" />
+            <span class="dot dot-3" />
+          </div>
+
+          <p class="loading-text" :class="{ 'loading-text--error': offline }">
+            {{ offline ? t('当前网络异常，请检查网络设置') : text || t('加载中') }}
+          </p>
+        </template>
 
         <button
           v-if="showReload"
@@ -137,6 +156,56 @@ const { t } = useI18n()
 
 .loading-text--error {
   color: #f44e5a;
+}
+
+.init-progress {
+  width: 220px;
+  margin-top: 12px;
+  text-align: center;
+
+  h3 {
+    margin: 0 0 8px;
+    color: #222;
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 700;
+  }
+
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  li {
+    position: relative;
+    height: 28px;
+    margin-top: 6px;
+    overflow: hidden;
+    border-radius: 14px;
+    background: #747474;
+  }
+
+  span {
+    position: relative;
+    z-index: 1;
+    display: block;
+    color: #fff;
+    font-size: 14px;
+    line-height: 28px;
+    font-weight: 700;
+  }
+
+  p {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    margin: 0;
+    border-radius: inherit;
+    background: #44c917;
+    transition: width 0.22s ease;
+  }
 }
 
 .reload-button {

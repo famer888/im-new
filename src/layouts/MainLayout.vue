@@ -85,6 +85,9 @@ const imageOverwriteDirectoryName = ref('')
 
 const isInitialized = ref(false)
 const initText = ref('')
+const firstInitProgressVisible = ref(false)
+const initFriendProgress = ref(0)
+const initChatProgress = ref(0)
 const initResetConfirmVisible = ref(false)
 const resettingInitData = ref(false)
 const initReloadVisible = ref(false)
@@ -155,6 +158,11 @@ function reloadInitPage() {
   window.location.reload()
 }
 
+function setFirstInitProgress(friend: number, chat: number) {
+  initFriendProgress.value = Math.min(100, Math.max(0, friend))
+  initChatProgress.value = Math.min(100, Math.max(0, chat))
+}
+
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return true
   if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
@@ -193,17 +201,34 @@ onMounted(async () => {
     }
 
     if (authStore.uid) {
+      firstInitProgressVisible.value = !authStore.isAccountInitialized(authStore.uid)
+      setFirstInitProgress(0, 0)
+
       const skipBootstrapAfterLogoutClear = Boolean(
         localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${authStore.uid}`),
       )
       setInitText(t('数据载入'))
-      await Promise.all([
-        chatStore.loadConversations(authStore.uid),
-        contactStore.loadContacts(authStore.uid),
-        groupStore.loadGroups(authStore.uid),
-        channelStore.loadChannels(authStore.uid),
-        settingStore.loadSettings(),
-      ])
+      if (firstInitProgressVisible.value) {
+        await contactStore.loadContacts(authStore.uid)
+        setFirstInitProgress(100, 0)
+
+        await Promise.all([
+          groupStore.loadGroups(authStore.uid),
+          channelStore.loadChannels(authStore.uid),
+          settingStore.loadSettings(),
+        ])
+
+        await chatStore.loadConversations(authStore.uid)
+        setFirstInitProgress(100, 100)
+      } else {
+        await Promise.all([
+          chatStore.loadConversations(authStore.uid),
+          contactStore.loadContacts(authStore.uid),
+          groupStore.loadGroups(authStore.uid),
+          channelStore.loadChannels(authStore.uid),
+          settingStore.loadSettings(),
+        ])
+      }
       setInitText(t('数据已载入'))
       appLocale.value = settingStore.settings.language
       pruneUnknownConversations()
@@ -273,6 +298,9 @@ onMounted(async () => {
 
     setInitText(t('完成'))
     chatStore.ensureFileHelperConversationInMemory()
+    if (authStore.uid && firstInitProgressVisible.value) {
+      authStore.markAccountInitialized(authStore.uid)
+    }
     isInitialized.value = true
     clearInitReloadTimer()
   } catch (err) {
@@ -1213,6 +1241,9 @@ async function handleForward(targetConvId: string) {
       :resetting="resettingInitData"
       :offline="!networkStore.isOnline"
       :show-reload="initReloadVisible"
+      :progress-mode="firstInitProgressVisible"
+      :friend-progress="initFriendProgress"
+      :chat-progress="initChatProgress"
       @reset="openInitResetConfirm"
       @reload="reloadInitPage"
     />

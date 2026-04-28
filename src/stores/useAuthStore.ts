@@ -24,6 +24,7 @@ export interface AccountInfo {
   icon?: string
   sessionId?: string
   sourceId?: string
+  init?: boolean
 }
 
 export interface WsConnectConfig {
@@ -137,6 +138,29 @@ export const useAuthStore = defineStore('auth', () => {
       accounts.value[idx] = { ...accounts.value[idx], ...info }
     } else {
       accounts.value.push(info)
+    }
+    saveAccounts()
+  }
+
+  function isAccountInitialized(accountId: string): boolean {
+    return accounts.value.some((item) => item.id === accountId && item.init === true)
+  }
+
+  function markAccountInitialized(accountId: string) {
+    const id = String(accountId || '').trim()
+    if (!id) return
+    const idx = accounts.value.findIndex((item) => item.id === id)
+    if (idx >= 0) {
+      accounts.value[idx] = { ...accounts.value[idx], init: true }
+    } else {
+      accounts.value.push({
+        id,
+        name: session.value?.nickname || id,
+        icon: session.value?.avatar,
+        sessionId: session.value?.sessionId,
+        sourceId: session.value?.sourceId,
+        init: true,
+      })
     }
     saveAccounts()
   }
@@ -384,6 +408,8 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     switchAccount,
     addOrUpdateAccount,
+    isAccountInitialized,
+    markAccountInitialized,
     setAutoLogin,
     updateProfile,
   }
