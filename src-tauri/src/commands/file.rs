@@ -262,6 +262,19 @@ pub async fn download_file(
 
     tokio::spawn(async move {
         let download_result = async {
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                let decoded = tokio::fs::read(&path)
+                    .await
+                    .map_err(|e| format!("Read cached image failed: {}", e))?;
+                let mime = sniff_image_mime(&decoded);
+                let data_url = format!(
+                    "data:{};base64,{}",
+                    mime,
+                    general_purpose::STANDARD.encode(&decoded)
+                );
+                return Ok::<(u64, String), String>((decoded.len() as u64, data_url));
+            }
+
             let response = reqwest::get(&url)
                 .await
                 .map_err(|e| format!("Download failed: {}", e))?;
