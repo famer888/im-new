@@ -100,6 +100,29 @@ pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     }
 }
 
+pub fn extract_attachment_file_key(content: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(content.trim()).ok()?;
+    let key = value
+        .get("fileKey")
+        .or_else(|| value.get("file_key"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or_default();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
+fn encrypt_attachment_key(rel_key: &str, file_key: Option<&str>) -> Result<String, CryptoError> {
+    let Some(file_key) = file_key.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(String::new());
+    };
+    let encrypted = encrypt_with_rel_key(rel_key, file_key.as_bytes())?;
+    Ok(hex::encode_upper(encrypted))
+}
+
 /// 用 relKey（群 / 频道 / 好友共享密钥）对 content protobuf 做 AES-128-ECB
 /// 加密。与老 im `_encrypt2(relKey, contentCode)` 等价。
 pub fn encrypt_with_rel_key(rel_key: &str, content: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -175,6 +198,7 @@ pub fn build_send_private_message_req(
     send_time: i64,
     flag: i64,
     snapchat_time: i32,
+    attachment_file_key: Option<&str>,
 ) -> Result<Vec<u8>, CryptoError> {
     let mut hasher = Md5::new();
     hasher.update(content_plain);
@@ -185,7 +209,7 @@ pub fn build_send_private_message_req(
             let encrypted = encrypt_with_rel_key(&rel_key, content_plain)?;
             Ok(Some(imweb::MessageContent {
                 content: encrypted,
-                attachment_key: String::new(),
+                attachment_key: encrypt_attachment_key(&rel_key, attachment_file_key)?,
                 version: ver,
             }))
         } else {

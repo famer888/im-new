@@ -506,7 +506,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if ((convType === 1 && [0, 1].includes(msgType)) || (isFileHelperSend && msgType === 0)) {
+      if ([0, 1].includes(msgType) && (convType === 1 || convType === 0)) {
         await ensureWsConnected()
       }
       console.log('[send] invoking Rust send_message', { conversationId, msgType })
@@ -534,7 +534,7 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
-      const canRetryWs = convType === 1 && [0, 1].includes(msgType) && /Not connected/i.test(errText)
+      const canRetryWs = [0, 1].includes(msgType) && (convType === 1 || convType === 0) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')
@@ -568,6 +568,33 @@ export const useMessageStore = defineStore('message', () => {
       updateMessageStatus(optimisticId, -1)
       throw e
     }
+  }
+
+  async function resendMessage(uid: string, message: Message) {
+    if (!uid || !message.conversationId || message.status !== -1) return null
+
+    const extra = parseExtraObject(message.extra) ?? {}
+    if (message.quoteMessage && !extra.quoteMessage) {
+      extra.quoteMessage = message.quoteMessage
+    }
+
+    const failedId = message.id || message.customMsgId || ''
+    if (failedId) {
+      deleteMessage(message.conversationId, failedId)
+      if (isTauri()) {
+        tauriInvoke('delete_message', { uid, messageId: failedId }).catch((err) => {
+          console.warn('[msg] delete failed message before resend failed:', err)
+        })
+      }
+    }
+
+    return sendMessage(
+      uid,
+      message.conversationId,
+      message.msgType,
+      message.content || '',
+      Object.keys(extra).length > 0 ? extra : undefined,
+    )
   }
 
   function appendMessage(conversationId: string, message: Message) {
@@ -834,6 +861,7 @@ export const useMessageStore = defineStore('message', () => {
     loadMessages,
     loadOlderMessages,
     sendMessage,
+    resendMessage,
     appendMessage,
     batchAppendMessages,
     appendLocalSystemNotice,

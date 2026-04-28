@@ -580,3 +580,25 @@ export async function checkUidList(
     groupId: data.groupId,
   })
 }
+
+export async function getUploadToken(baseUrl?: string): Promise<proto.GetUploadTokenResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/sys/getUploadToken`,
+    reqType: proto.GetUploadTokenReq,
+    respType: proto.GetUploadTokenResp,
+  })
+}
+
+export async function getUploadUrl(
+  data: { attachType: number; attachWorkspaceType: number; fileSize: number; suffix: string },
+  baseUrl?: string,
+): Promise<proto.GetUploadUrlResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/sys/getUploadUrl`,
+    reqType: proto.GetUploadUrlReq,
+    respType: proto.GetUploadUrlResp,
+    data: data as Partial<proto.GetUploadUrlReq>,
+  })
+}

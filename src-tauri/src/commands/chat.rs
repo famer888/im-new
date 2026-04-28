@@ -403,8 +403,7 @@ pub async fn send_message(
         Err(reason)
     };
 
-    // 按会话类型分流。当前群图片已实现；私聊图片因链路未完成，明确置失败，
-    // 避免前端一直停留在“发送中 / 加载中”的假成功状态。其余未实现类型先保持原来的
+    // 按会话类型分流。文本和图片走 WS 发送链路，其余未实现类型先保持原来的
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
         (1, 0) => {
@@ -492,12 +491,23 @@ pub async fn send_message(
             }
         }
         (0, 1) => {
-            let reason = format!(
-                "message send via WS not implemented yet for conv_type={} msg_type={}",
-                conv_type, request.msg_type
-            );
-            warn!("{}", reason);
-            return mark_failed_and_return(reason);
+            if let Err(e) = pipeline::send_private_message(
+                &ws_mgr,
+                &crypto,
+                &target_id,
+                &uid,
+                request.msg_type,
+                &request.content,
+                now,
+                client_flag,
+                snapchat_time,
+            ) {
+                error!(
+                    "send_private_message failed conversation={} msg_type={} err={}",
+                    request.conversation_id, request.msg_type, e
+                );
+                return mark_failed_and_return(e.to_string());
+            }
         }
         (1, _) => {
             warn!(

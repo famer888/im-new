@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::path::PathBuf;
 use tauri::{Emitter, State};
 use base64::{engine::general_purpose, Engine as _};
@@ -20,6 +21,58 @@ pub struct DownloadProgress {
     pub downloaded_bytes: u64,
     pub status: String, // "downloading", "decrypting", "done", "error"
     pub data_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OssPutObjectRequest {
+    pub url: String,
+    pub bucket: String,
+    pub object_key: String,
+    pub access_key_id: String,
+    pub access_key_secret: String,
+    pub security_token: String,
+    pub content_type: String,
+    pub body_base64: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OssPutObjectResult {
+    pub status: u16,
+    pub ok: bool,
+    pub body: String,
+}
+
+fn hmac_sha1_base64(secret: &str, message: &str) -> String {
+    let mut key = secret.as_bytes().to_vec();
+    if key.len() > 64 {
+        key = Sha1::digest(&key).to_vec();
+    }
+    key.resize(64, 0);
+
+    let mut ipad = [0x36_u8; 64];
+    let mut opad = [0x5c_u8; 64];
+    for (idx, byte) in key.iter().enumerate() {
+        ipad[idx] ^= byte;
+        opad[idx] ^= byte;
+    }
+
+    let mut inner = Sha1::new();
+    inner.update(ipad);
+    inner.update(message.as_bytes());
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha1::new();
+    outer.update(opad);
+    outer.update(inner_hash);
+    general_purpose::STANDARD.encode(outer.finalize())
+}
+
+fn oss_rfc1123_date() -> String {
+    chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string()
 }
 
 fn sniff_image_mime(bytes: &[u8]) -> &'static str {
@@ -78,6 +131,95 @@ pub async fn upload_file(
         url: String::new(),
         file_key,
         file_size: 0,
+    })
+}
+
+#[tauri::command]
+pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObjectResult, String> {
+    let body = general_purpose::STANDARD
+        .decode(request.body_base64.trim())
+        .map_err(|e| format!("decode upload body failed: {}", e))?;
+    let oss_date = oss_rfc1123_date();
+    let content_type = if request.content_type.trim().is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        request.content_type.trim().to_string()
+    };
+    let url = url::Url::parse(&request.url)
+        .map_err(|e| format!("invalid oss upload url: {}", e))?;
+    let object_path = url.path().trim_start_matches('/');
+    let object_key = if object_path.is_empty() {
+        request.object_key.trim_start_matches('/')
+    } else {
+        object_path
+    };
+    let canonical_resource = format!("/{}/{}", request.bucket.trim(), object_key);
+    let canonical_headers = format!(
+        "x-oss-date:{}\nx-oss-security-token:{}\n",
+        oss_date,
+        request.security_token
+    );
+    let string_to_sign = format!(
+        "PUT\n\n{}\n{}\n{}{}",
+        content_type, oss_date, canonical_headers, canonical_resource
+    );
+    let signature = hmac_sha1_base64(&request.access_key_secret, &string_to_sign);
+    let authorization = format!("OSS {}:{}", &request.access_key_id, signature);
+
+    tracing::info!(
+        target: "image-send",
+        "rust oss put start url_host={} body_bytes={} bucket={} object_key_head={} object_key_len={} content_type={} has_access_key={} has_secret={} has_token={} canonical_resource_head={} sign_len={}",
+        url.host_str().unwrap_or_default(),
+        body.len(),
+        request.bucket,
+        object_key.chars().take(24).collect::<String>(),
+        object_key.len(),
+        content_type,
+        !request.access_key_id.is_empty(),
+        !request.access_key_secret.is_empty(),
+        !request.security_token.is_empty(),
+        canonical_resource,
+        string_to_sign.len(),
+    );
+
+    let response = reqwest::Client::new()
+        .put(url)
+        .header("Authorization", authorization)
+        .header("x-oss-date", oss_date)
+        .header("Content-Type", content_type)
+        .header("x-oss-security-token", request.security_token)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("oss put request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .unwrap_or_else(|e| format!("read oss response failed: {}", e));
+    let body_preview: String = text.chars().take(4000).collect();
+
+    tracing::info!(
+        target: "image-send",
+        "rust oss put response status={} ok={} body_head={}",
+        status.as_u16(),
+        status.is_success(),
+        body_preview,
+    );
+
+    if !status.is_success() {
+        return Err(format!(
+            "oss put failed: HTTP {} {}",
+            status.as_u16(),
+            body_preview
+        ));
+    }
+
+    Ok(OssPutObjectResult {
+        status: status.as_u16(),
+        ok: true,
+        body: body_preview,
     })
 }
 
