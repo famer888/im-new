@@ -319,6 +319,7 @@ export async function setupTauriListeners() {
                     version: Number(c?.version || extra?.version || 1),
                     source: String(c?.source || ''),
                     cipherHex: String(c?.cipherHex || ''),
+                    attachmentKey: String(c?.attachmentKey || c?.attachment_key || ''),
                   }))
                   .filter((c: any) => !!c.cipherHex)
               : []
@@ -327,6 +328,7 @@ export async function setupTauriListeners() {
                 version: Number(extra?.version || 1),
                 source: '',
                 cipherHex,
+                attachmentKey: String(extra?.attachmentKey || extra?.attachment_key || ''),
               })
             }
             if (!decryptPending || cipherCandidates.length === 0 || !convId.includes('_')) continue
@@ -364,11 +366,15 @@ export async function setupTauriListeners() {
                       peerId,
                       version: Number(candidate.version || 1),
                       ciphertextHex: String(candidate.cipherHex || ''),
+                      msgType,
                     })
                     m.content = plain
                     if (m.extra && typeof m.extra === 'object') {
                       m.extra.decryptPending = false
                       m.extra.cipherHex = candidate.cipherHex
+                      if (candidate.attachmentKey && !m.extra.fileKey) {
+                        m.extra.fileKey = candidate.attachmentKey
+                      }
                     }
                     privateDecrypted = true
                     console.log('[e2ee] retry decrypt_private OK', {
