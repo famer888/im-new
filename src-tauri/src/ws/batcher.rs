@@ -413,6 +413,19 @@ impl MessageBatcher {
             let group_id_s = group_id.to_string();
             let conversation_id = format!("1_{}", group_id);
             let key_cached = crypto.get_group_key(&group_id_s).is_some();
+            if gm.msg_type == 2 {
+                info!(
+                    target: "group-audio",
+                    "GROUP_MSG_RECEIVED audio packet group_id={} msg_id={} sender_uid={} cipher_len={} version={} key_cached={} attachment_key_len={}",
+                    group_id,
+                    gm.msg_id,
+                    gm.send_uid,
+                    gm.content.len(),
+                    gm.version,
+                    key_cached,
+                    gm.attachment_key.len(),
+                );
+            }
             // 和私聊一致：解密失败时除了给一个占位文案，还要带上 cipherHex +
             // decryptPending，让前端 `msg:batch` 监听到后可以 ensureGroupRelKey
             // 再走一次 `decrypt_group_incoming` 重试，从而彻底消除"表情/文本首
@@ -432,6 +445,12 @@ impl MessageBatcher {
                         } else if gm.msg_type == 1 && imweb::ImageObj::decode(gm.content.as_slice()).is_ok() {
                             warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw ImageObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                            (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
+                        } else if gm.msg_type == 2 && imweb::AudioObj::decode(gm.content.as_slice()).is_ok() {
+                            warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw AudioObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
                             (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
@@ -465,8 +484,20 @@ impl MessageBatcher {
                 conversation_id,
                 decrypt_pending,
             );
-            let file_key =
-                decrypt_group_attachment_key(&crypto, &group_id_s, &gm.attachment_key);
+            let file_key = decrypt_group_attachment_key(&crypto, &group_id_s, &gm.attachment_key)
+                .or_else(|| fallback_plain_file_key(&gm.attachment_key));
+            if gm.msg_type == 2 {
+                info!(
+                    target: "group-audio",
+                    "GROUP_MSG_RECEIVED audio decoded group_id={} msg_id={} decrypt_pending={} content_head={} file_key_len={} attachment_key_head={}",
+                    group_id,
+                    gm.msg_id,
+                    decrypt_pending,
+                    content.chars().take(160).collect::<String>(),
+                    file_key.as_deref().unwrap_or("").len(),
+                    gm.attachment_key.chars().take(24).collect::<String>(),
+                );
+            }
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_MSG_RECEIVED,
                 msg_id: gm.msg_id.to_string(),

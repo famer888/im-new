@@ -12,11 +12,13 @@ const props = defineProps<{
 const authStore = useAuthStore()
 const activeSrc = ref('')
 const localFilePath = ref('')
+const decryptedContent = ref('')
 const loading = ref(false)
 const loadError = ref(false)
 const isPlaying = ref(false)
 const currentSecond = ref(0)
 let downloadToken = 0
+let contentDecryptToken = 0
 let playTimer: number | null = null
 let stopDownloadEvents: Array<() => void> = []
 
@@ -25,14 +27,15 @@ function audioTerminalLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
+  if (!isGroupAudio.value) return
   const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-  log(`[audio-message] ${message}`, data || {})
+  log(`[group-audio] ${message}`, data || {})
   if (!(window as any).__TAURI_INTERNALS__) return
   import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('image_send_log', {
       payload: {
         level,
-        message: `[audio-message] ${message}`,
+        message: `[group-audio] ${message}`,
         data: data || {},
       },
     }))
@@ -53,7 +56,7 @@ function describeUrl(url: string): string {
 }
 
 const audioData = computed(() => {
-  const raw = (props.message.content ?? '').trim()
+  const raw = (decryptedContent.value || props.message.content || '').trim()
   if (!raw) return { url: '', duration: 0, size: 0, name: '' }
   try {
     const parsed = JSON.parse(raw)
@@ -90,15 +93,21 @@ const fileKey = computed(() =>
 const attachmentKey = computed(() =>
   String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
 )
+const cipherHex = computed(() =>
+  String(extraData.value.cipherHex || extraData.value.cipher_hex || '').trim(),
+)
 const groupId = computed(() => {
   const extraGroupId = String(extraData.value.groupId || '').trim()
   if (extraGroupId) return extraGroupId
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
+const isGroupAudio = computed(() => Boolean(groupId.value || props.message.conversationId?.startsWith('1_')))
 const audioUrl = computed(() => {
   const url = audioData.value.url
+  if (!url || url.startsWith('[加密消息')) return ''
   if (url.startsWith('//')) return `https:${url}`
+  if (!/^(https?:|file:|asset:|data:|blob:)/i.test(url)) return ''
   return url
 })
 const cacheKey = computed(() => [
@@ -107,6 +116,7 @@ const cacheKey = computed(() => [
   audioUrl.value || '',
   fileKey.value || '',
   attachmentKey.value || '',
+  cipherHex.value || '',
 ].join('|'))
 const duration = computed(() => Math.max(0, Math.round(Number(audioData.value.duration || 0))))
 const totalSecond = computed(() => Math.max(1, duration.value || 1))
@@ -133,8 +143,14 @@ watch([audioUrl, fileKey, attachmentKey, cacheKey], () => {
     fileKeyLen: fileKey.value.length,
     hasAttachmentKey: Boolean(attachmentKey.value),
     attachmentKeyHead: safeHead(attachmentKey.value),
+    hasCipherHex: Boolean(cipherHex.value),
+    cipherHexLen: cipherHex.value.length,
   })
   if (!audioUrl.value) {
+    if (cipherHex.value && groupId.value) {
+      void decryptGroupAudioContent()
+      return
+    }
     loadError.value = true
     audioTerminalLog('missing audio url', {
       messageId: props.message.id,
@@ -182,6 +198,64 @@ function audioExt(url: string): string {
   return matched?.[0]?.toLowerCase() || '.webm'
 }
 
+function fallbackPlainFileKey(key: string): string {
+  const raw = key.trim()
+  if (!raw) return ''
+  if (raw.length <= 32 || !/^[0-9a-f]+$/i.test(raw)) return raw
+  return ''
+}
+
+async function decryptGroupAudioContent() {
+  const ciphertextHex = cipherHex.value
+  const gid = groupId.value
+  if (!ciphertextHex || !gid) return
+
+  const token = ++contentDecryptToken
+  loading.value = true
+  loadError.value = false
+  audioTerminalLog('decrypt group content start', {
+    messageId: props.message.id,
+    groupId: gid,
+    cipherHexLen: ciphertextHex.length,
+    hasAuthUid: Boolean(authStore.uid),
+  })
+  try {
+    if (authStore.uid) {
+      await ensureGroupRelKey(String(authStore.uid), gid)
+    }
+    const { invoke } = await import('@tauri-apps/api/core')
+    const plain = await invoke<string>('decrypt_group_incoming', {
+      groupId: gid,
+      ciphertextHex,
+      msgType: 2,
+    })
+    if (token !== contentDecryptToken) return
+    decryptedContent.value = plain
+    loadError.value = false
+    audioTerminalLog('decrypt group content ok', {
+      messageId: props.message.id,
+      groupId: gid,
+      contentHead: safeHead(plain, 160),
+      hasUrl: Boolean(audioUrl.value),
+      duration: audioData.value.duration,
+      size: audioData.value.size,
+    })
+  } catch (error) {
+    if (token !== contentDecryptToken) return
+    loadError.value = true
+    audioTerminalLog('decrypt group audio content failed', {
+      messageId: props.message.id,
+      groupId: gid,
+      cipherHexLen: ciphertextHex.length,
+      message: (error as Error)?.message || String(error),
+    }, 'error')
+  } finally {
+    if (token === contentDecryptToken && !audioUrl.value) {
+      loading.value = false
+    }
+  }
+}
+
 async function resolveFileKey(): Promise<string> {
   if (fileKey.value) {
     audioTerminalLog('resolved fileKey from message', {
@@ -190,6 +264,15 @@ async function resolveFileKey(): Promise<string> {
       fileKeyLen: fileKey.value.length,
     })
     return fileKey.value
+  }
+  const plainAttachmentKey = fallbackPlainFileKey(attachmentKey.value)
+  if (plainAttachmentKey) {
+    audioTerminalLog('resolved fileKey from plain attachmentKey', {
+      messageId: props.message.id,
+      fileKeyHead: safeHead(plainAttachmentKey),
+      fileKeyLen: plainAttachmentKey.length,
+    })
+    return plainAttachmentKey
   }
   if (!attachmentKey.value || !groupId.value) {
     audioTerminalLog('cannot resolve fileKey: missing attachmentKey/groupId', {
@@ -244,6 +327,13 @@ async function downloadAndDecryptAudio() {
   const token = ++downloadToken
   cleanupDownloadEvents()
   loading.value = true
+  audioTerminalLog('download start', {
+    messageId: props.message.id,
+    groupId: groupId.value,
+    url: describeUrl(url),
+    fileKeyHead: safeHead(key),
+    fileKeyLen: key.length,
+  })
 
   try {
     const [{ invoke, convertFileSrc }, { appDataDir, join }, { listen }] = await Promise.all([
@@ -302,7 +392,7 @@ async function downloadAndDecryptAudio() {
       fileKey: key,
       savePath,
       msgId: id,
-      logTag: 'audio',
+      logTag: isGroupAudio.value ? 'group-audio' : undefined,
     })
     audioTerminalLog('download invoke returned', {
       messageId: props.message.id,
