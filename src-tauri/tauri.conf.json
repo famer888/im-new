@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicotinamide/tauri/refs/heads/v2/tooling/cli/schema.json",
   "productName": "OCS Chat",
   "version": "1.6.8",
-  "identifier": "cn.55.chat",
+  "identifier": "cn.97.chat",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
