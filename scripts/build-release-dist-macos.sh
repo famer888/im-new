@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="OCS Chat"
-PKG_IDENTIFIER="cn.55.chat"
+PKG_IDENTIFIER="cn.97.chat"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/macos}"
 BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/ocs-chat-target-macos}"
 TAURI_TARGET="${TAURI_TARGET:-}"
