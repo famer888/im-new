@@ -168,6 +168,14 @@ function stringifyExtra(rawExtra: unknown): string | null {
   return null
 }
 
+function sanitizeSendExtra(extra?: Record<string, unknown>) {
+  const cleaned: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(extra ?? {})) {
+    if (!key.startsWith('__')) cleaned[key] = value
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined
+}
+
 function extractReadBurnMeta(raw: any, extraObj?: Record<string, unknown> | null) {
   const snapchatTime = Number(
     raw?.snapchatTime ??
@@ -406,9 +414,11 @@ export const useMessageStore = defineStore('message', () => {
     content: string,
     extra?: Record<string, unknown>,
   ) {
-    const quoteMsg = (extra?.quoteMessage as QuoteMessageInfo) ?? null
-    const extraJson = extra && Object.keys(extra).length > 0 ? JSON.stringify(extra) : null
-    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(extra)
+    const clientMsgId = typeof extra?.__clientMsgId === 'string' ? extra.__clientMsgId : ''
+    const sendExtra = sanitizeSendExtra(extra)
+    const quoteMsg = (sendExtra?.quoteMessage as QuoteMessageInfo) ?? null
+    const extraJson = sendExtra && Object.keys(sendExtra).length > 0 ? JSON.stringify(sendExtra) : null
+    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(sendExtra)
 
     if (!isTauri()) {
       const now = Date.now()
@@ -442,7 +452,7 @@ export const useMessageStore = defineStore('message', () => {
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
     // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
     // 用它覆盖占位（会按 customMsgId 精准替换，避免重复）。
-    const clientFlag = Date.now()
+    const clientFlag = clientMsgId ? Number(clientMsgId) || Date.now() : Date.now()
     const optimisticId = String(clientFlag)
     const optimistic: Message = {
       id: optimisticId,
@@ -516,7 +526,7 @@ export const useMessageStore = defineStore('message', () => {
           conversation_id: conversationId,
           msg_type: msgType,
           content,
-          extra: extra ?? null,
+          extra: sendExtra ?? null,
           custom_msg_id: optimisticId,
           snapchat_time: snapchatTime ?? 0,
         },
@@ -545,7 +555,7 @@ export const useMessageStore = defineStore('message', () => {
               conversation_id: conversationId,
               msg_type: msgType,
               content,
-              extra: extra ?? null,
+              extra: sendExtra ?? null,
               custom_msg_id: optimisticId,
               snapchat_time: snapchatTime ?? 0,
             },
