@@ -708,18 +708,31 @@ pub fn decrypt_private_incoming(
         }
     }
     let plain = plain.ok_or_else(|| last_err.unwrap_or_else(|| "decrypt failed".to_string()))?;
-    if msg_type.unwrap_or(0) == 1 {
-        if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
-            return Ok(serde_json::json!({
-                "url": obj.url,
-                "thumbnailUrl": obj.thumb_url,
-                "width": obj.width,
-                "height": obj.height,
-                "size": obj.file_size,
-                "sizeType": obj.size_type,
-            })
-            .to_string());
+    match msg_type.unwrap_or(0) {
+        1 => {
+            if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
+                return Ok(serde_json::json!({
+                    "url": obj.url,
+                    "thumbnailUrl": obj.thumb_url,
+                    "width": obj.width,
+                    "height": obj.height,
+                    "size": obj.file_size,
+                    "sizeType": obj.size_type,
+                })
+                .to_string());
+            }
         }
+        2 => {
+            if let Ok(obj) = crate::proto::imweb::AudioObj::decode(plain.as_slice()) {
+                return Ok(serde_json::json!({
+                    "url": obj.url,
+                    "duration": obj.duration,
+                    "size": obj.file_size,
+                })
+                .to_string());
+            }
+        }
+        _ => {}
     }
     if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
         return Ok(obj.content);
@@ -736,6 +749,16 @@ pub fn decrypt_group_incoming(
 ) -> Result<String, String> {
     let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let key_cached = crypto.get_group_key(&group_id).is_some();
+    let is_group_audio = msg_type.unwrap_or(0) == 2;
+    if is_group_audio {
+        tracing::info!(
+            target: "group-audio",
+            "decrypt_group_incoming request group_id={} cipher_len={} key_cached={}",
+            group_id,
+            data.len(),
+            key_cached,
+        );
+    }
     match crypto.decrypt_group_message(&group_id, &data) {
         Ok(plain) => {
             tracing::info!(
@@ -746,20 +769,52 @@ pub fn decrypt_group_incoming(
                 plain.len(),
                 key_cached,
             );
-            if msg_type.unwrap_or(0) == 1 {
-                if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
-                    return Ok(serde_json::json!({
-                        "url": obj.url,
-                        "thumbnailUrl": obj.thumb_url,
-                        "width": obj.width,
-                        "height": obj.height,
-                        "size": obj.file_size,
-                        "sizeType": obj.size_type,
-                    })
-                    .to_string());
+            match msg_type.unwrap_or(0) {
+                1 => {
+                    if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "thumbnailUrl": obj.thumb_url,
+                            "width": obj.width,
+                            "height": obj.height,
+                            "size": obj.file_size,
+                            "sizeType": obj.size_type,
+                        })
+                        .to_string());
+                    }
                 }
-            } else if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
+                2 => {
+                    if let Ok(obj) = crate::proto::imweb::AudioObj::decode(plain.as_slice()) {
+                        tracing::info!(
+                            target: "group-audio",
+                            "decrypt_group_incoming audio decoded group_id={} plain_len={} url_head={} duration={} size={}",
+                            group_id,
+                            plain.len(),
+                            obj.url.chars().take(120).collect::<String>(),
+                            obj.duration,
+                            obj.file_size,
+                        );
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "duration": obj.duration,
+                            "size": obj.file_size,
+                        })
+                        .to_string());
+                    }
+                }
+                _ => {}
+            }
+            if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
                 return Ok(obj.content);
+            }
+            if is_group_audio {
+                tracing::warn!(
+                    target: "group-audio",
+                    "decrypt_group_incoming audio protobuf decode failed group_id={} plain_len={} plain_head_hex={}",
+                    group_id,
+                    plain.len(),
+                    plain.iter().take(16).map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" "),
+                );
             }
             String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))
         }
@@ -772,6 +827,35 @@ pub fn decrypt_group_incoming(
                 key_cached,
                 e,
             );
+            if msg_type.unwrap_or(0) == 2 {
+                if let Ok(obj) = crate::proto::imweb::AudioObj::decode(data.as_slice()) {
+                    tracing::info!(
+                        target: "group-audio",
+                        "decrypt_group_incoming raw audio decoded group_id={} raw_len={} url_head={} duration={} size={}",
+                        group_id,
+                        data.len(),
+                        obj.url.chars().take(120).collect::<String>(),
+                        obj.duration,
+                        obj.file_size,
+                    );
+                    return Ok(serde_json::json!({
+                        "url": obj.url,
+                        "duration": obj.duration,
+                        "size": obj.file_size,
+                    })
+                    .to_string());
+                }
+            }
+            if is_group_audio {
+                tracing::warn!(
+                    target: "group-audio",
+                    "decrypt_group_incoming audio decrypt failed group_id={} cipher_len={} key_cached={} err={}",
+                    group_id,
+                    data.len(),
+                    key_cached,
+                    e,
+                );
+            }
             Err(e.to_string())
         }
     }

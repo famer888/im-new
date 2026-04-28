@@ -81,14 +81,19 @@ pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "{}".to_string());
 
-    let is_audio_log = payload.message.starts_with("[audio-message]");
-    match (is_audio_log, payload.level.as_deref().unwrap_or("info")) {
-        (true, "error") => tracing::error!(target: "audio-message", data = %data, "{}", payload.message),
-        (true, "warn") => tracing::warn!(target: "audio-message", data = %data, "{}", payload.message),
-        (true, _) => tracing::info!(target: "audio-message", data = %data, "{}", payload.message),
-        (false, "error") => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
-        (false, "warn") => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
-        (false, _) => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
+    let is_audio_log = payload.message.starts_with("[audio-message]")
+        || payload.message.starts_with("[group-audio]");
+    let is_group_audio_log = payload.message.starts_with("[group-audio]");
+    match (is_audio_log, is_group_audio_log, payload.level.as_deref().unwrap_or("info")) {
+        (true, true, "error") => tracing::error!(target: "group-audio", data = %data, "{}", payload.message),
+        (true, true, "warn") => tracing::warn!(target: "group-audio", data = %data, "{}", payload.message),
+        (true, true, _) => tracing::info!(target: "group-audio", data = %data, "{}", payload.message),
+        (true, false, "error") => tracing::error!(target: "audio-message", data = %data, "{}", payload.message),
+        (true, false, "warn") => tracing::warn!(target: "audio-message", data = %data, "{}", payload.message),
+        (true, false, _) => tracing::info!(target: "audio-message", data = %data, "{}", payload.message),
+        (false, _, "error") => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
+        (false, _, "warn") => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
+        (false, _, _) => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
     }
 
     Ok(())
@@ -121,12 +126,6 @@ pub fn play_audio_file(msg_id: String, file_path: String) -> Result<(), String> 
     };
 
     players.insert(msg_id.clone(), child);
-    tracing::info!(
-        target: "audio-message",
-        "play_audio_file started msg_id={} path={}",
-        msg_id,
-        file_path,
-    );
     Ok(())
 }
 
@@ -140,11 +139,9 @@ pub fn stop_audio_file(msg_id: Option<String>) -> Result<(), String> {
         if let Some(mut child) = players.remove(&id) {
             let _ = child.kill();
             let _ = child.wait();
-            tracing::info!(target: "audio-message", "stop_audio_file msg_id={}", id);
         }
     } else {
         stop_audio_children(&mut players, None);
-        tracing::info!(target: "audio-message", "stop_audio_file all");
     }
     Ok(())
 }
@@ -347,10 +344,10 @@ pub async fn download_file(
     log_tag: Option<String>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&save_path);
-    let should_log_audio = log_tag.as_deref() == Some("audio");
+    let should_log_audio = log_tag.as_deref() == Some("group-audio");
     if should_log_audio {
         tracing::info!(
-            target: "audio-message",
+            target: "group-audio",
             "download_file request msg_id={} url_head={} save_path={} file_key_head={} file_key_len={}",
             msg_id,
             url.chars().take(120).collect::<String>(),
@@ -372,7 +369,7 @@ pub async fn download_file(
                     .map_err(|e| format!("Read cached file failed: {}", e))?;
                 if should_log_audio_clone {
                     tracing::info!(
-                        target: "audio-message",
+                        target: "group-audio",
                         "download_file cache hit msg_id={} path={} bytes={} head_hex={}",
                         msg_id_clone,
                         path.to_string_lossy(),
@@ -391,7 +388,7 @@ pub async fn download_file(
 
             if should_log_audio_clone {
                 tracing::info!(
-                    target: "audio-message",
+                    target: "group-audio",
                     "download_file http start msg_id={} url_head={}",
                     msg_id_clone,
                     url.chars().take(120).collect::<String>(),
@@ -403,7 +400,7 @@ pub async fn download_file(
             let status = response.status();
             if should_log_audio_clone {
                 tracing::info!(
-                    target: "audio-message",
+                    target: "group-audio",
                     "download_file http response msg_id={} status={} ok={}",
                     msg_id_clone,
                     status.as_u16(),
@@ -427,7 +424,7 @@ pub async fn download_file(
                 .map_err(|e| format!("Read body failed: {}", e))?;
             if should_log_audio_clone {
                 tracing::info!(
-                    target: "audio-message",
+                    target: "group-audio",
                     "download_file http body msg_id={} encrypted_bytes={} encrypted_head_hex={}",
                     msg_id_clone,
                     bytes.len(),
@@ -448,7 +445,7 @@ pub async fn download_file(
 
             if should_log_audio_clone {
                 tracing::info!(
-                    target: "audio-message",
+                    target: "group-audio",
                     "download_file decrypt start msg_id={} enc_path={} out_path={} file_key_head={} file_key_len={}",
                     msg_id_clone,
                     enc_path.to_string_lossy(),
@@ -473,7 +470,7 @@ pub async fn download_file(
                 .map_err(|e| format!("Read decrypted file failed: {}", e))?;
             if should_log_audio_clone {
                 tracing::info!(
-                    target: "audio-message",
+                    target: "group-audio",
                     "download_file decrypt done msg_id={} decoded_bytes={} decoded_head_hex={}",
                     msg_id_clone,
                     decoded.len(),
@@ -494,7 +491,7 @@ pub async fn download_file(
             Ok((size, data_url)) => {
                 if should_log_audio_clone {
                     tracing::info!(
-                        target: "audio-message",
+                        target: "group-audio",
                         "download_file emit done msg_id={} size={}",
                         msg_id_clone,
                         size,
@@ -515,7 +512,7 @@ pub async fn download_file(
             Err(e) => {
                 if should_log_audio_clone {
                     tracing::error!(
-                        target: "audio-message",
+                        target: "group-audio",
                         "download_file emit error msg_id={} error={}",
                         msg_id_clone,
                         e,
