@@ -481,186 +481,225 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="comMstAudio" :class="{ playing: isPlaying, error: loadError }">
-    <button
-      class="audio-control"
-      type="button"
-      :disabled="loading || loadError"
-      @click="togglePlayback"
-    >
-      <span class="audio-play">
-        <span v-if="isPlaying" class="pause-icon" aria-hidden="true">
-          <i></i>
-          <i></i>
-        </span>
-        <span v-else class="play-icon" aria-hidden="true"></span>
-      </span>
-      <span class="audio-time">{{ currentTimeText }} / {{ durationText }}</span>
-      <span class="audio-track" aria-hidden="true">
-        <span class="audio-progress" :style="{ width: `${progressPercent}%` }"></span>
-      </span>
-      <span class="audio-volume" aria-hidden="true"></span>
-    </button>
-    <div class="content">
-      <div v-if="loading" class="audio-loading">
-        <div><ComLoading /></div>
+  <div class="audio-player" :class="{ playing: isPlaying, error: loadError }">
+    <div class="player-container">
+      <!-- Play Button with Ripple -->
+      <button
+        class="play-button"
+        type="button"
+        :disabled="loading || loadError"
+        @click="togglePlayback"
+        aria-label="Toggle audio playback"
+      >
+        <div class="ripple-container">
+          <span v-if="isPlaying" class="ripple"></span>
+          <svg v-if="!isPlaying" viewBox="0 0 24 24" fill="white" class="play-icon">
+            <path d="M8 5v14l11-7z" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" fill="white" class="pause-icon">
+            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+          </svg>
+        </div>
+      </button>
+
+      <!-- Progress Bar -->
+      <div class="progress-bar-wrapper">
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: `${progressPercent}%` }"></div>
+        </div>
       </div>
-      <span v-if="loadError" class="audio-error">语音加载失败</span>
+
+      <!-- Time Display -->
+      <span class="time-display">
+        <span class="current-time">{{ currentTimeText }}</span>
+        <span class="divider">/</span>
+        <span class="total-time">{{ durationText }}</span>
+      </span>
     </div>
+
+    <!-- Loading & Error States -->
+    <div v-if="loading" class="loading-overlay">
+      <ComLoading />
+    </div>
+    <div v-if="loadError" class="error-message">语音加载失败</div>
   </div>
 </template>
 
 <style scoped lang="scss">
-.comMstAudio {
-  padding: 5px 0 25px;
-  position: relative;
+.audio-player {
+  width: 100%;
+  max-width: 360px;
 
-  .content {
-    position: absolute;
-    inset: 5px 0 25px;
-    pointer-events: none;
+  &.error .player-container {
+    opacity: 0.6;
   }
 }
 
-.audio-control {
-  width: 292px;
-  height: 52px;
+.player-container {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px 0 10px;
-  border: 0;
-  border-radius: 26px;
-  background: #f3f7f8;
-  color: #111;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(170, 222, 254);
+  border-radius: 16px 0 16px 16px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.play-button {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: none;
+  padding: 0;
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
 
   &:disabled {
     cursor: default;
-    opacity: 0.72;
+    opacity: 0.5;
+  }
+
+  &:not(:disabled):active .ripple-container {
+    transform: scale(0.95);
   }
 }
 
-.audio-play {
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  flex: 0 0 auto;
+.ripple-container {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
+  display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  background: #e8eef1;
-}
-
-.play-icon {
-  width: 0;
-  height: 0;
-  margin-left: 2px;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
-  border-left: 8px solid #111;
-}
-
-.pause-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-
-  i {
-    width: 3px;
-    height: 12px;
-    display: block;
-    border-radius: 2px;
-    background: #111;
-  }
-}
-
-.audio-time {
-  min-width: 72px;
-  color: #111;
-  font-size: 14px;
-  white-space: nowrap;
-}
-
-.audio-track {
-  height: 4px;
-  min-width: 108px;
-  flex: 1 1 auto;
-  overflow: hidden;
-  border-radius: 99px;
-  background: #d5dcdf;
-}
-
-.audio-progress {
-  height: 100%;
-  display: block;
-  border-radius: inherit;
-  background: #111;
-  transition: width 0.15s linear;
-}
-
-.audio-volume {
-  width: 22px;
-  height: 22px;
+  color: white;
+  box-shadow: 0 2px 6px rgba(30, 136, 229, 0.25);
+  transition: all 0.2s ease;
   position: relative;
-  flex: 0 0 auto;
+  overflow: hidden;
 
-  &::before {
-    content: '';
-    position: absolute;
-    left: 2px;
-    top: 7px;
-    width: 6px;
-    height: 8px;
-    border-radius: 2px 0 0 2px;
-    background: #111;
-  }
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 7px;
-    top: 4px;
+  svg {
     width: 10px;
-    height: 14px;
-    border: 3px solid #111;
-    border-left: 0;
-    border-radius: 0 14px 14px 0;
+    height: 10px;
+    position: relative;
+    z-index: 2;
+  }
+
+  &:hover {
+    transform: scale(1.15);
+    box-shadow: 0 3px 10px rgba(30, 136, 229, 0.35);
   }
 }
 
-.comMstAudio.error .audio-control {
-  background: #f1f1f1;
-}
-
-.audio-loading {
+.ripple {
   position: absolute;
-  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
   background: rgba(255, 255, 255, 0.4);
-  z-index: 1;
+  animation: ripple-animation 1.2s infinite;
 
-  > div {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-
-    :deep(.comLoading),
-    :deep(.com-loading) {
-      width: 20px;
-      height: 20px;
+  @keyframes ripple-animation {
+    0% {
+      transform: scale(0.8);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(2.2);
+      opacity: 0;
     }
   }
 }
 
-.audio-error {
-  position: absolute;
-  left: 10px;
-  bottom: -18px;
-  color: #da2e2e;
+.progress-bar-wrapper {
+  flex: 1;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.3);
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.5);
+  }
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #42a5f5, #1e88e5);
+  transition: width 0.1s linear;
+  border-radius: 6px;
+}
+
+.time-display {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
+  font-weight: 500;
+  color: #0d47a1;
+  white-space: nowrap;
+
+  .current-time {
+    font-weight: 600;
+  }
+
+  .divider {
+    color: rgba(13, 71, 161, 0.3);
+    margin: 0 2px;
+  }
+
+  .total-time {
+    color: rgba(13, 71, 161, 0.6);
+  }
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  z-index: 10;
+
+  :deep(.comLoading),
+  :deep(.com-loading) {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.error-message {
+  color: #d32f2f;
+  font-size: 12px;
+  text-align: center;
+  padding-top: 6px;
+  animation: shake 0.3s ease;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
 }
 </style>
