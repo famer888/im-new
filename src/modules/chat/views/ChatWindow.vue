@@ -12,6 +12,7 @@ import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import lockIcon from '@/assets/images/message/lock.png'
+import { eventBus } from '@/utils/eventBus'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -103,6 +104,8 @@ watch(
     if (conversationId.value !== myId) return
     unreadSnapshotLocked.value = true
     loadGroupMembersIfNeeded(myId)
+    await nextTick()
+    eventBus.emit('editor:focus')
   },
   { immediate: true },
 )

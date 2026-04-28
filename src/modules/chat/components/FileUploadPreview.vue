@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import EmojiPicker from './send/EmojiPicker.vue'
@@ -80,6 +80,7 @@ watch(
       resetList(props.files)
       text.value = ''
       showEmoji.value = false
+      focusTextarea()
     } else {
       revokePreviews(list.value)
       list.value = []
@@ -158,6 +159,29 @@ function handleEditorKeydown(e: KeyboardEvent) {
   }
 }
 
+function focusTextarea() {
+  nextTick(() => {
+    requestAnimationFrame(() => textareaRef.value?.focus())
+  })
+}
+
+function handleWindowKeydown(e: KeyboardEvent) {
+  if (!props.visible || e.defaultPrevented || e.isComposing) return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    if (showEmoji.value) {
+      showEmoji.value = false
+      return
+    }
+    handleCancel()
+    return
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    handleConfirm()
+  }
+}
+
 function handleEmojiToggle() {
   showEmoji.value = !showEmoji.value
 }
@@ -165,8 +189,16 @@ function handleEmojiToggle() {
 function handleEmojiSelect(emoji: string) {
   text.value += emoji
   showEmoji.value = false
-  requestAnimationFrame(() => textareaRef.value?.focus())
+  focusTextarea()
 }
+
+onMounted(() => {
+  window.addEventListener('keydown', handleWindowKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowKeydown)
+})
 </script>
 
 <template>
