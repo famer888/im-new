@@ -28,8 +28,6 @@ import iconFileActive from '@/assets/images/activeIcon/file-active.png'
 import readBurnTimeIcon from '@/assets/images/chat/read-burn-time.png'
 import forwardPreviewIcon from '@/assets/images/forward.png'
 import clearIcon from '@/assets/images/message/icon-clear.png'
-import voiceIcon from '@/assets/images/message/voice-icon.png'
-import voiceActiveIcon from '@/assets/images/message/voice-active-icon.png'
 import replyPreviewIcon from '@/assets/images/menu/menu-reply-preview.svg'
 import menuCopy from '@/assets/images/menu/copy.png'
 import menuPaste from '@/assets/images/menu/paste.png'
@@ -56,10 +54,6 @@ useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 const showAtList = ref(false)
 const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
-const showVoicePanel = ref(false)
-const isRecordingVoice = ref(false)
-const recordingSeconds = ref(0)
-const recordingError = ref('')
 const pendingFiles = ref<File[]>([])
 const showFilePreview = ref(false)
 const editorMenuVisible = ref(false)
@@ -123,8 +117,6 @@ const GROUP_IMAGE_MAX_DIMENSION = 1600
 const GROUP_IMAGE_MIN_DIMENSION = 480
 const GROUP_IMAGE_MIN_QUALITY = 0.42
 const FILE_ENCRYPT_CHUNK_SIZE = 102400
-const MIN_VOICE_DURATION_SECONDS = 1
-const MAX_VOICE_DURATION_SECONDS = 60
 
 interface UploadedImagePayload {
   url: string
@@ -147,21 +139,6 @@ interface LocalImagePreview {
   height: number
   optimisticId: string
 }
-
-interface UploadedAudioPayload {
-  url: string
-  duration: number
-  size: number
-  name: string
-  fileKey: string
-}
-
-let mediaRecorder: MediaRecorder | null = null
-let recordingStream: MediaStream | null = null
-let recordingChunks: BlobPart[] = []
-let recordingStartedAt = 0
-let recordingTimer: number | null = null
-let shouldSendRecording = true
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
@@ -927,53 +904,6 @@ async function uploadImageLikeIm(
   }
 }
 
-async function uploadAudioLikeIm(file: File, duration: number): Promise<UploadedAudioPayload> {
-  const fileKey = createFileKey()
-  const encrypted = await encryptFileForUpload(file, fileKey)
-  const suffix = getFileSuffix(file)
-  const contentType = getUploadContentType(file, suffix)
-  const [uploadUrlInfo, token] = await Promise.all([
-    getUploadUrl({
-      attachType: getUploadAttachType(MessageType.Audio),
-      attachWorkspaceType: 1,
-      fileSize: encrypted.byteLength,
-      suffix,
-    }),
-    getUploadToken(),
-  ])
-
-  const objectKey = String(uploadUrlInfo.fileId || '').trim()
-  const endpoint = normalizeOssEndpoint(String(token.ossEndpoint || ''))
-  const bucket = String(token.ossBucket || '').trim()
-  const responseUrl = String(uploadUrlInfo.url || '').trim()
-  const accessKeyId = String(token.accessKeyId || '').trim()
-  const accessKeySecret = String(token.accessKeySecret || '').trim()
-  const securityToken = String(token.securityToken || '').trim()
-  if (!objectKey || !bucket || !endpoint || !accessKeyId || !accessKeySecret || !securityToken) {
-    throw new Error('上传语音失败：OSS 参数缺失')
-  }
-
-  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
-  await putObjectToOss({
-    url: uploadUrl,
-    bucket,
-    objectKey,
-    accessKeyId,
-    accessKeySecret,
-    securityToken,
-    body: encrypted,
-    contentType,
-  })
-
-  return {
-    url: stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:'),
-    duration,
-    size: file.size,
-    name: file.name,
-    fileKey,
-  }
-}
-
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -1157,150 +1087,6 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
   pendingFiles.value = []
 }
 
-function getSupportedVoiceMimeType(): string {
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/mp4',
-    'audio/wav',
-  ]
-  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || ''
-}
-
-function getVoiceFileExt(mimeType: string): string {
-  if (/mp4/i.test(mimeType)) return 'm4a'
-  if (/wav/i.test(mimeType)) return 'wav'
-  return 'webm'
-}
-
-function clearRecordingTimer() {
-  if (recordingTimer !== null) {
-    window.clearInterval(recordingTimer)
-    recordingTimer = null
-  }
-}
-
-function stopRecordingStream() {
-  recordingStream?.getTracks().forEach((track) => track.stop())
-  recordingStream = null
-}
-
-function buildVoiceSendExtra(fileKey: string) {
-  const extra: Record<string, unknown> = {}
-  if (fileKey) extra.fileKey = fileKey
-  if (uiStore.quoteMessage) {
-    extra.quoteMessage = {
-      id: uiStore.quoteMessage.id,
-      customMsgId: uiStore.quoteMessage.customMsgId ?? null,
-      senderId: uiStore.quoteMessage.senderId,
-      senderName: uiStore.quoteMessage.senderName,
-      msgType: uiStore.quoteMessage.msgType,
-      content: uiStore.quoteMessage.content,
-    }
-    uiStore.clearQuoteMessage()
-  }
-  return withReadBurnExtra(Object.keys(extra).length > 0 ? extra : undefined)
-}
-
-async function handleRecordedVoice(blob: Blob, duration: number, mimeType: string) {
-  if (!shouldSendRecording) return
-  if (duration < MIN_VOICE_DURATION_SECONDS) {
-    showToast('录音时间太短', 'error')
-    return
-  }
-
-  try {
-    const ext = getVoiceFileExt(mimeType)
-    const file = new File([blob], `voice-${Date.now()}.${ext}`, {
-      type: mimeType || blob.type || 'audio/webm',
-    })
-    const uploaded = await uploadAudioLikeIm(file, Math.min(duration, MAX_VOICE_DURATION_SECONDS))
-    emit('send', JSON.stringify({
-      url: uploaded.url,
-      duration: uploaded.duration,
-      size: uploaded.size,
-      name: uploaded.name,
-      fileKey: uploaded.fileKey,
-    }), MessageType.Audio, buildVoiceSendExtra(uploaded.fileKey))
-    showVoicePanel.value = false
-  } catch (error) {
-    console.error('[message-input] voice upload failed:', error)
-    showToast((error as Error)?.message || '语音发送失败', 'error')
-  }
-}
-
-async function startVoiceRecording() {
-  if (isRecordingVoice.value) return
-  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-    recordingError.value = '当前环境不支持录音'
-    return
-  }
-  try {
-    recordingError.value = ''
-    recordingChunks = []
-    shouldSendRecording = true
-    const mimeType = getSupportedVoiceMimeType()
-    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    mediaRecorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined)
-    recordingStartedAt = Date.now()
-    recordingSeconds.value = 0
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) recordingChunks.push(event.data)
-    }
-    mediaRecorder.onstop = () => {
-      clearRecordingTimer()
-      stopRecordingStream()
-      const duration = Math.max(0, Math.round((Date.now() - recordingStartedAt) / 1000))
-      const blob = new Blob(recordingChunks, { type: mediaRecorder?.mimeType || mimeType || 'audio/webm' })
-      const stoppedMimeType = mediaRecorder?.mimeType || mimeType || blob.type
-      mediaRecorder = null
-      isRecordingVoice.value = false
-      recordingSeconds.value = duration
-      void handleRecordedVoice(blob, duration, stoppedMimeType)
-    }
-    mediaRecorder.start()
-    isRecordingVoice.value = true
-    recordingTimer = window.setInterval(() => {
-      recordingSeconds.value = Math.round((Date.now() - recordingStartedAt) / 1000)
-      if (recordingSeconds.value >= MAX_VOICE_DURATION_SECONDS) {
-        stopVoiceRecording()
-      }
-    }, 300)
-  } catch (error) {
-    stopRecordingStream()
-    isRecordingVoice.value = false
-    recordingError.value = '无法访问麦克风'
-    console.error('[message-input] start voice recording failed:', error)
-  }
-}
-
-function stopVoiceRecording() {
-  shouldSendRecording = true
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
-  }
-}
-
-function cancelVoiceRecording() {
-  shouldSendRecording = false
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
-  } else {
-    clearRecordingTimer()
-    stopRecordingStream()
-    isRecordingVoice.value = false
-  }
-  recordingSeconds.value = 0
-}
-
-function toggleVoicePanel() {
-  showEmoji.value = false
-  showVoicePanel.value = !showVoicePanel.value
-  if (!showVoicePanel.value && isRecordingVoice.value) {
-    cancelVoiceRecording()
-  }
-}
-
 async function handleScheduleDeletionConfirm(seconds: number) {
   const contact = currentContact.value
   if (!contact) return
@@ -1393,7 +1179,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  cancelVoiceRecording()
   eventBus.off('editor:focus', handleEditorFocusEvent)
   eventBus.off('editor:insert-emoji', handleEmojiSelect)
   eventBus.off('editor:insert-at', handleAtSelect)
@@ -1467,41 +1252,7 @@ onBeforeUnmount(() => {
           <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('文件')" @click="handleFileSelect">
             <img class="im-active-icon" :src="iconFileActive" alt="" width="20" height="20" />
           </button>
-          <button
-            v-if="!isFileHelperChat"
-            class="tool-btn tool-btn-im-icon"
-            type="button"
-            :title="$t('语音')"
-            @click="toggleVoicePanel"
-          >
-            <img :class="['im-active-icon', { active: showVoicePanel }]" :src="showVoicePanel ? voiceActiveIcon : voiceIcon" alt="" width="20" height="20" />
-          </button>
         </div>
-      </div>
-
-      <div v-if="showVoicePanel" class="voice-panel">
-        <button
-          class="voice-record-btn"
-          type="button"
-          :class="{ recording: isRecordingVoice }"
-          @pointerdown.prevent="startVoiceRecording"
-          @pointerup.prevent="stopVoiceRecording"
-          @pointercancel.prevent="cancelVoiceRecording"
-          @keydown.space.prevent="startVoiceRecording"
-          @keyup.space.prevent="stopVoiceRecording"
-        >
-          <span>{{ isRecordingVoice ? '松开发送' : '按住说话' }}</span>
-          <em v-if="isRecordingVoice">{{ recordingSeconds }}s</em>
-        </button>
-        <button
-          v-if="isRecordingVoice"
-          class="voice-cancel-btn"
-          type="button"
-          @click="cancelVoiceRecording"
-        >
-          取消
-        </button>
-        <p v-if="recordingError" class="voice-error">{{ recordingError }}</p>
       </div>
 
       <div class="editor-wrapper">
@@ -1781,64 +1532,6 @@ onBeforeUnmount(() => {
 
 .tool-btn-im-icon:hover .im-active-icon {
   filter: unset;
-}
-
-.im-active-icon.active {
-  filter: unset;
-}
-
-.voice-panel {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px 2px;
-}
-
-.voice-record-btn {
-  width: 180px;
-  height: 34px;
-  border: 1px solid #e5e5e5;
-  border-radius: 4px;
-  background: #f7f7f7;
-  color: #333;
-  font-size: 13px;
-  cursor: pointer;
-
-  span {
-    line-height: 18px;
-  }
-
-  em {
-    margin-left: 8px;
-    color: #999;
-    font-style: normal;
-  }
-
-  &:hover {
-    background: #f0f0f0;
-  }
-
-  &.recording {
-    border-color: #3369fe;
-    background: #eef3ff;
-    color: #3369fe;
-  }
-}
-
-.voice-cancel-btn {
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: #fff;
-  color: #666;
-  cursor: pointer;
-}
-
-.voice-error {
-  margin: 0;
-  color: #da2e2e;
-  font-size: 12px;
 }
 
 .editor-wrapper {
