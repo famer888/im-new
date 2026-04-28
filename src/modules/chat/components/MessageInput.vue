@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessageType, ConversationType } from '@/types'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
@@ -246,6 +246,15 @@ watch(
 // 草稿保存
 const draftMap = new Map<string, string>()
 
+function focusEditor() {
+  if (showShutupTip.value) return
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      editorRef.value?.focus()
+    })
+  })
+}
+
 watch(convId, (newId, oldId) => {
   if (oldId && content.value.trim()) {
     draftMap.set(oldId, content.value)
@@ -257,6 +266,9 @@ watch(convId, (newId, oldId) => {
   }
   uiStore.clearQuoteMessage()
   uiStore.exitSelectionMode()
+  if (newId) {
+    focusEditor()
+  }
 })
 
 function handleSend() {
@@ -307,6 +319,30 @@ function handleKeydown(e: KeyboardEvent) {
       return
     }
   }
+  if (
+    showAtList.value
+    && ['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)
+  ) {
+    e.preventDefault()
+    return
+  }
+  if (e.key === 'Enter' && !e.isComposing) {
+    const mode = settingStore.settings.sendShortcutKey
+    const shouldSend = mode === 'Ctrl+Enter'
+      ? (e.ctrlKey || e.metaKey)
+      : !e.shiftKey && !e.ctrlKey && !e.metaKey
+    if (shouldSend) {
+      e.preventDefault()
+    }
+  }
+  if (e.key === '@' && isGroup.value && !isFileHelperChat.value) {
+    showAtList.value = true
+  }
+}
+
+function handleEditorKeyup(e: KeyboardEvent) {
+  saveEditorSelection()
+  if (showAtList.value || e.isComposing) return
   const mode = settingStore.settings.sendShortcutKey
   if (mode === 'Ctrl+Enter') {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -317,9 +353,6 @@ function handleKeydown(e: KeyboardEvent) {
   else if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSend()
-  }
-  if (e.key === '@' && isGroup.value && !isFileHelperChat.value) {
-    showAtList.value = true
   }
 }
 
@@ -1133,11 +1166,22 @@ function getForwardDigest(msgType: number, content: string | null): string {
   return (content || '').slice(0, 80)
 }
 
-eventBus.on('editor:focus', () => {
-  nextTick(() => editorRef.value?.focus())
+function handleEditorFocusEvent() {
+  focusEditor()
+}
+
+onMounted(() => {
+  focusEditor()
+  eventBus.on('editor:focus', handleEditorFocusEvent)
+  eventBus.on('editor:insert-emoji', handleEmojiSelect)
+  eventBus.on('editor:insert-at', handleAtSelect)
 })
-eventBus.on('editor:insert-emoji', handleEmojiSelect)
-eventBus.on('editor:insert-at', handleAtSelect)
+
+onBeforeUnmount(() => {
+  eventBus.off('editor:focus', handleEditorFocusEvent)
+  eventBus.off('editor:insert-emoji', handleEmojiSelect)
+  eventBus.off('editor:insert-at', handleAtSelect)
+})
 </script>
 
 <template>
@@ -1220,7 +1264,7 @@ eventBus.on('editor:insert-at', handleAtSelect)
           @keydown="handleKeydown"
           @paste="handlePaste"
           @mouseup="saveEditorSelection"
-          @keyup="saveEditorSelection"
+          @keyup="handleEditorKeyup"
           @blur="saveEditorSelection"
           @contextmenu.prevent.stop="handleEditorContextMenu"
         />
