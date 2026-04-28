@@ -72,6 +72,7 @@ pub fn send_group_message(
         .ok_or_else(|| SendError::MissingGroupKey(group_id_str.to_string()))?;
 
     let content_plain = super::encode_content_obj(msg_type, content);
+    let attachment_file_key = super::extract_attachment_file_key(content);
     let payload = super::build_send_group_message_req(
         group_id,
         sender_uid,
@@ -81,6 +82,7 @@ pub fn send_group_message(
         send_time,
         flag,
         at_uids,
+        attachment_file_key.as_deref(),
     )?;
 
     ws.send_packet(SEND_GROUP_MSG, flag, &payload)?;

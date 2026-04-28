@@ -153,6 +153,8 @@ pub fn run() {
             commands::file::upload_oss_object,
             commands::file::image_send_log,
             commands::file::download_file,
+            commands::file::play_audio_file,
+            commands::file::stop_audio_file,
             commands::file::get_download_progress,
             commands::file::save_base64_image,
             commands::file::file_exists,
