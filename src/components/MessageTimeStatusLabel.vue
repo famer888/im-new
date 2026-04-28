@@ -6,6 +6,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
+import { useMessageStore } from '@/stores/useMessageStore'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { MessageStatus } from '@/types/message'
 import { formatTimeStamp } from '@/utils/formatTimeStamp'
 import ComLoading from '@/components/ComLoading.vue'
@@ -19,6 +21,8 @@ const props = defineProps<{
 }>()
 
 const { t, locale } = useI18n()
+const authStore = useAuthStore()
+const messageStore = useMessageStore()
 
 const timeText = computed(() => {
   void locale.value
@@ -50,6 +54,15 @@ const isSentOnly = computed(
     (props.message.status === MessageStatus.Sent ||
       props.message.status === MessageStatus.Delivered),
 )
+
+async function handleResend() {
+  if (!showFailed.value || !authStore.uid) return
+  try {
+    await messageStore.resendMessage(authStore.uid, props.message)
+  } catch (err) {
+    console.warn('[msg] resend failed:', err)
+  }
+}
 </script>
 
 <template>
@@ -57,7 +70,7 @@ const isSentOnly = computed(
     <span class="time-text">{{ timeText }}</span>
     <ComLoading v-if="showLoading" />
     <div v-else-if="isSelf" class="tips">
-      <i v-if="showFailed">!</i>
+      <i v-if="showFailed" role="button" tabindex="0" @click.stop="handleResend" @keydown.enter.prevent="handleResend" @keydown.space.prevent="handleResend">!</i>
       <img v-else-if="isRead" class="tip-icon" :src="hasReadUrl" alt="" />
       <img v-else-if="isSentOnly" class="tip-icon" :src="hasSendUrl" alt="" />
     </div>

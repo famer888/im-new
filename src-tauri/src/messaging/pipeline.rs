@@ -117,13 +117,14 @@ pub fn send_group_text(
     )
 }
 
-/// 发送一条单聊文本消息（10101）。
-pub fn send_private_text(
+/// 发送一条单聊消息（10101）。
+pub fn send_private_message(
     ws: &WsManager,
     crypto: &CryptoEngine,
     friend_uid_str: &str,
     sender_uid_str: &str,
-    text: &str,
+    msg_type: i32,
+    content: &str,
     send_time: i64,
     flag: i64,
     snapchat_time: i32,
@@ -154,11 +155,12 @@ pub fn send_private_text(
         return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));
     }
 
-    let content_plain = super::encode_text_obj(text);
+    let content_plain = super::encode_content_obj(msg_type, content);
+    let attachment_file_key = super::extract_attachment_file_key(content);
     let payload = super::build_send_private_message_req(
         friend_uid,
         sender_uid,
-        0,
+        msg_type,
         &content_plain,
         friend_app_key,
         friend_web_key,
@@ -167,6 +169,7 @@ pub fn send_private_text(
         send_time,
         flag,
         snapchat_time,
+        attachment_file_key.as_deref(),
     )?;
 
     ws.send_packet(SEND_PRIVATE_MSG, flag, &payload)?;
@@ -177,4 +180,28 @@ pub fn send_private_text(
         payload.len()
     );
     Ok(())
+}
+
+/// 发送一条单聊文本消息（10101）。
+pub fn send_private_text(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    friend_uid_str: &str,
+    sender_uid_str: &str,
+    text: &str,
+    send_time: i64,
+    flag: i64,
+    snapchat_time: i32,
+) -> Result<(), SendError> {
+    send_private_message(
+        ws,
+        crypto,
+        friend_uid_str,
+        sender_uid_str,
+        0,
+        text,
+        send_time,
+        flag,
+        snapchat_time,
+    )
 }

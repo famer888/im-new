@@ -11,8 +11,9 @@ import { useUIStore } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import { getReadBurnTimeText } from '@/utils/readBurn'
-import { updateContacts } from '@/api/imBase'
+import { getUploadToken, getUploadUrl, updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
+import { aesEncrypt } from '@/utils/crypto'
 import EmojiPicker from './send/EmojiPicker.vue'
 import AtListDialog from './send/AtListDialog.vue'
 import CreateLinkDialog from './send/CreateLinkDialog.vue'
@@ -113,11 +114,35 @@ const MAX_GROUP_IMAGE_DATA_URL_BYTES = 256 * 1024
 const GROUP_IMAGE_MAX_DIMENSION = 1600
 const GROUP_IMAGE_MIN_DIMENSION = 480
 const GROUP_IMAGE_MIN_QUALITY = 0.42
+const FILE_ENCRYPT_CHUNK_SIZE = 102400
+
+interface UploadedImagePayload {
+  url: string
+  thumbnailUrl: string
+  width: number
+  height: number
+  size: number
+  name: string
+  fileKey: string
+}
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
   toastVisible.value = true
+}
+
+function terminalLog(
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
+  log(`[image-send] ${message}`, data || {})
+}
+
+function safeHead(value: string, length = 8): string {
+  return value ? value.slice(0, length) : ''
 }
 
 interface ClipboardFilePayload {
@@ -470,6 +495,272 @@ function blobToDataURL(blob: Blob): Promise<string> {
   })
 }
 
+function createFileKey(): string {
+  return Array.from({ length: 16 }, () => Math.floor(Math.random() * 10).toString(10)).join('')
+}
+
+function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+  const result = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return result
+}
+
+async function encryptFileForUpload(file: File, fileKey: string): Promise<Uint8Array> {
+  const plain = new Uint8Array(await file.arrayBuffer())
+  const chunks: Uint8Array[] = []
+  for (let offset = 0; offset < plain.byteLength; offset += FILE_ENCRYPT_CHUNK_SIZE) {
+    chunks.push(aesEncrypt(fileKey, plain.slice(offset, offset + FILE_ENCRYPT_CHUNK_SIZE)))
+  }
+  return concatUint8Arrays(chunks)
+}
+
+function getFileSuffix(file: File): string {
+  const name = file.name || ''
+  const dot = name.lastIndexOf('.')
+  if (dot >= 0 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase()
+  const subtype = (file.type || '').split('/')[1] || 'png'
+  return subtype.split(';')[0].toLowerCase() || 'png'
+}
+
+function getUploadContentType(file: File, suffix: string): string {
+  if (file.type) return file.type
+  if (suffix === 'jpg' || suffix === 'jpeg') return 'image/jpeg'
+  if (suffix === 'png') return 'image/png'
+  if (suffix === 'gif') return 'image/gif'
+  if (suffix === 'webp') return 'image/webp'
+  return 'application/octet-stream'
+}
+
+function getUploadAttachType(msgType: MessageType): number {
+  if (msgType === MessageType.Image) return 0
+  if (msgType === MessageType.Video) return 1
+  if (msgType === MessageType.DynamicImage) return 4
+  return 3
+}
+
+function normalizeOssEndpoint(endpoint: string): string {
+  const raw = String(endpoint || '').trim()
+  if (!raw) return ''
+  return raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+}
+
+function stripQuery(url: string): string {
+  const index = url.indexOf('?')
+  return index >= 0 ? url.slice(0, index) : url
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+function resolveOssUploadUrl(responseUrl: string, bucket: string, endpoint: string, objectKey: string): string {
+  const key = objectKey.replace(/^\/+/, '')
+  if (responseUrl) return stripQuery(responseUrl)
+
+  const normalizedEndpoint = normalizeOssEndpoint(endpoint)
+  if (/aliyuncs\.com$/i.test(normalizedEndpoint)) {
+    return `https://${bucket}.${normalizedEndpoint}/${key}`
+  }
+
+  return `https://${normalizedEndpoint}/${key}`
+}
+
+async function hmacSha1Base64(secret: string, text: string): Promise<string> {
+  const cryptoApi = window.crypto?.subtle
+  if (!cryptoApi) throw new Error('当前环境不支持文件上传签名')
+  const key = await cryptoApi.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-1' },
+    false,
+    ['sign'],
+  )
+  const signature = await cryptoApi.sign('HMAC', key, new TextEncoder().encode(text))
+  const bytes = new Uint8Array(signature)
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+}
+
+async function putObjectToOss(options: {
+  url: string
+  bucket: string
+  objectKey: string
+  accessKeyId: string
+  accessKeySecret: string
+  securityToken: string
+  body: Uint8Array
+  contentType: string
+}) {
+  const contentType = options.contentType || 'application/octet-stream'
+  terminalLog('oss put start', {
+    urlHost: (() => {
+      try { return new URL(options.url).host } catch { return options.url.slice(0, 60) }
+    })(),
+    bucket: options.bucket,
+    objectKeyHead: safeHead(options.objectKey, 24),
+    objectKeyLen: options.objectKey.length,
+    bodyBytes: options.body.byteLength,
+    contentType,
+    hasAccessKeyId: Boolean(options.accessKeyId),
+    hasAccessKeySecret: Boolean(options.accessKeySecret),
+    hasSecurityToken: Boolean(options.securityToken),
+  })
+
+  if ((window as any).__TAURI_INTERNALS__) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<{ ok: boolean; status: number; body: string }>('upload_oss_object', {
+      request: {
+        url: options.url,
+        bucket: options.bucket,
+        objectKey: options.objectKey,
+        accessKeyId: options.accessKeyId,
+        accessKeySecret: options.accessKeySecret,
+        securityToken: options.securityToken,
+        contentType,
+        bodyBase64: bytesToBase64(options.body),
+      },
+    })
+    terminalLog('oss put response', {
+      ok: result.ok,
+      status: result.status,
+      body: result.body,
+    }, result.ok ? 'info' : 'error')
+    return
+  }
+
+  const ossDate = new Date().toUTCString()
+  const canonicalResource = `/${options.bucket}/${options.objectKey.replace(/^\/+/, '')}`
+  const canonicalHeaders = [
+    `x-oss-date:${ossDate}`,
+    `x-oss-security-token:${options.securityToken}`,
+  ].join('\n') + '\n'
+  const stringToSign = `PUT\n\n${contentType}\n${ossDate}\n${canonicalHeaders}${canonicalResource}`
+  const signature = await hmacSha1Base64(options.accessKeySecret, stringToSign)
+  const authorization = `OSS ${options.accessKeyId}:${signature}`
+
+  const bodyBuffer = new ArrayBuffer(options.body.byteLength)
+  new Uint8Array(bodyBuffer).set(options.body)
+  const response = await fetch(options.url, {
+    method: 'PUT',
+    headers: {
+      Authorization: authorization,
+      'x-oss-date': ossDate,
+      'Content-Type': contentType,
+      'x-oss-security-token': options.securityToken,
+    },
+    body: new Blob([bodyBuffer], { type: contentType }),
+  })
+  terminalLog('oss put response', {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+  }, response.ok ? 'info' : 'error')
+  if (!response.ok) {
+    throw new Error(`上传图片失败：HTTP ${response.status}`)
+  }
+}
+
+async function uploadImageLikeIm(file: File): Promise<UploadedImagePayload> {
+  terminalLog('upload start', {
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  })
+  const fileKey = createFileKey()
+  const encrypted = await encryptFileForUpload(file, fileKey)
+  const suffix = getFileSuffix(file)
+  const contentType = getUploadContentType(file, suffix)
+  terminalLog('encrypt done', {
+    originalBytes: file.size,
+    encryptedBytes: encrypted.byteLength,
+    suffix,
+    contentType,
+    fileKeyHead: safeHead(fileKey),
+    fileKeyLen: fileKey.length,
+  })
+  const [uploadUrlInfo, token] = await Promise.all([
+    getUploadUrl({
+      attachType: getUploadAttachType(MessageType.Image),
+      attachWorkspaceType: 1,
+      fileSize: encrypted.byteLength,
+      suffix,
+    }),
+    getUploadToken(),
+  ])
+  terminalLog('upload api response', {
+    fileIdHead: safeHead(String(uploadUrlInfo.fileId || ''), 24),
+    fileIdLen: String(uploadUrlInfo.fileId || '').length,
+    responseUrlHost: (() => {
+      try { return new URL(String(uploadUrlInfo.url || '')).host } catch { return String(uploadUrlInfo.url || '').slice(0, 60) }
+    })(),
+    ossEndpoint: String(token.ossEndpoint || ''),
+    ossBucket: String(token.ossBucket || ''),
+    hasAccessKeyId: Boolean(token.accessKeyId),
+    hasAccessKeySecret: Boolean(token.accessKeySecret),
+    hasSecurityToken: Boolean(token.securityToken),
+    tokenExpiration: Number(token.expiration || 0),
+  })
+
+  const objectKey = String(uploadUrlInfo.fileId || '').trim()
+  const endpoint = normalizeOssEndpoint(String(token.ossEndpoint || ''))
+  const bucket = String(token.ossBucket || '').trim()
+  const responseUrl = String(uploadUrlInfo.url || '').trim()
+  const accessKeyId = String(token.accessKeyId || '').trim()
+  const accessKeySecret = String(token.accessKeySecret || '').trim()
+  const securityToken = String(token.securityToken || '').trim()
+  if (!objectKey || !bucket || !endpoint || !accessKeyId || !accessKeySecret || !securityToken) {
+    throw new Error('上传图片失败：OSS 参数缺失')
+  }
+
+  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
+  await putObjectToOss({
+    url: uploadUrl,
+    bucket,
+    objectKey,
+    accessKeyId,
+    accessKeySecret,
+    securityToken,
+    body: encrypted,
+    contentType,
+  })
+
+  const dataUrl = await fileToDataURL(file)
+  const { width, height } = await getImageSize(dataUrl)
+  const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
+  terminalLog('upload done', {
+    finalUrlHost: (() => {
+      try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
+    })(),
+    width,
+    height,
+    fileKeyHead: safeHead(fileKey),
+    fileKeyLen: fileKey.length,
+  })
+  return {
+    url: finalUrl,
+    thumbnailUrl: finalUrl,
+    width,
+    height,
+    size: file.size,
+    name: file.name,
+    fileKey,
+  }
+}
+
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -569,28 +860,55 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
     }
     if (file.type.startsWith('image/')) {
       try {
+        terminalLog('handle image file', {
+          conversationId: convId.value,
+          isGroup: isGroup.value,
+          isFriend: isFriend.value,
+          isFileHelper: isFileHelperChat.value,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        })
         const prepared = isGroup.value && !isFileHelperChat.value
           ? await prepareGroupImagePayload(file)
-          : await (async () => {
-              const dataUrl = await fileToDataURL(file)
-              const { width, height } = await getImageSize(dataUrl)
-              return {
-                dataUrl,
-                width,
-                height,
-                size: file.size,
-              }
-            })()
-        emit('send', JSON.stringify({
-          url: prepared.dataUrl,
-          thumbnailUrl: prepared.dataUrl,
-          width: prepared.width,
-          height: prepared.height,
-          size: prepared.size,
-          name: file.name,
-        }), MessageType.Image, withReadBurnExtra())
+          : null
+        if (prepared) {
+          emit('send', JSON.stringify({
+            url: prepared.dataUrl,
+            thumbnailUrl: prepared.dataUrl,
+            width: prepared.width,
+            height: prepared.height,
+            size: prepared.size,
+            name: file.name,
+          }), MessageType.Image, withReadBurnExtra())
+        } else {
+          const uploaded = await uploadImageLikeIm(file)
+          terminalLog('emit uploaded image message', {
+            conversationId: convId.value,
+            urlHost: (() => {
+              try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
+            })(),
+            fileKeyHead: safeHead(uploaded.fileKey),
+            fileKeyLen: uploaded.fileKey.length,
+          })
+          emit('send', JSON.stringify({
+            url: uploaded.url,
+            thumbnailUrl: uploaded.thumbnailUrl,
+            width: uploaded.width,
+            height: uploaded.height,
+            size: uploaded.size,
+            name: uploaded.name,
+            fileKey: uploaded.fileKey,
+          }), MessageType.Image, withReadBurnExtra({ fileKey: uploaded.fileKey }))
+        }
       } catch (error) {
         console.error('[message-input] prepare image payload failed:', error)
+        terminalLog('image send prepare/upload failed', {
+          message: (error as Error)?.message || String(error),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        }, 'error')
         showToast((error as Error)?.message || t('操作失败'), 'error')
       }
     } else {
