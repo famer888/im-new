@@ -127,6 +127,7 @@ const previewSrc = computed(() => activeSrc.value || imageData.value.url)
 const isSending = computed(() => Number(props.message.status) === 0)
 const showImageLoading = computed(() => !activeSrc.value || (!isLoaded.value && !loadError.value))
 const showImageOverlay = computed(() => !loadError.value && (showImageLoading.value || isSending.value))
+const canOpenPreview = computed(() => Boolean(previewSrc.value) && isLoaded.value && !loadError.value && !showImageOverlay.value)
 const imageBoxStyle = computed(() => {
   if (!activeSrc.value) {
     return {
@@ -224,7 +225,7 @@ function handleError() {
 }
 
 async function openPreview() {
-  if (!previewSrc.value || loadError.value) return
+  if (!canOpenPreview.value) return
   if (!(window as any).__TAURI_INTERNALS__) {
     showPreview.value = true
     return
@@ -384,7 +385,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="image-message">
-    <div class="image-wrapper" :style="imageBoxStyle" @click="openPreview">
+    <div
+      class="image-wrapper"
+      :class="{ 'is-preview-ready': canOpenPreview }"
+      :style="imageBoxStyle"
+      @click="openPreview"
+    >
       <img
         v-if="activeSrc && !loadError"
         :src="activeSrc"
@@ -457,10 +463,14 @@ onBeforeUnmount(() => {
     position: relative;
     border-radius: 10px;
     overflow: hidden;
-    cursor: pointer;
+    cursor: default;
     min-width: 120px;
     min-height: 150px;
     background: #bababa;
+
+    &.is-preview-ready {
+      cursor: pointer;
+    }
 
     img {
       width: 100%;
