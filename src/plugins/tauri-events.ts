@@ -3,12 +3,14 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useChatStore, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
+import { useChannelStore } from '@/stores/useChannelStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
+import { router } from '@/router'
 import {
   ensureFriendRelKey,
   ensureFriendRelKeyForVersion,
@@ -45,6 +47,12 @@ interface GroupReadReceiptUpdate {
   extra?: string | null
 }
 
+interface ForceLogoutPayload {
+  cmd?: number
+  reason?: string
+  kickType?: number
+}
+
 function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): boolean {
   if (!currentUid) return false
 
@@ -67,6 +75,7 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
 
 let screenshotShortcutBound = false
 let screenshotStarting = false
+let forceLogoutHandling = false
 
 function isMacPlatform(): boolean {
   const text = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
@@ -192,6 +201,52 @@ export async function setupTauriListeners() {
     const raw = Array.isArray(event.payload) ? event.payload : []
     contactStore.applyOnlineStatusUpdates(raw)
     groupStore.applyOnlineStatusUpdates(raw)
+  })
+
+  listen<ForceLogoutPayload>('auth:force-logout', async (event) => {
+    if (forceLogoutHandling) return
+    forceLogoutHandling = true
+
+    const authStore = useAuthStore()
+    const chatStore = useChatStore()
+    const messageStore = useMessageStore()
+    const contactStore = useContactStore()
+    const groupStore = useGroupStore()
+    const channelStore = useChannelStore()
+    const uiStore = useUIStore()
+    const networkStore = useNetworkStore()
+
+    console.warn('[auth] force logout received', event.payload)
+    networkStore.setWsStatus('disconnected')
+
+    import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('disconnect_ws'))
+      .catch((err) => {
+        console.warn('[auth] disconnect ws after force logout failed:', err)
+      })
+
+    chatStore.enablePersistence('')
+    chatStore.currentConversationId = null
+    chatStore.conversations = []
+    messageStore.clearAllMessageCaches()
+    contactStore.contacts = []
+    contactStore.searchResults = []
+    groupStore.groups = []
+    groupStore.memberMap = new Map()
+    channelStore.channels = []
+    uiStore.setDetailView('none')
+    uiStore.setRightPanel('none')
+    uiStore.setSidebarTab('chats')
+
+    try {
+      await authStore.logout({ keepHistoryOnLogout: true })
+      await router.replace('/login')
+      if (window.location.hash !== '#/login') {
+        window.location.hash = '#/login'
+      }
+    } finally {
+      forceLogoutHandling = false
+    }
   })
 
   listen<Message[]>('msg:batch', async (event) => {

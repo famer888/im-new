@@ -12,7 +12,16 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 const RECONNECT_DELAY_MS: u64 = 4000;
+const FAST_RECONNECT_DELAY_MS: u64 = 300;
 const MAX_RECONNECT_ATTEMPTS: u32 = 100;
+
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ForceLogoutEvent {
+    cmd: u16,
+    reason: String,
+    kick_type: i32,
+}
 
 pub async fn run_connection(
     url: &str,
@@ -25,7 +34,7 @@ pub async fn run_connection(
     reconnect_count: Arc<std::sync::atomic::AtomicU32>,
     pending: Arc<DashMap<String, PendingMessage>>,
 ) {
-    let mut current_url = url.to_string();
+    let current_url = url.to_string();
     let aes_key = aes_key.to_string();
 
     loop {
@@ -35,7 +44,7 @@ pub async fn run_connection(
             break;
         }
 
-        match connect_and_run(
+        let unexpected_disconnect = match connect_and_run(
             &current_url,
             &aes_key,
             &session_id,
@@ -49,11 +58,13 @@ pub async fn run_connection(
         {
             Ok(()) => {
                 info!("WebSocket connection closed normally");
+                false
             }
             Err(e) => {
                 error!("WebSocket error: {}", e);
+                true
             }
-        }
+        };
 
         let current_status = *status.read();
         if current_status == ConnectionStatus::Disconnected {
@@ -72,8 +83,13 @@ pub async fn run_connection(
         *status.write() = ConnectionStatus::Reconnecting;
         let _ = app_handle.emit("ws:status", "reconnecting");
 
-        warn!("Reconnecting in {}ms (attempt {})", RECONNECT_DELAY_MS, count + 1);
-        tokio::time::sleep(std::time::Duration::from_millis(RECONNECT_DELAY_MS)).await;
+        let delay_ms = if unexpected_disconnect && count == 0 {
+            FAST_RECONNECT_DELAY_MS
+        } else {
+            RECONNECT_DELAY_MS
+        };
+        warn!("Reconnecting in {}ms (attempt {})", delay_ms, count + 1);
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
 }
 
@@ -118,6 +134,8 @@ async fn connect_and_run(
 
     let mut batcher = MessageBatcher::new(app_handle.clone(), aes_key.to_string());
 
+    let mut unexpected_disconnect: Option<String> = None;
+
     loop {
         tokio::select! {
             msg = ws_stream_reader.next() => {
@@ -125,12 +143,33 @@ async fn connect_and_run(
                     Some(Ok(Message::Binary(data))) => {
                         batcher.push(data.to_vec()).await;
                     }
-                    Some(Ok(Message::Close(_))) => {
-                        info!("WebSocket closed by server");
+                    Some(Ok(Message::Close(frame))) => {
+                        let (close_code, close_reason) = frame
+                            .as_ref()
+                            .map(|f| (format!("{:?}", f.code), f.reason.to_string()))
+                            .unwrap_or_else(|| ("none".to_string(), String::new()));
+                        warn!(
+                            "WebSocket closed by server code={} reason={}",
+                            close_code,
+                            close_reason
+                        );
+                        *status.write() = ConnectionStatus::Disconnected;
+                        let reason = if close_reason.trim().is_empty() {
+                            "账号已在其他设备登录".to_string()
+                        } else {
+                            close_reason
+                        };
+                        let _ = app_handle.emit("auth:force-logout", ForceLogoutEvent {
+                            cmd: commands::FORCE_LOGOUT,
+                            reason,
+                            kick_type: 1,
+                        });
+                        let _ = app_handle.emit("ws:status", "disconnected");
                         break;
                     }
                     Some(Err(e)) => {
                         error!("WebSocket read error: {}", e);
+                        unexpected_disconnect = Some(e.to_string());
                         break;
                     }
                     None => {
@@ -143,6 +182,7 @@ async fn connect_and_run(
             Some(data) = rx.recv() => {
                 if let Err(e) = ws_sink.send(Message::Binary(data.into())).await {
                     error!("WebSocket send error: {}", e);
+                    unexpected_disconnect = Some(e.to_string());
                     break;
                 }
             }
@@ -151,6 +191,9 @@ async fn connect_and_run(
 
     batcher.flush().await;
     *send_tx.write() = None;
+    if let Some(detail) = unexpected_disconnect {
+        return Err(WsError::ConnectionFailed(detail));
+    }
     Ok(())
 }
 

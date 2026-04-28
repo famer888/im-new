@@ -5,7 +5,7 @@ use tokio::time::{Duration, Instant};
 use tracing::{error, info, warn};
                 
 use crate::crypto;
-use crate::proto::imweb;
+use crate::proto::{im, imweb};
 use crate::ws::commands as cmds;
 
 const FLUSH_INTERVAL_MS: u64 = 100;
@@ -163,6 +163,14 @@ pub struct MessageBatcher {
     aes_key: String,
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ForceLogoutEvent {
+    cmd: u16,
+    reason: String,
+    kick_type: i32,
+}
+
 impl MessageBatcher {
     pub fn new(app_handle: AppHandle, aes_key: String) -> Self {
         Self {
@@ -207,6 +215,10 @@ impl MessageBatcher {
         match cmd {
             cmds::HEARTBEAT_RESP => {
                 // 29901 心跳回包不参与消息批处理。
+                return;
+            }
+            cmds::LOGOUT_RESP | cmds::FORCE_LOGOUT => {
+                self.emit_force_logout(cmd, &decoded_payload);
                 return;
             }
             // 20201 是群消息发送回执。老 im UI 状态从"发送中"升级为"已发送"。
@@ -312,7 +324,7 @@ impl MessageBatcher {
             // 这些命令不是聊天正文，不进消息列表，避免干扰日志与 UI。
             cmds::GROUP_REQ_NUM_PUSH
             | cmds::GROUP_REQ_MSG_PUSH
-            | 20001 => {
+            | cmds::LOGIN_RESP => {
                 return;
             }
             // 其余命令先保留老逻辑，走批处理（后续补上对应 proto 解码）。
@@ -341,6 +353,40 @@ impl MessageBatcher {
         {
             self.flush().await;
         }
+    }
+
+    fn emit_force_logout(&self, cmd: u16, payload: &[u8]) {
+        let (reason, kick_type) = if cmd == cmds::FORCE_LOGOUT {
+            match im::PushKickUserMessage::decode(payload) {
+                Ok(resp) => {
+                    let tip = resp.kick_user_tip;
+                    let reason = tip
+                        .as_ref()
+                        .map(|item| item.tip.trim().to_string())
+                        .filter(|text: &String| !text.is_empty())
+                        .unwrap_or_else(|| "账号已在其他设备登录".to_string());
+                    let kick_type = tip.as_ref().map(|item| item.kick_type).unwrap_or(0);
+                    (reason, kick_type)
+                }
+                Err(e) => {
+                    warn!("decode FORCE_LOGOUT PushKickUserMessage failed: {}", e);
+                    ("账号已在其他设备登录".to_string(), 0)
+                }
+            }
+        } else {
+            ("退出登录".to_string(), 0)
+        };
+
+        warn!(
+            "WS force logout received cmd={} kick_type={} reason={}",
+            cmd, kick_type, reason
+        );
+        let _ = self.app_handle.emit("auth:force-logout", ForceLogoutEvent {
+            cmd,
+            reason,
+            kick_type,
+        });
+        let _ = self.app_handle.emit("ws:status", "disconnected");
     }
 
     fn decode_group_msg_received(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
@@ -767,6 +813,25 @@ impl MessageBatcher {
             resp.target_id,
             conversation_id
         );
+        if err_code == 100 {
+            let reason = if err_msg.trim().is_empty() {
+                "登录已过期，请重新登录".to_string()
+            } else {
+                err_msg.clone()
+            };
+            warn!(
+                "ERROR_RESP auth expired, force logout protocol={} reason={}",
+                resp.message_protocol_id,
+                reason
+            );
+            let _ = self.app_handle.emit("auth:force-logout", ForceLogoutEvent {
+                cmd: cmds::ERROR_RESP,
+                reason,
+                kick_type: 1,
+            });
+            let _ = self.app_handle.emit("ws:status", "disconnected");
+            return Ok(());
+        }
         self.app_handle
             .emit("msg:send-failed", &evt)
             .map_err(|e| format!("emit msg:send-failed: {}", e))?;
