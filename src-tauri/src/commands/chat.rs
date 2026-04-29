@@ -139,6 +139,7 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
         3 => "[视频]".to_string(),
         5 => "[名片]".to_string(),
         7 => "[文件]".to_string(),
+        12 => "[骰子]".to_string(),
         _ => content
             .unwrap_or_default()
             .trim()
@@ -424,7 +425,7 @@ pub async fn send_message(
         Err(reason)
     };
 
-    // 按会话类型分流。文本、图片、语音走 WS 发送链路，其余未实现类型先保持原来的
+    // 按会话类型分流。文本、图片、语音、文件、骰子走 WS 发送链路，其余未实现类型先保持原来的
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
         (1, 0) => {
@@ -483,7 +484,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (1, 1) | (1, 2) | (1, 7) => {
+        (1, 1) | (1, 2) | (1, 7) | (1, 12) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -511,7 +512,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) | (0, 7) => {
+        (0, 1) | (0, 2) | (0, 7) | (0, 12) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,
@@ -947,24 +948,94 @@ pub async fn mark_message_sent(
     let sent_time = request.sent_over_time.unwrap_or(0);
 
     db.with_connection(&uid, |conn| {
+        let local_exists = conn
+            .query_row(
+                "SELECT 1 FROM messages WHERE custom_msg_id = ?1 AND conversation_id = ?2",
+                rusqlite::params![request.custom_msg_id, request.conversation_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+            .is_some();
+
+        let duplicate = if local_exists {
+            conn.query_row(
+                "SELECT content, extra, read_status, send_time
+                 FROM messages
+                 WHERE id = ?1 AND conversation_id = ?2 AND COALESCE(custom_msg_id, '') <> ?3",
+                rusqlite::params![server_id, request.conversation_id, request.custom_msg_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i32>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+        } else {
+            None
+        };
+
+        let (duplicate_content, duplicate_extra, duplicate_read_status, duplicate_send_time) =
+            duplicate.unwrap_or((None, None, 0, 0));
+        let duplicate_content = duplicate_content.filter(|content| !content.trim().is_empty());
+        let next_sent_time = if sent_time > 0 {
+            sent_time
+        } else {
+            duplicate_send_time
+        };
+
+        if local_exists {
+            conn.execute(
+                "DELETE FROM messages
+                 WHERE id = ?1 AND conversation_id = ?2 AND COALESCE(custom_msg_id, '') <> ?3",
+                rusqlite::params![server_id, request.conversation_id, request.custom_msg_id],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        }
+
         // 两步：① 用服务端 msg_id 替换本地 id（与老 im `updateMsgProperty` 逻辑一致）；
         //     ② 同一行状态置为 1（sent），read_status 置为 1（发送成功）。
-        if sent_time > 0 {
+        if next_sent_time > 0 {
             conn.execute(
-                "UPDATE messages SET id = ?1, status = 1, read_status = MAX(read_status, 1), send_time = ?2
-                 WHERE custom_msg_id = ?3 AND conversation_id = ?4",
+                "UPDATE messages
+                 SET id = ?1,
+                     status = 1,
+                     read_status = MAX(read_status, ?2, 1),
+                     send_time = ?3,
+                     content = COALESCE(NULLIF(?4, ''), content),
+                     extra = COALESCE(?5, extra)
+                 WHERE custom_msg_id = ?6 AND conversation_id = ?7",
                 rusqlite::params![
                     server_id,
-                    sent_time,
+                    duplicate_read_status,
+                    next_sent_time,
+                    duplicate_content,
+                    duplicate_extra,
                     request.custom_msg_id,
                     request.conversation_id,
                 ],
             )
         } else {
             conn.execute(
-                "UPDATE messages SET id = ?1, status = 1, read_status = MAX(read_status, 1)
-                 WHERE custom_msg_id = ?2 AND conversation_id = ?3",
-                rusqlite::params![server_id, request.custom_msg_id, request.conversation_id],
+                "UPDATE messages
+                 SET id = ?1,
+                     status = 1,
+                     read_status = MAX(read_status, ?2, 1),
+                     content = COALESCE(NULLIF(?3, ''), content),
+                     extra = COALESCE(?4, extra)
+                 WHERE custom_msg_id = ?5 AND conversation_id = ?6",
+                rusqlite::params![
+                    server_id,
+                    duplicate_read_status,
+                    duplicate_content,
+                    duplicate_extra,
+                    request.custom_msg_id,
+                    request.conversation_id,
+                ],
             )
         }
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;

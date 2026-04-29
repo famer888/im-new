@@ -70,6 +70,12 @@ const toastType = ref<'success' | 'error'>('success')
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
+const emojiChatType = computed(() => {
+  const type = chatStore.currentConversation?.type
+  if (type === ConversationType.Group) return 'group'
+  if (type === ConversationType.Channel) return 'channel'
+  return 'friend'
+})
 const groupId = computed(() => chatStore.currentConversation?.targetId ?? '')
 /** 与 im 传输助手一致：工具栏仅表情 + 文件 */
 const isFileHelperChat = computed(
@@ -748,6 +754,12 @@ function handleEmojiSelect(emoji: string) {
   content.value += emoji
   if (editorRef.value) editorRef.value.textContent = content.value
   showEmoji.value = false
+}
+
+function handleDiceSelect() {
+  if (showShutupTip.value) return
+  showEmoji.value = false
+  emit('send', '', MessageType.SetImage, withReadBurnExtra())
 }
 
 function handleAtSelect(member: { uid: string; name: string }) {
@@ -1720,7 +1732,12 @@ onBeforeUnmount(() => {
 
       <Transition name="popup">
         <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
-          <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
+          <EmojiPicker
+            :chat-type="emojiChatType"
+            @select="handleEmojiSelect"
+            @select-dice="handleDiceSelect"
+            @close="showEmoji = false"
+          />
         </div>
       </Transition>
 

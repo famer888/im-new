@@ -43,6 +43,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Ok(obj) => name_card_obj_to_legacy_content(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
+        12 => match imweb::SetImageObj::decode(plain) {
+            Ok(obj) => set_image_obj_to_legacy_content(obj),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
         _ => match imweb::TextObj::decode(plain) {
             Ok(obj) => obj.content,
             Err(_) => String::from_utf8_lossy(plain).to_string(),
@@ -88,6 +92,15 @@ fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
     } else {
         format!("{}*|*|*{}*|*|*{}", obj.nick_name, obj.icon, obj.uid)
     }
+}
+
+fn set_image_obj_to_legacy_content(obj: imweb::SetImageObj) -> String {
+    if let Some(reference) = obj.r#ref {
+        if reference.msg_id > 0 {
+            return format!("{}||{}", obj.current_image, reference.msg_id);
+        }
+    }
+    obj.current_image.to_string()
 }
 
 fn decrypt_group_attachment_key(
@@ -510,6 +523,17 @@ impl MessageBatcher {
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
                         )
+                    } else if gm.msg_type == 12
+                        && imweb::SetImageObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw SetImageObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
                     } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
                         warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw UTF-8 parsed group_id={} msg_id={} msg_type={} err={}",
@@ -826,6 +850,24 @@ impl MessageBatcher {
                             decrypt_pending = true;
                             warn!(
                                 "PRIVATE_MSG_RECEIVED name card decrypt failed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            "[加密消息，等待密钥同步]".to_string()
+                        }
+                    }
+                } else if om.msg_type == 12 {
+                    match imweb::SetImageObj::decode(fallback_cipher) {
+                        Ok(obj) => {
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED decrypt failed but raw SetImageObj parsed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            set_image_obj_to_legacy_content(obj)
+                        }
+                        Err(_) => {
+                            decrypt_pending = true;
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED set image decrypt failed sender_uid={} msg_id={} err={}",
                                 om.send_uid, om.msg_id, e
                             );
                             "[加密消息，等待密钥同步]".to_string()

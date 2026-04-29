@@ -240,12 +240,57 @@ pub fn encode_name_card_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+fn json_i64(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        })
+    })
+}
+
+fn json_i32(value: &serde_json::Value, keys: &[&str]) -> Option<i32> {
+    json_i64(value, keys).map(|v| v as i32)
+}
+
+/// 将骰子功能表情编码为旧 im 使用的 SetImageObj protobuf。
+pub fn encode_set_image_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (set_image_id, current_image, image_size) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let set_image_id = json_i64(&value, &["setImageId", "set_image_id"])
+                .filter(|v| *v > 0)
+                .unwrap_or(1);
+            let current_image = json_i32(
+                &value,
+                &["currentImage", "current_image", "result", "value"],
+            )
+            .unwrap_or(0);
+            let image_size = json_i32(&value, &["imageSize", "image_size"])
+                .filter(|v| *v > 0)
+                .unwrap_or(7);
+            (set_image_id, current_image, image_size)
+        } else {
+            let set_image_id = raw.parse::<i64>().ok().filter(|v| *v > 0).unwrap_or(1);
+            (set_image_id, 0, 7)
+        };
+
+    let obj = imweb::SetImageObj {
+        set_image_id,
+        image_size,
+        current_image,
+        r#ref: None,
+    };
+    obj.encode_to_vec()
+}
+
 pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
         2 => encode_audio_obj(content),
         5 => encode_name_card_obj(content),
         7 => encode_file_obj(content),
+        12 => encode_set_image_obj(content),
         _ => encode_text_obj(content),
     }
 }
