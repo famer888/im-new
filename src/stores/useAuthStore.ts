@@ -168,10 +168,10 @@ export const useAuthStore = defineStore('auth', () => {
   function getPreferredAccount(): AccountInfo | null {
     const lastUid = localStorage.getItem(CURRENT_UID_KEY) || ''
     if (lastUid) {
-      const matched = accounts.value.find(a => a.id === lastUid)
+      const matched = accounts.value.find(a => a.id === lastUid && String(a.sessionId || '').trim())
       if (matched) return matched
     }
-    return accounts.value[0] || null
+    return [...accounts.value].reverse().find(a => String(a.sessionId || '').trim()) || null
   }
 
   async function initSession() {

@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { useAuthStore } from '@/stores/useAuthStore'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
@@ -14,11 +15,38 @@ const authStore = useAuthStore()
 const showNetworkConfig = ref(false)
 const showFileImport = ref(false)
 const isLoading = ref(false)
+const isRestoring = ref(true)
 const isMac = ref(false)
 const extraDomains = ref<string[]>([])
 
-onMounted(() => {
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
+  try {
+    await authStore.initSession()
+    if (authStore.uid) {
+      if (isTauri()) {
+        await invoke('login', {
+          request: {
+            session_url: '',
+            ws_url: '',
+            aes_key: '',
+            install_code: '',
+          },
+        })
+        return
+      }
+      await router.replace('/home')
+      return
+    }
+  } catch (error) {
+    console.warn('[auth] restore previous session failed:', error)
+  } finally {
+    isRestoring.value = false
+  }
 })
 
 function handleValidDomainList(urls: string[]) {
@@ -81,7 +109,7 @@ function startWindowDrag(e: MouseEvent) {
       @close="showNetworkConfig = false"
     />
     <QRCodeLogin
-      v-else
+      v-else-if="!isRestoring"
       :loading="isLoading"
       :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
