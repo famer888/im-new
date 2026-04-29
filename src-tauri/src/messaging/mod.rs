@@ -138,10 +138,64 @@ pub fn encode_audio_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将前端文件内容编码为旧 im 使用的 FileObj protobuf。
+pub fn encode_file_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (file_url, name, size, mime_type) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let file_url = value
+                .get("fileUrl")
+                .or_else(|| value.get("url"))
+                .or_else(|| value.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let name = value
+                .get("name")
+                .or_else(|| value.get("fileName"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let size = value
+                .get("size")
+                .or_else(|| value.get("fileSize"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let mime_type = value
+                .get("mimeType")
+                .or_else(|| value.get("mime"))
+                .or_else(|| value.get("ext"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            (file_url, name, size, mime_type)
+        } else {
+            let parts: Vec<&str> = raw.split("||").collect();
+            let file_url = parts.get(0).copied().unwrap_or_default().to_string();
+            let name = parts.get(1).copied().unwrap_or_default().to_string();
+            let size = parts
+                .get(2)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            let mime_type = parts.get(3).copied().unwrap_or_default().to_string();
+            (file_url, name, size, mime_type)
+        };
+
+    let obj = imweb::FileObj {
+        size,
+        file_url,
+        name,
+        mime_type,
+        r#ref: None,
+    };
+    obj.encode_to_vec()
+}
+
 pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
         2 => encode_audio_obj(content),
+        7 => encode_file_obj(content),
         _ => encode_text_obj(content),
     }
 }

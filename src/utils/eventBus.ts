@@ -7,6 +7,8 @@ type Events = {
   'editor:focus': void
   'editor:insert-emoji': string
   'editor:insert-at': { uid: string; name: string }
+  'editor:drop-files': File[]
+  'editor:drop-file-paths': string[]
   'chat:switch': string
   'notification:click': { conversationId: string }
 }

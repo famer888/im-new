@@ -128,6 +128,15 @@ interface UploadedImagePayload {
   fileKey: string
 }
 
+interface UploadedFilePayload {
+  url: string
+  size: number
+  name: string
+  ext: string
+  mimeType: string
+  fileKey: string
+}
+
 interface ImageSendTrace {
   id: string
   startedAt: number
@@ -495,6 +504,25 @@ function handleDrop(e: DragEvent) {
   if (files.length > 0) {
     pendingFiles.value = files
     showFilePreview.value = true
+  }
+}
+
+function openDroppedFiles(files: File[]) {
+  if (files.length === 0) return
+  pendingFiles.value = files
+  showFilePreview.value = true
+}
+
+async function openDroppedFilePaths(paths: string[]) {
+  if (paths.length === 0) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const items = await invoke<ClipboardFilePayload[]>('read_local_files', { paths })
+    const files = items.map(clipboardPayloadToFile)
+    openDroppedFiles(files)
+  } catch (error) {
+    console.warn('[message-input] read dropped files failed:', error)
+    showToast(t('操作失败'), 'error')
   }
 }
 
@@ -904,6 +932,71 @@ async function uploadImageLikeIm(
   }
 }
 
+async function uploadFileLikeIm(file: File): Promise<UploadedFilePayload> {
+  terminalLog('file upload start', {
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  })
+  const fileKey = createFileKey()
+  const encrypted = await encryptFileForUpload(file, fileKey)
+  const suffix = getFileSuffix(file)
+  const contentType = getUploadContentType(file, suffix)
+  const [uploadUrlInfo, token] = await Promise.all([
+    getUploadUrl({
+      attachType: getUploadAttachType(MessageType.File),
+      attachWorkspaceType: 1,
+      fileSize: encrypted.byteLength,
+      suffix,
+    }),
+    getUploadToken(),
+  ])
+
+  const objectKey = String(uploadUrlInfo.fileId || '').trim()
+  const endpoint = normalizeOssEndpoint(String(token.ossEndpoint || ''))
+  const bucket = String(token.ossBucket || '').trim()
+  const responseUrl = String(uploadUrlInfo.url || '').trim()
+  const accessKeyId = String(token.accessKeyId || '').trim()
+  const accessKeySecret = String(token.accessKeySecret || '').trim()
+  const securityToken = String(token.securityToken || '').trim()
+  if (!objectKey || !bucket || !endpoint || !accessKeyId || !accessKeySecret || !securityToken) {
+    throw new Error('上传文件失败：OSS 参数缺失')
+  }
+
+  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
+  await putObjectToOss({
+    url: uploadUrl,
+    bucket,
+    objectKey,
+    accessKeyId,
+    accessKeySecret,
+    securityToken,
+    body: encrypted,
+    contentType,
+  })
+
+  const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
+  terminalLog('file upload done', {
+    name: file.name,
+    originalBytes: file.size,
+    encryptedBytes: encrypted.byteLength,
+    finalUrlHost: (() => {
+      try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
+    })(),
+    fileKeyHead: safeHead(fileKey),
+    fileKeyLen: fileKey.length,
+  })
+
+  return {
+    url: finalUrl,
+    size: file.size,
+    name: file.name,
+    ext: suffix,
+    mimeType: contentType,
+    fileKey,
+  }
+}
+
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -1077,7 +1170,27 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         showToast((error as Error)?.message || t('操作失败'), 'error')
       }
     } else {
-      emit('send', JSON.stringify({ name: file.name, size: file.size, ext: file.name.split('.').pop() }), MessageType.File, withReadBurnExtra())
+      try {
+        const uploaded = await uploadFileLikeIm(file)
+        emit('send', JSON.stringify({
+          url: uploaded.url,
+          fileUrl: uploaded.url,
+          name: uploaded.name,
+          size: uploaded.size,
+          ext: uploaded.ext,
+          mimeType: uploaded.mimeType,
+          fileKey: uploaded.fileKey,
+        }), MessageType.File, withReadBurnExtra({ fileKey: uploaded.fileKey }))
+      } catch (error) {
+        console.error('[message-input] file upload failed:', error)
+        terminalLog('file upload failed', {
+          message: (error as Error)?.message || String(error),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        }, 'error')
+        showToast((error as Error)?.message || t('操作失败'), 'error')
+      }
     }
   }
   if (text) {
@@ -1176,12 +1289,16 @@ onMounted(() => {
   eventBus.on('editor:focus', handleEditorFocusEvent)
   eventBus.on('editor:insert-emoji', handleEmojiSelect)
   eventBus.on('editor:insert-at', handleAtSelect)
+  eventBus.on('editor:drop-files', openDroppedFiles)
+  eventBus.on('editor:drop-file-paths', openDroppedFilePaths)
 })
 
 onBeforeUnmount(() => {
   eventBus.off('editor:focus', handleEditorFocusEvent)
   eventBus.off('editor:insert-emoji', handleEmojiSelect)
   eventBus.off('editor:insert-at', handleAtSelect)
+  eventBus.off('editor:drop-files', openDroppedFiles)
+  eventBus.off('editor:drop-file-paths', openDroppedFilePaths)
 })
 </script>
 
