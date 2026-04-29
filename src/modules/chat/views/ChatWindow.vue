@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -12,6 +12,7 @@ import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import lockIcon from '@/assets/images/message/lock.png'
+import dropFileIcon from '@/assets/images/file/file-icon.png'
 import { eventBus } from '@/utils/eventBus'
 
 const route = useRoute()
@@ -43,6 +44,17 @@ const showReadBurnBackground = computed(() => currentFriendContact.value?.bfRead
 const sessionInitialUnread = ref(0)
 /** 已为当前会话执行过 markAsRead 后，不再用 store 覆盖快照，避免把已算好的 N 冲掉 */
 const unreadSnapshotLocked = ref(false)
+const dropAreaVisible = ref(false)
+const chatWindowRef = ref<HTMLElement | null>(null)
+let unlistenTauriDragDrop: (() => void) | null = null
+const dropAreaStyle = computed(() => {
+  const rect = chatWindowRef.value?.getBoundingClientRect()
+  if (!rect) return {}
+  return {
+    left: `${rect.left}px`,
+    width: `${rect.width}px`,
+  }
+})
 
 function captureUnreadSnapshot(convId: string) {
   const conv = chatStore.conversations.find((c) => c.id === convId)
@@ -120,10 +132,80 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
   if (!conversationId.value || !authStore.uid) return
   await messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra)
 }
+
+function hasDraggedFiles(e: DragEvent) {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+}
+
+function handleDragEnter(e: DragEvent) {
+  if (!hasDraggedFiles(e)) return
+  e.preventDefault()
+  dropAreaVisible.value = true
+}
+
+function handleDropAreaDragOver(e: DragEvent) {
+  e.preventDefault()
+}
+
+function closeDropArea() {
+  dropAreaVisible.value = false
+}
+
+function handleDropAreaDrop(e: DragEvent) {
+  e.preventDefault()
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  closeDropArea()
+  if (files.length > 0) {
+    eventBus.emit('editor:drop-files', files)
+  }
+}
+
+function isPositionInDropArea(position?: { x: number; y: number }) {
+  if (!position || !chatWindowRef.value) return false
+  const rect = chatWindowRef.value.getBoundingClientRect()
+  return position.x >= rect.left
+    && position.x <= rect.right
+    && position.y >= 0
+    && position.y <= window.innerHeight
+}
+
+async function setupTauriDragDrop() {
+  if (!(window as any).__TAURI_INTERNALS__) return
+  try {
+    const { getCurrentWebview } = await import('@tauri-apps/api/webview')
+    unlistenTauriDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload
+      if (payload.type === 'enter' || payload.type === 'over') {
+        dropAreaVisible.value = isPositionInDropArea(payload.position)
+        return
+      }
+      if (payload.type === 'drop') {
+        const shouldDrop = dropAreaVisible.value || isPositionInDropArea(payload.position)
+        dropAreaVisible.value = false
+        if (shouldDrop && payload.paths.length > 0) {
+          eventBus.emit('editor:drop-file-paths', payload.paths)
+        }
+        return
+      }
+      dropAreaVisible.value = false
+    })
+  } catch (error) {
+    console.warn('[chat-window] tauri drag-drop listen failed:', error)
+  }
+}
+
+onMounted(() => {
+  void setupTauriDragDrop()
+})
+
+onBeforeUnmount(() => {
+  unlistenTauriDragDrop?.()
+  unlistenTauriDragDrop = null
+})
 </script>
 
 <template>
-  <div class="chat-window">
+  <div ref="chatWindowRef" class="chat-window" @dragenter="handleDragEnter">
     <ChatHeader :conversation-id="conversationId" />
     <div class="e2e-notice">
       <!-- 视觉 10px：浏览器常限制最小字号，用 12px 基准 + scale(10/12) -->
@@ -143,6 +225,20 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
       @load-more="handleLoadMore"
     />
     <MessageInput @send="handleSend" />
+    <div
+      v-if="dropAreaVisible"
+      class="dom-drop-area"
+      :style="dropAreaStyle"
+      draggable="true"
+      @dragover="handleDropAreaDragOver"
+      @drop="handleDropAreaDrop"
+      @click="closeDropArea"
+    >
+      <p>
+        <img :src="dropFileIcon" alt="" />
+        <span>{{ t('拖入您要发送的文件') }}</span>
+      </p>
+    </div>
   </div>
 </template>
 
@@ -154,6 +250,38 @@ async function handleSend(content: string, msgType: number, extra?: Record<strin
   min-width: 0;
   height: 100%;
   background: #fff;
+  position: relative;
+}
+
+.dom-drop-area {
+  color: #fff;
+  text-align: center;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.3);
+  z-index: 10000;
+
+  > p {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 14px;
+    height: 24px;
+    margin: 0;
+
+    > img {
+      display: block;
+      height: 100%;
+      width: 24px;
+      margin-right: 10px;
+    }
+  }
 }
 
 /* 传输助手：顶栏下加密说明（与消息区同底色） */

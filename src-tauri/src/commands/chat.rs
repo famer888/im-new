@@ -472,7 +472,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (1, 1) | (1, 2) => {
+        (1, 1) | (1, 2) | (1, 7) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -500,7 +500,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) => {
+        (0, 1) | (0, 2) | (0, 7) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,

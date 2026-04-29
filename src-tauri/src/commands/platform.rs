@@ -108,6 +108,15 @@ pub fn write_clipboard_image(data_base64: String) -> Result<(), String> {
 #[tauri::command]
 pub fn read_clipboard_files() -> Result<Vec<ClipboardFilePayload>, String> {
     let paths = read_clipboard_file_paths()?;
+    read_files_from_paths(paths)
+}
+
+#[tauri::command]
+pub fn read_local_files(paths: Vec<String>) -> Result<Vec<ClipboardFilePayload>, String> {
+    read_files_from_paths(paths.into_iter().map(std::path::PathBuf::from).collect())
+}
+
+fn read_files_from_paths(paths: Vec<std::path::PathBuf>) -> Result<Vec<ClipboardFilePayload>, String> {
     let mut files = Vec::new();
 
     for path in paths {
