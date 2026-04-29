@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
 use prost::Message as _;
 use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tracing::{error, warn};
 
@@ -137,8 +137,22 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
         1 => "[图片]".to_string(),
         2 => "[语音]".to_string(),
         3 => "[视频]".to_string(),
+        5 => "[名片]".to_string(),
         7 => "[文件]".to_string(),
-        _ => content.unwrap_or_default().trim().chars().take(200).collect(),
+        _ => content
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(200)
+            .collect(),
+    }
+}
+
+fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
+    if obj.icon.is_empty() {
+        format!("{}*|*|*{}", obj.nick_name, obj.uid)
+    } else {
+        format!("{}*|*|*{}*|*|*{}", obj.nick_name, obj.icon, obj.uid)
     }
 }
 
@@ -211,8 +225,8 @@ pub async fn upsert_incoming_messages(
             queries::batch_insert_messages(conn, &rows)?;
 
             for msg in &rows {
-                let (conv_type, target_id) = parse_conversation_id(&msg.conversation_id)
-                    .unwrap_or((0, String::new()));
+                let (conv_type, target_id) =
+                    parse_conversation_id(&msg.conversation_id).unwrap_or((0, String::new()));
                 conn.execute(
                     "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -239,12 +253,11 @@ pub async fn upsert_incoming_messages(
 
             for (conv_id, delta) in unread_delta {
                 if delta > 0 {
-                    conn
-                        .execute(
-                            "UPDATE conversations SET unread_count = unread_count + ?1 WHERE id = ?2",
-                            rusqlite::params![delta, conv_id],
-                        )
-                        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    conn.execute(
+                        "UPDATE conversations SET unread_count = unread_count + ?1 WHERE id = ?2",
+                        rusqlite::params![delta, conv_id],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
                 }
             }
 
@@ -261,9 +274,9 @@ pub async fn upsert_incoming_messages(
         .map_err(|e| e.to_string())?;
 
     for conv_id in conv_ids_to_emit {
-        if let Ok(Some(conv)) =
-            db.with_connection(&uid_trim, |conn| queries::get_conversation_by_id(conn, &conv_id))
-        {
+        if let Ok(Some(conv)) = db.with_connection(&uid_trim, |conn| {
+            queries::get_conversation_by_id(conn, &conv_id)
+        }) {
             let _ = app.emit("conv:update", &conv);
         }
     }
@@ -314,10 +327,7 @@ fn extract_read_burn_meta(extra: Option<&str>) -> (i32, i64) {
         snapchat_time = delete_delay_ms / 1000;
     }
 
-    (
-        snapchat_time.max(0) as i32,
-        delete_delay_ms.max(0),
-    )
+    (snapchat_time.max(0) as i32, delete_delay_ms.max(0))
 }
 
 fn parse_extra_map(extra: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
@@ -334,9 +344,10 @@ fn parse_extra_map(extra: Option<&str>) -> serde_json::Map<String, serde_json::V
 }
 
 fn read_user_id(value: &serde_json::Value) -> Option<i64> {
-    value
-        .get("userId")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok())))
+    value.get("userId").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+    })
 }
 
 #[tauri::command]
@@ -571,7 +582,10 @@ pub fn has_group_rel_key(crypto: State<'_, CryptoEngine>, group_id: String) -> b
 /// `fnMsgDecryption` 在 `_decrypt` 抛错后 `delete groupKeyObjs[id]`
 /// 的语义一致。
 #[tauri::command]
-pub fn clear_group_rel_key(crypto: State<'_, CryptoEngine>, group_id: String) -> Result<(), String> {
+pub fn clear_group_rel_key(
+    crypto: State<'_, CryptoEngine>,
+    group_id: String,
+) -> Result<(), String> {
     crypto.remove_group_key(&group_id);
     tracing::info!(target: "e2ee", "clear_group_rel_key group_id={}", group_id);
     Ok(())
@@ -654,17 +668,11 @@ pub fn derive_friend_rel_key(
     version: Option<i64>,
     source: Option<String>,
 ) -> Result<String, String> {
-    let encrypted_msg_key = hex::decode(&encrypted_msg_key_hex)
-        .map_err(|e| format!("invalid msgKey hex: {}", e))?;
+    let encrypted_msg_key =
+        hex::decode(&encrypted_msg_key_hex).map_err(|e| format!("invalid msgKey hex: {}", e))?;
     let ver = version.unwrap_or(1);
     let src = source.unwrap_or_else(|| "web".to_string());
-    match crypto.derive_friend_key(
-        &friend_id,
-        ver,
-        &src,
-        &public_key_hex,
-        &encrypted_msg_key,
-    ) {
+    match crypto.derive_friend_key(&friend_id, ver, &src, &public_key_hex, &encrypted_msg_key) {
         Ok(rel) => Ok(rel),
         Err(e) => Err(e.to_string()),
     }
@@ -679,7 +687,8 @@ pub fn decrypt_private_incoming(
     ciphertext_hex: String,
     msg_type: Option<i32>,
 ) -> Result<String, String> {
-    let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
+    let data =
+        hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let ver = version.unwrap_or(1);
     let mut candidates = vec![sender_id];
     if let Some(pid) = peer_id {
@@ -732,6 +741,11 @@ pub fn decrypt_private_incoming(
                 .to_string());
             }
         }
+        5 => {
+            if let Ok(obj) = crate::proto::imweb::NameCardObj::decode(plain.as_slice()) {
+                return Ok(name_card_obj_to_legacy_content(obj));
+            }
+        }
         _ => {}
     }
     if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
@@ -747,7 +761,8 @@ pub fn decrypt_group_incoming(
     ciphertext_hex: String,
     msg_type: Option<i32>,
 ) -> Result<String, String> {
-    let data = hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
+    let data =
+        hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let key_cached = crypto.get_group_key(&group_id).is_some();
     let is_group_audio = msg_type.unwrap_or(0) == 2;
     if is_group_audio {
@@ -800,6 +815,11 @@ pub fn decrypt_group_incoming(
                             "size": obj.file_size,
                         })
                         .to_string());
+                    }
+                }
+                5 => {
+                    if let Ok(obj) = crate::proto::imweb::NameCardObj::decode(plain.as_slice()) {
+                        return Ok(name_card_obj_to_legacy_content(obj));
                     }
                 }
                 _ => {}
@@ -971,192 +991,199 @@ pub async fn mark_as_read(
     let (conv_type, target_id) = parse_conversation_id(&conversation_id)?;
     let now = chrono::Utc::now().timestamp_millis();
 
-    let (result, receipts) = db.with_connection(&uid, |conn| {
-        let mut stmt = conn
-            .prepare_cached(
-                "SELECT id, sender_id, msg_type, extra
+    let (result, receipts) = db
+        .with_connection(&uid, |conn| {
+            let mut stmt = conn
+                .prepare_cached(
+                    "SELECT id, sender_id, msg_type, extra
                  FROM messages
                  WHERE conversation_id = ?1
                    AND sender_id != ?2
                    AND is_deleted = 0
                    AND read_status = 0
                  ORDER BY send_time ASC",
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-        let rows = stmt
-            .query_map(rusqlite::params![conversation_id, uid], |row| {
-                let extra: Option<String> = row.get(3)?;
-                let (snapchat_time, delete_delay_ms) = extract_read_burn_meta(extra.as_deref());
-                Ok(ReadCandidate {
-                    id: row.get(0)?,
-                    sender_id: row.get(1)?,
-                    msg_type: row.get(2)?,
-                    delete_delay_ms,
-                    snapchat_time,
-                    extra,
+            let rows = stmt
+                .query_map(rusqlite::params![conversation_id, uid], |row| {
+                    let extra: Option<String> = row.get(3)?;
+                    let (snapchat_time, delete_delay_ms) = extract_read_burn_meta(extra.as_deref());
+                    Ok(ReadCandidate {
+                        id: row.get(0)?,
+                        sender_id: row.get(1)?,
+                        msg_type: row.get(2)?,
+                        delete_delay_ms,
+                        snapchat_time,
+                        extra,
+                    })
                 })
-            })
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-        let candidates = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            let candidates = rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-        if !candidates.is_empty() {
-            conn.execute(
-                "UPDATE messages
+            if !candidates.is_empty() {
+                conn.execute(
+                    "UPDATE messages
                  SET read_status = 1
                  WHERE conversation_id = ?1
                    AND sender_id != ?2
                    AND is_deleted = 0
                    AND read_status = 0",
-                rusqlite::params![conversation_id, uid],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        }
-
-        conn.execute(
-            "UPDATE conversations SET unread_count = 0 WHERE id = ?1",
-            rusqlite::params![conversation_id],
-        )
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-
-        let scheduled_deletions = candidates
-            .iter()
-            .filter(|item| item.delete_delay_ms > 0)
-            .map(|item| ScheduledDeletion {
-                conversation_id: conversation_id.clone(),
-                message_id: item.id.clone(),
-                expire_at: now + item.delete_delay_ms,
-            })
-            .collect::<Vec<_>>();
-
-        let read_message_ids = candidates.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
-
-        let mut group_read_updates = Vec::<GroupReadReceiptUpdate>::new();
-
-        if conv_type == 1 {
-            for item in &candidates {
-                let mut extra_map = parse_extra_map(item.extra.as_deref());
-                let existing_total = extra_map
-                    .get("readTotal")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or_default();
-                let existing_users = extra_map
-                    .get("readUsers")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                let old_known_count = existing_users.len() as i64;
-                let already_known = existing_users
-                    .iter()
-                    .any(|entry| read_user_id(entry) == uid.parse::<i64>().ok());
-
-                let mut read_users = existing_users
-                    .into_iter()
-                    .filter(|entry| read_user_id(entry) != uid.parse::<i64>().ok())
-                    .collect::<Vec<_>>();
-                read_users.push(serde_json::json!({
-                    "userId": uid.parse::<i64>().unwrap_or_default(),
-                    "readTime": now,
-                    "readState": imweb::MsgReceiptStatus::Viewed as i32,
-                }));
-
-                let baseline_total = existing_total.max(old_known_count);
-                let read_total = if already_known {
-                    baseline_total.max(read_users.len() as i64)
-                } else if existing_total > old_known_count {
-                    baseline_total + 1
-                } else {
-                    read_users.len() as i64
-                };
-
-                extra_map.insert("readUsers".to_string(), serde_json::Value::Array(read_users));
-                extra_map.insert("readTotal".to_string(), serde_json::Value::from(read_total));
-                let next_extra = serde_json::Value::Object(extra_map).to_string();
-
-                conn.execute(
-                    "UPDATE messages
-                     SET extra = ?1, read_status = 1
-                     WHERE conversation_id = ?2 AND id = ?3",
-                    rusqlite::params![next_extra, conversation_id, item.id],
+                    rusqlite::params![conversation_id, uid],
                 )
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            }
 
-                group_read_updates.push(GroupReadReceiptUpdate {
+            conn.execute(
+                "UPDATE conversations SET unread_count = 0 WHERE id = ?1",
+                rusqlite::params![conversation_id],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            let scheduled_deletions = candidates
+                .iter()
+                .filter(|item| item.delete_delay_ms > 0)
+                .map(|item| ScheduledDeletion {
                     conversation_id: conversation_id.clone(),
                     message_id: item.id.clone(),
-                    read_status: 1,
-                    extra: Some(next_extra),
-                });
+                    expire_at: now + item.delete_delay_ms,
+                })
+                .collect::<Vec<_>>();
+
+            let read_message_ids = candidates
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>();
+
+            let mut group_read_updates = Vec::<GroupReadReceiptUpdate>::new();
+
+            if conv_type == 1 {
+                for item in &candidates {
+                    let mut extra_map = parse_extra_map(item.extra.as_deref());
+                    let existing_total = extra_map
+                        .get("readTotal")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or_default();
+                    let existing_users = extra_map
+                        .get("readUsers")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    let old_known_count = existing_users.len() as i64;
+                    let already_known = existing_users
+                        .iter()
+                        .any(|entry| read_user_id(entry) == uid.parse::<i64>().ok());
+
+                    let mut read_users = existing_users
+                        .into_iter()
+                        .filter(|entry| read_user_id(entry) != uid.parse::<i64>().ok())
+                        .collect::<Vec<_>>();
+                    read_users.push(serde_json::json!({
+                        "userId": uid.parse::<i64>().unwrap_or_default(),
+                        "readTime": now,
+                        "readState": imweb::MsgReceiptStatus::Viewed as i32,
+                    }));
+
+                    let baseline_total = existing_total.max(old_known_count);
+                    let read_total = if already_known {
+                        baseline_total.max(read_users.len() as i64)
+                    } else if existing_total > old_known_count {
+                        baseline_total + 1
+                    } else {
+                        read_users.len() as i64
+                    };
+
+                    extra_map.insert(
+                        "readUsers".to_string(),
+                        serde_json::Value::Array(read_users),
+                    );
+                    extra_map.insert("readTotal".to_string(), serde_json::Value::from(read_total));
+                    let next_extra = serde_json::Value::Object(extra_map).to_string();
+
+                    conn.execute(
+                        "UPDATE messages
+                     SET extra = ?1, read_status = 1
+                     WHERE conversation_id = ?2 AND id = ?3",
+                        rusqlite::params![next_extra, conversation_id, item.id],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                    group_read_updates.push(GroupReadReceiptUpdate {
+                        conversation_id: conversation_id.clone(),
+                        message_id: item.id.clone(),
+                        read_status: 1,
+                        extra: Some(next_extra),
+                    });
+                }
             }
-        }
 
-        let receipts = if conv_type == 0 && target_id != queries::FILE_HELPER_TARGET_ID {
-            let target_uid = target_id.parse::<i64>().ok();
-            candidates
-                .iter()
-                .filter_map(|item| {
-                    let msg_id = item.id.parse::<i64>().ok()?;
-                    let send_uid = item.sender_id.parse::<i64>().ok()?;
-                    let target_uid = target_uid?;
-                    Some(imweb::ReceiptMessage {
-                        msg_id,
-                        r#type: imweb::ChatMessageType::OneToOne as i32,
-                        send_uid,
-                        group_id: 0,
-                        receipt_status: Some(imweb::MsgReceiptStatusBase {
-                            status: imweb::MsgReceiptStatus::Viewed as i32,
-                            time: now,
-                        }),
-                        message_type: item.msg_type,
-                        snapchat_time: item.snapchat_time,
-                        duration: 0,
-                        target_id: target_uid,
-                        source: imweb::MessageSource::Web as i32,
+            let receipts = if conv_type == 0 && target_id != queries::FILE_HELPER_TARGET_ID {
+                let target_uid = target_id.parse::<i64>().ok();
+                candidates
+                    .iter()
+                    .filter_map(|item| {
+                        let msg_id = item.id.parse::<i64>().ok()?;
+                        let send_uid = item.sender_id.parse::<i64>().ok()?;
+                        let target_uid = target_uid?;
+                        Some(imweb::ReceiptMessage {
+                            msg_id,
+                            r#type: imweb::ChatMessageType::OneToOne as i32,
+                            send_uid,
+                            group_id: 0,
+                            receipt_status: Some(imweb::MsgReceiptStatusBase {
+                                status: imweb::MsgReceiptStatus::Viewed as i32,
+                                time: now,
+                            }),
+                            message_type: item.msg_type,
+                            snapchat_time: item.snapchat_time,
+                            duration: 0,
+                            target_id: target_uid,
+                            source: imweb::MessageSource::Web as i32,
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        } else if conv_type == 1 {
-            let group_id = target_id.parse::<i64>().ok();
-            candidates
-                .iter()
-                .filter_map(|item| {
-                    let msg_id = item.id.parse::<i64>().ok()?;
-                    let send_uid = item.sender_id.parse::<i64>().ok()?;
-                    let group_id = group_id?;
-                    Some(imweb::ReceiptMessage {
-                        msg_id,
-                        r#type: imweb::ChatMessageType::Group as i32,
-                        send_uid,
-                        group_id,
-                        receipt_status: Some(imweb::MsgReceiptStatusBase {
-                            status: imweb::MsgReceiptStatus::Viewed as i32,
-                            time: now,
-                        }),
-                        message_type: item.msg_type,
-                        snapchat_time: item.snapchat_time,
-                        duration: 0,
-                        target_id: group_id,
-                        source: imweb::MessageSource::Web as i32,
+                    .collect::<Vec<_>>()
+            } else if conv_type == 1 {
+                let group_id = target_id.parse::<i64>().ok();
+                candidates
+                    .iter()
+                    .filter_map(|item| {
+                        let msg_id = item.id.parse::<i64>().ok()?;
+                        let send_uid = item.sender_id.parse::<i64>().ok()?;
+                        let group_id = group_id?;
+                        Some(imweb::ReceiptMessage {
+                            msg_id,
+                            r#type: imweb::ChatMessageType::Group as i32,
+                            send_uid,
+                            group_id,
+                            receipt_status: Some(imweb::MsgReceiptStatusBase {
+                                status: imweb::MsgReceiptStatus::Viewed as i32,
+                                time: now,
+                            }),
+                            message_type: item.msg_type,
+                            snapchat_time: item.snapchat_time,
+                            duration: 0,
+                            target_id: group_id,
+                            source: imweb::MessageSource::Web as i32,
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
 
-        Ok((
-            ReadProcessingResult {
-                read_message_ids,
-                scheduled_deletions,
-                group_read_updates,
-            },
-            receipts,
-        ))
-    })
-    .map_err(|e| e.to_string())?;
+            Ok((
+                ReadProcessingResult {
+                    read_message_ids,
+                    scheduled_deletions,
+                    group_read_updates,
+                },
+                receipts,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
 
     if !receipts.is_empty() {
         let req = imweb::SendReceiptMessageReq { receipts };
@@ -1301,12 +1328,7 @@ pub async fn apply_group_read_receipts(
                        AND is_deleted = 0
                      LIMIT 1",
                     rusqlite::params![conversation_id, receipt.msg_id.to_string()],
-                    |row| {
-                        Ok((
-                            row.get::<_, Option<String>>(0)?,
-                            row.get::<_, i32>(1)?,
-                        ))
-                    },
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i32>(1)?)),
                 )
                 .optional()
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
@@ -1349,7 +1371,10 @@ pub async fn apply_group_read_receipts(
                 read_users.len() as i64
             };
 
-            extra_map.insert("readUsers".to_string(), serde_json::Value::Array(read_users));
+            extra_map.insert(
+                "readUsers".to_string(),
+                serde_json::Value::Array(read_users),
+            );
             extra_map.insert("readTotal".to_string(), serde_json::Value::from(read_total));
             let next_extra = serde_json::Value::Object(extra_map).to_string();
             let next_read_status = current_read_status.max(1);
@@ -1387,28 +1412,29 @@ pub async fn delete_message(
     uid: String,
     message_id: String,
 ) -> Result<(), String> {
-    let conversation_id = db.with_connection(&uid, |conn| {
-        let conversation_id = conn
-            .query_row(
-                "SELECT conversation_id FROM messages WHERE id = ?1 LIMIT 1",
-                rusqlite::params![message_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    let conversation_id = db
+        .with_connection(&uid, |conn| {
+            let conversation_id = conn
+                .query_row(
+                    "SELECT conversation_id FROM messages WHERE id = ?1 LIMIT 1",
+                    rusqlite::params![message_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-        conn.execute(
-            "UPDATE messages SET is_deleted = 1 WHERE id = ?1",
-            rusqlite::params![message_id],
-        )
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        if let Some(conv_id) = conversation_id.as_deref() {
-            // 删除消息后把会话摘要回退到最新的未删除消息，供左侧列表即时刷新。
-            queries::refresh_conversation_summary(conn, conv_id)?;
-        }
-        Ok(conversation_id)
-    })
-    .map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE messages SET is_deleted = 1 WHERE id = ?1",
+                rusqlite::params![message_id],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            if let Some(conv_id) = conversation_id.as_deref() {
+                // 删除消息后把会话摘要回退到最新的未删除消息，供左侧列表即时刷新。
+                queries::refresh_conversation_summary(conn, conv_id)?;
+            }
+            Ok(conversation_id)
+        })
+        .map_err(|e| e.to_string())?;
 
     if let Some(conv_id) = conversation_id {
         if let Ok(Some(conv)) =
@@ -1527,9 +1553,9 @@ pub async fn clear_conversation_history(
     })
     .map_err(|e| e.to_string())?;
 
-    if let Ok(Some(conv)) =
-        db.with_connection(&uid, |conn| queries::get_conversation_by_id(conn, &request.conversation_id))
-    {
+    if let Ok(Some(conv)) = db.with_connection(&uid, |conn| {
+        queries::get_conversation_by_id(conn, &request.conversation_id)
+    }) {
         let _ = app.emit("conv:update", &conv);
     }
 

@@ -38,7 +38,11 @@ export const useUIStore = defineStore('ui', () => {
   })
 
   const memberInfoVisible = ref(false)
-  const memberInfoTarget = ref({ userId: '', groupId: '' })
+  const memberInfoTarget = ref<{ userId: string; groupId: string; candidateIds: string[] }>({
+    userId: '',
+    groupId: '',
+    candidateIds: [],
+  })
 
   // Context menu
   const contextMenuVisible = ref(false)
@@ -119,8 +123,8 @@ export const useUIStore = defineStore('ui', () => {
   }
   function closeUpVersion() { upVersionVisible.value = false }
 
-  function openMemberInfo(userId: string, groupId?: string) {
-    memberInfoTarget.value = { userId, groupId: groupId || '' }
+  function openMemberInfo(userId: string, groupId?: string, candidateIds: string[] = []) {
+    memberInfoTarget.value = { userId, groupId: groupId || '', candidateIds }
     memberInfoVisible.value = true
   }
   function closeMemberInfo() { memberInfoVisible.value = false }

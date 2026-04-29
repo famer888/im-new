@@ -124,6 +124,7 @@ function showFriendOnlineDot(conv: Conversation): boolean {
 function formatDigestText(digest: string): string {
   const raw = digest.trim()
   if (!raw) return ''
+  if (raw.includes('\uFFFD')) return '[名片]'
 
   try {
     const parsed = JSON.parse(raw)
@@ -155,6 +156,7 @@ function getDigest(conv: Conversation): string {
     if (latest.msgType === 1) return '[图片]'
     if (latest.msgType === 2) return '[语音]'
     if (latest.msgType === 3) return '[视频]'
+    if (latest.msgType === 5) return '[名片]'
     if (latest.msgType === 7) return '[文件]'
     if (raw) return formatDigestText(raw)
   }

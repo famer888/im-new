@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use prost::Message as _;
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{Duration, Instant};
 use tracing::{error, info, warn};
-                
+
 use crate::crypto;
 use crate::proto::{im, imweb};
 use crate::ws::commands as cmds;
@@ -37,6 +37,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
         },
         7 => match imweb::FileObj::decode(plain) {
             Ok(obj) => file_obj_to_json(obj),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
+        5 => match imweb::NameCardObj::decode(plain) {
+            Ok(obj) => name_card_obj_to_legacy_content(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
         _ => match imweb::TextObj::decode(plain) {
@@ -76,6 +80,14 @@ fn file_obj_to_json(obj: imweb::FileObj) -> String {
         "mimeType": obj.mime_type,
     })
     .to_string()
+}
+
+fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
+    if obj.icon.is_empty() {
+        format!("{}*|*|*{}", obj.nick_name, obj.uid)
+    } else {
+        format!("{}*|*|*{}*|*|*{}", obj.nick_name, obj.icon, obj.uid)
+    }
 }
 
 fn decrypt_group_attachment_key(
@@ -299,10 +311,7 @@ impl MessageBatcher {
                             })
                             .collect();
                         let _ = self.app_handle.emit("user:online-status", &list);
-                        info!(
-                            "USER_ONLINE_STATUS_PUSH emitted users={}",
-                            resp.users.len()
-                        );
+                        info!("USER_ONLINE_STATUS_PUSH emitted users={}", resp.users.len());
                     }
                     Err(e) => {
                         warn!("decode PushUserOnOrOffLineMessageResp: {}", e);
@@ -350,9 +359,7 @@ impl MessageBatcher {
                 return;
             }
             // 这些命令不是聊天正文，不进消息列表，避免干扰日志与 UI。
-            cmds::GROUP_REQ_NUM_PUSH
-            | cmds::GROUP_REQ_MSG_PUSH
-            | cmds::LOGIN_RESP => {
+            cmds::GROUP_REQ_NUM_PUSH | cmds::GROUP_REQ_MSG_PUSH | cmds::LOGIN_RESP => {
                 return;
             }
             // 其余命令先保留老逻辑，走批处理（后续补上对应 proto 解码）。
@@ -409,11 +416,14 @@ impl MessageBatcher {
             "WS force logout received cmd={} kick_type={} reason={}",
             cmd, kick_type, reason
         );
-        let _ = self.app_handle.emit("auth:force-logout", ForceLogoutEvent {
-            cmd,
-            reason,
-            kick_type,
-        });
+        let _ = self.app_handle.emit(
+            "auth:force-logout",
+            ForceLogoutEvent {
+                cmd,
+                reason,
+                kick_type,
+            },
+        );
         let _ = self.app_handle.emit("ws:status", "disconnected");
     }
 
@@ -446,43 +456,68 @@ impl MessageBatcher {
             // 再走一次 `decrypt_group_incoming` 重试，从而彻底消除"表情/文本首
             // 条消息在 key warmup 之前到达时被永久卡住在 [加密消息，等待密钥
             // 同步]"的现象。
-            let (content, decrypt_pending) =
-                match crypto.decrypt_group_message(&group_id_s, &gm.content) {
-                    Ok(plain) => (decode_content_obj(gm.msg_type, plain.as_slice()), false),
-                    Err(e) => {
-                        // 兼容老客户端发来的明文消息（例如版本=0 或骰子/扑克等未加密类型）
-                        if gm.msg_type == 7 && imweb::FileObj::decode(gm.content.as_slice()).is_ok() {
-                            warn!(
+            let (content, decrypt_pending) = match crypto
+                .decrypt_group_message(&group_id_s, &gm.content)
+            {
+                Ok(plain) => (decode_content_obj(gm.msg_type, plain.as_slice()), false),
+                Err(e) => {
+                    // 兼容老客户端发来的明文消息（例如版本=0 或骰子/扑克等未加密类型）
+                    if gm.msg_type == 7 && imweb::FileObj::decode(gm.content.as_slice()).is_ok() {
+                        warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw FileObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                            (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
-                        } else if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
-                            warn!(
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
+                    } else if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
+                        warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw TextObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                            (obj.content, false)
-                        } else if gm.msg_type == 1 && imweb::ImageObj::decode(gm.content.as_slice()).is_ok() {
-                            warn!(
+                        (obj.content, false)
+                    } else if gm.msg_type == 1
+                        && imweb::ImageObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw ImageObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                            (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
-                        } else if gm.msg_type == 2 && imweb::AudioObj::decode(gm.content.as_slice()).is_ok() {
-                            warn!(
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
+                    } else if gm.msg_type == 2
+                        && imweb::AudioObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw AudioObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                            (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
-                        } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
-                            warn!(
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
+                    } else if gm.msg_type == 5
+                        && imweb::NameCardObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw NameCardObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
+                    } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
+                        warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw UTF-8 parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                            (s, false)
-                        } else {
-                            warn!(
+                        (s, false)
+                    } else {
+                        warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed group_id={} msg_id={} msg_type={} cipher_len={} version={} key_cached={} err={}",
                                 group_id,
                                 gm.msg_id,
@@ -492,10 +527,10 @@ impl MessageBatcher {
                                 key_cached,
                                 e
                             );
-                            ("[加密消息，等待密钥同步]".to_string(), true)
-                        }
+                        ("[加密消息，等待密钥同步]".to_string(), true)
                     }
-                };
+                }
+            };
             info!(
                 "GROUP_MSG_RECEIVED group_id={} msg_id={} sender_uid={} msg_type={} conversation_id={} decrypt_pending={}",
                 group_id,
@@ -554,12 +589,12 @@ impl MessageBatcher {
 
         let sender_id = om.send_uid.to_string();
         let receiver_id = om.receive_uid.to_string();
-        
+
         let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
         // Wait, how do we know our own UID?
         // We can check if sender_id == receiver_id.
         // Actually, if we can't reliably know our own UID from CryptoEngine, we can just let frontend handle it or pass candidate_ids.
-        // But let's assume we can get our own UID from somewhere? 
+        // But let's assume we can get our own UID from somewhere?
         // Actually, in imweb we often don't have our own UID easily available in batcher.
         // Let's just use sender_id, and if frontend detects it's from self, frontend can adjust the conversationId!
         // Wait, frontend depends on conversationId being correct. Let's just pass `0_{sender}` for now, but if sender==receiver, it's `0_{sender}`.
@@ -578,30 +613,81 @@ impl MessageBatcher {
         // 不是 MessageContent.version（接收端对应设备的 keyVersion）。
         // 桌面端优先尝试 webContent，和老 im `fnFriendMsgAdd` 保持一致。
         if let Some(web) = &om.web_content {
-            let attachment_key = if web.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { web.attachment_key.as_str() };
+            let attachment_key = if web.attachment_key.trim().is_empty() {
+                om.attachment_key.as_str()
+            } else {
+                web.attachment_key.as_str()
+            };
             ciphertexts_to_try.push((ver, sender_source, web.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((web.version as i64, "web", web.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((
+                web.version as i64,
+                "web",
+                web.content.as_slice(),
+                attachment_key,
+            ));
         }
         if let Some(app) = &om.app_content {
-            let attachment_key = if app.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { app.attachment_key.as_str() };
+            let attachment_key = if app.attachment_key.trim().is_empty() {
+                om.attachment_key.as_str()
+            } else {
+                app.attachment_key.as_str()
+            };
             ciphertexts_to_try.push((ver, sender_source, app.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((app.version as i64, "app", app.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((
+                app.version as i64,
+                "app",
+                app.content.as_slice(),
+                attachment_key,
+            ));
         }
         if let Some(mapp) = &om.myself_app_content {
-            let attachment_key = if mapp.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { mapp.attachment_key.as_str() };
+            let attachment_key = if mapp.attachment_key.trim().is_empty() {
+                om.attachment_key.as_str()
+            } else {
+                mapp.attachment_key.as_str()
+            };
             ciphertexts_to_try.push((ver, sender_source, mapp.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((mapp.version as i64, "app", mapp.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((
+                mapp.version as i64,
+                "app",
+                mapp.content.as_slice(),
+                attachment_key,
+            ));
         }
         if let Some(mweb) = &om.myself_web_content {
-            let attachment_key = if mweb.attachment_key.trim().is_empty() { om.attachment_key.as_str() } else { mweb.attachment_key.as_str() };
+            let attachment_key = if mweb.attachment_key.trim().is_empty() {
+                om.attachment_key.as_str()
+            } else {
+                mweb.attachment_key.as_str()
+            };
             ciphertexts_to_try.push((ver, sender_source, mweb.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((mweb.version as i64, "web", mweb.content.as_slice(), attachment_key));
+            ciphertexts_to_try.push((
+                mweb.version as i64,
+                "web",
+                mweb.content.as_slice(),
+                attachment_key,
+            ));
         }
         // Fallback for old/unencrypted messages that might still use `content`
         if !om.content.is_empty() {
-            ciphertexts_to_try.push((ver, sender_source, om.content.as_slice(), om.attachment_key.as_str()));
-            ciphertexts_to_try.push((ver, "web", om.content.as_slice(), om.attachment_key.as_str()));
-            ciphertexts_to_try.push((ver, "app", om.content.as_slice(), om.attachment_key.as_str()));
+            ciphertexts_to_try.push((
+                ver,
+                sender_source,
+                om.content.as_slice(),
+                om.attachment_key.as_str(),
+            ));
+            ciphertexts_to_try.push((
+                ver,
+                "web",
+                om.content.as_slice(),
+                om.attachment_key.as_str(),
+            ));
+            ciphertexts_to_try.push((
+                ver,
+                "app",
+                om.content.as_slice(),
+                om.attachment_key.as_str(),
+            ));
         }
         let cipher_candidates: Vec<serde_json::Value> = ciphertexts_to_try
             .iter()
@@ -645,12 +731,15 @@ impl MessageBatcher {
 
                 if decrypted.is_ok() {
                     selected_attachment_key = (*attachment_key).to_string();
-                    selected_file_key = decrypt_friend_attachment_key(&crypto, fid, *v, source, attachment_key)
-                        .or_else(|| fallback_plain_file_key(attachment_key));
+                    selected_file_key =
+                        decrypt_friend_attachment_key(&crypto, fid, *v, source, attachment_key)
+                            .or_else(|| fallback_plain_file_key(attachment_key));
                     break 'outer;
                 } else if let Err(e) = &decrypted {
                     // Keep the first actual AES error instead of KeyNotFound
-                    if matches!(e, crate::crypto::CryptoError::AesError(_)) && fallback_err.is_none() {
+                    if matches!(e, crate::crypto::CryptoError::AesError(_))
+                        && fallback_err.is_none()
+                    {
                         fallback_err = Some(crate::crypto::CryptoError::AesError(e.to_string()));
                     }
                 }
@@ -719,6 +808,24 @@ impl MessageBatcher {
                             decrypt_pending = true;
                             warn!(
                                 "PRIVATE_MSG_RECEIVED file decrypt failed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            "[加密消息，等待密钥同步]".to_string()
+                        }
+                    }
+                } else if om.msg_type == 5 {
+                    match imweb::NameCardObj::decode(fallback_cipher) {
+                        Ok(obj) => {
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED decrypt failed but raw NameCardObj parsed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            name_card_obj_to_legacy_content(obj)
+                        }
+                        Err(_) => {
+                            decrypt_pending = true;
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED name card decrypt failed sender_uid={} msg_id={} err={}",
                                 om.send_uid, om.msg_id, e
                             );
                             "[加密消息，等待密钥同步]".to_string()
@@ -829,15 +936,18 @@ impl MessageBatcher {
         let by_conversation = group_by_conversation(&messages);
 
         for (conv_id, msgs) in &by_conversation {
-            let _ = self.app_handle.emit(
-                &format!("msg:batch:{}", conv_id),
-                msgs,
-            );
+            let _ = self
+                .app_handle
+                .emit(&format!("msg:batch:{}", conv_id), msgs);
         }
 
         let _ = self.app_handle.emit("msg:batch", &messages);
 
-        info!("Flushed {} messages in {} conversations", messages.len(), by_conversation.len());
+        info!(
+            "Flushed {} messages in {} conversations",
+            messages.len(),
+            by_conversation.len()
+        );
     }
 
     fn emit_group_msg_sent(&self, payload: &[u8]) -> Result<(), String> {
@@ -919,14 +1029,16 @@ impl MessageBatcher {
             };
             warn!(
                 "ERROR_RESP auth expired, force logout protocol={} reason={}",
-                resp.message_protocol_id,
-                reason
+                resp.message_protocol_id, reason
             );
-            let _ = self.app_handle.emit("auth:force-logout", ForceLogoutEvent {
-                cmd: cmds::ERROR_RESP,
-                reason,
-                kick_type: 1,
-            });
+            let _ = self.app_handle.emit(
+                "auth:force-logout",
+                ForceLogoutEvent {
+                    cmd: cmds::ERROR_RESP,
+                    reason,
+                    kick_type: 1,
+                },
+            );
             let _ = self.app_handle.emit("ws:status", "disconnected");
             return Ok(());
         }

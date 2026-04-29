@@ -7,8 +7,9 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import TextAvatar from '@/components/TextAvatar.vue'
-import { updateContacts } from '@/api/imBase'
+import { findContactsList, updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
+import { eventBus } from '@/utils/eventBus'
 import editIcon from '@/assets/images/message/edit-icon.png'
 import closeIcon from '@/assets/images/common/close-icon.png'
 
@@ -23,6 +24,15 @@ const visible = computed(() => uiStore.memberInfoVisible)
 const target = computed(() => uiStore.memberInfoTarget)
 const userId = computed(() => target.value.userId)
 const groupId = computed(() => target.value.groupId)
+const candidateIds = computed(() => {
+  const values = [
+    target.value.userId,
+    ...((target.value as { candidateIds?: string[] }).candidateIds || []),
+    nickname.value,
+    remark.value,
+  ]
+  return Array.from(new Set(values.map(v => String(v || '').trim()).filter(Boolean)))
+})
 
 const isSelf = computed(() => userId.value === authStore.uid)
 
@@ -160,13 +170,62 @@ async function saveDepict() {
   }
 }
 
-function handleSendMsg() {
+function findLocalFriendTargetId(candidates: string[]): string {
+  for (const key of candidates) {
+    const conv = chatStore.conversations.find(c => c.type === 0 && c.targetId === key)
+    if (conv) return conv.targetId
+  }
+  for (const key of candidates) {
+    const contact = contactStore.contacts.find(c =>
+      c.id === key ||
+      c.nickname === key ||
+      c.remark === key,
+    )
+    if (contact?.id) return contact.id
+  }
+  return candidates[0] || ''
+}
+
+async function resolveFriendTargetId(): Promise<string> {
+  const localTargetId = findLocalFriendTargetId(candidateIds.value)
+  if (localTargetId && contactStore.getContact(localTargetId)) return localTargetId
+
+  for (const key of candidateIds.value) {
+    if (!/^\d{6,}$/.test(key)) continue
+    try {
+      const resp = await findContactsList({ targetUid: Number(key), findType: 1 })
+      const userInfo = (resp as any)?.contactsList?.[0]?.userInfo || (resp as any)?.contactsList?.[0]
+      const uid = String(userInfo?.uid || '').trim()
+      if (uid) return uid
+    } catch {
+      // targetUid 不一定支持手机号，继续按 phoneNum 查
+    }
+
+    try {
+      const resp = await findContactsList({ phoneNum: key, findType: 1 })
+      const userInfo = (resp as any)?.contactsList?.[0]?.userInfo || (resp as any)?.contactsList?.[0]
+      const uid = String(userInfo?.uid || '').trim()
+      if (uid) return uid
+    } catch (error) {
+      console.warn('[MemberInfoDialog] resolve card target failed:', key, error)
+    }
+  }
+
+  return localTargetId
+}
+
+async function handleSendMsg() {
+  const targetId = await resolveFriendTargetId()
+  if (!targetId) return
   close()
-  const conv = chatStore.ensureConversation(0, userId.value)
+  const conv = chatStore.ensureConversation(0, targetId)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setSidebarTab('chats')
   uiStore.setDetailView('chat')
   uiStore.setRightPanel('none')
+  nextTick(() => {
+    eventBus.emit('editor:focus')
+  })
 }
 </script>
 

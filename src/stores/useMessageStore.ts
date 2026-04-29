@@ -261,6 +261,7 @@ export const useMessageStore = defineStore('message', () => {
     if (msgType === 1) return '[图片]'
     if (msgType === 2) return '[语音]'
     if (msgType === 3) return '[视频]'
+    if (msgType === 5) return '[名片]'
     if (msgType === 7) return '[文件]'
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }

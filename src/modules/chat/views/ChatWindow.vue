@@ -23,7 +23,7 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 
-const conversationId = computed(() => (route.query.id as string) || chatStore.currentConversationId || '')
+const conversationId = computed(() => chatStore.currentConversationId || (route.query.id as string) || '')
 const conversation = computed(() =>
   chatStore.conversations.find((c) => c.id === conversationId.value) ?? null,
 )
