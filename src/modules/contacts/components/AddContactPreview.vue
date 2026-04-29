@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { contactsRelation } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import emptyBrandImg from '@/assets/images/login/dock.png'
@@ -9,6 +10,7 @@ import closeIcon from '@/assets/images/common/close-icon.png'
 
 const authStore = useAuthStore()
 const uiStore = useUIStore()
+const chatStore = useChatStore()
 
 const sending = ref(false)
 const sent = ref(false)
@@ -18,9 +20,10 @@ const verifyMessage = ref('')
 
 const target = computed(() => uiStore.addContactTarget)
 const displayName = computed(() => target.value?.nickname || target.value?.uid || '')
-const addDisabled = computed(() => !target.value || target.value.isFriend || sending.value || sent.value)
+const isOwn = computed(() => target.value?.uid === authStore.uid)
+const addDisabled = computed(() => !target.value || sending.value || sent.value)
 const buttonText = computed(() => {
-  if (target.value?.isFriend) return '已添加'
+  if (target.value?.isFriend) return '发送消息'
   if (sent.value) return '已发送'
   if (sending.value) return '添加中...'
   return '添加'
@@ -50,9 +53,23 @@ function defaultVerifyMessage() {
 
 function handleAdd() {
   if (!target.value || addDisabled.value) return
+  if (target.value.isFriend) {
+    handleToFriendChat()
+    return
+  }
   verifyMessage.value = defaultVerifyMessage()
   sendFailed.value = false
   verifyVisible.value = true
+}
+
+function handleToFriendChat() {
+  const uid = target.value?.uid
+  if (!uid) return
+  const conv = chatStore.ensureConversation(0, uid)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
 }
 
 function handleCloseVerify() {
@@ -107,7 +124,7 @@ async function handleConfirmAdd() {
         rounded
       />
       <div class="preview-name">{{ displayName }}</div>
-      <button type="button" class="add-btn" :disabled="addDisabled" @click="handleAdd">
+      <button v-if="!isOwn" type="button" class="add-btn" :disabled="addDisabled" @click="handleAdd">
         {{ buttonText }}
       </button>
       <div v-if="sendFailed" class="send-tip">添加失败，请稍后重试</div>
