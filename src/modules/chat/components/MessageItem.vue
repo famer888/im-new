@@ -267,7 +267,16 @@ onMounted(() => {
             :is="messageComponent"
             :message="message"
           />
-          <div v-else :class="['non-text-bubble-host', { 'image-like-bubble-host': isImageLikeBubble }]">
+          <div
+            v-else
+            :class="[
+              'non-text-bubble-host',
+              {
+                'image-like-bubble-host': isImageLikeBubble,
+                'name-card-bubble-host': message.msgType === MessageType.NameCard,
+              },
+            ]"
+          >
             <component :is="messageComponent" :message="message" />
             <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
           </div>
@@ -426,6 +435,11 @@ onMounted(() => {
 
 .image-like-bubble-host {
   padding-bottom: 25px;
+}
+
+.name-card-bubble-host {
+  width: 300px;
+  max-width: calc(100vw - 120px);
 }
 
 .read-burn-fire {

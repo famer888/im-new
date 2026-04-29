@@ -109,10 +109,7 @@ pub fn encode_audio_obj(content: &str) -> Vec<u8> {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let duration = value
-                .get("duration")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
+            let duration = value.get("duration").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
             let file_size = value
                 .get("size")
                 .or_else(|| value.get("fileSize"))
@@ -191,10 +188,63 @@ pub fn encode_file_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将旧 im 名片内容串编码为 NameCardObj protobuf。
+///
+/// 兼容：
+/// - `昵称*|*|*头像*|*|*uid`
+/// - `昵称*|*|*uid`
+/// - 新项目 JSON：`{ nickname/name, avatar/pic, uid/id }`
+pub fn encode_name_card_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (nick_name, icon, uid) = if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+        let nick_name = value
+            .get("nickname")
+            .or_else(|| value.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let icon = value
+            .get("avatar")
+            .or_else(|| value.get("pic"))
+            .or_else(|| value.get("icon"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let uid = value
+            .get("uid")
+            .or_else(|| value.get("id"))
+            .and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+            })
+            .unwrap_or(0);
+        (nick_name, icon, uid)
+    } else {
+        let parts: Vec<&str> = raw.split("*|*|*").collect();
+        let nick_name = parts.get(0).copied().unwrap_or_default().to_string();
+        let (icon, uid_raw) = match parts.as_slice() {
+            [_, avatar, uid, ..] => ((*avatar).to_string(), *uid),
+            [_, uid] => (String::new(), *uid),
+            _ => (String::new(), ""),
+        };
+        let uid = uid_raw.parse::<i64>().unwrap_or(0);
+        (nick_name, icon, uid)
+    };
+
+    let obj = imweb::NameCardObj {
+        uid,
+        nick_name,
+        icon,
+        r#ref: None,
+    };
+    obj.encode_to_vec()
+}
+
 pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
         2 => encode_audio_obj(content),
+        5 => encode_name_card_obj(content),
         7 => encode_file_obj(content),
         _ => encode_text_obj(content),
     }
@@ -305,18 +355,19 @@ pub fn build_send_private_message_req(
     hasher.update(content_plain);
     let content_md5 = format!("{:x}", hasher.finalize());
 
-    let encrypt_content = |key_info: Option<(i32, String)>| -> Result<Option<imweb::MessageContent>, CryptoError> {
-        if let Some((ver, rel_key)) = key_info {
-            let encrypted = encrypt_with_rel_key(&rel_key, content_plain)?;
-            Ok(Some(imweb::MessageContent {
-                content: encrypted,
-                attachment_key: encrypt_attachment_key(&rel_key, attachment_file_key)?,
-                version: ver,
-            }))
-        } else {
-            Ok(None)
-        }
-    };
+    let encrypt_content =
+        |key_info: Option<(i32, String)>| -> Result<Option<imweb::MessageContent>, CryptoError> {
+            if let Some((ver, rel_key)) = key_info {
+                let encrypted = encrypt_with_rel_key(&rel_key, content_plain)?;
+                Ok(Some(imweb::MessageContent {
+                    content: encrypted,
+                    attachment_key: encrypt_attachment_key(&rel_key, attachment_file_key)?,
+                    version: ver,
+                }))
+            } else {
+                Ok(None)
+            }
+        };
 
     let app_content = encrypt_content(friend_app_key)?;
     let web_content = encrypt_content(friend_web_key)?;
@@ -381,7 +432,14 @@ mod tests {
         let rel_key = "0123456789abcdef"; // 16 char ASCII → 16 bytes
         let plain = encode_text_obj("hi group");
         let req_bytes = build_send_group_message_req(
-            10086, 88, 0, &plain, rel_key, 1_700_000_000_000, 42, vec![],
+            10086,
+            88,
+            0,
+            &plain,
+            rel_key,
+            1_700_000_000_000,
+            42,
+            vec![],
             None,
         )
         .unwrap();
