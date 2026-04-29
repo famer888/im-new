@@ -696,12 +696,8 @@ async function ensureImageCacheFile(data: Record<string, unknown>): Promise<stri
 
 async function openImageDirectory(data: Record<string, unknown>) {
   const filePath = await ensureImageCacheFile(data)
-  const [{ dirname }, { open }] = await Promise.all([
-    import('@tauri-apps/api/path'),
-    import('@tauri-apps/plugin-shell'),
-  ])
-  const directoryPath = await dirname(filePath)
-  await open(directoryPath)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('reveal_file_in_directory', { path: filePath })
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
