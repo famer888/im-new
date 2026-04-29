@@ -579,3 +579,54 @@ pub async fn save_base64_image(file_path: String, base64_data: String) -> Result
 pub async fn file_exists(path: String) -> Result<bool, String> {
     Ok(tokio::fs::metadata(PathBuf::from(path)).await.is_ok())
 }
+
+#[tauri::command]
+pub async fn reveal_file_in_directory(path: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+    if !file_path.is_file() {
+        return Err(format!("file not found: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let reveal_status = Command::new("open")
+            .arg("-R")
+            .arg(&file_path)
+            .status()
+            .map_err(|e| format!("reveal file failed: {}", e))?;
+        if !reveal_status.success() {
+            return Err(format!("reveal file failed with status: {}", reveal_status));
+        }
+
+        let activate_status = Command::new("open")
+            .arg("-a")
+            .arg("Finder")
+            .status()
+            .map_err(|e| format!("activate Finder failed: {}", e))?;
+        if activate_status.success() {
+            return Ok(());
+        }
+        return Err(format!("activate Finder failed with status: {}", activate_status));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg(format!("/select,{}", file_path.to_string_lossy()))
+            .spawn()
+            .map_err(|e| format!("reveal file failed: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let directory = file_path
+            .parent()
+            .ok_or_else(|| format!("directory not found for file: {}", path))?;
+        Command::new("xdg-open")
+            .arg(directory)
+            .spawn()
+            .map_err(|e| format!("open directory failed: {}", e))?;
+        Ok(())
+    }
+}

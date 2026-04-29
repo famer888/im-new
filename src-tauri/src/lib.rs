@@ -158,6 +158,7 @@ pub fn run() {
             commands::file::get_download_progress,
             commands::file::save_base64_image,
             commands::file::file_exists,
+            commands::file::reveal_file_in_directory,
             commands::media::open_media_window,
             commands::media::media_window_minimize,
             commands::media::media_window_toggle_maximize,
