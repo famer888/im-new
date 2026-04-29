@@ -37,11 +37,11 @@ const showFailed = computed(
   () => props.isSelf && props.message.status === MessageStatus.Failed,
 )
 
-/** 已读：readStatus 回执为 1，或 status 已为 Read(3) */
+/** 对齐旧 im：readStatus 1=发送成功，2=已读。 */
 const isRead = computed(
   () =>
     props.isSelf &&
-    (props.message.readStatus === 1 || props.message.status === MessageStatus.Read),
+    (props.message.readStatus === 2 || props.message.status === MessageStatus.Read),
 )
 
 /** 已送达（单勾）：已发送且未显示已读 */
@@ -51,7 +51,8 @@ const isSentOnly = computed(
     !showLoading.value &&
     !showFailed.value &&
     !isRead.value &&
-    (props.message.status === MessageStatus.Sent ||
+    (props.message.readStatus === 1 ||
+      props.message.status === MessageStatus.Sent ||
       props.message.status === MessageStatus.Delivered),
 )
 

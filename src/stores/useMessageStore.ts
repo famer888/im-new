@@ -856,7 +856,12 @@ export const useMessageStore = defineStore('message', () => {
     )
     if (idx < 0) return
     const next = [...list]
-    const msg = { ...next[idx], id: serverId, status: 1 }
+    const msg = {
+      ...next[idx],
+      id: serverId,
+      status: 1,
+      readStatus: Math.max(Number(next[idx].readStatus || 0), 1),
+    }
     if (params.sentOverTime && params.sentOverTime > 0) {
       msg.sendTime = params.sentOverTime
     }

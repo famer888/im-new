@@ -948,10 +948,10 @@ pub async fn mark_message_sent(
 
     db.with_connection(&uid, |conn| {
         // 两步：① 用服务端 msg_id 替换本地 id（与老 im `updateMsgProperty` 逻辑一致）；
-        //     ② 同一行状态置为 1（sent），send_time 更新为服务端返回的完成时间。
+        //     ② 同一行状态置为 1（sent），read_status 置为 1（发送成功）。
         if sent_time > 0 {
             conn.execute(
-                "UPDATE messages SET id = ?1, status = 1, send_time = ?2
+                "UPDATE messages SET id = ?1, status = 1, read_status = MAX(read_status, 1), send_time = ?2
                  WHERE custom_msg_id = ?3 AND conversation_id = ?4",
                 rusqlite::params![
                     server_id,
@@ -962,7 +962,7 @@ pub async fn mark_message_sent(
             )
         } else {
             conn.execute(
-                "UPDATE messages SET id = ?1, status = 1
+                "UPDATE messages SET id = ?1, status = 1, read_status = MAX(read_status, 1)
                  WHERE custom_msg_id = ?2 AND conversation_id = ?3",
                 rusqlite::params![server_id, request.custom_msg_id, request.conversation_id],
             )
@@ -1244,7 +1244,7 @@ pub async fn apply_friend_read_receipts(
                        AND sender_id = ?2
                        AND is_deleted = 0
                        AND send_time <= ?3
-                       AND read_status = 0
+                       AND read_status < 2
                      ORDER BY send_time ASC",
                 )
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
@@ -1270,12 +1270,12 @@ pub async fn apply_friend_read_receipts(
 
             conn.execute(
                 "UPDATE messages
-                 SET read_status = 1
+                 SET read_status = 2
                  WHERE conversation_id = ?1
                    AND sender_id = ?2
                    AND is_deleted = 0
                    AND send_time <= ?3
-                   AND read_status = 0",
+                   AND read_status < 2",
                 rusqlite::params![conversation_id, uid, boundary_send_time],
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
@@ -1377,7 +1377,7 @@ pub async fn apply_group_read_receipts(
             );
             extra_map.insert("readTotal".to_string(), serde_json::Value::from(read_total));
             let next_extra = serde_json::Value::Object(extra_map).to_string();
-            let next_read_status = current_read_status.max(1);
+            let next_read_status = current_read_status.max(2);
 
             conn.execute(
                 "UPDATE messages

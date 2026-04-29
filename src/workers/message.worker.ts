@@ -1,3 +1,5 @@
+import { emojiObj } from '@/utils/emoji'
+
 /// Message processing Web Worker
 /// Handles: content formatting, emoji resolution, HTML sanitization, pinyin indexing
 
@@ -42,7 +44,12 @@ function formatMessageContent(content: string, msgType: number): string {
     // Text: resolve emoji placeholders → img tags
     return content.replace(
       /\[([^\]]+)\]/g,
-      (match, name) => `<img class="emoji" src="/images/emoji/${name}.png" alt="${name}" />`,
+      (match, name) => {
+        const fileName = (emojiObj as Record<string, string>)[`[${name}]`] || (/^pet_emoji_\d+$/.test(name) ? name : '')
+        return fileName
+          ? `<img class="emoji" src="/images/emoji/${fileName}.png" alt="${name}" />`
+          : match
+      },
     )
   }
   return content

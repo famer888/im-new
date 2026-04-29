@@ -1,22 +1,19 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { emojiObj } from '@/utils/emoji'
+import emojIcon from '@/assets/images/chat/emoj-icon.png'
+import ownIcon from '@/assets/images/chat/own-icon.png'
+import arrowIcon from '@/assets/images/chat/jiantou-icon.png'
 
 const emit = defineEmits<{ (e: 'select', emoji: string): void; (e: 'close'): void }>()
 
 const activeTab = ref<'emoji' | 'sticker'>('emoji')
 
-const emojis = [
-  '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '😉',
-  '😊', '😇', '🥰', '😍', '😘', '😗', '😚', '😙', '🥲', '😋',
-  '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🫡',
-  '🤐', '🤨', '😐', '😑', '😶', '🫥', '😏', '😒', '🙄', '😬',
-  '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢',
-  '🤮', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '🥸', '😎',
-  '🤓', '🧐', '😕', '🫤', '😟', '🙁', '😮', '😯', '😲', '😳',
-  '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱',
-  '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠',
-  '👍', '👎', '👋', '🤝', '👏', '🙏', '❤️', '💔', '🎉', '🔥',
-]
+const emojis = Object.entries(emojiObj).map(([key, value]) => ({
+  key,
+  value,
+  src: `/images/emoji/${value}.png`,
+}))
 
 function handleSelect(emoji: string) {
   emit('select', emoji)
@@ -26,87 +23,119 @@ function handleSelect(emoji: string) {
 <template>
   <div class="emoji-picker" @click.stop>
     <div class="picker-tabs">
-      <button :class="['tab', { active: activeTab === 'emoji' }]" @click="activeTab = 'emoji'">表情</button>
-      <button :class="['tab', { active: activeTab === 'sticker' }]" @click="activeTab = 'sticker'">贴图</button>
-    </div>
-    <div v-if="activeTab === 'emoji'" class="emoji-grid">
       <button
-        v-for="emoji in emojis"
-        :key="emoji"
-        class="emoji-item"
-        @click="handleSelect(emoji)"
+        :class="['tab', { active: activeTab === 'emoji' }]"
+        type="button"
+        :title="$t('表情')"
+        @click="activeTab = 'emoji'"
       >
-        {{ emoji }}
+        <img :src="emojIcon" alt="" />
+      </button>
+      <button
+        :class="['tab', { active: activeTab === 'sticker' }]"
+        type="button"
+        title="贴图"
+        @click="activeTab = 'sticker'"
+      >
+        <img :src="ownIcon" alt="" />
       </button>
     </div>
-    <div v-else class="sticker-grid">
-      <div class="sticker-empty">暂无贴图</div>
-    </div>
+    <ul v-if="activeTab === 'emoji'" class="emoji-grid">
+      <li
+        v-for="emoji in emojis"
+        :key="emoji.key"
+        class="emoji-item"
+        @click="handleSelect(emoji.key)"
+      >
+        <img :src="emoji.src" :alt="emoji.key" />
+      </li>
+    </ul>
+    <ul v-else class="emoji-grid sticker-grid"></ul>
+    <img class="picker-arrow" :src="arrowIcon" alt="" />
   </div>
 </template>
 
 <style lang="scss" scoped>
 .emoji-picker {
-  width: 340px;
-  height: 280px;
+  width: 300px;
+  height: 400px;
   background: #fff;
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid #cccccc;
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.05);
+  position: relative;
 }
 
 .picker-tabs {
   display: flex;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid #e5e5e5;
+  padding: 5px 10px;
 
   .tab {
-    flex: 1;
-    height: 36px;
-    background: none;
+    height: 32px;
+    margin-right: 10px;
+    padding: 4px 8px;
+    background: transparent;
     border: none;
-    font-size: 13px;
-    color: #666;
+    border-radius: 17px;
     cursor: pointer;
-    border-bottom: 2px solid transparent;
-    &.active { color: #3369fe; border-bottom-color: #3369fe; }
-    &:hover:not(.active) { color: #333; }
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &.active {
+      background: #f4f6f9;
+    }
+
+    img {
+      display: block;
+      width: 23px;
+      height: 23px;
+      object-fit: contain;
+    }
   }
 }
 
 .emoji-grid {
-  flex: 1;
+  position: absolute;
+  top: 50px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   overflow-y: auto;
-  display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  gap: 2px;
-  padding: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  padding: 0;
+  margin: 0;
+  list-style: none;
 }
 
 .emoji-item {
-  width: 30px;
-  height: 30px;
+  width: 41px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: none;
+  background: transparent;
   border: none;
-  border-radius: 4px;
+  padding: 0;
   cursor: pointer;
-  font-size: 18px;
-  &:hover { background: #f2f3f5; }
+
+  &:hover {
+    opacity: 0.8;
+  }
+
+  img {
+    display: block;
+    width: 23px;
+    height: 23px;
+    object-fit: contain;
+  }
 }
 
-.sticker-grid {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sticker-empty {
-  color: #ccc;
-  font-size: 13px;
+.picker-arrow {
+  position: absolute;
+  bottom: -24px;
+  left: 60px;
 }
 </style>

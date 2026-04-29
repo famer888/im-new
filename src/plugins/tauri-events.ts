@@ -654,7 +654,7 @@ export async function setupTauriListeners() {
   listen<{ messageId: string; readBy: string }>('msg:read', (event) => {
     const messageStore = useMessageStore()
     messageStore.updateMessage(event.payload.messageId, {
-      readStatus: 1,
+      readStatus: 2,
     })
   })
 
@@ -681,7 +681,7 @@ export async function setupTauriListeners() {
       })
       const messageStore = useMessageStore()
       if (Array.isArray(result?.readMessageIds) && result.readMessageIds.length > 0) {
-        messageStore.markMessagesRead(result.readMessageIds, 1)
+        messageStore.markMessagesRead(result.readMessageIds, 2)
       }
       for (const item of Array.isArray(result?.scheduledDeletions) ? result.scheduledDeletions : []) {
         scheduleDeletionStore.addMessageTimer(
