@@ -1,13 +1,31 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { emojiObj } from '@/utils/emoji'
 import emojIcon from '@/assets/images/chat/emoj-icon.png'
 import ownIcon from '@/assets/images/chat/own-icon.png'
 import arrowIcon from '@/assets/images/chat/jiantou-icon.png'
+import touzi from '@/assets/images/message/touz_6.jpg'
 
-const emit = defineEmits<{ (e: 'select', emoji: string): void; (e: 'close'): void }>()
+const props = withDefaults(defineProps<{
+  definedHidden?: boolean
+  chatType?: string
+}>(), {
+  definedHidden: false,
+  chatType: '',
+})
+
+const emit = defineEmits<{
+  (e: 'select', emoji: string): void
+  (e: 'select-dice'): void
+  (e: 'close'): void
+}>()
 
 const activeTab = ref<'emoji' | 'sticker'>('emoji')
+const showCustomTab = computed(() => !props.definedHidden && props.chatType !== 'channel')
+
+watch(showCustomTab, (visible) => {
+  if (!visible) activeTab.value = 'emoji'
+})
 
 const emojis = Object.entries(emojiObj).map(([key, value]) => ({
   key,
@@ -15,8 +33,18 @@ const emojis = Object.entries(emojiObj).map(([key, value]) => ({
   src: `/images/emoji/${value}.png`,
 }))
 
+const stickers = [
+  { key: 'dice', src: touzi, type: 2 },
+]
+
 function handleSelect(emoji: string) {
   emit('select', emoji)
+}
+
+function handleStickerSelect(type: number) {
+  if (type === 2) {
+    emit('select-dice')
+  }
 }
 </script>
 
@@ -32,6 +60,7 @@ function handleSelect(emoji: string) {
         <img :src="emojIcon" alt="" />
       </button>
       <button
+        v-if="showCustomTab"
         :class="['tab', { active: activeTab === 'sticker' }]"
         type="button"
         title="贴图"
@@ -50,7 +79,16 @@ function handleSelect(emoji: string) {
         <img :src="emoji.src" :alt="emoji.key" />
       </li>
     </ul>
-    <ul v-else class="emoji-grid sticker-grid"></ul>
+    <ul v-else class="emoji-grid sticker-grid">
+      <li
+        v-for="item in stickers"
+        :key="item.key"
+        class="sticker-item"
+        @click.stop="handleStickerSelect(item.type)"
+      >
+        <img :src="item.src" alt="" />
+      </li>
+    </ul>
     <img class="picker-arrow" :src="arrowIcon" alt="" />
   </div>
 </template>
@@ -110,7 +148,8 @@ function handleSelect(emoji: string) {
   list-style: none;
 }
 
-.emoji-item {
+.emoji-item,
+.sticker-item {
   width: 41px;
   height: 40px;
   display: flex;
@@ -130,6 +169,18 @@ function handleSelect(emoji: string) {
     width: 23px;
     height: 23px;
     object-fit: contain;
+  }
+}
+
+.sticker-grid {
+  .sticker-item {
+    width: 80px;
+    height: 80px;
+
+    img {
+      width: 50px;
+      height: auto;
+    }
   }
 }
 

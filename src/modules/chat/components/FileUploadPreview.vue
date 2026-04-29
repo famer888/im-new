@@ -266,7 +266,7 @@ onBeforeUnmount(() => {
             />
             <Transition name="popup">
               <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
-                <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
+                <EmojiPicker defined-hidden @select="handleEmojiSelect" @close="showEmoji = false" />
               </div>
             </Transition>
           </div>

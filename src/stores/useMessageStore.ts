@@ -263,6 +263,7 @@ export const useMessageStore = defineStore('message', () => {
     if (msgType === 3) return '[视频]'
     if (msgType === 5) return '[名片]'
     if (msgType === 7) return '[文件]'
+    if (msgType === 12) return '[骰子]'
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
 
@@ -552,7 +553,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if ([0, 1, 2, 7].includes(msgType) && (convType === 1 || convType === 0)) {
+      if ([0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0)) {
         const stepStartedAt = performance.now()
         await ensureWsConnected()
         logSendStep('ensureWsConnected OK', {
@@ -589,7 +590,7 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
-      const canRetryWs = [0, 1, 2, 7].includes(msgType) && (convType === 1 || convType === 0) && /Not connected/i.test(errText)
+      const canRetryWs = [0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')
@@ -856,16 +857,30 @@ export const useMessageStore = defineStore('message', () => {
     )
     if (idx < 0) return
     const next = [...list]
+    const duplicateIdx = next.findIndex((m, i) => i !== idx && m.id === serverId)
+    const duplicate = duplicateIdx >= 0 ? next[duplicateIdx] : null
+    const duplicateContent = duplicate?.content ?? null
     const msg = {
       ...next[idx],
+      extra: duplicate?.extra ?? next[idx].extra,
+      quoteMessage: duplicate?.quoteMessage ?? next[idx].quoteMessage,
+      snapchatTime: duplicate?.snapchatTime ?? next[idx].snapchatTime,
+      deleteSeconds: duplicate?.deleteSeconds ?? next[idx].deleteSeconds,
+      content: duplicateContent && duplicateContent.length > 0 ? duplicateContent : next[idx].content,
       id: serverId,
       status: 1,
-      readStatus: Math.max(Number(next[idx].readStatus || 0), 1),
+      readStatus: Math.max(Number(next[idx].readStatus || 0), Number(duplicate?.readStatus || 0), 1),
     }
     if (params.sentOverTime && params.sentOverTime > 0) {
       msg.sendTime = params.sentOverTime
+    } else if (duplicate?.sendTime) {
+      msg.sendTime = duplicate.sendTime
     }
-    next[idx] = msg
+    if (duplicateIdx >= 0) {
+      next.splice(duplicateIdx, 1)
+    }
+    const nextIdx = duplicateIdx >= 0 && duplicateIdx < idx ? idx - 1 : idx
+    next[nextIdx] = msg
     messageMap.value.set(params.conversationId, next)
 
     const chatStore = useChatStore()
