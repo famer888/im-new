@@ -52,6 +52,9 @@ const emojiToggleBtnRef = ref<HTMLElement | null>(null)
 const emojiPickerPopoverRef = ref<HTMLElement | null>(null)
 useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 const showAtList = ref(false)
+const atKeyword = ref('')
+const atListRef = ref<{ handleKeyboard: (key: string) => void } | null>(null)
+const suppressNextEnterKeyup = ref(false)
 const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
 const pendingFiles = ref<File[]>([])
@@ -117,6 +120,7 @@ const GROUP_IMAGE_MAX_DIMENSION = 1600
 const GROUP_IMAGE_MIN_DIMENSION = 480
 const GROUP_IMAGE_MIN_QUALITY = 0.42
 const FILE_ENCRYPT_CHUNK_SIZE = 102400
+const VISIBLE_TRAILING_SPACE = '\u00a0'
 
 interface UploadedImagePayload {
   url: string
@@ -302,7 +306,7 @@ watch(convId, (newId, oldId) => {
 
 function handleSend() {
   showEmoji.value = false
-  const text = content.value.trim()
+  const text = normalizeEditorText(content.value).trim()
   if (!text && !hasForwardDraft.value) return
 
   const extra: Record<string, unknown> = {}
@@ -353,6 +357,8 @@ function handleKeydown(e: KeyboardEvent) {
     && ['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)
   ) {
     e.preventDefault()
+    if (e.key === 'Enter') suppressNextEnterKeyup.value = true
+    atListRef.value?.handleKeyboard(e.key)
     return
   }
   if (e.key === 'Enter' && !e.isComposing) {
@@ -366,11 +372,16 @@ function handleKeydown(e: KeyboardEvent) {
   }
   if (e.key === '@' && isGroup.value && !isFileHelperChat.value) {
     showAtList.value = true
+    atKeyword.value = ''
   }
 }
 
 function handleEditorKeyup(e: KeyboardEvent) {
   saveEditorSelection()
+  if (suppressNextEnterKeyup.value && e.key === 'Enter') {
+    suppressNextEnterKeyup.value = false
+    return
+  }
   if (showAtList.value || e.isComposing) return
   const mode = settingStore.settings.sendShortcutKey
   if (mode === 'Ctrl+Enter') {
@@ -389,6 +400,7 @@ function handleInput() {
   if (editorRef.value) {
     content.value = editorRef.value.textContent ?? ''
   }
+  updateAtListFromCaret()
 }
 
 function saveEditorSelection() {
@@ -414,6 +426,96 @@ function restoreEditorSelection() {
   } catch {
     editorRef.value.focus()
   }
+}
+
+function getEditorText(): string {
+  return editorRef.value?.textContent ?? ''
+}
+
+function normalizeEditorText(value: string): string {
+  return value.replace(/\u00a0/g, ' ')
+}
+
+function getCaretTextOffset(): number {
+  const editor = editorRef.value
+  const selection = window.getSelection()
+  if (!editor || !selection || selection.rangeCount === 0) return content.value.length
+  const range = selection.getRangeAt(0)
+  if (!editor.contains(range.endContainer)) return content.value.length
+
+  const preRange = range.cloneRange()
+  preRange.selectNodeContents(editor)
+  preRange.setEnd(range.endContainer, range.endOffset)
+  return preRange.toString().length
+}
+
+function setEditorTextAndCaret(text: string, caretOffset: number) {
+  const editor = editorRef.value
+  if (!editor) return
+
+  editor.textContent = text
+  content.value = text
+  editor.focus()
+
+  const selection = window.getSelection()
+  const range = document.createRange()
+  const textNode = editor.firstChild
+  if (textNode?.nodeType === Node.TEXT_NODE) {
+    const offset = Math.max(0, Math.min(caretOffset, textNode.textContent?.length ?? 0))
+    range.setStart(textNode, offset)
+  } else {
+    range.setStart(editor, 0)
+  }
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  savedSelection.value = range.cloneRange()
+}
+
+function getActiveAtRange() {
+  const text = getEditorText()
+  const caretOffset = getCaretTextOffset()
+  const beforeCaret = text.slice(0, caretOffset)
+  let atIndex = beforeCaret.lastIndexOf('@')
+  if (atIndex < 0) return null
+
+  const afterAt = beforeCaret.slice(atIndex + 1)
+  if (/\s/.test(afterAt)) return null
+
+  const prev = atIndex > 0 ? text[atIndex - 1] : ''
+  if (prev && !/\s|@/.test(prev)) return null
+
+  while (atIndex > 0 && text[atIndex - 1] === '@') {
+    atIndex -= 1
+  }
+
+  const afterCaret = text.slice(caretOffset)
+  const nextBreak = afterCaret.search(/\s/)
+  const end = nextBreak < 0 ? text.length : caretOffset + nextBreak
+
+  return {
+    start: atIndex,
+    end,
+    keyword: text.slice(atIndex + 1, caretOffset).replace(/^@+/, ''),
+  }
+}
+
+function updateAtListFromCaret() {
+  if (!isGroup.value || isFileHelperChat.value) {
+    showAtList.value = false
+    atKeyword.value = ''
+    return
+  }
+
+  const atRange = getActiveAtRange()
+  if (!atRange) {
+    showAtList.value = false
+    atKeyword.value = ''
+    return
+  }
+
+  atKeyword.value = atRange.keyword
+  showAtList.value = true
 }
 
 function handleEditorContextMenu(e: MouseEvent) {
@@ -649,8 +751,22 @@ function handleEmojiSelect(emoji: string) {
 }
 
 function handleAtSelect(member: { uid: string; name: string }) {
-  content.value += `@${member.name} `
-  if (editorRef.value) editorRef.value.textContent = content.value
+  restoreEditorSelection()
+  const atRange = getActiveAtRange()
+  const name = member.name.replace(/^@+/, '')
+  const insertText = `@${name}${VISIBLE_TRAILING_SPACE}`
+
+  if (!atRange) {
+    const text = getEditorText()
+    setEditorTextAndCaret(`${text}${insertText}`, text.length + insertText.length)
+  } else {
+    const text = getEditorText()
+    const nextText = `${text.slice(0, atRange.start)}${insertText}${text.slice(atRange.end)}`
+    setEditorTextAndCaret(nextText, atRange.start + insertText.length)
+  }
+
+  showAtList.value = false
+  atKeyword.value = ''
 }
 
 function handleLinkConfirm(data: { linkText: string; linkValue: string; selectText?: string }) {
@@ -1633,8 +1749,10 @@ onBeforeUnmount(() => {
         </Transition>
 
         <AtListDialog
+          ref="atListRef"
           v-model:visible="showAtList"
           :group-id="groupId"
+          :keyword="atKeyword"
           @select="handleAtSelect"
         />
       </div>
