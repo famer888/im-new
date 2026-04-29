@@ -13,6 +13,14 @@ export interface ForwardDraftItem {
   senderName: string
 }
 
+export interface AddContactTarget {
+  uid: string
+  nickname: string
+  avatar: string
+  addToken: string
+  isFriend: boolean
+}
+
 export const useUIStore = defineStore('ui', () => {
   const sidebarTab = ref<SidebarTab>('chats')
   const rightPanel = ref<RightPanelType>('none')
@@ -43,6 +51,7 @@ export const useUIStore = defineStore('ui', () => {
     groupId: '',
     candidateIds: [],
   })
+  const addContactTarget = ref<AddContactTarget | null>(null)
 
   // Context menu
   const contextMenuVisible = ref(false)
@@ -128,6 +137,10 @@ export const useUIStore = defineStore('ui', () => {
     memberInfoVisible.value = true
   }
   function closeMemberInfo() { memberInfoVisible.value = false }
+
+  function setAddContactTarget(target: AddContactTarget | null) {
+    addContactTarget.value = target
+  }
 
   function showContextMenu(x: number, y: number, data: Record<string, unknown>) {
     contextMenuPosition.value = { x, y }
@@ -236,6 +249,8 @@ export const useUIStore = defineStore('ui', () => {
     memberInfoTarget,
     openMemberInfo,
     closeMemberInfo,
+    addContactTarget,
+    setAddContactTarget,
     quoteMessage,
     forwardDraftItems,
     forwardDraftTargetId,

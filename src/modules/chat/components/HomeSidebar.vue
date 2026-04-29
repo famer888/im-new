@@ -122,6 +122,10 @@ watch(() => uiStore.sidebarTab, (tab) => {
   addAction.value = false
   searchKeyword.value = ''
   searchStore.clearResults()
+  uiStore.setAddContactTarget(null)
+  if (uiStore.detailView === 'add-contact') {
+    uiStore.setDetailView('none')
+  }
   if (searchStore.searchSpecifiedChatInfo) {
     searchStore.closeSearchSpecifiedChat()
   }
@@ -154,6 +158,12 @@ function handleSearch(query: string) {
 function handleClearSearch() {
   searchKeyword.value = ''
   searchStore.clearResults()
+  if (uiStore.sidebarTab === 'contacts' && addAction.value) {
+    uiStore.setAddContactTarget(null)
+    if (uiStore.detailView === 'add-contact') {
+      uiStore.setDetailView('none')
+    }
+  }
   if (searchStore.searchSpecifiedChatInfo) {
     searchStore.clearChatSearch()
   }
@@ -176,12 +186,19 @@ function handleAddAction() {
   addAction.value = true
   searchKeyword.value = ''
   searchStore.clearResults()
+  uiStore.setAddContactTarget(null)
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('none')
 }
 
 function handleCancelAddAction() {
   addAction.value = false
   searchKeyword.value = ''
   searchStore.clearResults()
+  uiStore.setAddContactTarget(null)
+  if (uiStore.detailView === 'add-contact') {
+    uiStore.setDetailView('none')
+  }
 }
 
 function handleAvatarClick(event: MouseEvent) {
