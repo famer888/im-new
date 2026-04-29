@@ -182,6 +182,7 @@ pub fn run() {
             commands::platform::system_beep,
             commands::platform::read_clipboard_files,
             commands::platform::read_local_files,
+            commands::platform::stat_local_files,
             commands::platform::read_clipboard_text,
             commands::platform::write_clipboard_image,
             commands::platform::start_screenshot,

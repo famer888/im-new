@@ -149,6 +149,10 @@ interface LocalImagePreview {
   optimisticId: string
 }
 
+interface LocalFilePreview {
+  optimisticId: string
+}
+
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
@@ -161,7 +165,7 @@ function terminalLog(
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
   const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-  log(`[image-send] ${message}`, data || {})
+  log(`[message-input] ${message}`, data || {})
   if (!(window as any).__TAURI_INTERNALS__) return
   import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('image_send_log', {
@@ -198,6 +202,15 @@ function traceLog(
   }, level)
 }
 
+function fileTraceLog(
+  trace: ImageSendTrace,
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  traceLog(trace, `[file-send] ${message}`, data, level)
+}
+
 let localImageSeq = 0
 
 function createOptimisticImageId(): string {
@@ -209,6 +222,13 @@ interface ClipboardFilePayload {
   name: string
   mime: string
   dataBase64: string
+}
+
+interface LocalFileMetaPayload {
+  path: string
+  name: string
+  mime: string
+  size: number
 }
 
 function formatReadBurnNotice(seconds: number, enabled: boolean) {
@@ -469,6 +489,58 @@ function clipboardPayloadToFile(payload: ClipboardFilePayload) {
   })
 }
 
+function createLocalPathFile(meta: LocalFileMetaPayload): File {
+  let loadedFile: Promise<File> | null = null
+  const loadFile = async () => {
+    if (!loadedFile) {
+      const startedAt = performance.now()
+      terminalLog('[file-send] lazy read local file start', {
+        pathHead: safeHead(meta.path, 80),
+        name: meta.name,
+        size: meta.size,
+        mime: meta.mime,
+      })
+      loadedFile = import('@tauri-apps/api/core')
+        .then(({ invoke }) => invoke<ClipboardFilePayload[]>('read_local_files', { paths: [meta.path] }))
+        .then((items) => {
+          const item = items[0]
+          if (!item) throw new Error('local file not found')
+          const file = clipboardPayloadToFile(item)
+          terminalLog('[file-send] lazy read local file done', {
+            elapsedMs: Math.round(performance.now() - startedAt),
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          })
+          return file
+        })
+        .catch((error) => {
+          loadedFile = null
+          terminalLog('[file-send] lazy read local file failed', {
+            elapsedMs: Math.round(performance.now() - startedAt),
+            name: meta.name,
+            message: (error as Error)?.message || String(error),
+          }, 'error')
+          throw error
+        })
+    }
+    return loadedFile
+  }
+
+  const emptyBlob = new Blob([], { type: meta.mime || 'application/octet-stream' })
+  return {
+    name: meta.name || 'local-file',
+    size: Number(meta.size || 0),
+    type: meta.mime || 'application/octet-stream',
+    lastModified: Date.now(),
+    webkitRelativePath: '',
+    arrayBuffer: async () => (await loadFile()).arrayBuffer(),
+    text: async () => (await loadFile()).text(),
+    stream: () => emptyBlob.stream(),
+    slice: (start?: number, end?: number, contentType?: string) => emptyBlob.slice(start, end, contentType),
+  } as unknown as File
+}
+
 // 粘贴图片/文件
 function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
@@ -515,13 +587,53 @@ function openDroppedFiles(files: File[]) {
 
 async function openDroppedFilePaths(paths: string[]) {
   if (paths.length === 0) return
+  const startedAt = performance.now()
+  terminalLog('[file-send] read dropped paths start', {
+    count: paths.length,
+    pathHeads: paths.slice(0, 3).map((path) => safeHead(path, 80)),
+  })
   try {
     const { invoke } = await import('@tauri-apps/api/core')
-    const items = await invoke<ClipboardFilePayload[]>('read_local_files', { paths })
-    const files = items.map(clipboardPayloadToFile)
+    const metas = await invoke<LocalFileMetaPayload[]>('stat_local_files', { paths })
+    terminalLog('[file-send] stat dropped paths done', {
+      elapsedMs: Math.round(performance.now() - startedAt),
+      count: metas.length,
+      totalBytes: metas.reduce((sum, file) => sum + Number(file.size || 0), 0),
+    })
+    const imageMetas = metas.filter((item) => String(item.mime || '').startsWith('image/'))
+    const imageFilesByPath = new Map<string, File>()
+
+    if (imageMetas.length > 0) {
+      const imageReadStartedAt = performance.now()
+      const items = await invoke<ClipboardFilePayload[]>('read_local_files', {
+        paths: imageMetas.map((item) => item.path),
+      })
+      items.forEach((item, index) => {
+        const path = imageMetas[index]?.path
+        if (path) imageFilesByPath.set(path, clipboardPayloadToFile(item))
+      })
+      terminalLog('[file-send] read dropped image paths done', {
+        elapsedMs: Math.round(performance.now() - imageReadStartedAt),
+        count: items.length,
+        totalBytes: items.reduce((sum, item) => sum + Math.floor((item.dataBase64.length * 3) / 4), 0),
+      })
+    }
+
+    const files = metas.map((meta) => imageFilesByPath.get(meta.path) ?? createLocalPathFile(meta))
+    terminalLog('[file-send] read dropped paths done', {
+      elapsedMs: Math.round(performance.now() - startedAt),
+      count: files.length,
+      totalBytes: files.reduce((sum, file) => sum + file.size, 0),
+      lazyCount: files.length - imageFilesByPath.size,
+      imageCount: imageFilesByPath.size,
+    })
     openDroppedFiles(files)
   } catch (error) {
     console.warn('[message-input] read dropped files failed:', error)
+    terminalLog('[file-send] read dropped paths failed', {
+      elapsedMs: Math.round(performance.now() - startedAt),
+      message: (error as Error)?.message || String(error),
+    }, 'error')
     showToast(t('操作失败'), 'error')
   }
 }
@@ -632,6 +744,51 @@ async function appendLocalImagePreview(
     size: file.size,
   })
   return { url: previewUrl, width, height, optimisticId }
+}
+
+function appendLocalFilePreview(
+  file: File,
+  fileKey: string,
+  trace: ImageSendTrace,
+): LocalFilePreview | null {
+  const conversationId = convId.value
+  const uid = authStore.uid
+  if (!conversationId || !uid) return null
+
+  const suffix = getFileSuffix(file)
+  const contentType = getUploadContentType(file, suffix)
+  const optimisticId = createOptimisticImageId()
+  const extra = withReadBurnExtra({ fileKey, uploadPending: true, fileTraceId: trace.id })
+  messageStore.appendMessage(conversationId, {
+    id: optimisticId,
+    customMsgId: optimisticId,
+    conversationId,
+    senderId: uid,
+    msgType: MessageType.File,
+    content: JSON.stringify({
+      name: file.name,
+      size: file.size,
+      ext: suffix,
+      mimeType: contentType,
+      fileKey,
+      uploadPending: true,
+    }),
+    sendTime: Date.now(),
+    status: 0,
+    readStatus: 0,
+    version: 0,
+    isDeleted: false,
+    extra: extra ? JSON.stringify(extra) : null,
+  })
+  fileTraceLog(trace, 'local file preview appended', {
+    optimisticId,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    suffix,
+    contentType,
+  })
+  return { optimisticId }
 }
 
 function getFileSizeLimitBytes(file: File): number {
@@ -762,10 +919,12 @@ async function putObjectToOss(options: {
   body: Uint8Array
   contentType: string
   trace?: ImageSendTrace
+  logPrefix?: string
 }) {
   const contentType = options.contentType || 'application/octet-stream'
+  const logPrefix = options.logPrefix || ''
   const log = options.trace
-    ? (message: string, data: Record<string, unknown>, level?: 'info' | 'warn' | 'error') => traceLog(options.trace!, message, data, level)
+    ? (message: string, data: Record<string, unknown>, level?: 'info' | 'warn' | 'error') => traceLog(options.trace!, `${logPrefix}${message}`, data, level)
     : terminalLog
   log('oss put start', {
     urlHost: (() => {
@@ -783,6 +942,13 @@ async function putObjectToOss(options: {
 
   if ((window as any).__TAURI_INTERNALS__) {
     const { invoke } = await import('@tauri-apps/api/core')
+    const encodeStartedAt = performance.now()
+    const bodyBase64 = bytesToBase64(options.body)
+    log('oss body base64 done', {
+      elapsedMs: Math.round(performance.now() - encodeStartedAt),
+      bodyBytes: options.body.byteLength,
+      base64Length: bodyBase64.length,
+    })
     const result = await invoke<{ ok: boolean; status: number; body: string }>('upload_oss_object', {
       request: {
         url: options.url,
@@ -792,7 +958,7 @@ async function putObjectToOss(options: {
         accessKeySecret: options.accessKeySecret,
         securityToken: options.securityToken,
         contentType,
-        bodyBase64: bytesToBase64(options.body),
+        bodyBase64,
       },
     })
     log('oss put response', {
@@ -932,16 +1098,37 @@ async function uploadImageLikeIm(
   }
 }
 
-async function uploadFileLikeIm(file: File): Promise<UploadedFilePayload> {
-  terminalLog('file upload start', {
+async function uploadFileLikeIm(
+  file: File,
+  options?: {
+    fileKey?: string
+    trace?: ImageSendTrace
+  },
+): Promise<UploadedFilePayload> {
+  const trace = options?.trace ?? createImageTrace()
+  fileTraceLog(trace, 'upload start', {
     name: file.name,
     size: file.size,
     type: file.type,
   })
-  const fileKey = createFileKey()
+  const fileKey = options?.fileKey || createFileKey()
   const encrypted = await encryptFileForUpload(file, fileKey)
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
+  fileTraceLog(trace, 'encrypt done', {
+    originalBytes: file.size,
+    encryptedBytes: encrypted.byteLength,
+    suffix,
+    contentType,
+    fileKeyHead: safeHead(fileKey),
+    fileKeyLen: fileKey.length,
+  })
+  fileTraceLog(trace, 'upload api start', {
+    attachType: getUploadAttachType(MessageType.File),
+    attachWorkspaceType: 1,
+    fileSize: encrypted.byteLength,
+    suffix,
+  })
   const [uploadUrlInfo, token] = await Promise.all([
     getUploadUrl({
       attachType: getUploadAttachType(MessageType.File),
@@ -951,6 +1138,19 @@ async function uploadFileLikeIm(file: File): Promise<UploadedFilePayload> {
     }),
     getUploadToken(),
   ])
+  fileTraceLog(trace, 'upload api done', {
+    fileIdHead: safeHead(String(uploadUrlInfo.fileId || ''), 24),
+    fileIdLen: String(uploadUrlInfo.fileId || '').length,
+    responseUrlHost: (() => {
+      try { return new URL(String(uploadUrlInfo.url || '')).host } catch { return String(uploadUrlInfo.url || '').slice(0, 60) }
+    })(),
+    ossEndpoint: String(token.ossEndpoint || ''),
+    ossBucket: String(token.ossBucket || ''),
+    hasAccessKeyId: Boolean(token.accessKeyId),
+    hasAccessKeySecret: Boolean(token.accessKeySecret),
+    hasSecurityToken: Boolean(token.securityToken),
+    tokenExpiration: Number(token.expiration || 0),
+  })
 
   const objectKey = String(uploadUrlInfo.fileId || '').trim()
   const endpoint = normalizeOssEndpoint(String(token.ossEndpoint || ''))
@@ -973,10 +1173,12 @@ async function uploadFileLikeIm(file: File): Promise<UploadedFilePayload> {
     securityToken,
     body: encrypted,
     contentType,
+    trace,
+    logPrefix: '[file-send] ',
   })
 
   const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
-  terminalLog('file upload done', {
+  fileTraceLog(trace, 'upload done', {
     name: file.name,
     originalBytes: file.size,
     encryptedBytes: encrypted.byteLength,
@@ -1170,8 +1372,30 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         showToast((error as Error)?.message || t('操作失败'), 'error')
       }
     } else {
+      const trace = createImageTrace()
+      const fileKey = createFileKey()
+      const localPreview = appendLocalFilePreview(file, fileKey, trace)
       try {
-        const uploaded = await uploadFileLikeIm(file)
+        fileTraceLog(trace, 'prepare upload after confirm', {
+          conversationId: convId.value,
+          isGroup: isGroup.value,
+          isFriend: isFriend.value,
+          isFileHelper: isFileHelperChat.value,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          optimisticId: localPreview?.optimisticId || '',
+        })
+        const uploaded = await uploadFileLikeIm(file, { fileKey, trace })
+        fileTraceLog(trace, 'emit uploaded file message', {
+          conversationId: convId.value,
+          optimisticId: localPreview?.optimisticId || '',
+          urlHost: (() => {
+            try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
+          })(),
+          fileKeyHead: safeHead(uploaded.fileKey),
+          fileKeyLen: uploaded.fileKey.length,
+        })
         emit('send', JSON.stringify({
           url: uploaded.url,
           fileUrl: uploaded.url,
@@ -1180,10 +1404,16 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           ext: uploaded.ext,
           mimeType: uploaded.mimeType,
           fileKey: uploaded.fileKey,
-        }), MessageType.File, withReadBurnExtra({ fileKey: uploaded.fileKey }))
+        }), MessageType.File, withReadBurnExtra({
+          fileKey: uploaded.fileKey,
+          ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
+        }))
       } catch (error) {
         console.error('[message-input] file upload failed:', error)
-        terminalLog('file upload failed', {
+        if (localPreview?.optimisticId) {
+          messageStore.updateMessageStatus(localPreview.optimisticId, -1)
+        }
+        fileTraceLog(trace, 'upload failed', {
           message: (error as Error)?.message || String(error),
           name: file.name,
           size: file.size,

@@ -17,6 +17,15 @@ pub struct ClipboardFilePayload {
     pub data_base64: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalFileMeta {
+    pub path: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+}
+
 #[tauri::command]
 pub fn get_platform_info() -> PlatformInfo {
     PlatformInfo {
@@ -114,6 +123,31 @@ pub fn read_clipboard_files() -> Result<Vec<ClipboardFilePayload>, String> {
 #[tauri::command]
 pub fn read_local_files(paths: Vec<String>) -> Result<Vec<ClipboardFilePayload>, String> {
     read_files_from_paths(paths.into_iter().map(std::path::PathBuf::from).collect())
+}
+
+#[tauri::command]
+pub fn stat_local_files(paths: Vec<String>) -> Result<Vec<LocalFileMeta>, String> {
+    let mut files = Vec::new();
+
+    for raw_path in paths {
+        let path = std::path::PathBuf::from(&raw_path);
+        if !path.is_file() {
+            continue;
+        }
+        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "local-file".to_string());
+        files.push(LocalFileMeta {
+            path: raw_path,
+            name,
+            mime: mime_from_path(&path),
+            size: metadata.len(),
+        });
+    }
+
+    Ok(files)
 }
 
 fn read_files_from_paths(paths: Vec<std::path::PathBuf>) -> Result<Vec<ClipboardFilePayload>, String> {

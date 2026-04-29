@@ -84,16 +84,25 @@ pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
     let is_audio_log = payload.message.starts_with("[audio-message]")
         || payload.message.starts_with("[group-audio]");
     let is_group_audio_log = payload.message.starts_with("[group-audio]");
-    match (is_audio_log, is_group_audio_log, payload.level.as_deref().unwrap_or("info")) {
-        (true, true, "error") => tracing::error!(target: "group-audio", data = %data, "{}", payload.message),
-        (true, true, "warn") => tracing::warn!(target: "group-audio", data = %data, "{}", payload.message),
-        (true, true, _) => tracing::info!(target: "group-audio", data = %data, "{}", payload.message),
-        (true, false, "error") => tracing::error!(target: "audio-message", data = %data, "{}", payload.message),
-        (true, false, "warn") => tracing::warn!(target: "audio-message", data = %data, "{}", payload.message),
-        (true, false, _) => tracing::info!(target: "audio-message", data = %data, "{}", payload.message),
-        (false, _, "error") => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
-        (false, _, "warn") => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
-        (false, _, _) => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
+    let is_file_log = payload.message.starts_with("[file-send]");
+    match (
+        is_audio_log,
+        is_group_audio_log,
+        is_file_log,
+        payload.level.as_deref().unwrap_or("info"),
+    ) {
+        (true, true, _, "error") => tracing::error!(target: "group-audio", data = %data, "{}", payload.message),
+        (true, true, _, "warn") => tracing::warn!(target: "group-audio", data = %data, "{}", payload.message),
+        (true, true, _, _) => tracing::info!(target: "group-audio", data = %data, "{}", payload.message),
+        (true, false, _, "error") => tracing::error!(target: "audio-message", data = %data, "{}", payload.message),
+        (true, false, _, "warn") => tracing::warn!(target: "audio-message", data = %data, "{}", payload.message),
+        (true, false, _, _) => tracing::info!(target: "audio-message", data = %data, "{}", payload.message),
+        (false, _, true, "error") => tracing::error!(target: "file-send", data = %data, "{}", payload.message),
+        (false, _, true, "warn") => tracing::warn!(target: "file-send", data = %data, "{}", payload.message),
+        (false, _, true, _) => tracing::info!(target: "file-send", data = %data, "{}", payload.message),
+        (false, _, false, "error") => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
+        (false, _, false, "warn") => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
+        (false, _, false, _) => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
     }
 
     Ok(())
