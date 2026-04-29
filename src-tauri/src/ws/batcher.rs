@@ -35,6 +35,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Ok(obj) => audio_obj_to_json(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
+        7 => match imweb::FileObj::decode(plain) {
+            Ok(obj) => file_obj_to_json(obj),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
         _ => match imweb::TextObj::decode(plain) {
             Ok(obj) => obj.content,
             Err(_) => String::from_utf8_lossy(plain).to_string(),
@@ -59,6 +63,17 @@ fn audio_obj_to_json(obj: imweb::AudioObj) -> String {
         "url": obj.url,
         "duration": obj.duration,
         "size": obj.file_size,
+    })
+    .to_string()
+}
+
+fn file_obj_to_json(obj: imweb::FileObj) -> String {
+    serde_json::json!({
+        "url": obj.file_url,
+        "fileUrl": obj.file_url,
+        "name": obj.name,
+        "size": obj.size,
+        "mimeType": obj.mime_type,
     })
     .to_string()
 }
@@ -436,7 +451,13 @@ impl MessageBatcher {
                     Ok(plain) => (decode_content_obj(gm.msg_type, plain.as_slice()), false),
                     Err(e) => {
                         // 兼容老客户端发来的明文消息（例如版本=0 或骰子/扑克等未加密类型）
-                        if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
+                        if gm.msg_type == 7 && imweb::FileObj::decode(gm.content.as_slice()).is_ok() {
+                            warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw FileObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                            (decode_content_obj(gm.msg_type, gm.content.as_slice()), false)
+                        } else if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
                             warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw TextObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
@@ -680,6 +701,24 @@ impl MessageBatcher {
                             decrypt_pending = true;
                             warn!(
                                 "PRIVATE_MSG_RECEIVED audio decrypt failed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            "[加密消息，等待密钥同步]".to_string()
+                        }
+                    }
+                } else if om.msg_type == 7 {
+                    match imweb::FileObj::decode(fallback_cipher) {
+                        Ok(obj) => {
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED decrypt failed but raw FileObj parsed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            file_obj_to_json(obj)
+                        }
+                        Err(_) => {
+                            decrypt_pending = true;
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED file decrypt failed sender_uid={} msg_id={} err={}",
                                 om.send_uid, om.msg_id, e
                             );
                             "[加密消息，等待密钥同步]".to_string()
