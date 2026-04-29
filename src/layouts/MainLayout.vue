@@ -425,8 +425,7 @@ function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
 }
 
 function messageSupportsImageSave(data: Record<string, unknown>): boolean {
-  return chatStore.currentConversation?.type === ConversationType.Group
-    && Number(data.msgType) === MessageType.Image
+  return Number(data.msgType) === MessageType.Image
     && typeof data.imageSrc === 'string'
     && data.imageSrc.trim().length > 0
 }
@@ -594,6 +593,13 @@ function groupReadCountLabel(data: Record<string, unknown>): string {
 
 function messageSupportsImageOpenDirectory(data: Record<string, unknown>): boolean {
   return !!(window as any).__TAURI_INTERNALS__ && messageSupportsImageSave(data)
+}
+
+function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean {
+  const conv = chatStore.currentConversation
+  if (!conv || Number(data.readStatus ?? 0) === -1) return false
+  if (conv.type === ConversationType.Friend) return true
+  return Boolean(data.isSelf)
 }
 
 function deleteEveryoneLabelForConversation(): string {
@@ -1008,9 +1014,6 @@ const contextMenuItems = computed((): MenuItem[] => {
     ]
   }
   if (data.type === 'message') {
-    const conv = chatStore.currentConversation
-    const convType = conv?.type ?? 0
-    const isSelf = Boolean(data.isSelf)
     const items: MenuItem[] = []
 
     if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data)) {
@@ -1025,7 +1028,7 @@ const contextMenuItems = computed((): MenuItem[] => {
       items.push({ key: 'open_directory', label: '打开目录', iconSrc: menuOpenDir })
     }
 
-    if (isSelf) {
+    if (messageSupportsDeleteEverywhere(data)) {
       items.push({
         key: 'delete_everyone',
         label: deleteEveryoneLabelForConversation(),
