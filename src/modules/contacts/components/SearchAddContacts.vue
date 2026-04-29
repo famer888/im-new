@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/useChatStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { findContactsList, groupSearch } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
+import searchBlueIcon from '@/assets/images/headNav/search-blue.png'
+import arrowRightIcon from '@/assets/images/headNav/arrow-right.png'
+import addNewIcon from '@/assets/images/headNav/add-new-icon.png'
 import searchNoDataImg from '@/assets/images/common/search-no-data.png'
 
 const props = defineProps<{
@@ -28,8 +32,10 @@ type GroupHit = {
 const authStore = useAuthStore()
 const uiStore = useUIStore()
 const chatStore = useChatStore()
+const contactStore = useContactStore()
 
 const searching = ref(false)
+const remoteSearchTriggered = ref(false)
 const searchDone = ref(false)
 const tabAction = ref<0 | 1>(1)
 const groupHit = ref<GroupHit | null>(null)
@@ -43,18 +49,12 @@ const tabList = [
   { name: '联系人', key: 1 },
 ] as const
 
-let searchTimer: number | null = null
 let searchRunId = 0
-
-function clearSearchTimer() {
-  if (searchTimer === null) return
-  window.clearTimeout(searchTimer)
-  searchTimer = null
-}
 
 function resetResultState() {
   searchRunId += 1
   searching.value = false
+  remoteSearchTriggered.value = false
   searchDone.value = false
   tabAction.value = 1
   groupHit.value = null
@@ -71,26 +71,65 @@ function clearPreview() {
 
 watch(
   trimmedQuery,
-  (query) => {
-    clearSearchTimer()
+  () => {
     resetResultState()
     clearPreview()
-
-    if (!query) return
-    searchTimer = window.setTimeout(() => {
-      void handleSearch(query)
-    }, 180)
   },
-  { immediate: true },
 )
 
-onBeforeUnmount(() => {
-  clearSearchTimer()
+onMounted(() => {
+  if (authStore.uid) {
+    void contactStore.loadContacts(authStore.uid)
+  }
 })
 
 function tabSelect(key: 0 | 1) {
   tabAction.value = key
 }
+
+function getLocalContactName(contact: (typeof contactStore.contacts)[0]) {
+  return contact.remark || contact.nickname || contact.id
+}
+
+function getHighlightSegments(value: string) {
+  const keyword = trimmedQuery.value
+  if (!keyword) return [{ text: value, matched: false }]
+
+  const source = value || ''
+  const sourceUpper = source.toUpperCase()
+  const keywordUpper = keyword.toUpperCase()
+  const segments: Array<{ text: string; matched: boolean }> = []
+  let cursor = 0
+
+  while (cursor < source.length) {
+    const index = sourceUpper.indexOf(keywordUpper, cursor)
+    if (index < 0) {
+      segments.push({ text: source.slice(cursor), matched: false })
+      break
+    }
+    if (index > cursor) {
+      segments.push({ text: source.slice(cursor, index), matched: false })
+    }
+    segments.push({ text: source.slice(index, index + keyword.length), matched: true })
+    cursor = index + keyword.length
+  }
+
+  return segments.length > 0 ? segments : [{ text: source, matched: false }]
+}
+
+const localContactHits = computed(() => {
+  const query = trimmedQuery.value.toUpperCase()
+  if (!query || remoteSearchTriggered.value) return []
+  return contactStore.contacts.filter((contact) => {
+    const fields = [
+      contact.id,
+      contact.nickname || '',
+      contact.remark || '',
+      contact.pinyin || '',
+    ]
+    return fields.some((field) => field.toUpperCase().includes(query))
+  })
+})
 
 function stringifyId(value: unknown): string {
   if (value == null) return ''
@@ -153,6 +192,7 @@ async function handleSearch(query: string) {
 
   const runId = ++searchRunId
   searching.value = true
+  remoteSearchTriggered.value = true
   searchDone.value = false
   groupHit.value = null
   contactHits.value = []
@@ -188,6 +228,15 @@ function handleSelectUser(user: FoundContact) {
   uiStore.setDetailView('add-contact')
 }
 
+function handleSelectLocalContact(contact: (typeof contactStore.contacts)[0]) {
+  uiStore.setAddContactTarget(null)
+  const conv = chatStore.ensureConversation(0, contact.id)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
+}
+
 function handleSelectGroup() {
   const g = groupHit.value
   if (!g?.id) return
@@ -197,12 +246,61 @@ function handleSelectGroup() {
   uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
 }
+
+function goNewFriendExamine() {
+  uiStore.setAddContactTarget(null)
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('friend-examine')
+}
 </script>
 
 <template>
   <div class="search-add-contacts">
     <div class="search-result-wrap">
-      <div v-if="searching" class="state-loading">搜索中...</div>
+      <template v-if="!remoteSearchTriggered">
+        <button
+          type="button"
+          class="add-tip"
+          @click="handleSearch(trimmedQuery)"
+        >
+          <div class="add-tip-left">
+            <img class="icon-search" :src="searchBlueIcon" alt="" />
+            <span>搜索{{ trimmedQuery }}</span>
+          </div>
+          <img class="arrow" :src="arrowRightIcon" alt="" />
+        </button>
+
+        <button
+          type="button"
+          class="new-friend-row"
+          @click="goNewFriendExamine"
+        >
+          <img class="new-friend-icon" :src="addNewIcon" alt="" />
+          <span class="new-friend-title">新的好友</span>
+        </button>
+
+        <div v-if="localContactHits.length > 0" class="local-section">
+          <div class="local-title">联系人</div>
+          <button
+            v-for="contact in localContactHits"
+            :key="contact.id"
+            type="button"
+            class="local-contact-row"
+            @click="handleSelectLocalContact(contact)"
+          >
+            <TextAvatar :name="getLocalContactName(contact)" :src="contact.avatar" :size="34" rounded />
+            <span class="result-name">
+              <span
+                v-for="(segment, index) in getHighlightSegments(getLocalContactName(contact))"
+                :key="`${index}-${segment.text}`"
+                :class="{ 'keyword-highlight': segment.matched }"
+              >{{ segment.text }}</span>
+            </span>
+          </button>
+        </div>
+      </template>
+
+      <div v-else-if="searching" class="state-loading">搜索中...</div>
       <template v-else>
         <div class="search-tabs">
           <button
@@ -271,6 +369,111 @@ function handleSelectGroup() {
 .search-result-wrap {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 16px;
+  box-sizing: border-box;
+}
+
+.add-tip {
+  width: calc(100% - 24px);
+  min-height: 58px;
+  margin: 0 12px;
+  padding: 16px;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
+  background: #fff;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.add-tip-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+
+  span {
+    margin-left: 10px;
+    font-size: 14px;
+    color: #111;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.icon-search {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.arrow {
+  width: 6px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.new-friend-row {
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: #f4f4f4;
+  }
+}
+
+.new-friend-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.new-friend-title {
+  margin-left: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #111;
+}
+
+.local-section {
+  margin-top: 2px;
+}
+
+.local-title {
+  height: 27px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  line-height: 27px;
+  font-size: 12px;
+  color: #999;
+  background: #f2f2f2;
+}
+
+.local-contact-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 59px;
+  padding: 10px 16px;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: #f4f4f4;
+  }
 }
 
 .state-loading {
@@ -334,6 +537,10 @@ function handleSelectGroup() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.keyword-highlight {
+  color: #3369fe;
 }
 
 .search-no-data-block {
