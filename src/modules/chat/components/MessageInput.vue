@@ -1718,6 +1718,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <Transition name="popup">
+        <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
+          <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
+        </div>
+      </Transition>
+
       <div class="editor-wrapper">
         <div
           ref="editorRef"
@@ -1741,12 +1747,6 @@ onBeforeUnmount(() => {
           variant="editor"
           @select="handleEditorMenuSelect"
         />
-
-        <Transition name="popup">
-          <div v-if="showEmoji" ref="emojiPickerPopoverRef" class="emoji-popup">
-            <EmojiPicker @select="handleEmojiSelect" @close="showEmoji = false" />
-          </div>
-        </Transition>
 
         <AtListDialog
           ref="atListRef"
@@ -2023,10 +2023,9 @@ onBeforeUnmount(() => {
 
 .emoji-popup {
   position: absolute;
-  bottom: 100%;
-  left: 0;
+  bottom: 50px;
+  left: 10px;
   z-index: 100;
-  margin-bottom: 4px;
 }
 
 .send-area {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { emojiObj } from '@/utils/emoji'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
@@ -108,6 +109,12 @@ function pushTextSegment(segments: ContentSegment[], text: string) {
   }
 }
 
+function resolveEmojiSrc(name: string): string {
+  const mapped = (emojiObj as Record<string, string>)[`[${name}]`]
+  const fileName = mapped || (/^pet_emoji_\d+$/.test(name) ? name : '')
+  return fileName ? `/images/emoji/${fileName}.png` : ''
+}
+
 const contentSegments = computed<ContentSegment[]>(() => {
   const content = props.message.content ?? ''
   const segments: ContentSegment[] = []
@@ -118,7 +125,12 @@ const contentSegments = computed<ContentSegment[]>(() => {
     const emojiMatch = rest.match(/^\[([^\]]+)\]/)
     if (emojiMatch) {
       const name = emojiMatch[1]
-      segments.push({ type: 'emoji', name, src: `/images/emoji/${name}.png` })
+      const src = resolveEmojiSrc(name)
+      if (src) {
+        segments.push({ type: 'emoji', name, src })
+      } else {
+        pushTextSegment(segments, emojiMatch[0])
+      }
       index += emojiMatch[0].length
       continue
     }
