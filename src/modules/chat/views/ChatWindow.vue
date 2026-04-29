@@ -47,6 +47,9 @@ const unreadSnapshotLocked = ref(false)
 const dropAreaVisible = ref(false)
 const chatWindowRef = ref<HTMLElement | null>(null)
 let unlistenTauriDragDrop: (() => void) | null = null
+let closeDropAreaTimer: ReturnType<typeof window.setTimeout> | null = null
+let lastDropHandledAt = 0
+const DROP_DEDUPE_MS = 500
 const dropAreaStyle = computed(() => {
   const rect = chatWindowRef.value?.getBoundingClientRect()
   if (!rect) return {}
@@ -137,27 +140,16 @@ function hasDraggedFiles(e: DragEvent) {
   return Array.from(e.dataTransfer?.types ?? []).includes('Files')
 }
 
-function handleDragEnter(e: DragEvent) {
-  if (!hasDraggedFiles(e)) return
-  e.preventDefault()
-  dropAreaVisible.value = true
-}
-
-function handleDropAreaDragOver(e: DragEvent) {
-  e.preventDefault()
-}
-
-function closeDropArea() {
-  dropAreaVisible.value = false
-}
-
-function handleDropAreaDrop(e: DragEvent) {
-  e.preventDefault()
-  const files = Array.from(e.dataTransfer?.files ?? [])
-  closeDropArea()
-  if (files.length > 0) {
-    eventBus.emit('editor:drop-files', files)
+function normalizeTauriDropPosition(position?: { x: number; y: number }) {
+  if (!position) return undefined
+  const scale = window.devicePixelRatio || 1
+  if (scale > 1 && (position.x > window.innerWidth || position.y > window.innerHeight)) {
+    return {
+      x: position.x / scale,
+      y: position.y / scale,
+    }
   }
+  return position
 }
 
 function isPositionInDropArea(position?: { x: number; y: number }) {
@@ -169,6 +161,120 @@ function isPositionInDropArea(position?: { x: number; y: number }) {
     && position.y <= window.innerHeight
 }
 
+function setDropEffect(e: DragEvent) {
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+function clearCloseDropAreaTimer() {
+  if (!closeDropAreaTimer) return
+  window.clearTimeout(closeDropAreaTimer)
+  closeDropAreaTimer = null
+}
+
+function scheduleCloseDropArea() {
+  clearCloseDropAreaTimer()
+  closeDropAreaTimer = window.setTimeout(() => {
+    dropAreaVisible.value = false
+    closeDropAreaTimer = null
+  }, 80)
+}
+
+function markDropHandled() {
+  const now = Date.now()
+  if (now - lastDropHandledAt < DROP_DEDUPE_MS) return false
+  lastDropHandledAt = now
+  return true
+}
+
+function emitDroppedFiles(files: File[]) {
+  if (files.length === 0 || !markDropHandled()) return
+  eventBus.emit('editor:drop-files', files)
+}
+
+function emitDroppedFilePaths(paths: string[]) {
+  if (paths.length === 0 || !markDropHandled()) return
+  eventBus.emit('editor:drop-file-paths', paths)
+}
+
+function updateDropAreaFromDomDrag(e: DragEvent) {
+  if (!hasDraggedFiles(e)) return false
+  const inside = isPositionInDropArea({ x: e.clientX, y: e.clientY })
+  if (!inside) {
+    dropAreaVisible.value = false
+    return false
+  }
+  clearCloseDropAreaTimer()
+  e.preventDefault()
+  setDropEffect(e)
+  dropAreaVisible.value = true
+  return true
+}
+
+function handleDragEnter(e: DragEvent) {
+  if (!hasDraggedFiles(e)) return
+  e.preventDefault()
+  setDropEffect(e)
+  dropAreaVisible.value = true
+}
+
+function handleDropAreaDragOver(e: DragEvent) {
+  e.preventDefault()
+  setDropEffect(e)
+}
+
+function closeDropArea() {
+  clearCloseDropAreaTimer()
+  dropAreaVisible.value = false
+}
+
+function handleDropAreaDrop(e: DragEvent) {
+  e.preventDefault()
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  closeDropArea()
+  emitDroppedFiles(files)
+}
+
+function handleWindowDragEnter(e: DragEvent) {
+  updateDropAreaFromDomDrag(e)
+}
+
+function handleWindowDragOver(e: DragEvent) {
+  updateDropAreaFromDomDrag(e)
+}
+
+function handleWindowDragLeave(e: DragEvent) {
+  if (!hasDraggedFiles(e)) return
+  scheduleCloseDropArea()
+}
+
+function handleWindowDrop(e: DragEvent) {
+  if (!hasDraggedFiles(e)) return
+  const inside = isPositionInDropArea({ x: e.clientX, y: e.clientY })
+  closeDropArea()
+  if (!inside) return
+  e.preventDefault()
+  emitDroppedFiles(Array.from(e.dataTransfer?.files ?? []))
+}
+
+function setupDomDragDrop() {
+  window.addEventListener('dragenter', handleWindowDragEnter, true)
+  window.addEventListener('dragover', handleWindowDragOver, true)
+  window.addEventListener('dragleave', handleWindowDragLeave, true)
+  window.addEventListener('drop', handleWindowDrop, true)
+  window.addEventListener('blur', closeDropArea)
+}
+
+function cleanupDomDragDrop() {
+  window.removeEventListener('dragenter', handleWindowDragEnter, true)
+  window.removeEventListener('dragover', handleWindowDragOver, true)
+  window.removeEventListener('dragleave', handleWindowDragLeave, true)
+  window.removeEventListener('drop', handleWindowDrop, true)
+  window.removeEventListener('blur', closeDropArea)
+  clearCloseDropAreaTimer()
+}
+
 async function setupTauriDragDrop() {
   if (!(window as any).__TAURI_INTERNALS__) return
   try {
@@ -176,14 +282,14 @@ async function setupTauriDragDrop() {
     unlistenTauriDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
       const payload = event.payload
       if (payload.type === 'enter' || payload.type === 'over') {
-        dropAreaVisible.value = isPositionInDropArea(payload.position)
+        dropAreaVisible.value = isPositionInDropArea(normalizeTauriDropPosition(payload.position))
         return
       }
       if (payload.type === 'drop') {
-        const shouldDrop = dropAreaVisible.value || isPositionInDropArea(payload.position)
+        const shouldDrop = dropAreaVisible.value || isPositionInDropArea(normalizeTauriDropPosition(payload.position))
         dropAreaVisible.value = false
         if (shouldDrop && payload.paths.length > 0) {
-          eventBus.emit('editor:drop-file-paths', payload.paths)
+          emitDroppedFilePaths(payload.paths)
         }
         return
       }
@@ -195,10 +301,12 @@ async function setupTauriDragDrop() {
 }
 
 onMounted(() => {
+  setupDomDragDrop()
   void setupTauriDragDrop()
 })
 
 onBeforeUnmount(() => {
+  cleanupDomDragDrop()
   unlistenTauriDragDrop?.()
   unlistenTauriDragDrop = null
 })
