@@ -474,6 +474,22 @@ export const useMessageStore = defineStore('message', () => {
     appendMessage(conversationId, optimistic)
     syncConversationSummary(conversationId, optimistic)
 
+    const sendStartedAt = performance.now()
+    const logSendStep = (
+      message: string,
+      data?: Record<string, unknown>,
+      level: 'info' | 'warn' | 'error' = 'info',
+    ) => {
+      const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
+      log(`[send] ${message}`, {
+        elapsedMs: Math.round(performance.now() - sendStartedAt),
+        conversationId,
+        msgType,
+        optimisticId,
+        ...(data || {}),
+      })
+    }
+
     console.log('[send] begin', {
       uid,
       conversationId,
@@ -487,29 +503,48 @@ export const useMessageStore = defineStore('message', () => {
     // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。
     if (convType === 1 && targetId) {
       try {
+        const stepStartedAt = performance.now()
         await ensureGroupRelKey(uid, targetId)
-        console.log('[send] ensureGroupRelKey OK', { targetId })
+        logSendStep('ensureGroupRelKey OK', {
+          targetId,
+          stepMs: Math.round(performance.now() - stepStartedAt),
+        })
       } catch (e) {
-        console.error('[send] ensureGroupRelKey failed:', e)
+        logSendStep('ensureGroupRelKey failed', {
+          targetId,
+          message: (e as Error)?.message || String(e),
+        }, 'error')
         updateMessageStatus(optimisticId, -1)
         throw e
       }
     }
     if (isFileHelperSend) {
       try {
+        const stepStartedAt = performance.now()
         await ensureOwnKeyPair(uid)
-        console.log('[send] ensureOwnKeyPair OK for file helper')
+        logSendStep('ensureOwnKeyPair OK for file helper', {
+          stepMs: Math.round(performance.now() - stepStartedAt),
+        })
       } catch (e) {
-        console.error('[send] ensureOwnKeyPair failed for file helper:', e)
+        logSendStep('ensureOwnKeyPair failed for file helper', {
+          message: (e as Error)?.message || String(e),
+        }, 'error')
         updateMessageStatus(optimisticId, -1)
         throw e
       }
     } else if (convType === 0 && targetId) {
       try {
+        const stepStartedAt = performance.now()
         await ensureFriendRelKey(uid, targetId)
-        console.log('[send] ensureFriendRelKey OK', { targetId })
+        logSendStep('ensureFriendRelKey OK', {
+          targetId,
+          stepMs: Math.round(performance.now() - stepStartedAt),
+        })
       } catch (e) {
-        console.error('[send] ensureFriendRelKey failed:', e)
+        logSendStep('ensureFriendRelKey failed', {
+          targetId,
+          message: (e as Error)?.message || String(e),
+        }, 'error')
         updateMessageStatus(optimisticId, -1)
         throw e
       }
@@ -517,9 +552,14 @@ export const useMessageStore = defineStore('message', () => {
 
     try {
       if ([0, 1, 2, 7].includes(msgType) && (convType === 1 || convType === 0)) {
+        const stepStartedAt = performance.now()
         await ensureWsConnected()
+        logSendStep('ensureWsConnected OK', {
+          stepMs: Math.round(performance.now() - stepStartedAt),
+        })
       }
-      console.log('[send] invoking Rust send_message', { conversationId, msgType })
+      const rustStartedAt = performance.now()
+      logSendStep('invoking Rust send_message')
       const result = await tauriInvoke<any>('send_message', {
         uid,
         request: {
@@ -531,7 +571,11 @@ export const useMessageStore = defineStore('message', () => {
           snapchat_time: snapchatTime ?? 0,
         },
       })
-      console.log('[send] Rust send_message result:', result)
+      logSendStep('Rust send_message result', {
+        stepMs: Math.round(performance.now() - rustStartedAt),
+        resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
+        resultStatus: Number(result?.status ?? 0),
+      })
       const normalized = normalizeMessage(result)
       if (quoteMsg && !normalized.quoteMessage) {
         normalized.quoteMessage = quoteMsg
