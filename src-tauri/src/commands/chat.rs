@@ -533,6 +533,24 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
+        (2, 0) => {
+            if let Err(e) = pipeline::send_channel_text(
+                &ws_mgr,
+                &crypto,
+                &target_id,
+                &uid,
+                &request.content,
+                now,
+                client_flag,
+                Vec::new(),
+            ) {
+                error!(
+                    "send_channel_text failed conversation={} err={}",
+                    request.conversation_id, e
+                );
+                return mark_failed_and_return(e.to_string());
+            }
+        }
         (1, 1) | (1, 2) | (1, 7) | (1, 12) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
@@ -580,16 +598,41 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
+        (2, 1) | (2, 2) | (2, 7) | (2, 12) => {
+            if let Err(e) = pipeline::send_channel_message(
+                &ws_mgr,
+                &crypto,
+                &target_id,
+                &uid,
+                request.msg_type,
+                &request.content,
+                now,
+                client_flag,
+                Vec::new(),
+            ) {
+                error!(
+                    "send_channel_message failed conversation={} msg_type={} err={}",
+                    request.conversation_id, request.msg_type, e
+                );
+                return mark_failed_and_return(e.to_string());
+            }
+        }
         (1, _) => {
             warn!(
                 "group non-text message (type={}) send not implemented yet; kept local only",
                 request.msg_type
             );
         }
-        (0, _) | (2, _) => {
+        (0, _) => {
             warn!(
-                "friend/channel send via WS not implemented yet (conv_type={}); kept local only",
+                "friend send via WS not implemented yet (conv_type={}); kept local only",
                 conv_type
+            );
+        }
+        (2, _) => {
+            warn!(
+                "channel non-text message (type={}) send not implemented yet; kept local only",
+                request.msg_type
             );
         }
         _ => {
@@ -626,6 +669,11 @@ pub fn has_group_rel_key(crypto: State<'_, CryptoEngine>, group_id: String) -> b
     crypto.get_group_key(&group_id).is_some()
 }
 
+#[tauri::command]
+pub fn has_channel_rel_key(crypto: State<'_, CryptoEngine>, channel_id: String) -> bool {
+    crypto.get_channel_key(&channel_id).is_some()
+}
+
 /// 从 CryptoEngine 移除指定群的 relKey 缓存。用于"收到一条群消息但
 /// 解密失败（key 可能已轮换）"时强制下一次 `ensureGroupRelKey` 走
 /// 服务端 `GetKeyPair` 重新派生。与老 im
@@ -638,6 +686,16 @@ pub fn clear_group_rel_key(
 ) -> Result<(), String> {
     crypto.remove_group_key(&group_id);
     tracing::info!(target: "e2ee", "clear_group_rel_key group_id={}", group_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_channel_rel_key(
+    crypto: State<'_, CryptoEngine>,
+    channel_id: String,
+) -> Result<(), String> {
+    crypto.remove_channel_key(&channel_id);
+    tracing::info!(target: "e2ee", "clear_channel_rel_key channel_id={}", channel_id);
     Ok(())
 }
 
@@ -701,6 +759,54 @@ pub fn derive_group_rel_key(
                 target: "e2ee",
                 "derive_group_rel_key FAILED group_id={} err={} encrypted_msgkey_bytes={}",
                 group_id,
+                e,
+                encrypted_msg_key.len()
+            );
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn derive_channel_rel_key(
+    crypto: State<'_, CryptoEngine>,
+    channel_id: String,
+    public_key_hex: String,
+    encrypted_msg_key_hex: String,
+) -> Result<String, String> {
+    let priv_present = crypto.get_curve_private_key().is_some();
+    tracing::info!(
+        target: "e2ee",
+        "derive_channel_rel_key start channel_id={} pubkey_hex_len={} pubkey_head={} msgkey_hex_len={} msgkey_head={} own_priv_set={}",
+        channel_id,
+        public_key_hex.len(),
+        safe_head(&public_key_hex, 16),
+        encrypted_msg_key_hex.len(),
+        safe_head(&encrypted_msg_key_hex, 16),
+        priv_present,
+    );
+
+    let encrypted_msg_key = hex::decode(&encrypted_msg_key_hex).map_err(|e| {
+        tracing::error!(target: "e2ee", "derive_channel_rel_key: msgKey hex decode failed: {}", e);
+        format!("invalid msgKey hex: {}", e)
+    })?;
+
+    match crypto.derive_channel_key(&channel_id, &public_key_hex, &encrypted_msg_key) {
+        Ok(rel) => {
+            tracing::info!(
+                target: "e2ee",
+                "derive_channel_rel_key OK channel_id={} relkey_len={} relkey_head={}",
+                channel_id,
+                rel.len(),
+                safe_head(&rel, 8)
+            );
+            Ok(rel)
+        }
+        Err(e) => {
+            tracing::error!(
+                target: "e2ee",
+                "derive_channel_rel_key FAILED channel_id={} err={} encrypted_msgkey_bytes={}",
+                channel_id,
                 e,
                 encrypted_msg_key.len()
             );
@@ -926,6 +1032,88 @@ pub fn decrypt_group_incoming(
                     e,
                 );
             }
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn decrypt_channel_incoming(
+    crypto: State<'_, CryptoEngine>,
+    channel_id: String,
+    ciphertext_hex: String,
+    msg_type: Option<i32>,
+) -> Result<String, String> {
+    let data =
+        hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
+    let key_cached = crypto.get_channel_key(&channel_id).is_some();
+    tracing::info!(
+        target: "e2ee",
+        "[channel] decrypt_channel_incoming request channel_id={} cipher_len={} key_cached={}",
+        channel_id,
+        data.len(),
+        key_cached,
+    );
+    match crypto.decrypt_channel_message(&channel_id, &data) {
+        Ok(plain) => {
+            tracing::info!(
+                target: "e2ee",
+                "[channel] decrypt_channel_incoming OK channel_id={} cipher_len={} plain_len={} key_cached={}",
+                channel_id,
+                data.len(),
+                plain.len(),
+                key_cached,
+            );
+            match msg_type.unwrap_or(0) {
+                1 => {
+                    if let Ok(obj) = crate::proto::imweb::ImageObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "thumbnailUrl": obj.thumb_url,
+                            "width": obj.width,
+                            "height": obj.height,
+                            "size": obj.file_size,
+                            "sizeType": obj.size_type,
+                        })
+                        .to_string());
+                    }
+                }
+                2 => {
+                    if let Ok(obj) = crate::proto::imweb::AudioObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "duration": obj.duration,
+                            "size": obj.file_size,
+                        })
+                        .to_string());
+                    }
+                }
+                5 => {
+                    if let Ok(obj) = crate::proto::imweb::NameCardObj::decode(plain.as_slice()) {
+                        return Ok(name_card_obj_to_legacy_content(obj));
+                    }
+                }
+                12 => {
+                    if let Ok(obj) = crate::proto::imweb::SetImageObj::decode(plain.as_slice()) {
+                        return Ok(obj.current_image.to_string());
+                    }
+                }
+                _ => {}
+            }
+            if let Ok(obj) = crate::proto::imweb::TextObj::decode(plain.as_slice()) {
+                return Ok(obj.content);
+            }
+            String::from_utf8(plain).map_err(|e| format!("utf8 decode failed: {}", e))
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "e2ee",
+                "[channel] decrypt_channel_incoming FAILED channel_id={} cipher_len={} key_cached={} err={}",
+                channel_id,
+                data.len(),
+                key_cached,
+                e,
+            );
             Err(e.to_string())
         }
     }

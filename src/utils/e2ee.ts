@@ -278,6 +278,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
 // ---------------------------------------------------------------------------
 
 const pendingGroupKeys = new Map<string, Promise<string>>()
+const pendingChannelKeys = new Map<string, Promise<string>>()
 const pendingFriendKeys = new Map<string, Promise<string>>()
 const pendingFriendVersionKeys = new Map<string, Promise<string>>()
 
@@ -381,6 +382,83 @@ export async function refreshGroupRelKey(
   }
   pendingGroupKeys.delete(gid)
   return ensureGroupRelKey(uid, gid)
+}
+
+/**
+ * 保证频道 `channelId` 的 relKey 已经被 Rust 缓存。
+ *
+ * 对齐老 im `fnChannelRelKeyGet`：
+ *   GetKeyPair({ targetId: channelId, flag: 3, channelKeyVersion: 1 })
+ *   → channelKeyPair(publicKey/msgKey) → 本地派生 relKey。
+ */
+export async function ensureChannelRelKey(
+  uid: string | number,
+  channelId: string | number,
+): Promise<string> {
+  if (!isTauri()) {
+    throw new Error('ensureChannelRelKey: Tauri only')
+  }
+  const cid = String(channelId)
+
+  const cachedHit = await tauriInvoke<boolean>('has_channel_rel_key', { channelId: cid })
+  if (cachedHit) {
+    console.log('[e2ee] ensureChannelRelKey: rust cache hit', { cid })
+    return ''
+  }
+
+  const existing = pendingChannelKeys.get(cid)
+  if (existing) return existing
+
+  const task = (async () => {
+    console.log('[e2ee] ensureChannelRelKey: start', { uid, cid })
+    await ensureOwnKeyPair(uid)
+
+    const resp = await getKeyPair({
+      targetId: Number(cid),
+      flag: 3,
+      channelKeyVersion: 1,
+    })
+    const ckp = (resp as any)?.channelKeyPair
+    console.log('[e2ee] getKeyPair(channel) resp:', {
+      cid,
+      hasCkp: !!ckp,
+      publicKeyLen: ckp?.publicKey ? String(ckp.publicKey).length : 0,
+      publicKeyHead: ckp?.publicKey ? String(ckp.publicKey).slice(0, 16) : null,
+      msgKeyLen: ckp?.msgKey ? String(ckp.msgKey).length : 0,
+      msgKeyHead: ckp?.msgKey ? String(ckp.msgKey).slice(0, 16) : null,
+      keyVersion: ckp?.keyVersion,
+    })
+    if (!ckp?.publicKey || !ckp?.msgKey) {
+      throw new Error(`[e2ee] getKeyPair(channel=${cid}) missing publicKey/msgKey`)
+    }
+
+    try {
+      const relKey = await tauriInvoke<string>('derive_channel_rel_key', {
+        channelId: cid,
+        publicKeyHex: String(ckp.publicKey),
+        encryptedMsgKeyHex: String(ckp.msgKey),
+      })
+      console.log('[e2ee] ensureChannelRelKey DONE', {
+        cid,
+        relKeyLen: relKey.length,
+        relKeyHead: relKey.slice(0, 8),
+      })
+      return relKey
+    } catch (err) {
+      console.error('[e2ee] derive_channel_rel_key FAILED', {
+        cid,
+        err: String(err),
+        publicKey: String(ckp.publicKey),
+        msgKey: String(ckp.msgKey),
+      })
+      throw err
+    }
+  })().finally(() => {
+    pendingChannelKeys.delete(cid)
+  })
+
+  pendingChannelKeys.set(cid, task)
+  return task
 }
 
 /**

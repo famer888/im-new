@@ -13,10 +13,10 @@ import { getBaseUrl } from './config'
 /**
  * 拉取 keyPair。
  * - `flag=0`：获取当前账号自身的 app/web keyPair（targetId 填自己的 uid）
- * - `flag=1`：获取指定群/频道/好友的密钥包；按 targetId 类型区分：
+ * - `flag=1`：获取指定群/好友的密钥包；按 targetId 类型区分：
  *   - 群聊：groupKeyVersion=1 且 targetId=groupId
  *   - 好友：传 webKeyVersion / appKeyVersion 和对端 uid
- *   - 频道：channelKeyVersion=1 且 targetId=channelId
+ * - `flag=3`：获取频道密钥包，channelKeyVersion=1 且 targetId=channelId
  */
 export async function getKeyPair(
   data: {

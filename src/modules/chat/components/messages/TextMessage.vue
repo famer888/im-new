@@ -21,7 +21,11 @@ const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
-const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
+const isChannelChat = computed(
+  () => chatStore.currentConversation?.type === ConversationType.Channel,
+)
+/** 旧 im 频道消息统一按左侧白色气泡展示，即使是自己发送的消息也不右对齐。 */
+const displayAsSelf = computed(() => (isSelf.value || isFileHelperChat.value) && !isChannelChat.value)
 
 type ContentSegment =
   | { type: 'text'; text: string }

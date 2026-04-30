@@ -159,6 +159,24 @@ fn decrypt_group_attachment_key(
         .filter(|s| !s.is_empty())
 }
 
+fn decrypt_channel_attachment_key(
+    crypto: &crate::crypto::CryptoEngine,
+    channel_id: &str,
+    attachment_key: &str,
+) -> Option<String> {
+    let raw = attachment_key.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let data = hex::decode(raw).ok()?;
+    let plain = crypto.decrypt_channel_message(channel_id, &data).ok()?;
+    String::from_utf8(plain)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn decrypt_friend_attachment_key(
     crypto: &crate::crypto::CryptoEngine,
     friend_id: &str,
@@ -290,6 +308,17 @@ impl MessageBatcher {
             return;
         }
         let payload = &frame[payload_start..];
+        if matches!(
+            cmd,
+            cmds::CHANNEL_MSG_SENT | cmds::CHANNEL_MSG_RECEIVED | cmds::CHANNEL_EVENT_PUSH
+        ) {
+            info!(
+                "[channel] WS frame received cmd={} encrypted={} payload_len={}",
+                cmd,
+                is_encrypted,
+                payload.len()
+            );
+        }
 
         let decoded_payload = if is_encrypted == 0x01 {
             match crypto::aes::decrypt_transport(payload, &self.aes_key) {
@@ -324,6 +353,12 @@ impl MessageBatcher {
             cmds::PRIVATE_MSG_SENT => {
                 if let Err(e) = self.emit_private_msg_sent(&decoded_payload) {
                     error!("20101 decode/emit failed: {}", e);
+                }
+                return;
+            }
+            cmds::CHANNEL_MSG_SENT => {
+                if let Err(e) = self.emit_channel_msg_sent(&decoded_payload) {
+                    error!("[channel] 4201 decode/emit failed: {}", e);
                 }
                 return;
             }
@@ -403,6 +438,23 @@ impl MessageBatcher {
                     }
                     Err(e) => {
                         warn!("decode PRIVATE_MSG_RECEIVED failed: {}", e);
+                    }
+                }
+                return;
+            }
+            cmds::CHANNEL_MSG_RECEIVED => {
+                match self.decode_channel_msg_received(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        info!("[channel] CHANNEL_MSG_RECEIVED decoded count={}", msgs.len());
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[channel] decode CHANNEL_MSG_RECEIVED failed: {}", e);
                     }
                 }
                 return;
@@ -968,6 +1020,130 @@ impl MessageBatcher {
         }])
     }
 
+    fn decode_channel_msg_received(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushChannelMessage::decode(payload)
+            .map_err(|e| format!("decode PushChannelMessage: {}", e))?;
+        let Some(cm) = resp.latest_channel_message else {
+            info!("[channel] CHANNEL_MSG_RECEIVED empty latest_channel_message");
+            return Ok(Vec::new());
+        };
+
+        let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
+        let channel_id = cm.channel_id;
+        let channel_id_s = channel_id.to_string();
+        let conversation_id = format!("2_{}", channel_id);
+        let key_cached = crypto.get_channel_key(&channel_id_s).is_some();
+        info!(
+            "[channel] CHANNEL_MSG_RECEIVED packet channel_id={} msg_id={} sender_uid={} msg_type={} cipher_len={} version={} key_cached={}",
+            channel_id,
+            cm.msg_id,
+            cm.send_uid,
+            cm.msg_type,
+            cm.content.len(),
+            cm.version,
+            key_cached,
+        );
+
+        let (content, decrypt_pending) = match crypto.decrypt_channel_message(&channel_id_s, &cm.content) {
+            Ok(plain) => {
+                info!(
+                    "[channel] CHANNEL_MSG_RECEIVED decrypt OK channel_id={} msg_id={} plain_len={}",
+                    channel_id,
+                    cm.msg_id,
+                    plain.len()
+                );
+                (decode_content_obj(cm.msg_type, plain.as_slice()), false)
+            }
+            Err(e) => {
+                if cm.msg_type == 7 && imweb::FileObj::decode(cm.content.as_slice()).is_ok() {
+                    warn!(
+                        "[channel] decrypt failed but raw FileObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                } else if let Ok(obj) = imweb::TextObj::decode(cm.content.as_slice()) {
+                    warn!(
+                        "[channel] decrypt failed but raw TextObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (obj.content, false)
+                } else if cm.msg_type == 1 && imweb::ImageObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw ImageObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                } else if cm.msg_type == 2 && imweb::AudioObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw AudioObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                } else if cm.msg_type == 5
+                    && imweb::NameCardObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw NameCardObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                } else if cm.msg_type == 12
+                    && imweb::SetImageObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw SetImageObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                } else if let Ok(s) = String::from_utf8(cm.content.clone()) {
+                    warn!(
+                        "[channel] decrypt failed but raw UTF-8 parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (s, false)
+                } else {
+                    warn!(
+                        "[channel] CHANNEL_MSG_RECEIVED decrypt failed channel_id={} msg_id={} msg_type={} cipher_len={} version={} key_cached={} err={}",
+                        channel_id,
+                        cm.msg_id,
+                        cm.msg_type,
+                        cm.content.len(),
+                        cm.version,
+                        key_cached,
+                        e
+                    );
+                    ("[加密消息，等待密钥同步]".to_string(), true)
+                }
+            }
+        };
+
+        let file_key = decrypt_channel_attachment_key(&crypto, &channel_id_s, &cm.attachment_key)
+            .or_else(|| fallback_plain_file_key(&cm.attachment_key));
+        Ok(vec![DecodedMessage {
+            cmd: cmds::CHANNEL_MSG_RECEIVED,
+            msg_id: cm.msg_id.to_string(),
+            conversation_id,
+            sender_id: cm.send_uid.to_string(),
+            msg_type: cm.msg_type,
+            content,
+            send_time: cm.msg_time,
+            status: 1,
+            read_status: 0,
+            extra: serde_json::json!({
+                "channelId": channel_id,
+                "version": cm.version,
+                "contentMd5": cm.content_md5,
+                "readTotal": cm.read_total,
+                "decryptPending": decrypt_pending,
+                "cipherHex": hex::encode(&cm.content),
+                "attachmentKey": cm.attachment_key,
+                "fileKey": file_key,
+            }),
+        }])
+    }
+
     fn handle_key_pair_change(&self, payload: &[u8]) -> Result<(), String> {
         let resp = imweb::PushKeyPairChangeMessageResp::decode(payload)
             .map_err(|e| format!("decode PushKeyPairChangeMessageResp: {}", e))?;
@@ -1075,6 +1251,26 @@ impl MessageBatcher {
         info!(
             "PRIVATE_MSG_SENT flag={} msg_id={} receive_uid={}",
             evt.flag, evt.msg_id, resp.receive_uid
+        );
+        self.app_handle
+            .emit("msg:sent", &evt)
+            .map_err(|e| format!("emit msg:sent: {}", e))?;
+        Ok(())
+    }
+
+    fn emit_channel_msg_sent(&self, payload: &[u8]) -> Result<(), String> {
+        let resp = imweb::PushSendChannelMessageSuccessMessage::decode(payload)
+            .map_err(|e| format!("decode PushSendChannelMessageSuccessMessage: {}", e))?;
+        let evt = MsgSentEvent {
+            flag: resp.flag,
+            msg_id: resp.msg_id,
+            group_id: 0,
+            sent_over_time: 0,
+            conversation_id: format!("2_{}", resp.channel_id),
+        };
+        info!(
+            "[channel] CHANNEL_MSG_SENT receipt flag={} msg_id={} channel_id={}",
+            evt.flag, evt.msg_id, resp.channel_id
         );
         self.app_handle
             .emit("msg:sent", &evt)

@@ -15,7 +15,7 @@ use tracing::info;
 use crate::crypto::CryptoEngine;
 use crate::db::queries::FILE_HELPER_TARGET_ID;
 use crate::ws::{
-    commands::{SEND_GROUP_MSG, SEND_PRIVATE_MSG},
+    commands::{SEND_CHANNEL_MSG, SEND_GROUP_MSG, SEND_PRIVATE_MSG},
     WsError, WsManager,
 };
 
@@ -25,6 +25,8 @@ pub enum SendError {
     MissingGroupKey(String),
     #[error("friend rel key not cached for {0}; call derive_friend_rel_key first")]
     MissingFriendKey(String),
+    #[error("channel rel key not cached for {0}; call derive_channel_rel_key first")]
+    MissingChannelKey(String),
 
     #[error("crypto error: {0}")]
     Crypto(#[from] crate::crypto::CryptoError),
@@ -110,6 +112,77 @@ pub fn send_group_text(
         ws,
         crypto,
         group_id_str,
+        sender_uid_str,
+        0,
+        text,
+        send_time,
+        flag,
+        at_uids,
+    )
+}
+
+/// 发送一条频道消息（4101）。
+pub fn send_channel_message(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    channel_id_str: &str,
+    sender_uid_str: &str,
+    msg_type: i32,
+    content: &str,
+    send_time: i64,
+    flag: i64,
+    at_uids: Vec<i64>,
+) -> Result<(), SendError> {
+    let channel_id: i64 = channel_id_str.parse().map_err(|_| {
+        SendError::InvalidId(format!("channel_id '{}' not numeric", channel_id_str))
+    })?;
+    let sender_uid: i64 = sender_uid_str.parse().map_err(|_| {
+        SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str))
+    })?;
+
+    let rel_key = crypto
+        .get_channel_key(channel_id_str)
+        .ok_or_else(|| SendError::MissingChannelKey(channel_id_str.to_string()))?;
+
+    let content_plain = super::encode_content_obj(msg_type, content);
+    let attachment_file_key = super::extract_attachment_file_key(content);
+    let payload = super::build_send_channel_message_req(
+        channel_id,
+        sender_uid,
+        msg_type,
+        &content_plain,
+        &rel_key,
+        send_time,
+        flag,
+        at_uids,
+        attachment_file_key.as_deref(),
+    )?;
+
+    ws.send_packet(SEND_CHANNEL_MSG, flag, &payload)?;
+    info!(
+        "sent SEND_CHANNEL_MSG channel_id={} flag={} bytes={}",
+        channel_id,
+        flag,
+        payload.len()
+    );
+    Ok(())
+}
+
+/// 发送一条频道文本消息（4101）。
+pub fn send_channel_text(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    channel_id_str: &str,
+    sender_uid_str: &str,
+    text: &str,
+    send_time: i64,
+    flag: i64,
+    at_uids: Vec<i64>,
+) -> Result<(), SendError> {
+    send_channel_message(
+        ws,
+        crypto,
+        channel_id_str,
         sender_uid_str,
         0,
         text,

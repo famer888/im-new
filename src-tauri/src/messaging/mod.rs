@@ -384,6 +384,51 @@ pub fn build_send_group_message_req(
     Ok(req.encode_to_vec())
 }
 
+/// 产出一条可直接交给 WS 发送的 `SendChannelMessage` protobuf bytes。
+///
+/// 对齐老 im `CReqSendChatChannel`：频道消息固定 version=1，内容使用频道
+/// relKey 加密后通过 4101 发送。
+pub fn build_send_channel_message_req(
+    channel_id: i64,
+    sender_uid: i64,
+    msg_type: i32,
+    content_plain: &[u8],
+    rel_key: &str,
+    send_time: i64,
+    flag: i64,
+    at_uids: Vec<i64>,
+    attachment_file_key: Option<&str>,
+) -> Result<Vec<u8>, CryptoError> {
+    let encrypted = encrypt_with_rel_key(rel_key, content_plain)?;
+    let mut hasher = Md5::new();
+    hasher.update(content_plain);
+    let content_md5 = format!("{:x}", hasher.finalize());
+
+    let channel_message = imweb::ChannelMessage {
+        send_uid: sender_uid,
+        channel_id,
+        msg_type,
+        content: encrypted,
+        msg_id: 0,
+        read_total: 0,
+        msg_time: send_time,
+        version: 1,
+        content_md5,
+        attachment_key: encrypt_attachment_key(rel_key, attachment_file_key)?,
+        at_uids,
+        channel_type: 0,
+        msg_from: 0,
+        links: Vec::new(),
+    };
+
+    let req = imweb::SendChannelMessage {
+        channel_message: Some(channel_message),
+        flag,
+    };
+
+    Ok(req.encode_to_vec())
+}
+
 /// 产出一条可直接交给 WS 发送的 `OneToOneMessageReq` protobuf bytes。
 pub fn build_send_private_message_req(
     receive_uid: i64,
