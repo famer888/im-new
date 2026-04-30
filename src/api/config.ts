@@ -4,6 +4,7 @@ function isTauri(): boolean {
 
 const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
 const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
+const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
 
 export const API_CONFIG = {
   rawBaseUrl: RAW_BASE_URL,
@@ -16,6 +17,7 @@ export const API_CONFIG = {
   language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
   rawDomainUrl: RAW_DOMAIN_URL,
+  rawOpenChatDomain: RAW_OPEN_CHAT_DOMAIN,
   env: import.meta.env.VITE_APP_ENV || 'test',
 }
 
@@ -42,4 +44,8 @@ export function setBaseUrl(url: string) {
 
 export function getRawBaseUrl(): string {
   return dynamicBaseUrl || RAW_BASE_URL
+}
+
+export function getOpenChatBaseUrl(): string {
+  return isTauri() ? RAW_OPEN_CHAT_DOMAIN : '/open-chat-api'
 }

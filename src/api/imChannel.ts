@@ -4,9 +4,11 @@
  * Response body: AES-128-ECB encrypted JSON with binary packet header.
  */
 import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
-import { API_CONFIG, getRawBaseUrl } from './config'
+import { API_CONFIG, getOpenChatBaseUrl } from './config'
 import { getDeviceConfig } from './request'
 import { ungzip } from 'pako'
+
+const CHANNEL_PACKAGE_CODE = 5520
 
 function getSessionIdFromStorage(): string {
   try {
@@ -37,8 +39,8 @@ function getClientInfoForSign() {
   return {
     sessionId: getSessionIdFromStorage(),
     // 频道接口签名必须和老 im 的 getSignHeader 对齐，否则服务端会把请求判成异常。
-    appVer: 168,
-    packageCode: 7100,
+    appVer: API_CONFIG.appVer,
+    packageCode: CHANNEL_PACKAGE_CODE,
     language: API_CONFIG.language,
     plat: 4,
     sysModel: getPlatformSysModel(),
@@ -117,6 +119,7 @@ export interface ChannelListItem {
   logoColor?: string
   memberCount?: number
   status?: number
+  isDisable?: boolean
   adminPrivacy?: number
   isDisturb?: boolean | number
   updateTime?: number
@@ -161,7 +164,7 @@ export interface ChannelUsersResp {
 }
 
 async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
-  const base = getRawBaseUrl()
+  const base = getOpenChatBaseUrl()
   const url = `${base}${path}`
   const signClient = getClientInfoForSign()
   console.info('[ChannelAPI] request', {

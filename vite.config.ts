@@ -34,6 +34,14 @@ export default defineConfig(({ mode }) => {
           rewrite: (path: string) => path.replace(/^\/domain-api/, ''),
           secure: false,
         },
+        
+        // 频道接口对齐老 IM，走 gateway 域名；该代理仅用于浏览器开发模式规避跨域。
+        '/open-chat-api': {
+          target: env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/open-chat-api/, ''),
+          secure: false,
+        },
       },
     },
     build: {

@@ -1,6 +1,19 @@
+use rusqlite::params;
+use serde::Deserialize;
 use tauri::State;
 
 use crate::db::{models, DbManager};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveChannelRequest {
+    pub id: String,
+    pub name: Option<String>,
+    pub avatar: Option<String>,
+    pub owner_id: Option<String>,
+    pub description: Option<String>,
+    pub updated_at: i64,
+}
 
 #[tauri::command]
 pub async fn get_channels(
@@ -59,6 +72,50 @@ pub async fn get_channel_info(
             })
         })
         .map_err(|_| crate::db::DbError::NotFound)
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn save_channels(
+    db: State<'_, DbManager>,
+    uid: String,
+    channels: Vec<SaveChannelRequest>,
+) -> Result<(), String> {
+    db.with_connection(&uid, |conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO channels
+                     (id, name, avatar, owner_id, description, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            for channel in channels {
+                let id = channel.id.trim();
+                if id.is_empty() {
+                    continue;
+                }
+
+                stmt.execute(params![
+                    id,
+                    channel.name,
+                    channel.avatar,
+                    channel.owner_id,
+                    channel.description,
+                    channel.updated_at,
+                ])
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))
     })
     .map_err(|e| e.to_string())
 }
