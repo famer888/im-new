@@ -9,7 +9,32 @@ on:
       - 'v*'
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+
+    steps:
+      - name: Determine tag and release name
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${{ github.ref_name }}"
+            RELEASE_NAME="Release ${{ github.ref_name }}"
+            IS_PRERELEASE="false"
+          else
+            TAG_NAME="dev-run-${{ github.run_number }}"
+            RELEASE_NAME="Dev Build #${{ github.run_number }} - $(date +'%Y-%m-%d %H:%M:%S')"
+            IS_PRERELEASE="true"
+          fi
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
   create-release:
+    needs: setup
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,10 +51,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          tag_name: ${{ needs.setup.outputs.tag_name }}
+          release_name: ${{ needs.setup.outputs.release_name }}
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.setup.outputs.is_prerelease }}
 
   build-windows:
     needs: create-release
