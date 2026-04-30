@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getChannelList, type ChannelListItem } from '@/api/imChannel'
+import { getChannelDetail, getChannelList, type ChannelListItem } from '@/api/imChannel'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -45,7 +45,7 @@ export const useChannelStore = defineStore('channel', () => {
       avatar: item.avatar ?? item.icon ?? null,
       icon: item.icon ?? item.avatar ?? null,
       logoColor: item.logoColor ?? null,
-      memberCount: Number(item.memberCount ?? item.member_count ?? 0),
+      memberCount: Number(item.memberCount ?? item.member_count ?? -1),
       status,
       isDisable: Boolean(item.isDisable ?? item.is_disable ?? status === 3),
       adminPrivacy: Number(item.adminPrivacy ?? 0),
@@ -226,10 +226,42 @@ export const useChannelStore = defineStore('channel', () => {
     return channels.value.find((c) => c.id === id)
   }
 
+  async function refreshChannelDetail(channelId: string | number): Promise<Channel | null> {
+    const id = String(channelId || '').trim()
+    if (!id) return null
+
+    try {
+      const resp = await getChannelDetail({ channelId: id })
+      const code = Number(resp?.code ?? 200)
+      if (code !== 200 && code !== 0) {
+        throw new Error(resp?.msg || 'channel detail request failed')
+      }
+      if (!resp.data) return getChannel(id) || null
+
+      const next = normalizeChannel({
+        ...getChannel(id),
+        ...resp.data,
+        id,
+        channelId: resp.data.channelId ?? resp.data.id ?? id,
+      })
+      const index = channels.value.findIndex((item) => item.id === id)
+      if (index >= 0) {
+        channels.value[index] = next
+      } else {
+        channels.value.unshift(next)
+      }
+      return next
+    } catch (e) {
+      console.error('[ChannelStore] refreshChannelDetail failed:', e)
+      return getChannel(id) || null
+    }
+  }
+
   return {
     channels,
     loading,
     loadChannels,
     getChannel,
+    refreshChannelDetail,
   }
 })

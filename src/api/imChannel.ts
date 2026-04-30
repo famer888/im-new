@@ -116,12 +116,17 @@ export interface ChannelListItem {
   channelId: number | string
   channelName?: string
   icon?: string
+  alias?: string
   logoColor?: string
   memberCount?: number
   status?: number
   isDisable?: boolean
   adminPrivacy?: number
   isDisturb?: boolean | number
+  channelDesc?: string
+  remark?: string
+  linkType?: number
+  memberType?: number
   updateTime?: number
   createTime?: number
 }
@@ -158,6 +163,15 @@ export interface ChannelUsersResp {
       icon?: string
       type?: number
       role?: number
+      memberType?: number
+      userInfoDTO?: {
+        uid?: number | string
+        id?: number | string
+        nickName?: string
+        nickname?: string
+        name?: string
+        icon?: string
+      }
     }>
     total?: number
   }
