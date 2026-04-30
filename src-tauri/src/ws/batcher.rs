@@ -44,8 +44,27 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
         12 => match imweb::SetImageObj::decode(plain) {
-            Ok(obj) => set_image_obj_to_legacy_content(obj),
-            Err(_) => String::from_utf8_lossy(plain).to_string(),
+            Ok(obj) => {
+                let content = set_image_obj_to_legacy_content(obj);
+                warn!(
+                    target: "dice",
+                    "[dice] decode_content_obj SetImageObj plain_len={} content='{}'",
+                    plain.len(),
+                    content
+                );
+                content
+            }
+            Err(err) => {
+                let fallback = String::from_utf8_lossy(plain).to_string();
+                warn!(
+                    target: "dice",
+                    "[dice] decode_content_obj SetImageObj failed plain_len={} err={} fallback='{}'",
+                    plain.len(),
+                    err,
+                    fallback
+                );
+                fallback
+            }
         },
         _ => match imweb::TextObj::decode(plain) {
             Ok(obj) => obj.content,
@@ -101,6 +120,25 @@ fn set_image_obj_to_legacy_content(obj: imweb::SetImageObj) -> String {
         }
     }
     obj.current_image.to_string()
+}
+
+fn dice_result_from_content(content: &str) -> Option<i32> {
+    let value = content
+        .trim()
+        .split("||")
+        .next()
+        .and_then(|value| value.trim().parse::<i32>().ok())?;
+    if (1..=6).contains(&value) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn has_dice_result_message(messages: &[DecodedMessage]) -> bool {
+    messages
+        .iter()
+        .any(|msg| msg.msg_type == 12 && dice_result_from_content(&msg.content).is_some())
 }
 
 fn decrypt_group_attachment_key(
@@ -336,8 +374,10 @@ impl MessageBatcher {
             cmds::GROUP_MSG_RECEIVED => {
                 match self.decode_group_msg_received(&decoded_payload) {
                     Ok(mut msgs) => {
+                        let flush_now = has_dice_result_message(&msgs);
                         self.buffer.append(&mut msgs);
-                        if self.buffer.len() >= MAX_BATCH_SIZE
+                        if flush_now
+                            || self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
                         {
                             self.flush().await;
@@ -352,8 +392,10 @@ impl MessageBatcher {
             cmds::PRIVATE_MSG_RECEIVED => {
                 match self.decode_private_msg_received(&decoded_payload) {
                     Ok(mut msgs) => {
+                        let flush_now = has_dice_result_message(&msgs);
                         self.buffer.append(&mut msgs);
-                        if self.buffer.len() >= MAX_BATCH_SIZE
+                        if flush_now
+                            || self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
                         {
                             self.flush().await;
@@ -1002,6 +1044,14 @@ impl MessageBatcher {
             sent_over_time: resp.sent_over_time,
             conversation_id: format!("1_{}", resp.group_id),
         };
+        warn!(
+            target: "dice",
+            "[dice] GROUP_MSG_SENT receipt flag={} msg_id={} group_id={} sent_over_time={}",
+            evt.flag,
+            evt.msg_id,
+            evt.group_id,
+            evt.sent_over_time
+        );
         info!(
             "GROUP_MSG_SENT flag={} msg_id={} group_id={}",
             evt.flag, evt.msg_id, evt.group_id

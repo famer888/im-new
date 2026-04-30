@@ -168,6 +168,83 @@ function stringifyExtra(rawExtra: unknown): string | null {
   return null
 }
 
+const DICE_REPLAY_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+let diceReplayLogStarted = false
+
+function diceLog(message: string, data?: Record<string, unknown>) {
+  const payload = { debugRunId: DICE_REPLAY_DEBUG_RUN_ID, ...(data || {}) }
+  if (!diceReplayLogStarted) {
+    diceReplayLogStarted = true
+    console.clear()
+    console.warn('[dice-replay] RESET copy logs after this line', { debugRunId: DICE_REPLAY_DEBUG_RUN_ID })
+    if (isTauri()) {
+      tauriInvoke('image_send_log', {
+        payload: {
+          level: 'warn',
+          message: '[dice-replay] RESET copy logs after this line',
+          data: { debugRunId: DICE_REPLAY_DEBUG_RUN_ID },
+        },
+      }).catch(() => {})
+    }
+  }
+  console.warn(`[dice] ${message}`, payload)
+  if (!isTauri()) return
+  tauriInvoke('image_send_log', {
+    payload: {
+      level: 'warn',
+      message: `[dice] ${message}`,
+      data: payload,
+    },
+  }).catch(() => {})
+}
+
+function diceReplaySummary(messages: Message[]) {
+  return messages
+    .filter((message) => message.msgType === 12)
+    .map((message) => ({
+      id: message.id,
+      customMsgId: message.customMsgId,
+      key: message.customMsgId || message.id,
+      content: message.content ?? '',
+      result: getDiceResultFromContent(message.content),
+      status: message.status,
+      readStatus: message.readStatus,
+      sendTime: message.sendTime,
+    }))
+}
+
+function getDiceResultFromContent(content: string | null | undefined): number {
+  const raw = String(content ?? '').trim()
+  if (!raw) return 0
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const directValue = Number(parsed)
+    if (Number.isFinite(directValue) && directValue >= 1 && directValue <= 6) {
+      return directValue
+    }
+    if (parsed && typeof parsed === 'object') {
+      const parsedObj = parsed as Record<string, unknown>
+      for (const key of ['currentImage', 'current_image', 'result', 'value']) {
+        const value = Number(parsedObj[key])
+        if (Number.isFinite(value) && value >= 1 && value <= 6) return value
+      }
+    }
+    return 0
+  } catch {
+    const value = Number(raw.split('||')[0] || 0)
+    return Number.isFinite(value) && value >= 1 && value <= 6 ? value : 0
+  }
+}
+
+function getDiceFallbackResult(seed: number | string): string {
+  let hash = 0
+  const raw = String(seed)
+  for (const char of raw) {
+    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0
+  }
+  return String((hash % 6) + 1)
+}
+
 function sanitizeSendExtra(extra?: Record<string, unknown>) {
   const cleaned: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(extra ?? {})) {
@@ -357,6 +434,13 @@ export const useMessageStore = defineStore('message', () => {
     if (!isTauri()) return
     if (isLoading(conversationId)) return
 
+    const existingBeforeLoad = getMessages(conversationId)
+    diceLog('loadMessages start', {
+      uid,
+      conversationId,
+      existingCount: existingBeforeLoad.length,
+      existingDice: diceReplaySummary(existingBeforeLoad),
+    })
     loadingMap.value.set(conversationId, true)
     try {
       const result = await tauriInvoke<any[]>('get_messages', {
@@ -367,6 +451,14 @@ export const useMessageStore = defineStore('message', () => {
       const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
       const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
       messageMap.value.set(conversationId, filteredResult.messages)
+      diceLog('loadMessages done', {
+        uid,
+        conversationId,
+        rawCount: Array.isArray(result) ? result.length : 0,
+        normalizedDice: diceReplaySummary(normalized),
+        storedCount: filteredResult.messages.length,
+        storedDice: diceReplaySummary(filteredResult.messages),
+      })
       hasMoreMap.value.set(
         conversationId,
         !filteredResult.hitLogoutClearBoundary && normalized.length >= PAGE_SIZE,
@@ -381,6 +473,12 @@ export const useMessageStore = defineStore('message', () => {
     if (isLoading(conversationId) || !hasMore(conversationId)) return
 
     const existing = getMessages(conversationId)
+    diceLog('loadOlderMessages start', {
+      uid,
+      conversationId,
+      existingCount: existing.length,
+      existingDice: diceReplaySummary(existing),
+    })
     const beforeTime = existing.length > 0 ? existing[0].sendTime : undefined
 
     loadingMap.value.set(conversationId, true)
@@ -399,6 +497,21 @@ export const useMessageStore = defineStore('message', () => {
           merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
         }
         messageMap.value.set(conversationId, merged)
+        diceLog('loadOlderMessages merged', {
+          uid,
+          conversationId,
+          rawCount: Array.isArray(result) ? result.length : 0,
+          olderDice: diceReplaySummary(filteredResult.messages),
+          mergedCount: merged.length,
+          mergedDice: diceReplaySummary(merged),
+        })
+      } else {
+        diceLog('loadOlderMessages empty', {
+          uid,
+          conversationId,
+          rawCount: Array.isArray(result) ? result.length : 0,
+          normalizedDice: diceReplaySummary(normalized),
+        })
       }
       hasMoreMap.value.set(
         conversationId,
@@ -475,6 +588,18 @@ export const useMessageStore = defineStore('message', () => {
     }
     appendMessage(conversationId, optimistic)
     syncConversationSummary(conversationId, optimistic)
+    if (msgType === 12) {
+      diceLog('sendMessage optimistic appended', {
+        uid,
+        conversationId,
+        convType,
+        targetId,
+        optimisticId,
+        content,
+        extraJson,
+        sendTime: clientFlag,
+      })
+    }
 
     const sendStartedAt = performance.now()
     const logSendStep = (
@@ -578,6 +703,16 @@ export const useMessageStore = defineStore('message', () => {
         resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
         resultStatus: Number(result?.status ?? 0),
       })
+      if (msgType === 12) {
+        diceLog('sendMessage Rust result raw', {
+          optimisticId,
+          resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
+          resultCustomMsgId: String(result?.customMsgId || result?.custom_msg_id || ''),
+          resultContent: String(result?.content ?? ''),
+          resultStatus: Number(result?.status ?? 0),
+          resultReadStatus: Number(result?.readStatus ?? result?.read_status ?? 0),
+        })
+      }
       const normalized = normalizeMessage(result)
       if (quoteMsg && !normalized.quoteMessage) {
         normalized.quoteMessage = quoteMsg
@@ -607,6 +742,16 @@ export const useMessageStore = defineStore('message', () => {
             },
           })
           const normalized = normalizeMessage(retry)
+          if (msgType === 12) {
+            diceLog('sendMessage retry Rust result raw', {
+              optimisticId,
+              resultId: String(retry?.id || retry?.customMsgId || retry?.custom_msg_id || ''),
+              resultCustomMsgId: String(retry?.customMsgId || retry?.custom_msg_id || ''),
+              resultContent: String(retry?.content ?? ''),
+              resultStatus: Number(retry?.status ?? 0),
+              resultReadStatus: Number(retry?.readStatus ?? retry?.read_status ?? 0),
+            })
+          }
           if (quoteMsg && !normalized.quoteMessage) {
             normalized.quoteMessage = quoteMsg
           }
@@ -662,11 +807,36 @@ export const useMessageStore = defineStore('message', () => {
     const existIndex = list.findIndex(
       (m) => m.id === message.id || (m.customMsgId && m.customMsgId === message.customMsgId),
     )
+    if (message.msgType === 12) {
+      const previous = existIndex >= 0 ? list[existIndex] : null
+      diceLog('appendMessage', {
+        conversationId,
+        incomingId: message.id,
+        incomingCustomMsgId: message.customMsgId,
+        incomingContent: message.content ?? '',
+        incomingStatus: message.status,
+        incomingReadStatus: message.readStatus,
+        existIndex,
+        previousId: previous?.id ?? '',
+        previousCustomMsgId: previous?.customMsgId ?? '',
+        previousContent: previous?.content ?? '',
+        previousStatus: previous?.status ?? null,
+      })
+    }
     if (existIndex >= 0) {
       const previous = list[existIndex]
+      const incomingDiceResult = getDiceResultFromContent(message.content)
+      const previousDiceResult = getDiceResultFromContent(previous.content)
       list[existIndex] = {
         ...previous,
         ...message,
+        content: (
+          (previous.msgType === 12 || message.msgType === 12)
+          && incomingDiceResult <= 0
+          && previousDiceResult > 0
+        )
+          ? previous.content
+          : message.content,
         extra: message.extra ?? previous.extra,
         quoteMessage: message.quoteMessage ?? previous.quoteMessage,
         snapchatTime: message.snapchatTime ?? previous.snapchatTime,
@@ -686,6 +856,21 @@ export const useMessageStore = defineStore('message', () => {
     for (const raw of messages as any[]) {
       const msg = normalizeMessage(raw)
       const convId = String(msg.conversationId || '')
+      if (msg.msgType === 12) {
+        diceLog('batchAppendMessages normalized', {
+          rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),
+          rawCustomMsgId: String((raw as any)?.customMsgId ?? (raw as any)?.custom_msg_id ?? ''),
+          rawContent: String((raw as any)?.content ?? ''),
+          normalizedId: msg.id,
+          normalizedCustomMsgId: msg.customMsgId,
+          normalizedContent: msg.content ?? '',
+          conversationId: convId,
+          senderId: msg.senderId,
+          status: msg.status,
+          readStatus: msg.readStatus,
+          extra: msg.extra ?? null,
+        })
+      }
       if (!convId || !convId.includes('_')) {
         console.warn('[msg] drop batch item: invalid conversationId', {
           conversationId: (raw as any)?.conversationId ?? (raw as any)?.conversation_id,
@@ -851,25 +1036,84 @@ export const useMessageStore = defineStore('message', () => {
     const customMsgId = String(params.flag)
     const serverId = String(params.serverMsgId)
     const list = messageMap.value.get(params.conversationId)
-    if (!list) return
+    if (!list) {
+      diceLog('applySendReceipt no list', {
+        conversationId: params.conversationId,
+        customMsgId,
+        serverId,
+        sentOverTime: Number(params.sentOverTime || 0),
+      })
+      return
+    }
     const idx = list.findIndex(
       (m) => m.customMsgId === customMsgId || m.id === customMsgId,
     )
-    if (idx < 0) return
+    if (idx < 0) {
+      diceLog('applySendReceipt no optimistic message', {
+        conversationId: params.conversationId,
+        customMsgId,
+        serverId,
+        listSize: list.length,
+        ids: list.slice(-8).map((m) => ({
+          id: m.id,
+          customMsgId: m.customMsgId,
+          msgType: m.msgType,
+          content: m.content ?? '',
+        })),
+      })
+      return
+    }
     const next = [...list]
     const duplicateIdx = next.findIndex((m, i) => i !== idx && m.id === serverId)
     const duplicate = duplicateIdx >= 0 ? next[duplicateIdx] : null
     const duplicateContent = duplicate?.content ?? null
+    const current = next[idx]
+    const duplicateDiceResult = getDiceResultFromContent(duplicateContent)
+    const currentDiceResult = getDiceResultFromContent(current.content)
+    const fallbackDiceResult = getDiceFallbackResult(serverId)
+    const nextContent = current.msgType === 12
+      ? (
+          duplicateDiceResult > 0
+            ? duplicateContent
+            : currentDiceResult > 0
+              ? current.content
+              : fallbackDiceResult
+        )
+      : (duplicateContent && duplicateContent.length > 0 ? duplicateContent : current.content)
+    if (current.msgType === 12 || duplicate?.msgType === 12) {
+      diceLog('applySendReceipt merge start', {
+        conversationId: params.conversationId,
+        customMsgId,
+        serverId,
+        idx,
+        duplicateIdx,
+        sentOverTime: Number(params.sentOverTime || 0),
+        currentId: current.id,
+        currentCustomMsgId: current.customMsgId,
+        currentContent: current.content ?? '',
+        currentStatus: current.status,
+        currentReadStatus: current.readStatus,
+        duplicateId: duplicate?.id ?? '',
+        duplicateCustomMsgId: duplicate?.customMsgId ?? '',
+        duplicateContent: duplicate?.content ?? '',
+        duplicateStatus: duplicate?.status ?? null,
+        duplicateReadStatus: duplicate?.readStatus ?? null,
+        duplicateDiceResult,
+        currentDiceResult,
+        fallbackDiceResult,
+        nextContent,
+      })
+    }
     const msg = {
-      ...next[idx],
-      extra: duplicate?.extra ?? next[idx].extra,
-      quoteMessage: duplicate?.quoteMessage ?? next[idx].quoteMessage,
-      snapchatTime: duplicate?.snapchatTime ?? next[idx].snapchatTime,
-      deleteSeconds: duplicate?.deleteSeconds ?? next[idx].deleteSeconds,
-      content: duplicateContent && duplicateContent.length > 0 ? duplicateContent : next[idx].content,
+      ...current,
+      extra: duplicate?.extra ?? current.extra,
+      quoteMessage: duplicate?.quoteMessage ?? current.quoteMessage,
+      snapchatTime: duplicate?.snapchatTime ?? current.snapchatTime,
+      deleteSeconds: duplicate?.deleteSeconds ?? current.deleteSeconds,
+      content: nextContent,
       id: serverId,
       status: 1,
-      readStatus: Math.max(Number(next[idx].readStatus || 0), Number(duplicate?.readStatus || 0), 1),
+      readStatus: Math.max(Number(current.readStatus || 0), Number(duplicate?.readStatus || 0), 1),
     }
     if (params.sentOverTime && params.sentOverTime > 0) {
       msg.sendTime = params.sentOverTime
@@ -882,6 +1126,19 @@ export const useMessageStore = defineStore('message', () => {
     const nextIdx = duplicateIdx >= 0 && duplicateIdx < idx ? idx - 1 : idx
     next[nextIdx] = msg
     messageMap.value.set(params.conversationId, next)
+    if (msg.msgType === 12) {
+      diceLog('applySendReceipt merge done', {
+        conversationId: params.conversationId,
+        customMsgId,
+        serverId,
+        nextIdx,
+        finalId: msg.id,
+        finalContent: msg.content ?? '',
+        finalStatus: msg.status,
+        finalReadStatus: msg.readStatus,
+        finalSendTime: msg.sendTime,
+      })
+    }
 
     const chatStore = useChatStore()
     const conv = chatStore.conversations.find((c) => c.id === params.conversationId)
