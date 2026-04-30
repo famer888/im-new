@@ -180,6 +180,21 @@ async fn connect_and_run(
                 }
             }
             Some(data) = rx.recv() => {
+                if data.len() >= 16 {
+                    let cmd = u16::from_be_bytes([data[2], data[3]]);
+                    if matches!(cmd, commands::SEND_CHANNEL_MSG | commands::RECALL_CHANNEL_MSG | commands::READ_CHANNEL_MSG) {
+                        let msg_id = i64::from_be_bytes([
+                            data[8], data[9], data[10], data[11],
+                            data[12], data[13], data[14], data[15],
+                        ]);
+                        info!(
+                            "[channel] WS frame sending cmd={} msg_id={} bytes={}",
+                            cmd,
+                            msg_id,
+                            data.len()
+                        );
+                    }
+                }
                 if let Err(e) = ws_sink.send(Message::Binary(data.into())).await {
                     error!("WebSocket send error: {}", e);
                     unexpected_disconnect = Some(e.to_string());

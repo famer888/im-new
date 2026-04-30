@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import { FILE_HELPER_TARGET_ID, useChatStore } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
-import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 
 function isTauri(): boolean {
@@ -563,6 +563,16 @@ export const useMessageStore = defineStore('message', () => {
     const [typeRaw, targetId = ''] = conversationId.split('_')
     const convType = Number(typeRaw || 0)
     const isFileHelperSend = convType === 0 && targetId === FILE_HELPER_TARGET_ID
+    if (convType === 2) {
+      console.clear()
+      console.info('[channel] ===== 清空旧日志，开始频道发送调试 =====', {
+        uid,
+        conversationId,
+        targetId,
+        msgType,
+        contentLen: (content || '').length,
+      })
+    }
 
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
     // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
@@ -675,10 +685,26 @@ export const useMessageStore = defineStore('message', () => {
         updateMessageStatus(optimisticId, -1)
         throw e
       }
+    } else if (convType === 2 && targetId) {
+      try {
+        const stepStartedAt = performance.now()
+        await ensureChannelRelKey(uid, targetId)
+        logSendStep('ensureChannelRelKey OK', {
+          targetId,
+          stepMs: Math.round(performance.now() - stepStartedAt),
+        })
+      } catch (e) {
+        logSendStep('ensureChannelRelKey failed', {
+          targetId,
+          message: (e as Error)?.message || String(e),
+        }, 'error')
+        updateMessageStatus(optimisticId, -1)
+        throw e
+      }
     }
 
     try {
-      if ([0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0)) {
+      if ([0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
         const stepStartedAt = performance.now()
         await ensureWsConnected()
         logSendStep('ensureWsConnected OK', {
@@ -687,6 +713,14 @@ export const useMessageStore = defineStore('message', () => {
       }
       const rustStartedAt = performance.now()
       logSendStep('invoking Rust send_message')
+      if (convType === 2) {
+        console.info('[channel] invoke send_message -> Rust', {
+          conversationId,
+          targetId,
+          msgType,
+          optimisticId,
+        })
+      }
       const result = await tauriInvoke<any>('send_message', {
         uid,
         request: {
@@ -703,6 +737,13 @@ export const useMessageStore = defineStore('message', () => {
         resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
         resultStatus: Number(result?.status ?? 0),
       })
+      if (convType === 2) {
+        console.info('[channel] Rust send_message returned', {
+          optimisticId,
+          resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
+          resultStatus: Number(result?.status ?? 0),
+        })
+      }
       if (msgType === 12) {
         diceLog('sendMessage Rust result raw', {
           optimisticId,
@@ -725,7 +766,7 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
-      const canRetryWs = [0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0) && /Not connected/i.test(errText)
+      const canRetryWs = [0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')

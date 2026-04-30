@@ -12,6 +12,7 @@ import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
 import { router } from '@/router'
 import {
+  ensureChannelRelKey,
   ensureFriendRelKey,
   ensureFriendRelKeyForVersion,
   ensureGroupRelKey,
@@ -163,6 +164,9 @@ export async function setupTauriListeners() {
       const groupIds = chatStore.conversations
         .filter((c) => c.type === 1 && /^\d+$/.test(String(c.targetId || '')))
         .map((c) => String(c.targetId))
+      const channelIds = chatStore.conversations
+        .filter((c) => c.type === 2 && /^\d+$/.test(String(c.targetId || '')))
+        .map((c) => String(c.targetId))
       const friendIds = chatStore.conversations
         .filter((c) => c.type === 0 && /^\d+$/.test(String(c.targetId || '')))
         .map((c) => String(c.targetId))
@@ -170,13 +174,21 @@ export async function setupTauriListeners() {
         .map((c) => String(c.id || ''))
         .filter((id) => /^\d+$/.test(id))
       const allFriendIds = Array.from(new Set([...friendIds, ...contactFriendIds]))
-      if (groupIds.length === 0 && allFriendIds.length === 0) return
+      if (groupIds.length === 0 && channelIds.length === 0 && allFriendIds.length === 0) return
       groupKeyWarmupPending = (async () => {
         for (const gid of groupIds) {
           try {
             await ensureGroupRelKey(uid, gid)
           } catch (err) {
             console.warn('[e2ee] warmup group relKey failed', { gid, err: String(err) })
+          }
+        }
+        for (const cid of channelIds) {
+          try {
+            await ensureChannelRelKey(uid, cid)
+            console.info('[channel] warmup channel relKey OK', { cid })
+          } catch (err) {
+            console.warn('[channel] warmup channel relKey failed', { cid, err: String(err) })
           }
         }
         for (const fid of allFriendIds) {
@@ -309,6 +321,18 @@ export async function setupTauriListeners() {
       })
     }
     if (filtered.length === 0) return
+    if (filtered.some((m: any) => String(m?.conversationId ?? m?.conversation_id ?? '').startsWith('2_'))) {
+      console.info('[channel] msg:batch received channel messages', filtered
+        .filter((m: any) => String(m?.conversationId ?? m?.conversation_id ?? '').startsWith('2_'))
+        .map((m: any) => ({
+          id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
+          conversationId: String(m?.conversationId ?? m?.conversation_id ?? ''),
+          senderId: String(m?.senderId ?? m?.sender_id ?? ''),
+          msgType: Number(m?.msgType ?? m?.msg_type ?? 0),
+          decryptPending: Boolean(m?.extra?.decryptPending),
+          content: String(m?.content ?? '').slice(0, 80),
+        })))
+    }
 
     // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
     // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
@@ -352,6 +376,26 @@ export async function setupTauriListeners() {
           await ensureGroupRelKey(uid, gid)
         } catch (err) {
           console.warn('[e2ee] ensureGroupRelKey on msg:batch failed', { gid, err: String(err) })
+        }
+      }
+
+      const pendingChannelIds = Array.from(
+        new Set(
+          filtered
+            .filter((m: any) => Boolean(m?.extra?.decryptPending))
+            .map((m: any) => {
+              const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+              return String(m?.extra?.channelId || convId.split('_')[1] || '')
+            })
+            .filter((cid) => !!cid),
+        ),
+      )
+      for (const cid of pendingChannelIds) {
+        try {
+          await ensureChannelRelKey(uid, cid)
+          console.info('[channel] ensureChannelRelKey on msg:batch OK', { cid })
+        } catch (err) {
+          console.warn('[channel] ensureChannelRelKey on msg:batch failed', { cid, err: String(err) })
         }
       }
     }
@@ -510,6 +554,29 @@ export async function setupTauriListeners() {
                 })
                 // 保留占位文案 + decryptPending=true，下一轮 batch/重启后仍可再试。
               }
+            } else if (convId.startsWith('2_')) {
+              const channelId = String(extra?.channelId || convId.split('_')[1] || '')
+              if (!channelId) continue
+              try {
+                const plain = await invoke<string>('decrypt_channel_incoming', {
+                  channelId,
+                  ciphertextHex: cipherHex,
+                  msgType,
+                })
+                m.content = plain
+                if (m.extra && typeof m.extra === 'object') {
+                  m.extra.decryptPending = false
+                }
+                console.info('[channel] retry decrypt_channel OK', { msgId, channelId, msgType })
+              } catch (err) {
+                console.warn('[channel] retry decrypt_channel FAILED', {
+                  msgId,
+                  channelId,
+                  msgType,
+                  cipherLen: cipherHex.length,
+                  err: String(err),
+                })
+              }
             }
           }
         } catch {
@@ -582,6 +649,14 @@ export async function setupTauriListeners() {
     const payload = event.payload || ({} as any)
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
+    if (String(payload.conversationId || '').startsWith('2_')) {
+      console.info('[channel] msg:sent receipt received', {
+        conversationId: payload.conversationId,
+        flag: payload.flag,
+        msgId: payload.msgId,
+        sentOverTime: payload.sentOverTime,
+      })
+    }
 
     messageStore.applySendReceipt({
       conversationId: payload.conversationId,

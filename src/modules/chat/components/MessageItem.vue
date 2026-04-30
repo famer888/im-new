@@ -6,7 +6,7 @@ import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
-import { MessageType } from '@/types'
+import { ConversationType, MessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
@@ -41,7 +41,6 @@ const uiStore = useUIStore()
 const searchStore = useSearchStore()
 const itemRef = ref<HTMLElement | null>(null)
 const isSelf = computed(() => props.message.senderId === authStore.uid)
-const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
 const isSelected = computed(() => uiStore.selectedMessageIds.has(props.message.id))
 /** 与 im `getCurrentMsgClass` 里 `active`（搜索定位高亮）一致 */
 const isSearchHighlighted = computed(
@@ -127,9 +126,14 @@ function getQuoteContentDigest(msgType: number, content: string | null): string 
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
 )
+const isChannelChat = computed(
+  () => chatStore.currentConversation?.type === ConversationType.Channel,
+)
 const isGroupChat = computed(
   () => chatStore.currentConversation?.type === 1,
 )
+/** 旧 im 频道消息统一按左侧白色气泡展示，即使是自己发送的消息也不右对齐。 */
+const displayAsSelf = computed(() => (isSelf.value || isFileHelperChat.value) && !isChannelChat.value)
 const showAvatar = computed(
   // 对齐 im：仅群聊的他人消息显示头像；单聊/传输助手不显示头像
   () => isGroupChat.value && !displayAsSelf.value,
