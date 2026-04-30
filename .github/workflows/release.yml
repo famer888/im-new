@@ -81,9 +81,6 @@ jobs:
       - name: Install protobuf compiler (Windows)
         run: choco install protoc
 
-      - name: Install WixToolset (Windows)
-        run: choco install wixtoolset -y
-
       - name: Install dependencies
         run: pnpm install
 
@@ -94,6 +91,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles nsis
 
       - name: Find and upload Windows installer
         shell: bash
@@ -148,6 +147,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles dmg
 
       - name: Find and upload DMG
         shell: bash

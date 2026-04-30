@@ -16,7 +16,7 @@
     "tauri:build": "tauri build",
     "tauri:build:mac": "TAURI_TARGET=universal-apple-darwin bash ./scripts/build-release-dist-macos.sh",
     "tauri:build:mac:uat": "tauri build --target universal-apple-darwin -- --mode uat",
-    "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc",
+    "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc --bundles nsis",
     "tauri:build:win:uat": "tauri build --target x86_64-pc-windows-msvc -- --mode uat",
     "release:mac": "bash ./release-mac.sh",
     "release:dist:mac": "env -u TAURI_TARGET bash ./scripts/build-release-dist-macos.sh",
