@@ -81,6 +81,9 @@ jobs:
       - name: Install protobuf compiler (Windows)
         run: choco install protoc
 
+      - name: Install WixToolset (Windows)
+        run: choco install wixtoolset -y
+
       - name: Install dependencies
         run: pnpm install
 
@@ -92,15 +95,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload installer
-        uses: actions/upload-release-asset@v1
+      - name: Find and upload Windows installer
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/release/bundle/nsis/OCS Chat_1.6.8_x64_en-US.exe
-          asset_name: OCS-Chat-Windows-x64.exe
-          asset_content_type: application/octet-stream
+        run: |
+          EXE_PATH=$(find ./src-tauri/target/release/bundle/nsis -name "*.exe" 2>/dev/null | head -1)
+          if [ -z "$EXE_PATH" ]; then
+            echo "Error: EXE file not found"
+            ls -la ./src-tauri/target/release/bundle/nsis/ || echo "nsis directory not found"
+            exit 1
+          fi
+          echo "Found EXE: $EXE_PATH"
+          TAG_NAME="${{ github.ref_name }}"
+          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            TAG_NAME="dev-run-${{ github.run_number }}"
+          fi
+          gh release upload "$TAG_NAME" "$EXE_PATH" --clobber
 
   build-macos:
     needs: create-release
@@ -138,12 +149,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload DMG
-        uses: actions/upload-release-asset@v1
+      - name: Find and upload DMG
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./src-tauri/target/release/bundle/dmg/OCS Chat_1.6.8_x64.dmg
-          asset_name: OCS-Chat-macOS-x64.dmg
-          asset_content_type: application/octet-stream
+        run: |
+          DMG_PATH=$(find ./src-tauri/target/release/bundle/dmg -name "*.dmg" 2>/dev/null | head -1)
+          if [ -z "$DMG_PATH" ]; then
+            echo "Error: DMG file not found"
+            ls -la ./src-tauri/target/release/bundle/dmg/ || echo "dmg directory not found"
+            exit 1
+          fi
+          echo "Found DMG: $DMG_PATH"
+          TAG_NAME="${{ github.ref_name }}"
+          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            TAG_NAME="dev-run-${{ github.run_number }}"
+          fi
+          gh release upload "$TAG_NAME" "$DMG_PATH" --clobber
