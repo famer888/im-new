@@ -261,18 +261,13 @@ pub fn encode_set_image_obj(content: &str) -> Vec<u8> {
             let set_image_id = json_i64(&value, &["setImageId", "set_image_id"])
                 .filter(|v| *v > 0)
                 .unwrap_or(1);
-            let current_image = json_i32(
-                &value,
-                &["currentImage", "current_image", "result", "value"],
-            )
-            .unwrap_or(0);
+            let current_image = json_i32(&value, &["currentImage", "current_image"]).unwrap_or(0);
             let image_size = json_i32(&value, &["imageSize", "image_size"])
                 .filter(|v| *v > 0)
                 .unwrap_or(7);
             (set_image_id, current_image, image_size)
         } else {
-            let set_image_id = raw.parse::<i64>().ok().filter(|v| *v > 0).unwrap_or(1);
-            (set_image_id, 0, 7)
+            (1, 0, 7)
         };
 
     let obj = imweb::SetImageObj {
@@ -281,6 +276,14 @@ pub fn encode_set_image_obj(content: &str) -> Vec<u8> {
         current_image,
         r#ref: None,
     };
+    tracing::warn!(
+        target: "dice",
+        "[dice] encode_set_image_obj raw='{}' set_image_id={} current_image={} image_size={}",
+        raw,
+        set_image_id,
+        current_image,
+        image_size
+    );
     obj.encode_to_vec()
 }
 

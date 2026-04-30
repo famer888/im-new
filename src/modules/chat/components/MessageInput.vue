@@ -758,8 +758,16 @@ function handleEmojiSelect(emoji: string) {
 
 function handleDiceSelect() {
   if (showShutupTip.value) return
+  const localDiceResult = 1 + Math.floor(Math.random() * 6)
+  const diceContent = String(localDiceResult)
+  terminalLog('[dice] picker select', {
+    conversationId: chatStore.currentConversationId,
+    conversationType: chatStore.currentConversation?.type,
+    targetId: chatStore.currentConversation?.targetId,
+    localDiceResult,
+  }, 'warn')
   showEmoji.value = false
-  emit('send', '', MessageType.SetImage, withReadBurnExtra())
+  emit('send', diceContent, MessageType.SetImage, withReadBurnExtra())
 }
 
 function handleAtSelect(member: { uid: string; name: string }) {

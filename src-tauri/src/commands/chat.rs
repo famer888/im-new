@@ -149,6 +149,55 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
     }
 }
 
+fn dice_result_from_content(content: Option<&str>) -> Option<i32> {
+    let raw = content?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(value) = value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        {
+            if (1..=6).contains(&value) {
+                return Some(value as i32);
+            }
+        }
+
+        for key in ["currentImage", "current_image", "result", "value"] {
+            let Some(value) = value.get(key).and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+            }) else {
+                continue;
+            };
+            if (1..=6).contains(&value) {
+                return Some(value as i32);
+            }
+        }
+        return None;
+    }
+
+    let value = raw
+        .split("||")
+        .next()
+        .and_then(|value| value.trim().parse::<i64>().ok())?;
+    if (1..=6).contains(&value) {
+        Some(value as i32)
+    } else {
+        None
+    }
+}
+
+fn dice_fallback_result(seed: &str) -> String {
+    let mut hash = 0u32;
+    for ch in seed.chars() {
+        hash = hash.wrapping_mul(31).wrapping_add(ch as u32);
+    }
+    ((hash % 6) + 1).to_string()
+}
+
 fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
     if obj.icon.is_empty() {
         format!("{}*|*|*{}", obj.nick_name, obj.uid)
@@ -946,17 +995,27 @@ pub async fn mark_message_sent(
 ) -> Result<(), String> {
     let server_id = request.server_msg_id.to_string();
     let sent_time = request.sent_over_time.unwrap_or(0);
+    warn!(
+        target: "dice",
+        "[dice] mark_message_sent start uid={} conversation_id={} custom_msg_id={} server_msg_id={} sent_time={}",
+        uid,
+        request.conversation_id,
+        request.custom_msg_id,
+        request.server_msg_id,
+        sent_time
+    );
 
     db.with_connection(&uid, |conn| {
-        let local_exists = conn
+        let local_row = conn
             .query_row(
-                "SELECT 1 FROM messages WHERE custom_msg_id = ?1 AND conversation_id = ?2",
+                "SELECT msg_type, content FROM messages WHERE custom_msg_id = ?1 AND conversation_id = ?2",
                 rusqlite::params![request.custom_msg_id, request.conversation_id],
-                |_| Ok(()),
+                |row| Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .optional()
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
-            .is_some();
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        let local_exists = local_row.is_some();
+        let (local_msg_type, local_content) = local_row.unwrap_or((0, None));
 
         let duplicate = if local_exists {
             conn.query_row(
@@ -982,6 +1041,34 @@ pub async fn mark_message_sent(
         let (duplicate_content, duplicate_extra, duplicate_read_status, duplicate_send_time) =
             duplicate.unwrap_or((None, None, 0, 0));
         let duplicate_content = duplicate_content.filter(|content| !content.trim().is_empty());
+        let duplicate_dice_result = dice_result_from_content(duplicate_content.as_deref());
+        let local_dice_result = dice_result_from_content(local_content.as_deref());
+        let merged_content = if local_msg_type == 12 {
+            if duplicate_dice_result.is_some() {
+                duplicate_content.clone()
+            } else if local_dice_result.is_some() {
+                local_content.clone()
+            } else {
+                Some(dice_fallback_result(&server_id))
+            }
+        } else {
+            duplicate_content.clone()
+        };
+        warn!(
+            target: "dice",
+            "[dice] mark_message_sent merge local_exists={} local_msg_type={} local_content={:?} duplicate_content={:?} duplicate_dice_result={:?} local_dice_result={:?} merged_content={:?} duplicate_extra_present={} duplicate_read_status={} duplicate_send_time={} next_server_id={}",
+            local_exists,
+            local_msg_type,
+            local_content.as_deref(),
+            duplicate_content.as_deref(),
+            duplicate_dice_result,
+            local_dice_result,
+            merged_content.as_deref(),
+            duplicate_extra.is_some(),
+            duplicate_read_status,
+            duplicate_send_time,
+            server_id
+        );
         let next_sent_time = if sent_time > 0 {
             sent_time
         } else {
@@ -1000,7 +1087,7 @@ pub async fn mark_message_sent(
         // 两步：① 用服务端 msg_id 替换本地 id（与老 im `updateMsgProperty` 逻辑一致）；
         //     ② 同一行状态置为 1（sent），read_status 置为 1（发送成功）。
         if next_sent_time > 0 {
-            conn.execute(
+            let changed = conn.execute(
                 "UPDATE messages
                  SET id = ?1,
                      status = 1,
@@ -1013,14 +1100,25 @@ pub async fn mark_message_sent(
                     server_id,
                     duplicate_read_status,
                     next_sent_time,
-                    duplicate_content,
-                    duplicate_extra,
+                    merged_content.as_deref(),
+                    duplicate_extra.as_deref(),
                     request.custom_msg_id,
                     request.conversation_id,
                 ],
             )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            warn!(
+                target: "dice",
+                "[dice] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content={:?} merged_content={:?} next_sent_time={}",
+                changed,
+                server_id,
+                request.custom_msg_id,
+                duplicate_content.as_deref(),
+                merged_content.as_deref(),
+                next_sent_time
+            );
         } else {
-            conn.execute(
+            let changed = conn.execute(
                 "UPDATE messages
                  SET id = ?1,
                      status = 1,
@@ -1031,14 +1129,23 @@ pub async fn mark_message_sent(
                 rusqlite::params![
                     server_id,
                     duplicate_read_status,
-                    duplicate_content,
-                    duplicate_extra,
+                    merged_content.as_deref(),
+                    duplicate_extra.as_deref(),
                     request.custom_msg_id,
                     request.conversation_id,
                 ],
             )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            warn!(
+                target: "dice",
+                "[dice] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content={:?} merged_content={:?}",
+                changed,
+                server_id,
+                request.custom_msg_id,
+                duplicate_content.as_deref(),
+                merged_content.as_deref()
+            );
         }
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
         // 同步会话 last_msg_id → 服务端 id，避免"发送成功后点进去重新加载消息"
         // 出现一条重复的本地占位记录。

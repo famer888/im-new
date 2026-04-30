@@ -89,6 +89,10 @@ const rowsForList = computed((): ChatListRow[] => {
   return rows
 })
 
+function messageRenderKey(message: Message): string {
+  return String(message.customMsgId || message.id)
+}
+
 /** 与旧 im `floatDate` / `floatDateVisible`：滚动时顶部固定提示当前所处日期 */
 const floatDate = ref('')
 const floatDateVisible = ref(false)
@@ -498,7 +502,7 @@ function onUnreadBannerClick() {
       <div class="scroll-content" :class="{ 'align-top': alignTop }">
         <template
           v-for="row in rowsForList"
-          :key="row.kind === 'unread' ? row.key : row.entry.message.id"
+          :key="row.kind === 'unread' ? row.key : messageRenderKey(row.entry.message)"
         >
           <div
             v-if="row.kind === 'unread'"
