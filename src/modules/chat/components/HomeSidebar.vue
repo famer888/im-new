@@ -12,6 +12,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import SearchInput from '@/components/SearchInput.vue'
+import TextAvatar from '@/components/TextAvatar.vue'
 import ConversationList from './ConversationList.vue'
 import SearchResults from './SearchResults.vue'
 import ChatSpecifiedSearch from './ChatSpecifiedSearch.vue'
@@ -21,7 +22,6 @@ import AddressBook from '@/modules/contacts/views/AddressBook.vue'
 import SearchAddContacts from '@/modules/contacts/components/SearchAddContacts.vue'
 import AccountDialog from '@/modules/auth/components/AccountDialog.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import accountIcon from '@/assets/images/headNav/message/logo-icon.png'
 import messageIcon from '@/assets/images/headNav/message/message-icon.png'
 import messageActiveIcon from '@/assets/images/headNav/message/message-active-icon.png'
 import contactsIcon from '@/assets/images/headNav/message/contacts-icon.png'
@@ -337,7 +337,13 @@ onBeforeUnmount(() => {
       <div ref="avatarWrapRef" class="nav-avatar-wrap">
         <div class="nav-avatar">
           <picture @click="handleAvatarClick">
-            <img class="account-avatar" :src="accountIcon" alt="account" />
+            <TextAvatar
+              class="account-avatar"
+              :name="authStore.nickname || authStore.uid || 'User'"
+              :src="authStore.avatar || null"
+              :size="40"
+              rounded
+            />
           </picture>
         </div>
         <AccountDialog
