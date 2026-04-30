@@ -78,6 +78,9 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Install protobuf compiler (Windows)
+        run: choco install protoc
+
       - name: Install dependencies
         run: pnpm install
 
@@ -120,6 +123,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install protobuf compiler (macOS)
+        run: brew install protobuf
 
       - name: Install dependencies
         run: pnpm install

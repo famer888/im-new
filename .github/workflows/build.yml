@@ -31,6 +31,9 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Install protobuf compiler (Windows)
+        run: choco install protoc
+
       - name: Install frontend deps
         run: pnpm install
 
