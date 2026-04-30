@@ -21,6 +21,7 @@ export interface Channel {
   logoColor: string | null
   memberCount: number
   status: number
+  isDisable: boolean
   adminPrivacy: number
   isDisturb: boolean
   ownerId: string | null
@@ -35,6 +36,7 @@ export const useChannelStore = defineStore('channel', () => {
   // 兼容三种来源：频道接口、Tauri 本地表、频道会话兜底字段。
   function normalizeChannel(item: any): Channel {
     const id = String(item.id ?? item.channelId ?? '')
+    const status = Number(item.status ?? 0)
     return {
       id,
       channelId: String(item.channelId ?? item.id ?? ''),
@@ -44,7 +46,8 @@ export const useChannelStore = defineStore('channel', () => {
       icon: item.icon ?? item.avatar ?? null,
       logoColor: item.logoColor ?? null,
       memberCount: Number(item.memberCount ?? item.member_count ?? 0),
-      status: Number(item.status ?? 0),
+      status,
+      isDisable: Boolean(item.isDisable ?? item.is_disable ?? status === 3),
       adminPrivacy: Number(item.adminPrivacy ?? 0),
       isDisturb: Boolean(item.isDisturb ?? item.is_disturb ?? false),
       ownerId: item.ownerId ?? item.owner_id ?? null,
@@ -150,7 +153,8 @@ export const useChannelStore = defineStore('channel', () => {
     while (hasMore) {
       try {
         const resp = await getChannelList({ pageNum, pageSize })
-        if (Number(resp?.code) !== 200) {
+        const code = Number(resp?.code ?? 200)
+        if (code !== 200 && code !== 0) {
           throw new Error(resp?.msg || 'channel list request failed')
         }
         const list = resp?.data?.rowList || []
@@ -185,6 +189,7 @@ export const useChannelStore = defineStore('channel', () => {
 
     if (mergedChannels.length > 0) {
       channels.value = mergedChannels
+      await saveChannelsToLocal(uid, mergedChannels)
       console.info('[ChannelStore] loaded from channel API', { count: allChannels.length })
       return
     }
@@ -195,6 +200,26 @@ export const useChannelStore = defineStore('channel', () => {
     console.warn(
       '[ChannelStore] channel api empty, fallback from conversations',
     )
+  }
+
+  async function saveChannelsToLocal(uid: string, list: Channel[]) {
+    if (!isTauri() || list.length === 0) return
+
+    try {
+      await tauriInvoke('save_channels', {
+        uid,
+        channels: list.map((item) => ({
+          id: item.id,
+          name: item.channelName || item.name || item.id,
+          avatar: item.avatar || item.icon || null,
+          ownerId: item.ownerId,
+          description: item.description,
+          updatedAt: item.updatedAt,
+        })),
+      })
+    } catch (e) {
+      console.error('[ChannelStore] save_channels failed:', e)
+    }
   }
 
   function getChannel(id: string): Channel | undefined {

@@ -22,7 +22,8 @@ onMounted(() => {
 function handleSelect(channel: typeof channelStore.channels[0]) {
   const conv = chatStore.ensureConversation(2, channel.id)
   chatStore.setCurrentConversation(conv.id)
-  uiStore.setDetailView('channel-detail')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
 }
 </script>
 
