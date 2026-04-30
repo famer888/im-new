@@ -205,6 +205,12 @@ onMounted(async () => {
       firstInitProgressVisible.value = !authStore.isAccountInitialized(authStore.uid)
       setFirstInitProgress(0, 0)
 
+      try {
+        await authStore.refreshProfile()
+      } catch (error) {
+        console.warn('[init] refresh profile failed:', error)
+      }
+
       const skipBootstrapAfterLogoutClear = Boolean(
         localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${authStore.uid}`),
       )

@@ -201,6 +201,9 @@ async function handleNicknameSave() {
 
 onMounted(() => {
   window.addEventListener('mousedown', handleDocumentMouseDown, true)
+  void authStore.refreshProfile().catch((error) => {
+    console.warn('[AccountDialog] refresh profile failed:', error)
+  })
 })
 
 onBeforeUnmount(() => {

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { getUserInfo } from '@/api/imBase'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -394,6 +395,37 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function refreshProfile() {
+    const currentUid = Number(session.value?.uid || 0)
+    if (!Number.isFinite(currentUid) || currentUid <= 0) return null
+
+    if (session.value) {
+      addOrUpdateAccount({
+        id: session.value.uid,
+        name: session.value.nickname || session.value.uid,
+        icon: session.value.avatar,
+        sessionId: session.value.sessionId,
+        sourceId: session.value.sourceId,
+      })
+    }
+
+    const response = await getUserInfo({ uid: currentUid })
+    const commonResult = response.commonResult
+    const errCode = Number(commonResult?.errCode ?? 200)
+    if (errCode !== 200 && errCode !== 0) {
+      throw new Error(commonResult?.errMsg || 'get user info failed')
+    }
+
+    const userInfo = response.userInfo
+    if (!userInfo) return response
+
+    updateProfile({
+      nickname: userInfo.nickName || session.value?.nickname || '',
+      avatar: userInfo.icon || session.value?.avatar || '',
+    })
+    return response
+  }
+
   return {
     session,
     isLoggedIn,
@@ -412,5 +444,6 @@ export const useAuthStore = defineStore('auth', () => {
     markAccountInitialized,
     setAutoLogin,
     updateProfile,
+    refreshProfile,
   }
 })
