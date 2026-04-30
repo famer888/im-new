@@ -91,7 +91,9 @@ const isFriendChat = computed(
 )
 
 const canOpenHeaderMenu = computed(
-  () => conversation.value?.type === ConversationType.Friend || conversation.value?.type === ConversationType.Group,
+  () => conversation.value?.type === ConversationType.Friend
+    || conversation.value?.type === ConversationType.Group
+    || conversation.value?.type === ConversationType.Channel,
 )
 
 const editingRemark = ref(false)
@@ -113,6 +115,18 @@ const friendOnlineSubtitle = computed(() => {
   return ''
 })
 
+const channelInfo = computed(() => {
+  const targetId = conversation.value?.targetId
+  if (!targetId || conversation.value?.type !== ConversationType.Channel) return null
+  return channelStore.getChannel(targetId) ?? null
+})
+
+const channelSubtitle = computed(() => {
+  if (conversation.value?.type !== ConversationType.Channel) return ''
+  const count = Number(channelInfo.value?.memberCount ?? -1)
+  return count >= 0 ? `${count}位订阅者` : ''
+})
+
 const title = computed(() => {
   void locale.value
   if (!conversation.value) return ''
@@ -126,6 +140,8 @@ const title = computed(() => {
       const count = group?.memberCount || groupStore.getMembers(conversation.value.targetId).length
       return count > 0 ? `${name} (${count}人)` : name
     }
+    case ConversationType.Channel:
+      return channelInfo.value?.channelName || channelInfo.value?.name || conversation.value.targetId
     default:
       return ''
   }
@@ -236,6 +252,16 @@ function handleSearch() {
     name: title.value,
   })
 }
+
+watch(
+  () => conversation.value?.type === ConversationType.Channel ? conversation.value.targetId : '',
+  (channelId) => {
+    if (channelId) {
+      void channelStore.refreshChannelDetail(channelId)
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -292,7 +318,9 @@ function handleSearch() {
                 @click.stop="startEditRemark"
               />
             </div>
-            <div v-if="friendOnlineSubtitle" class="friend-status-line">{{ friendOnlineSubtitle }}</div>
+            <div v-if="friendOnlineSubtitle || channelSubtitle" class="subtitle-line">
+              {{ friendOnlineSubtitle || channelSubtitle }}
+            </div>
           </div>
         </div>
       </template>
@@ -412,7 +440,7 @@ function handleSearch() {
   min-width: 0;
 }
 
-.friend-status-line {
+.subtitle-line {
   font-size: 12px;
   color: #999;
   font-weight: 400;
