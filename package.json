@@ -27,13 +27,13 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-deep-link": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
-    "@tauri-apps/plugin-fs": "^2.0.0",
-    "@tauri-apps/plugin-notification": "^2.0.0",
-    "@tauri-apps/plugin-shell": "^2.0.0",
-    "@tauri-apps/plugin-updater": "^2.0.0",
+    "@tauri-apps/api": "2.0.0",
+    "@tauri-apps/plugin-deep-link": "2.4.7",
+    "@tauri-apps/plugin-dialog": "2.6.0",
+    "@tauri-apps/plugin-fs": "2.4.5",
+    "@tauri-apps/plugin-notification": "2.3.3",
+    "@tauri-apps/plugin-shell": "2.3.5",
+    "@tauri-apps/plugin-updater": "2.10.0",
     "crypto-js": "^4.2.0",
     "dayjs": "^1.11.10",
     "dompurify": "^3.0.9",
@@ -47,7 +47,7 @@
     "vue-router": "^4.3.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
+    "@tauri-apps/cli": "2.0.0",
     "@types/crypto-js": "^4.2.2",
     "@types/dompurify": "^3.0.5",
     "@types/pako": "^2.0.4",
