@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import QrcodeVue from 'qrcode.vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { ConversationType } from '@/types'
-import { getChannelDetail, getChannelUsers, updateMember } from '@/api/imChannel'
+import { getChannelDetail, getChannelUsers, updateMember, updateChannel } from '@/api/imChannel'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
@@ -29,6 +30,11 @@ const detail = ref<Record<string, any>>({})
 const members = ref<ChannelMember[]>([])
 const keyword = ref('')
 const updatingDisturb = ref(false)
+const editDescVisible = ref(false)
+const editDescDraft = ref('')
+const editDescDraftCopy = ref('')
+const isEditDesc = ref(false)
+const showQrCode = ref(false)
 
 const conv = computed(() => chatStore.currentConversation)
 const channel = computed(() => {
@@ -149,11 +155,82 @@ async function clearHistory() {
   })
 }
 
+const currentUserMemberType = computed(() => {
+  const currentUserId = authStore.uid
+  const currentMember = members.value.find((m) => m.id === currentUserId)
+  return currentMember?.memberType ?? 3
+})
+
+const canClearHistory = computed(() => {
+  const memberType = currentUserMemberType.value
+  return memberType !== 3
+})
+
 function roleLabel(memberType: number): string {
   if (memberType === 1) return '所有者'
   if (memberType === 2) return t('管理员')
   return ''
 }
+
+function openEditDesc() {
+  if (!canClearHistory.value) return
+  editDescDraft.value = description.value || ''
+  editDescDraftCopy.value = editDescDraft.value
+  editDescVisible.value = true
+  isEditDesc.value = false
+}
+
+function handleClose() {
+  isEditDesc.value = false
+  editDescVisible.value = false
+}
+
+function handleCancel() {
+  isEditDesc.value = false
+  editDescDraft.value = editDescDraftCopy.value
+}
+
+async function handleOk() {
+  if (!channelId.value) return
+  try {
+    const resp = await updateChannel({
+      channelId: channelId.value,
+      remark: editDescDraft.value,
+    })
+    if (!responseOk(resp)) throw new Error(resp?.msg || 'update channel description failed')
+
+    detail.value = { ...detail.value, channelDesc: editDescDraft.value }
+    channelStore.patchChannel(channelId.value, { description: editDescDraft.value })
+    editDescDraftCopy.value = editDescDraft.value
+    isEditDesc.value = false
+    handleClose()
+  } catch (error) {
+    console.warn('[ChannelInfoPanel] save channel description failed:', error)
+  }
+}
+
+function handleResetQrCode() {
+  console.warn('[ChannelInfoPanel] reset qrcode')
+}
+
+function handleCopyQrLink() {
+  const qrLink = `${detail.value.link || ''}?id=${channelId.value}`
+  navigator.clipboard.writeText(qrLink).then(() => {
+    console.log('[ChannelInfoPanel] qrcode link copied')
+  }).catch(() => {
+    console.warn('[ChannelInfoPanel] failed to copy qrcode link')
+  })
+}
+
+function handleForwardQrCode() {
+  console.warn('[ChannelInfoPanel] forward qrcode')
+}
+
+function handleSaveQrCode() {
+  console.warn('[ChannelInfoPanel] save qrcode')
+}
+
+const qrcodeRef = ref()
 
 watch(channelId, loadChannelInfo)
 onMounted(loadChannelInfo)
@@ -161,7 +238,7 @@ onMounted(loadChannelInfo)
 
 <template>
   <div v-if="conv" class="channel-info-panel">
-    <section v-if="alias || adminPrivacy" class="channel-link">
+    <section v-if="alias || adminPrivacy" class="channel-link" @click="showQrCode = true">
       <h4>{{ t('频道别名') }}</h4>
       <div class="channel-link-info">
         <span class="alias">{{ alias ? `@${alias}` : '' }}</span>
@@ -170,13 +247,92 @@ onMounted(loadChannelInfo)
       </div>
     </section>
 
-    <section class="panel-section intro-section">
+    <section class="panel-section intro-section" :class="{ clickable: canClearHistory }" @click="canClearHistory && openEditDesc()">
       <div class="section-head">
         <h4>{{ t('频道简介') }}</h4>
         <span class="arrow">›</span>
       </div>
       <p>{{ description || channelName }}</p>
     </section>
+
+    <!-- 编辑频道简介对话框 -->
+    <div v-if="editDescVisible" class="comGroupNoticeDialog" @click="handleClose">
+      <div class="content" @click.stop>
+        <picture @click.stop="handleClose">
+          <img src="@/assets/images/common/close-icon.png" />
+        </picture>
+        <section>
+          <textarea
+            v-if="isEditDesc && canClearHistory"
+            v-model="editDescDraft"
+            maxlength="800"
+            type="text"
+            :placeholder="t('请输入内容')"
+            :disabled="!canClearHistory"
+          />
+          <div v-else :style="{ height: '203px' }">
+            <p class="notice-view">{{ editDescDraft || '无简介' }}</p>
+          </div>
+          <span v-if="canClearHistory && isEditDesc">{{ 800 - editDescDraft.length }}</span>
+        </section>
+        <template v-if="canClearHistory">
+          <div class="bottom" v-if="!isEditDesc">
+            <span @click.stop="isEditDesc = true">{{ t('修改') }}</span>
+          </div>
+          <div class="bottom" v-else>
+            <span @click.stop="handleOk">{{ t('确定') }}</span>
+            <span @click.stop="handleCancel">{{ t('取消') }}</span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 二维码面板 -->
+    <div v-if="showQrCode" class="qrcode-panel">
+      <div class="qrcode-content">
+        <div class="qrcode-header">
+          <button class="qrcode-close" @click="showQrCode = false">
+            <img src="@/assets/images/chat/arrow-left-blue.png" alt="" />
+          </button>
+          <span>{{ t('通过二维码邀请') }}</span>
+        </div>
+        <section class="qrcode-section">
+          <QrcodeVue
+            v-if="channelId"
+            ref="qrcodeRef"
+            class="qrcode"
+            :value="`${detail.link || ''}?id=${channelId}`"
+            level="H"
+            :size="180"
+          />
+          <h3>{{ t('二维码长期有效') }}</h3>
+          <p v-if="canClearHistory" @click="handleResetQrCode" class="reset-link">
+            <img class="refresh-icon" src="@/assets/images/common/refresh.png" alt="" />
+            {{ t('重置二维码') }}
+          </p>
+        </section>
+        <div class="qrcode-buttons">
+          <div class="btn-item">
+            <button @click="handleForwardQrCode">
+              <img src="@/assets/images/system/share.png" alt="" />
+            </button>
+            <span class="btn-title">{{ t('转发给朋友') }}</span>
+          </div>
+          <div class="btn-item">
+            <button @click="handleSaveQrCode">
+              <img src="@/assets/images/system/down.png" alt="" />
+            </button>
+            <span class="btn-title">{{ t('保存图片') }}</span>
+          </div>
+          <div class="btn-item">
+            <button @click="handleCopyQrLink">
+              <img src="@/assets/images/system/link.png" alt="" />
+            </button>
+            <span class="btn-title">{{ t('复制链接') }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <section class="panel-section config-section">
       <div class="config-item">
@@ -191,14 +347,14 @@ onMounted(loadChannelInfo)
           @update:model-value="setChannelReceiveNotifications"
         />
       </div>
-      <button class="clear-btn" type="button" @click="clearHistory">清空聊天记录</button>
+      <button v-if="canClearHistory" class="clear-btn" type="button" @click="clearHistory">清空聊天记录</button>
     </section>
 
-    <section class="manager-title">
+    <section v-if="adminPrivacy" class="manager-title">
       <h4>{{ t('管理员') }}</h4>
     </section>
 
-    <section class="member-section">
+    <section v-if="adminPrivacy" class="member-section">
       <label class="member-search">
         <img :src="searchIcon" alt="" />
         <input v-model="keyword" type="text" :placeholder="t('搜索')" />
@@ -417,5 +573,294 @@ onMounted(loadChannelInfo)
   background: #3369fe;
   color: #fff;
   font-size: 12px;
+}
+
+.intro-section.clickable {
+  cursor: pointer;
+
+  &:hover {
+    background: #f0f0f0;
+  }
+}
+
+.comGroupNoticeDialog {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.2);
+
+  .content {
+    padding-top: 30px;
+  }
+
+  > div {
+    background: #fff;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 10px 16px;
+    border-radius: 8px;
+    width: 438px;
+    box-sizing: border-box;
+
+    > picture {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+
+      &:hover {
+        opacity: 0.8;
+      }
+    }
+
+    > section {
+      position: relative;
+
+      > textarea {
+        padding: 15px 10px;
+        box-sizing: border-box;
+        width: 100%;
+        height: 223px;
+        background-color: rgb(245, 245, 245);
+        border-radius: 8px;
+        font-size: 14px;
+        color: #333;
+        display: block;
+        border: none;
+        font-family: inherit;
+        resize: none;
+
+        &:focus {
+          outline: none;
+        }
+      }
+
+      > span {
+        position: absolute;
+        right: 10px;
+        bottom: -18px;
+        font-size: 12px;
+        color: #666;
+      }
+
+      > div {
+        padding: 15px 0;
+        background-color: rgb(245, 245, 245);
+        border-radius: 8px;
+        height: 203px;
+        overflow-y: auto;
+
+        p {
+          padding: 0 10px;
+          margin: 0;
+          font-size: 14px;
+          color: #333;
+          line-height: 20px;
+          word-break: break-word;
+        }
+      }
+    }
+
+    > .bottom {
+      margin-top: 5px;
+      padding-top: 20px;
+      padding-bottom: 10px;
+      display: flex;
+      justify-content: flex-end;
+
+      > span {
+        display: block;
+        color: #fff;
+        background-color: #3369fe;
+        border: 1px solid #3369fe;
+        cursor: pointer;
+        padding: 0 28px;
+        display: inline-block;
+        height: 32px;
+        line-height: 32px;
+        font-size: 12px;
+        border-radius: 4px;
+
+        &:hover {
+          opacity: 0.8;
+        }
+
+        &:nth-child(2) {
+          background-color: #fff;
+          border: 1px solid #eeeeee;
+          color: #666666;
+          margin-left: 10px;
+        }
+      }
+    }
+  }
+}
+
+.notice-view {
+  word-wrap: break-word;
+  user-select: text;
+}
+
+.qrcode-panel {
+  position: fixed;
+  right: 0;
+  top: 34px;
+  width: 270px;
+  height: calc(100% - 34px);
+  background: #ffffff;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-left: 1px solid #f5f5f5;
+}
+
+.qrcode-content {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.qrcode-header {
+  width: 100%;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: #ffffff;
+  border-bottom: 1px solid #f5f5f5;
+  position: relative;
+  font-size: 16px;
+  font-weight: 600;
+  color: #000;
+
+  .qrcode-close {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 50px;
+    width: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+
+    img {
+      display: block;
+      width: 25px;
+      height: 25px;
+    }
+
+    &:hover {
+      opacity: 0.8;
+    }
+  }
+}
+
+.qrcode-section {
+  height: 250px;
+  width: 100%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  position: relative;
+  padding-bottom: 30px;
+
+  .qrcode {
+    width: 180px;
+    height: 180px;
+  }
+
+  h3 {
+    display: block;
+    font-size: 13px;
+    color: #787878;
+    line-height: 30px;
+    margin: 0;
+  }
+
+  .reset-link {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: #333;
+    cursor: pointer;
+    margin-top: 10px;
+
+    &:hover {
+      color: #000;
+    }
+
+    .refresh-icon {
+      height: 18px;
+      margin-right: 4px;
+    }
+  }
+}
+
+.qrcode-buttons {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+  width: 100%;
+  justify-content: center;
+
+  .btn-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    button {
+      width: 54px;
+      height: 54px;
+      background: #F2F9FF;
+      border-radius: 16px;
+      border: none;
+      font-size: 16px;
+      font-weight: 500;
+      color: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      cursor: pointer;
+      position: relative;
+
+      &:hover {
+        background: #f9f9f9;
+      }
+
+      img {
+        display: block;
+        width: 20px;
+        height: 20px;
+      }
+    }
+
+    .btn-title {
+      font-size: 12px;
+      color: #000;
+      font-weight: 300;
+    }
+  }
 }
 </style>
