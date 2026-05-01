@@ -247,3 +247,10 @@ export async function updateMember(data: {
 }): Promise<ChannelUpdateMemberResp> {
   return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelMember/updateMember', data)
 }
+
+export async function updateChannel(data: {
+  channelId: number | string
+  remark?: string
+}): Promise<ChannelUpdateMemberResp> {
+  return requestChannelJson<ChannelUpdateMemberResp>('/channel/updateChannel', data)
+}
