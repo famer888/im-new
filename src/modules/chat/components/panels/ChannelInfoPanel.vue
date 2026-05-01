@@ -749,7 +749,8 @@ onMounted(loadChannelInfo)
   height: 50px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding-left: 50px;
   box-sizing: border-box;
   background: #ffffff;
   border-bottom: 1px solid #f5f5f5;
@@ -774,7 +775,6 @@ onMounted(loadChannelInfo)
     img {
       display: block;
       width: 25px;
-      height: 25px;
     }
 
     &:hover {
@@ -811,16 +811,20 @@ onMounted(loadChannelInfo)
 .qrcode-buttons {
   display: flex;
   align-items: center;
-  gap: 20px;
-  padding: 20px;
   width: 100%;
   justify-content: center;
+  border: none;
 
   .btn-item {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    margin-left: 20px;
+
+    &:first-child {
+      margin-left: 0;
+    }
 
     button {
       width: 54px;
@@ -845,7 +849,6 @@ onMounted(loadChannelInfo)
       img {
         display: block;
         width: 20px;
-        height: 20px;
       }
     }
 
