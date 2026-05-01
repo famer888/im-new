@@ -6,7 +6,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { ConversationType } from '@/types'
-import { getChannelDetail, getChannelUsers } from '@/api/imChannel'
+import { getChannelDetail, getChannelUsers, updateMember } from '@/api/imChannel'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
@@ -28,6 +28,7 @@ const messageStore = useMessageStore()
 const detail = ref<Record<string, any>>({})
 const members = ref<ChannelMember[]>([])
 const keyword = ref('')
+const updatingDisturb = ref(false)
 
 const conv = computed(() => chatStore.currentConversation)
 const channel = computed(() => {
@@ -43,11 +44,30 @@ const description = computed(() =>
   String(detail.value.channelDesc || detail.value.remark || channel.value?.description || ''),
 )
 const adminPrivacy = computed(() => Number(detail.value.adminPrivacy ?? channel.value?.adminPrivacy ?? 0))
+const channelDisturbed = computed(() =>
+  toBool(detail.value.isDisturb ?? channel.value?.isDisturb ?? conv.value?.isMuted ?? false),
+)
+const receiveNotifications = computed(() => !channelDisturbed.value)
 const filteredMembers = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   if (!q) return members.value
   return members.value.filter((item) => item.name.toLowerCase().includes(q) || item.id.includes(q))
 })
+
+function toBool(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return false
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  const text = String(value).trim().toLowerCase()
+  if (text === '0' || text === 'false' || text === 'no') return false
+  if (text === '1' || text === 'true' || text === 'yes') return true
+  return Boolean(value)
+}
+
+function responseOk(resp: { code?: number } | null | undefined): boolean {
+  const code = Number(resp?.code ?? 200)
+  return code === 200 || code === 0
+}
 
 async function loadChannelInfo() {
   if (!channelId.value || conv.value?.type !== ConversationType.Channel) return
@@ -59,6 +79,18 @@ async function loadChannelInfo() {
     ])
 
     detail.value = detailResp.data || {}
+    if (detailResp.data) {
+      channelStore.patchChannel(channelId.value, {
+        ...detailResp.data,
+        isDisturb: toBool(detailResp.data.isDisturb),
+      })
+      if (detailResp.data.isDisturb !== undefined && conv.value) {
+        chatStore.updateConversation({
+          id: conv.value.id,
+          isMuted: toBool(detailResp.data.isDisturb),
+        })
+      }
+    }
     const rows = usersResp.data?.rowList || []
     members.value = rows.map((raw) => {
       const user = raw.userInfoDTO || raw
@@ -80,9 +112,30 @@ async function togglePin() {
   await chatStore.pinConversation(authStore.uid, conv.value.id, !conv.value.isPinned)
 }
 
-async function toggleMute() {
-  if (!conv.value) return
-  await chatStore.muteConversation(authStore.uid, conv.value.id, !conv.value.isMuted)
+async function setChannelReceiveNotifications(receive: boolean) {
+  if (!conv.value || !channelId.value || updatingDisturb.value) return
+  const nextDisturb = !receive
+  updatingDisturb.value = true
+  try {
+    const resp = await updateMember({
+      channelId: channelId.value,
+      isDisturb: Number(nextDisturb),
+    })
+    if (!responseOk(resp)) throw new Error(resp?.msg || 'update channel disturb failed')
+
+    detail.value = { ...detail.value, isDisturb: nextDisturb }
+    channelStore.patchChannel(channelId.value, { isDisturb: nextDisturb })
+    chatStore.updateConversation({ id: conv.value.id, isMuted: nextDisturb })
+    if (authStore.uid) {
+      await chatStore.muteConversation(authStore.uid, conv.value.id, nextDisturb).catch((error) => {
+        console.warn('[ChannelInfoPanel] local mute sync failed:', error)
+      })
+    }
+  } catch (error) {
+    console.warn('[ChannelInfoPanel] update channel disturb failed:', error)
+  } finally {
+    updatingDisturb.value = false
+  }
 }
 
 async function clearHistory() {
@@ -132,7 +185,11 @@ onMounted(loadChannelInfo)
       </div>
       <div class="config-item">
         <span>接收通知</span>
-        <AppSwitch :model-value="!conv.isMuted" @update:model-value="toggleMute" />
+        <AppSwitch
+          :model-value="receiveNotifications"
+          :disabled="updatingDisturb"
+          @update:model-value="setChannelReceiveNotifications"
+        />
       </div>
       <button class="clear-btn" type="button" @click="clearHistory">清空聊天记录</button>
     </section>

@@ -24,6 +24,10 @@ export interface Channel {
   isDisable: boolean
   adminPrivacy: number
   isDisturb: boolean
+  memberType: number | null
+  alias: string | null
+  remark: string | null
+  linkType: number | null
   ownerId: string | null
   description: string | null
   updatedAt: number
@@ -32,6 +36,16 @@ export interface Channel {
 export const useChannelStore = defineStore('channel', () => {
   const channels = ref<Channel[]>([])
   const loading = ref(false)
+
+  function toBool(value: unknown, fallback = false): boolean {
+    if (value === undefined || value === null || value === '') return fallback
+    if (typeof value === 'boolean') return value
+    if (typeof value === 'number') return value !== 0
+    const text = String(value).trim().toLowerCase()
+    if (text === '0' || text === 'false' || text === 'no') return false
+    if (text === '1' || text === 'true' || text === 'yes') return true
+    return Boolean(value)
+  }
 
   // 兼容三种来源：频道接口、Tauri 本地表、频道会话兜底字段。
   function normalizeChannel(item: any): Channel {
@@ -47,9 +61,15 @@ export const useChannelStore = defineStore('channel', () => {
       logoColor: item.logoColor ?? null,
       memberCount: Number(item.memberCount ?? item.member_count ?? -1),
       status,
-      isDisable: Boolean(item.isDisable ?? item.is_disable ?? status === 3),
+      isDisable: toBool(item.isDisable ?? item.is_disable, status === 3),
       adminPrivacy: Number(item.adminPrivacy ?? 0),
-      isDisturb: Boolean(item.isDisturb ?? item.is_disturb ?? false),
+      isDisturb: toBool(item.isDisturb ?? item.is_disturb ?? false),
+      memberType: item.memberType === undefined || item.memberType === null
+        ? null
+        : Number(item.memberType),
+      alias: item.alias ?? null,
+      remark: item.remark ?? null,
+      linkType: item.linkType === undefined || item.linkType === null ? null : Number(item.linkType),
       ownerId: item.ownerId ?? item.owner_id ?? null,
       description: item.description ?? item.channelDesc ?? null,
       updatedAt: Number(item.updatedAt ?? item.updated_at ?? item.updateTime ?? item.createTime ?? 0),
@@ -226,6 +246,26 @@ export const useChannelStore = defineStore('channel', () => {
     return channels.value.find((c) => c.id === id)
   }
 
+  function patchChannel(channelId: string | number, patch: Record<string, unknown>) {
+    const id = String(channelId || '').trim()
+    if (!id) return
+    const index = channels.value.findIndex((item) => item.id === id)
+    if (index >= 0) {
+      channels.value[index] = normalizeChannel({
+        ...channels.value[index],
+        ...patch,
+        id,
+        channelId: id,
+      })
+    } else {
+      channels.value.unshift(normalizeChannel({
+        ...patch,
+        id,
+        channelId: id,
+      }))
+    }
+  }
+
   async function refreshChannelDetail(channelId: string | number): Promise<Channel | null> {
     const id = String(channelId || '').trim()
     if (!id) return null
@@ -262,6 +302,7 @@ export const useChannelStore = defineStore('channel', () => {
     loading,
     loadChannels,
     getChannel,
+    patchChannel,
     refreshChannelDetail,
   }
 })

@@ -5,6 +5,7 @@ import friendIcon from '@/assets/images/logo/logo-58.png'
 import channelIcon from '@/assets/images/logo/channel-notice.webp'
 
 const props = withDefaults(defineProps<{
+  id?: string | number | null
   name: string
   src?: string | null
   size?: number
@@ -20,6 +21,16 @@ const props = withDefaults(defineProps<{
 const initial = computed(() => (props.name || '?')[0].toUpperCase())
 const imageLoadError = ref(false)
 
+const legacyChannelGradientColors = [
+  ['#ff516a', '#ff885e'],
+  ['#ffa85c', '#ffcd6a'],
+  ['#665fff', '#82b1ff'],
+  ['#54cb68', '#a0de7e'],
+  ['#4acccd', '#00fcfd'],
+  ['#2a9ef1', '#72d5fd'],
+  ['#d669ed', '#e0a2f3'],
+]
+
 watch(() => props.src, () => {
   imageLoadError.value = false
 })
@@ -31,10 +42,27 @@ const defaultSrc = computed(() => {
 })
 
 const hasSrc = computed(() => !!props.src && !imageLoadError.value)
-const showImage = computed(() => props.avatarType !== 'text')
+const showImage = computed(() => props.avatarType !== 'text' && (props.avatarType !== 'channel' || hasSrc.value))
 const imageSrc = computed<string>(() => (hasSrc.value ? (props.src as string) : defaultSrc.value))
-const useCircle = computed(() => props.rounded || props.avatarType === 'group')
-const textBgColor = computed(() => props.color || '#3369fe')
+const useCircle = computed(() => props.rounded || props.avatarType === 'group' || props.avatarType === 'channel' || props.avatarType === 'text')
+
+function legacyGradientById(id: string | number | null | undefined): string | null {
+  if (id === undefined || id === null || id === '') return null
+  const raw = String(id)
+  const numeric = Number(raw)
+  const seed = Number.isFinite(numeric)
+    ? Math.abs(Math.trunc(numeric))
+    : [...raw].reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  const color = legacyChannelGradientColors[seed % legacyChannelGradientColors.length]
+  return `linear-gradient(to top, ${color[0]}, ${color[1]})`
+}
+
+const textBgColor = computed(() => {
+  if (props.avatarType === 'channel' || props.avatarType === 'text') {
+    return legacyGradientById(props.id) || props.color || '#3369fe'
+  }
+  return props.color || '#3369fe'
+})
 
 const sizeStyle = computed(() => ({
   width: props.size + 'px',

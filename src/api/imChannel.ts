@@ -114,6 +114,7 @@ function getSignHeaders() {
 
 export interface ChannelListItem {
   channelId: number | string
+  id?: number | string
   channelName?: string
   icon?: string
   alias?: string
@@ -177,6 +178,12 @@ export interface ChannelUsersResp {
   }
 }
 
+export interface ChannelUpdateMemberResp {
+  code: number
+  msg?: string
+  data?: unknown
+}
+
 async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
   const base = getOpenChatBaseUrl()
   const url = `${base}${path}`
@@ -232,4 +239,11 @@ export async function getChannelUsers(data: {
   pageSize: number
 }): Promise<ChannelUsersResp> {
   return requestChannelJson<ChannelUsersResp>('/channel/channelMember/pageChannelNormalMember', data)
+}
+
+export async function updateMember(data: {
+  channelId: number | string
+  isDisturb: boolean | number
+}): Promise<ChannelUpdateMemberResp> {
+  return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelMember/updateMember', data)
 }

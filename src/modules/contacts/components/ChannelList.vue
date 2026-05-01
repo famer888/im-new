@@ -43,6 +43,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       <TextAvatar
         v-if="!ch.avatar"
         class="textAvatar"
+        :id="ch.channelId || ch.id"
         :name="ch.channelName || ch.name || ch.id"
         avatar-type="text"
         :color="ch.logoColor || undefined"
@@ -51,9 +52,11 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       />
       <TextAvatar
         v-else
+        :id="ch.channelId || ch.id"
         :name="ch.channelName || ch.name || ch.id"
         :src="ch.avatar"
         avatar-type="channel"
+        :color="ch.logoColor || undefined"
         :size="35"
         rounded
       />

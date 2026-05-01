@@ -9,10 +9,12 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useChannelStore } from '@/stores/useChannelStore'
 import { eventBus } from '@/utils/eventBus'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import { getReadBurnTimeText } from '@/utils/readBurn'
 import { getUploadToken, getUploadUrl, updateContacts } from '@/api/imBase'
+import { updateMember } from '@/api/imChannel'
 import { proto } from '@/api/request'
 import { aesEncrypt } from '@/utils/crypto'
 import EmojiPicker from './send/EmojiPicker.vue'
@@ -44,6 +46,7 @@ const messageStore = useMessageStore()
 const authStore = useAuthStore()
 const settingStore = useSettingStore()
 const uiStore = useUIStore()
+const channelStore = useChannelStore()
 const { t } = useI18n()
 const content = ref('')
 const editorRef = ref<HTMLDivElement | null>(null)
@@ -67,9 +70,15 @@ const selectedLinkText = ref('')
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
+const updatingChannelDisturb = ref(false)
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
+const currentChannel = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel) return null
+  return channelStore.getChannel(conv.targetId) ?? null
+})
 const emojiChatType = computed(() => {
   const type = chatStore.currentConversation?.type
   if (type === ConversationType.Group) return 'group'
@@ -89,6 +98,32 @@ const showShutupTip = computed(() => {
   const group = groupStore.getGroup(conv.targetId)
   return Boolean(group?.isMuted)
 })
+const showChannelDisabledTip = computed(() => {
+  const conv = chatStore.currentConversation
+  const channel = currentChannel.value
+  if (!conv || conv.type !== ConversationType.Channel || !channel) return false
+  return Boolean(channel.isDisable || Number(channel.status ?? 0) === 3)
+})
+const hasChannelPublishAuthority = computed(() => {
+  const channel = currentChannel.value
+  if (!channel) return true
+  const adminPrivacy = Number(channel.adminPrivacy ?? 0)
+  return adminPrivacy > 0 && (adminPrivacy & 2) !== 0
+})
+const showChannelNotifyToggle = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel || !currentChannel.value) return false
+  if (showChannelDisabledTip.value) return false
+  return !hasChannelPublishAuthority.value
+})
+const channelNotifyText = computed(() =>
+  toBool(currentChannel.value?.isDisturb ?? chatStore.currentConversation?.isMuted ?? false)
+    ? '永久静音'
+    : '接收通知',
+)
+const showInputNoticeOnly = computed(() =>
+  showChannelDisabledTip.value || showChannelNotifyToggle.value || showShutupTip.value,
+)
 const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
 const currentContact = computed(() => {
@@ -167,6 +202,50 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
   toastVisible.value = true
+}
+
+function toBool(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return false
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  const text = String(value).trim().toLowerCase()
+  if (text === '0' || text === 'false' || text === 'no') return false
+  if (text === '1' || text === 'true' || text === 'yes') return true
+  return Boolean(value)
+}
+
+function responseOk(resp: { code?: number } | null | undefined): boolean {
+  const code = Number(resp?.code ?? 200)
+  return code === 200 || code === 0
+}
+
+async function toggleChannelDisturb() {
+  const conv = chatStore.currentConversation
+  const channel = currentChannel.value
+  if (!conv || conv.type !== ConversationType.Channel || !channel || updatingChannelDisturb.value) return
+
+  const nextDisturb = !toBool(channel.isDisturb ?? conv.isMuted)
+  updatingChannelDisturb.value = true
+  try {
+    const resp = await updateMember({
+      channelId: channel.channelId || conv.targetId,
+      isDisturb: Number(nextDisturb),
+    })
+    if (!responseOk(resp)) throw new Error(resp?.msg || 'update channel disturb failed')
+
+    channelStore.patchChannel(channel.channelId || conv.targetId, { isDisturb: nextDisturb })
+    chatStore.updateConversation({ id: conv.id, isMuted: nextDisturb })
+    if (authStore.uid) {
+      await chatStore.muteConversation(authStore.uid, conv.id, nextDisturb).catch((error) => {
+        console.warn('[MessageInput] local channel mute sync failed:', error)
+      })
+    }
+  } catch (error) {
+    console.warn('[MessageInput] update channel disturb failed:', error)
+    showToast(t('操作失败'), 'error')
+  } finally {
+    updatingChannelDisturb.value = false
+  }
 }
 
 function terminalLog(
@@ -1669,9 +1748,26 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="message-input" @drop="handleDrop" @dragover="handleDragOver">
+  <div
+    class="message-input"
+    :class="{ 'notice-only': showInputNoticeOnly }"
+    @drop="handleDrop"
+    @dragover="handleDragOver"
+  >
+    <div v-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
+      该频道已禁用
+    </div>
+    <button
+      v-else-if="showChannelNotifyToggle"
+      class="channel-notify-toggle"
+      type="button"
+      :disabled="updatingChannelDisturb"
+      @click="toggleChannelDisturb"
+    >
+      {{ channelNotifyText }}
+    </button>
     <!-- 与 im 逻辑一致：只在群全员禁言时提示 -->
-    <div v-if="showShutupTip" class="shutup-tip">
+    <div v-else-if="showShutupTip" class="shutup-tip">
       {{ $t('全员禁言中') }}
     </div>
 
@@ -1833,6 +1929,10 @@ onBeforeUnmount(() => {
   background: #fff;
   flex-shrink: 0;
   position: relative;
+
+  &.notice-only {
+    min-height: 0;
+  }
 }
 
 .forward-preview-bar,
@@ -1965,7 +2065,31 @@ onBeforeUnmount(() => {
   padding: 10px 0;
   text-align: center;
   color: #da2e2e;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: normal;
+}
+
+.channel-state-tip {
+  color: #333;
+}
+
+.channel-notify-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  background: #fff;
+  color: #178aff;
+  font-size: 14px;
+  line-height: normal;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
 }
 
 .toolbar {

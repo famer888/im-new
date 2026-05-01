@@ -41,9 +41,11 @@ const currentTitle = computed(() => {
 
 interface ForwardItem {
   id: string
+  channelId?: string
   name: string
   avatar: string | null
   type: 'friend' | 'group' | 'channel'
+  color?: string
 }
 
 const list = computed((): ForwardItem[] => {
@@ -91,9 +93,11 @@ const list = computed((): ForwardItem[] => {
       const channel = channelStore.getChannel(conv.targetId)
       addItem({
         id: conv.id,
+        channelId: channel?.channelId ?? channel?.id ?? conv.targetId,
         name: channel?.channelName ?? channel?.name ?? conv.targetId,
         avatar: channel?.avatar ?? channel?.icon ?? null,
         type: 'channel',
+        color: channel?.logoColor || undefined,
       })
     }
   }
@@ -137,9 +141,11 @@ const list = computed((): ForwardItem[] => {
     const convId = conv?.id ?? `channel_${channel.id}`
     addItem({
       id: convId,
+      channelId: channel.channelId ?? channel.id,
       name: channel.channelName ?? channel.name ?? channel.id,
       avatar: channel.avatar ?? channel.icon ?? null,
       type: 'channel',
+      color: channel.logoColor || undefined,
     })
   }
 
@@ -283,9 +289,11 @@ onBeforeUnmount(() => {
                   @click="handleSelect(item)"
                 >
                   <TextAvatar
+                    :id="item.channelId"
                     :name="item.name"
                     :src="item.avatar"
                     :avatar-type="item.type"
+                    :color="item.color"
                     :size="40"
                     rounded
                     class="item-avatar"

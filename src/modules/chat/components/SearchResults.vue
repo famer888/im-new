@@ -43,9 +43,11 @@ function convLabelForMessage(m: Message): string {
 }
 
 function avatarPropsForMessage(m: Message): {
+  id?: string
   name: string
   src: string | null
   avatarType: 'friend' | 'group' | 'channel'
+  color?: string
 } {
   const { type, targetId } = parseConversationRef(m.conversationId)
   if (type === 1) {
@@ -54,7 +56,13 @@ function avatarPropsForMessage(m: Message): {
   }
   if (type === 2) {
     const ch = channelStore.getChannel(targetId)
-    return { name: ch?.name ?? targetId, src: ch?.avatar ?? null, avatarType: 'channel' }
+    return {
+      id: ch?.channelId || ch?.id || targetId,
+      name: ch?.channelName ?? ch?.name ?? targetId,
+      src: ch?.avatar ?? null,
+      avatarType: 'channel',
+      color: ch?.logoColor || undefined,
+    }
   }
   const c = contactStore.getContact(targetId)
   return {
@@ -166,8 +174,15 @@ function selectMessage(m: Message) {
           class="result-item"
           @click="selectChannel(ch.id)"
         >
-          <TextAvatar :name="ch.name || ch.id" :src="ch.avatar" avatar-type="channel" :size="32" />
-          <span class="result-name">{{ ch.name || ch.id }}</span>
+          <TextAvatar
+            :id="ch.channelId || ch.id"
+            :name="ch.channelName || ch.name || ch.id"
+            :src="ch.avatar"
+            avatar-type="channel"
+            :color="ch.logoColor || undefined"
+            :size="32"
+          />
+          <span class="result-name">{{ ch.channelName || ch.name || ch.id }}</span>
         </div>
       </div>
       <div v-if="searchStore.results.messages.length > 0" class="result-section">
