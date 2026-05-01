@@ -70,7 +70,9 @@ function getName(conv: Conversation): string {
     case ConversationType.Group:
       return groupStore.getGroup(conv.targetId)?.name ?? conv.targetId
     case ConversationType.Channel:
-      return channelStore.getChannel(conv.targetId)?.name ?? conv.targetId
+      return channelStore.getChannel(conv.targetId)?.channelName
+        ?? channelStore.getChannel(conv.targetId)?.name
+        ?? conv.targetId
     default:
       return conv.targetId
   }
@@ -88,6 +90,17 @@ function getAvatar(conv: Conversation): string | null {
     default:
       return null
   }
+}
+
+function getAvatarId(conv: Conversation): string | undefined {
+  if (conv.type !== ConversationType.Channel) return undefined
+  const channel = channelStore.getChannel(conv.targetId)
+  return channel?.channelId || channel?.id || conv.targetId
+}
+
+function getAvatarColor(conv: Conversation): string | undefined {
+  if (conv.type !== ConversationType.Channel) return undefined
+  return channelStore.getChannel(conv.targetId)?.logoColor || undefined
 }
 
 function getAvatarType(conv: Conversation): 'friend' | 'group' | 'channel' {
@@ -220,9 +233,11 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
       >
         <div class="conv-avatar-wrap">
           <TextAvatar
+            :id="getAvatarId(conv)"
             :name="getName(conv)"
             :src="getAvatar(conv)"
             :avatar-type="getAvatarType(conv)"
+            :color="getAvatarColor(conv)"
             :size="35"
             :rounded="!!getAvatar(conv)"
           />
@@ -301,7 +316,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   height: 59px;
   background-color: #fcfcfc;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background-color 0.2s ease;
 
   &:hover { background: #f9f9f9; }
   &.active { background: #efefef; }
@@ -384,6 +399,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   flex: 1;
   min-width: 0;
   max-width: 120px;
+  line-height: 18px;
 }
 
 .conv-time {

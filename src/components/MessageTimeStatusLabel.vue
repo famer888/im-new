@@ -13,6 +13,7 @@ import { formatTimeStamp } from '@/utils/formatTimeStamp'
 import ComLoading from '@/components/ComLoading.vue'
 import hasSendUrl from '@/assets/images/message/has-send.png'
 import hasReadUrl from '@/assets/images/message/has-read.png'
+import channelReadUrl from '@/assets/images/channel/read1.png'
 
 const props = defineProps<{
   message: Message
@@ -27,6 +28,25 @@ const messageStore = useMessageStore()
 const timeText = computed(() => {
   void locale.value
   return formatTimeStamp(props.message.sendTime, locale.value, t)
+})
+
+const isChannelMessage = computed(() => String(props.message.conversationId || '').startsWith('2_'))
+
+function parseExtra(raw: string | null): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+const channelReadTotal = computed(() => {
+  if (!isChannelMessage.value) return 0
+  const extra = parseExtra(props.message.extra)
+  const total = Number(extra.readTotal ?? extra.read_total ?? 0)
+  return Number.isFinite(total) && total > 0 ? total : 1
 })
 
 const showLoading = computed(
@@ -68,6 +88,10 @@ async function handleResend() {
 
 <template>
   <div class="com-time-status-label">
+    <div v-if="isChannelMessage" class="channel-read">
+      <img class="channel-read-icon" :src="channelReadUrl" alt="" />
+      <span class="channel-read-num">{{ channelReadTotal }}</span>
+    </div>
     <span class="time-text">{{ timeText }}</span>
     <ComLoading v-if="showLoading" />
     <div v-else-if="isSelf" class="tips">
@@ -92,6 +116,24 @@ async function handleResend() {
     font-size: 12px;
     color: #666;
     white-space: nowrap;
+  }
+
+  .channel-read {
+    display: flex;
+    align-items: center;
+    margin-right: 2px;
+
+    .channel-read-icon {
+      width: 14px;
+      height: 10px;
+    }
+
+    .channel-read-num {
+      margin-left: 2px;
+      font-size: 12px;
+      color: #666;
+      white-space: nowrap;
+    }
   }
 
   .tips {

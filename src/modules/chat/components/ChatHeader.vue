@@ -174,6 +174,16 @@ const avatarType = computed<'friend' | 'group' | 'channel'>(() => {
   }
 })
 
+const avatarId = computed(() => {
+  if (conversation.value?.type !== ConversationType.Channel) return undefined
+  return channelInfo.value?.channelId || channelInfo.value?.id || conversation.value.targetId
+})
+
+const avatarColor = computed(() => {
+  if (conversation.value?.type !== ConversationType.Channel) return undefined
+  return channelInfo.value?.logoColor || undefined
+})
+
 watch(friendContact, (contact) => {
   remarkDraft.value = contact?.remark || contact?.nickname || ''
   editingRemark.value = false
@@ -292,9 +302,11 @@ watch(
         >
           <TextAvatar
             class="header-avatar"
+            :id="avatarId"
             :name="title || conversation?.targetId || '?'"
             :src="avatar || null"
             :avatar-type="avatarType"
+            :color="avatarColor"
             :size="25"
             rounded
           />
@@ -441,14 +453,15 @@ watch(
 }
 
 .subtitle-line {
-  font-size: 12px;
-  color: #999;
+  font-size: 10px;
+  color: #b4b4b4;
   font-weight: 400;
-  line-height: 1.2;
-  margin-top: 2px;
+  line-height: 1;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  // margin-bottom: 20px;
 }
 
 .header-avatar {
@@ -482,7 +495,6 @@ watch(
 .title {
   font-size: 16px;
   font-weight: 700;
-  line-height: 1;
   color: #333;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -17,10 +17,12 @@ const channel = computed(() => channelStore.getChannel(props.channelId))
 const detail = ref<{
   channelName: string
   icon: string
+  logoColor: string
   memberCount: number
 }>({
   channelName: '',
   icon: '',
+  logoColor: '',
   memberCount: 0,
 })
 const memberList = ref<Array<{ id: string; name: string; icon: string; type: number }>>([])
@@ -38,6 +40,7 @@ watch(
       detail.value = {
         channelName: String(d.channelName || channel.value?.name || channelId),
         icon: String(d.icon || channel.value?.avatar || ''),
+        logoColor: String(d.logoColor || channel.value?.logoColor || ''),
         memberCount: Number(d.memberCount || channel.value?.memberCount || 0),
       }
 
@@ -53,6 +56,7 @@ watch(
       detail.value = {
         channelName: String(channel.value?.name || channelId),
         icon: String(channel.value?.avatar || ''),
+        logoColor: String(channel.value?.logoColor || ''),
         memberCount: Number(channel.value?.memberCount || 0),
       }
       memberList.value = []
@@ -75,9 +79,11 @@ function startChat() {
       <div class="user-info">
         <TextAvatar
           class="avatar"
+          :id="channel?.channelId || channel?.id || props.channelId"
           :name="detail.channelName || channel?.name || channel?.id || props.channelId"
           :src="detail.icon || channel?.avatar || null"
           avatar-type="channel"
+          :color="detail.logoColor || channel?.logoColor || undefined"
           :size="60"
           rounded
         />

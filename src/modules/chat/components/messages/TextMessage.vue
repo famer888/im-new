@@ -201,7 +201,7 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
 <template>
   <!-- 结构对齐旧 im `msg/text.vue` + `time-status-label`：气泡内右下时间/状态 -->
-  <div :class="['text-message', 'com-msg-text', { self: displayAsSelf }]">
+  <div :class="['text-message', 'com-msg-text', { self: displayAsSelf, channel: isChannelChat }]">
     <div class="content-text">
       <template v-for="(segment, index) in contentSegments" :key="index">
         <span
@@ -259,6 +259,10 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
         opacity: 0.8;
       }
     }
+  }
+
+  &.channel > .content-text {
+    padding-right: 92px;
   }
 }
 

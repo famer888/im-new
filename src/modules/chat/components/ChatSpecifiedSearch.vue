@@ -100,6 +100,7 @@ function linkTo(m: Message) {
       <div v-if="info" class="chat-info">
         <TextAvatar
           class="img-head"
+          :id="info.type === 'channel' ? info.id : undefined"
           :name="info.name || info.id"
           :src="info.pic || null"
           :avatar-type="info.type === 'group' ? 'group' : info.type === 'channel' ? 'channel' : 'friend'"
