@@ -62,6 +62,10 @@ const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
 const pendingFiles = ref<File[]>([])
 const showFilePreview = ref(false)
+/** 二维码转发（data: 图）：与老 im file-dialog 一致，弹出 FileUploadPreview */
+const showQrForwardUpload = ref(false)
+const qrForwardPendingFiles = ref<File[]>([])
+const qrForwardAutoOpenToken = ref('')
 const editorMenuVisible = ref(false)
 const editorMenuX = ref(0)
 const editorMenuY = ref(0)
@@ -140,6 +144,20 @@ const currentForwardDraftItems = computed(() => (
     : []
 ))
 const hasForwardDraft = computed(() => currentForwardDraftItems.value.length > 0)
+
+/** 频道/群二维码「转发给朋友」：草稿里是 data: 合成图，输入区展示大图预览（对齐老 im forward + 待发图片） */
+const forwardPreviewQrSrc = computed(() => {
+  if (currentForwardDraftItems.value.length !== 1) return ''
+  const item = currentForwardDraftItems.value[0]
+  if (item.msgType !== MessageType.Image) return ''
+  try {
+    const o = JSON.parse(item.content) as { url?: string; thumbnailUrl?: string }
+    const u = String(o.thumbnailUrl || o.url || '')
+    return u.startsWith('data:image/') ? u : ''
+  } catch {
+    return ''
+  }
+})
 const readBurnTimeText = computed(() =>
   getReadBurnTimeText(currentContact.value?.msgCancelTime || 30),
 )
@@ -374,6 +392,9 @@ function focusEditor() {
 }
 
 watch(convId, (newId, oldId) => {
+  showQrForwardUpload.value = false
+  qrForwardPendingFiles.value = []
+  qrForwardAutoOpenToken.value = ''
   if (oldId && content.value.trim()) {
     draftMap.set(oldId, content.value)
   }
@@ -389,7 +410,80 @@ watch(convId, (newId, oldId) => {
   }
 })
 
-function handleSend() {
+function parseForwardImageDataUrl(content: string): { dataUrl: string; fileName: string } | null {
+  try {
+    const o = JSON.parse(content) as { url?: string; name?: string }
+    const dataUrl = String(o.url || '')
+    if (!dataUrl.startsWith('data:image/')) return null
+    const fileName = String(o.name || 'image.png')
+    return { dataUrl, fileName }
+  } catch {
+    return null
+  }
+}
+
+function dataUrlToFile(dataUrl: string, fileName: string): File {
+  const segments = dataUrl.split(',')
+  const header = segments[0] || ''
+  const base64 = segments[1] || ''
+  const mimeMatch = header.match(/data:(.*?);base64/)
+  const mime = mimeMatch?.[1] || 'image/png'
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], fileName, { type: mime })
+}
+
+function openQrForwardFileDialogFromDraft() {
+  const item = currentForwardDraftItems.value[0]
+  if (!item || item.msgType !== MessageType.Image) return
+  const parsed = parseForwardImageDataUrl(item.content)
+  if (!parsed) return
+  try {
+    qrForwardPendingFiles.value = [dataUrlToFile(parsed.dataUrl, parsed.fileName)]
+    showQrForwardUpload.value = true
+  } catch (e) {
+    console.error('[message-input] QR forward → file dialog failed:', e)
+    showToast((e as Error)?.message || t('操作失败'), 'error')
+  }
+}
+
+watch(
+  () => ({
+    cid: convId.value,
+    tid: uiStore.forwardDraftTargetId,
+    qrLen: forwardPreviewQrSrc.value.length,
+    draftLen: uiStore.forwardDraftItems.length,
+  }),
+  (s) => {
+    if (showQrForwardUpload.value || showFilePreview.value) return
+    if (!s.qrLen || s.draftLen !== 1 || !s.cid || s.cid !== s.tid) return
+    const token = `${s.cid}|${s.tid}|${s.qrLen}`
+    if (qrForwardAutoOpenToken.value === token) return
+    qrForwardAutoOpenToken.value = token
+    nextTick(() => {
+      if (showQrForwardUpload.value || showFilePreview.value) return
+      openQrForwardFileDialogFromDraft()
+    })
+  },
+)
+
+async function handleQrForwardConfirm(payload: { text: string; files: File[] }) {
+  showQrForwardUpload.value = false
+  qrForwardPendingFiles.value = []
+  qrForwardAutoOpenToken.value = ''
+  uiStore.clearForwardDraft()
+  await handleFileSend(payload)
+}
+
+function handleQrForwardCancel() {
+  showQrForwardUpload.value = false
+  qrForwardPendingFiles.value = []
+  qrForwardAutoOpenToken.value = ''
+  uiStore.clearForwardDraft()
+}
+
+async function handleSend() {
   showEmoji.value = false
   const text = normalizeEditorText(content.value).trim()
   if (!text && !hasForwardDraft.value) return
@@ -407,10 +501,23 @@ function handleSend() {
     uiStore.clearQuoteMessage()
   }
 
-  for (const item of currentForwardDraftItems.value) {
-    emit('send', item.content, item.msgType, item.extra)
-  }
-  if (hasForwardDraft.value) {
+  const forwardSnapshot = [...currentForwardDraftItems.value]
+  if (forwardSnapshot.length > 0) {
+    for (const item of forwardSnapshot) {
+      const inlineImage = item.msgType === MessageType.Image ? parseForwardImageDataUrl(item.content) : null
+      if (inlineImage) {
+        try {
+          const file = dataUrlToFile(inlineImage.dataUrl, inlineImage.fileName)
+          await handleFileSend([file])
+        } catch (error) {
+          console.error('[message-input] forward QR/image upload failed:', error)
+          showToast((error as Error)?.message || t('操作失败'), 'error')
+          return
+        }
+      } else {
+        emit('send', item.content, item.msgType, item.extra)
+      }
+    }
     uiStore.clearForwardDraft()
   }
 
@@ -424,6 +531,7 @@ function handleSend() {
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
+    if (showQrForwardUpload.value) return
     if (hasForwardDraft.value) {
       uiStore.clearForwardDraft()
       return
@@ -1772,9 +1880,13 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
+      <!-- 二维码类转发优先弹 file-dialog；若未弹起，保留预览条可手动点开 -->
       <div v-if="hasForwardDraft" class="forward-preview-bar">
         <img class="forward-preview-icon" :src="forwardPreviewIcon" alt="" />
-        <div class="forward-preview-body">
+        <div
+          class="forward-preview-body"
+          @click="forwardPreviewQrSrc && openQrForwardFileDialogFromDraft()"
+        >
           <template v-if="currentForwardDraftItems.length === 1">
             <div class="forward-preview-info">
               <h3 class="forward-preview-sender">{{ currentForwardDraftItems[0].senderName }}</h3>
@@ -1884,7 +1996,11 @@ onBeforeUnmount(() => {
             <img :src="readBurnTimeIcon" alt="" />
             <span>{{ readBurnTimeText }}</span>
           </span>
-          <button class="send-btn" :disabled="!content.trim() && !hasForwardDraft" @click="handleSend">
+          <button
+            class="send-btn"
+            :disabled="!content.trim() && (!hasForwardDraft || !!forwardPreviewQrSrc)"
+            @click="handleSend"
+          >
             {{ $t('发送') }}
           </button>
         </div>
@@ -1912,6 +2028,14 @@ onBeforeUnmount(() => {
       :files="pendingFiles"
       @confirm="handleFileSend"
       @cancel="pendingFiles = []"
+    />
+
+    <FileUploadPreview
+      v-model:visible="showQrForwardUpload"
+      :files="qrForwardPendingFiles"
+      large-hero-preview
+      @confirm="handleQrForwardConfirm"
+      @cancel="handleQrForwardCancel"
     />
 
     <Toast

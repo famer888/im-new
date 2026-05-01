@@ -1224,15 +1224,42 @@ function buildForwardDraftItems(): ForwardDraftItem[] {
   }))
 }
 
+function normalizeForwardTargetConvId(targetConvId: string): string {
+  const raw = String(targetConvId || '').trim()
+  if (!raw) return raw
+  if (/^\d+_.+/.test(raw)) return raw
+  if (chatStore.conversations.some((c) => c.id === raw)) return raw
+
+  if (raw.startsWith('friend_')) {
+    return `${ConversationType.Friend}_${raw.slice('friend_'.length)}`
+  }
+  if (raw.startsWith('group_')) {
+    return `${ConversationType.Group}_${raw.slice('group_'.length)}`
+  }
+  if (raw.startsWith('channel_')) {
+    return `${ConversationType.Channel}_${raw.slice('channel_'.length)}`
+  }
+  return raw
+}
+
 async function handleForward(targetConvId: string) {
   const drafts = buildForwardDraftItems()
   if (drafts.length === 0) return
+  const normalizedTargetConvId = normalizeForwardTargetConvId(targetConvId)
+  const [convTypeRaw, convTargetId = ''] = normalizedTargetConvId.split('_')
+  const convType = Number(convTypeRaw)
+  if (!Number.isNaN(convType) && convTargetId) {
+    chatStore.ensureConversation(convType, convTargetId)
+  }
+
   uiStore.clearQuoteMessage()
-  uiStore.setForwardDraft(targetConvId, drafts)
+  uiStore.setForwardDraft(normalizedTargetConvId, drafts)
   uiStore.exitSelectionMode()
   uiStore.closeForwardDialog()
 
-  chatStore.setCurrentConversation(targetConvId)
+  chatStore.setCurrentConversation(normalizedTargetConvId)
+  // 转发落到新会话后，关闭之前会话残留的右侧信息面板（频道二维码/详情等）
+  uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
   eventBus.emit('editor:focus')
 }
