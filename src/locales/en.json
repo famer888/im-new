@@ -189,6 +189,8 @@
   "操作失败": "Operation failed",
   "群二维码": "Group QR Code",
   "群二维码默认文件名": "Group-QR-{id}",
+  "频道二维码": "Channel QR Code",
+  "频道二维码默认文件名": "Channel-QR-{id}",
   "二维码长期有效": "QR Code is permanently valid",
   "重置二维码": "Reset QR Code",
   "二维码链接异常": "QR Code link is abnormal",
