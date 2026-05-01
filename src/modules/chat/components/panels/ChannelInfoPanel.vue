@@ -77,6 +77,10 @@ const isEditDesc = ref(false)
 const showQrCode = ref(false)
 const toastMessage = ref('')
 const toastTimer = ref<number | null>(null)
+const loadingMembers = ref(false)
+let loadSeq = 0
+const CHANNEL_DETAIL_CACHE_TTL_MS = 60 * 1000
+const CHANNEL_MEMBERS_CACHE_TTL_MS = 60 * 1000
 
 const conv = computed(() => chatStore.currentConversation)
 const channel = computed(() => {
@@ -126,30 +130,62 @@ function responseOk(resp: { code?: number } | null | undefined): boolean {
   return code === 200 || code === 0
 }
 
-async function loadChannelInfo() {
-  if (!channelId.value || conv.value?.type !== ConversationType.Channel) return
+function detailCacheKey(id: string): string {
+  return `channel-info:detail:${id}`
+}
 
+function membersCacheKey(id: string): string {
+  return `channel-info:members:${id}`
+}
+
+function readCache<T>(key: string, ttlMs: number): T | null {
   try {
-    const [detailResp, usersResp] = await Promise.all([
-      getChannelDetail({ channelId: channelId.value }),
-      getChannelUsers({ channelId: channelId.value, pageNum: 1, pageSize: 50 }),
-    ])
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { ts?: number; data?: T }
+    if (!parsed || typeof parsed.ts !== 'number') return null
+    if (Date.now() - parsed.ts > ttlMs) return null
+    return parsed.data ?? null
+  } catch {
+    return null
+  }
+}
 
-    detail.value = detailResp.data || {}
-    if (detailResp.data) {
-      channelStore.patchChannel(channelId.value, {
-        ...detailResp.data,
-        isDisturb: toBool(detailResp.data.isDisturb),
-      })
-      if (detailResp.data.isDisturb !== undefined && conv.value) {
-        chatStore.updateConversation({
-          id: conv.value.id,
-          isMuted: toBool(detailResp.data.isDisturb),
-        })
-      }
-    }
+function writeCache<T>(key: string, data: T) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
+  } catch {
+    // ignore sessionStorage errors
+  }
+}
+
+function syncDisturbFromDetail(data: Record<string, any>, targetChannelId: string) {
+  if (data?.isDisturb === undefined || !conv.value) return
+  chatStore.updateConversation({
+    id: conv.value.id,
+    isMuted: toBool(data.isDisturb),
+  })
+  channelStore.patchChannel(targetChannelId, { isDisturb: toBool(data.isDisturb) })
+}
+
+function shouldLoadMembersByDetail(data: Record<string, any> | null | undefined): boolean {
+  return Number(data?.adminPrivacy ?? 0) > 0
+}
+
+async function loadChannelMembers(targetChannelId: string, seq: number) {
+  if (!targetChannelId || seq !== loadSeq) return
+  const cachedMembers = readCache<ChannelMember[]>(membersCacheKey(targetChannelId), CHANNEL_MEMBERS_CACHE_TTL_MS)
+  if (cachedMembers && cachedMembers.length > 0) {
+    members.value = cachedMembers
+    loadingMembers.value = false
+    return
+  }
+  loadingMembers.value = true
+  try {
+    const usersResp = await getChannelUsers({ channelId: targetChannelId, pageNum: 1, pageSize: 20 })
+    if (seq !== loadSeq || targetChannelId !== channelId.value) return
     const rows = usersResp.data?.rowList || []
-    members.value = rows.map((raw) => {
+    const parsedMembers = rows.map((raw) => {
       const user = raw.userInfoDTO || raw
       const id = String(user.uid ?? user.id ?? raw.uid ?? raw.id ?? '')
       return {
@@ -159,6 +195,60 @@ async function loadChannelInfo() {
         memberType: Number(raw.memberType ?? raw.type ?? raw.role ?? 3),
       }
     }).filter((item) => item.id)
+    members.value = parsedMembers
+    writeCache(membersCacheKey(targetChannelId), parsedMembers)
+  } catch (error) {
+    if (seq === loadSeq) {
+      members.value = []
+    }
+    console.warn('[ChannelInfoPanel] load channel members failed:', error)
+  } finally {
+    if (seq === loadSeq) {
+      loadingMembers.value = false
+    }
+  }
+}
+
+async function loadChannelInfo() {
+  if (!channelId.value || conv.value?.type !== ConversationType.Channel) return
+
+  const seq = ++loadSeq
+  const targetChannelId = channelId.value
+  members.value = []
+  loadingMembers.value = false
+  const cachedDetail = readCache<Record<string, any>>(detailCacheKey(targetChannelId), CHANNEL_DETAIL_CACHE_TTL_MS)
+
+  if (cachedDetail) {
+    detail.value = cachedDetail
+    channelStore.patchChannel(targetChannelId, {
+      ...cachedDetail,
+      isDisturb: toBool(cachedDetail.isDisturb),
+    })
+    syncDisturbFromDetail(cachedDetail, targetChannelId)
+    if (shouldLoadMembersByDetail(cachedDetail)) {
+      void loadChannelMembers(targetChannelId, seq)
+    }
+    return
+  }
+
+  try {
+    const detailResp = await getChannelDetail({ channelId: targetChannelId })
+    if (seq !== loadSeq || targetChannelId !== channelId.value) return
+
+    detail.value = detailResp.data || {}
+    if (detailResp.data) {
+      writeCache(detailCacheKey(targetChannelId), detailResp.data)
+      channelStore.patchChannel(targetChannelId, {
+        ...detailResp.data,
+        isDisturb: toBool(detailResp.data.isDisturb),
+      })
+      syncDisturbFromDetail(detailResp.data, targetChannelId)
+    }
+
+    // 成员列表放到详情渲染后再异步请求，优先保证右侧面板首屏可交互。
+    if (shouldLoadMembersByDetail(detailResp.data)) {
+      void loadChannelMembers(targetChannelId, seq)
+    }
   } catch (error) {
     console.warn('[ChannelInfoPanel] load channel info failed:', error)
   }
@@ -181,6 +271,7 @@ async function setChannelReceiveNotifications(receive: boolean) {
     if (!responseOk(resp)) throw new Error(resp?.msg || 'update channel disturb failed')
 
     detail.value = { ...detail.value, isDisturb: nextDisturb }
+    writeCache(detailCacheKey(channelId.value), detail.value)
     channelStore.patchChannel(channelId.value, { isDisturb: nextDisturb })
     chatStore.updateConversation({ id: conv.value.id, isMuted: nextDisturb })
     if (authStore.uid) {
@@ -251,6 +342,7 @@ async function handleOk() {
     if (!responseOk(resp)) throw new Error(resp?.msg || 'update channel description failed')
 
     detail.value = { ...detail.value, channelDesc: editDescDraft.value }
+    writeCache(detailCacheKey(channelId.value), detail.value)
     channelStore.patchChannel(channelId.value, { description: editDescDraft.value })
     editDescDraftCopy.value = editDescDraft.value
     isEditDesc.value = false
@@ -600,7 +692,8 @@ onBeforeUnmount(() => {
         <input v-model="keyword" type="text" :placeholder="t('搜索')" />
       </label>
 
-      <ul class="member-list">
+      <div v-if="loadingMembers" class="member-loading">{{ t('加载中') }}...</div>
+      <ul v-else class="member-list">
         <li v-for="member in filteredMembers" :key="member.id">
           <TextAvatar
             :name="member.name || member.id"
@@ -801,6 +894,12 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
   }
+}
+
+.member-loading {
+  margin-top: 12px;
+  color: #999;
+  font-size: 12px;
 }
 
 .member-info {
