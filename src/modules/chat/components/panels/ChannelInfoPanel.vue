@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore } from '@/stores/useMessageStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import { getChannelDetail, getChannelUsers, updateMember, updateChannel } from '@/api/imChannel'
 import AppSwitch from '@/components/AppSwitch.vue'
@@ -20,11 +21,47 @@ interface ChannelMember {
   memberType: number
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const channelStore = useChannelStore()
 const messageStore = useMessageStore()
+const uiStore = useUIStore()
+
+/** 英文/葡语/越南语界面下，另存为等对话框更适合拉丁文件名（与 GroupQRCode 一致） */
+function prefersAsciiFriendlyFileNames(): boolean {
+  const loc = (locale.value || '').toLowerCase()
+  return loc.startsWith('en') || loc.startsWith('pt') || loc.startsWith('vi')
+}
+
+const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/
+
+function safeChannelFileNameId(): string {
+  return String(channelId.value || 'channel').replace(/[/\\?%*:|"<>.\s]/g, '_').slice(0, 48) || 'channel'
+}
+
+function sanitizeChannelFileNameStem(name: string): string {
+  const s = name.replace(/[/\\?%*:|"<>]/g, '_').trim().slice(0, 120)
+  return s || t('频道二维码')
+}
+
+function channelQrImageFileStem(): string {
+  const raw = channelName.value.trim()
+  const idPart = safeChannelFileNameId()
+  const latinUi = prefersAsciiFriendlyFileNames()
+
+  if (!raw) {
+    return latinUi ? t('频道二维码默认文件名', { id: idPart }) : sanitizeChannelFileNameStem(t('频道二维码'))
+  }
+  if (latinUi && CJK_RE.test(raw)) {
+    return t('频道二维码默认文件名', { id: idPart })
+  }
+  return sanitizeChannelFileNameStem(raw)
+}
+
+function channelQrImageFileName(): string {
+  return `${channelQrImageFileStem()}.png`
+}
 
 const detail = ref<Record<string, any>>({})
 const members = ref<ChannelMember[]>([])
@@ -221,7 +258,20 @@ function handleCopyQrLink() {
 }
 
 function handleForwardQrCode() {
-  console.warn('[ChannelInfoPanel] forward qrcode')
+  const qrCodeBase64 = buildChannelQrForwardImage()
+  if (!qrCodeBase64) {
+    showBriefToast(t('转发失败'))
+    return
+  }
+  const imageName = channelQrImageFileName()
+  uiStore.openForwardDialogWithPayload({
+    msgType: 1,
+    content: JSON.stringify({
+      name: imageName,
+      url: qrCodeBase64,
+      thumbnailUrl: qrCodeBase64,
+    }),
+  })
 }
 
 function handleSaveQrCode() {
@@ -242,7 +292,70 @@ function copyAlias() {
   })
 }
 
-const qrcodeRef = ref()
+const qrcodeWrapRef = ref<HTMLElement | null>(null)
+
+function resolveQrCanvas(): HTMLCanvasElement | null {
+  const wrap = qrcodeWrapRef.value
+  if (!wrap) return null
+  const canvas = wrap.querySelector('canvas')
+  if (canvas instanceof HTMLCanvasElement) return canvas
+  return null
+}
+
+/** 合成与群二维码转发相同规格的图片，供消息转发对话框使用 */
+function buildChannelQrForwardImage(): string | null {
+  const qrcodeElement = resolveQrCanvas()
+  if (!qrcodeElement) {
+    console.warn('[ChannelInfoPanel] buildChannelQrForwardImage: canvas not found')
+    return null
+  }
+
+  try {
+    const dpr = window.devicePixelRatio || 1
+    const baseWidth = 360
+    const baseHeight = 340
+
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+
+    canvas.width = baseWidth * dpr
+    canvas.height = baseHeight * dpr
+    ctx.scale(dpr, dpr)
+
+    ctx.fillStyle = '#F5F5F5'
+    ctx.fillRect(0, 0, baseWidth, baseHeight)
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, baseWidth, baseHeight - 40)
+
+    const drawCodeSize = 250
+    const codeX = (baseWidth - drawCodeSize) / 2
+    const codeY = 12
+    ctx.drawImage(qrcodeElement, codeX, codeY, drawCodeSize, drawCodeSize)
+
+    ctx.fillStyle = '#787878'
+    ctx.font = '16px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(t('二维码长期有效'), baseWidth / 2, 286)
+
+    ctx.fillStyle = '#000000'
+    ctx.font = '22px sans-serif'
+    ctx.fillText(channelName.value || '', baseWidth / 2, 318)
+
+    return canvas.toDataURL('image/png')
+  } catch (e) {
+    console.warn('[ChannelInfoPanel] buildChannelQrForwardImage failed:', e)
+    return null
+  }
+}
+
+function showBriefToast(msg: string) {
+  toastMessage.value = msg
+  if (toastTimer.value) clearTimeout(toastTimer.value)
+  toastTimer.value = window.setTimeout(() => {
+    toastMessage.value = ''
+  }, 2000)
+}
 
 watch(channelId, loadChannelInfo)
 onMounted(loadChannelInfo)
@@ -311,14 +424,15 @@ onMounted(loadChannelInfo)
           <span>{{ t('通过二维码邀请') }}</span>
         </div>
         <section class="qrcode-section">
-          <QrcodeVue
-            v-if="channelId"
-            ref="qrcodeRef"
-            class="qrcode"
-            :value="`${detail.link || ''}?id=${channelId}`"
-            level="H"
-            :size="180"
-          />
+          <div v-if="channelId" ref="qrcodeWrapRef" class="qrcode-wrap">
+            <QrcodeVue
+              class="qrcode"
+              :value="`${detail.link || ''}?id=${channelId}`"
+              level="H"
+              :size="180"
+              render-as="canvas"
+            />
+          </div>
           <h3>{{ t('二维码长期有效') }}</h3>
         </section>
         <div class="qrcode-buttons">
@@ -793,6 +907,12 @@ onMounted(loadChannelInfo)
   flex-direction: column;
   position: relative;
   padding-bottom: 30px;
+
+  .qrcode-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
   .qrcode {
     width: 180px;

@@ -189,6 +189,8 @@
   "操作失败": "Thao tác thất bại",
   "群二维码": "Mã QR nhóm",
   "群二维码默认文件名": "QR-nhom-{id}",
+  "频道二维码": "Mã QR kênh",
+  "频道二维码默认文件名": "QR-kenh-{id}",
   "二维码长期有效": "Mã QR có hiệu lực lâu dài",
   "重置二维码": "Thiết lập lại mã QR",
   "二维码链接异常": "Liên kết mã QR không ổn định",
