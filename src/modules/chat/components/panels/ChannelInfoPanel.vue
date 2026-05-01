@@ -35,6 +35,8 @@ const editDescDraft = ref('')
 const editDescDraftCopy = ref('')
 const isEditDesc = ref(false)
 const showQrCode = ref(false)
+const toastMessage = ref('')
+const toastTimer = ref<number | null>(null)
 
 const conv = computed(() => chatStore.currentConversation)
 const channel = computed(() => {
@@ -230,6 +232,20 @@ function handleSaveQrCode() {
   console.warn('[ChannelInfoPanel] save qrcode')
 }
 
+function copyAlias() {
+  if (!alias.value) return
+  const textToCopy = `@${alias.value}`
+  navigator.clipboard.writeText(textToCopy).then(() => {
+    toastMessage.value = '复制成功'
+    if (toastTimer.value) clearTimeout(toastTimer.value)
+    toastTimer.value = window.setTimeout(() => {
+      toastMessage.value = ''
+    }, 2000)
+  }).catch(() => {
+    console.warn('[ChannelInfoPanel] failed to copy alias')
+  })
+}
+
 const qrcodeRef = ref()
 
 watch(channelId, loadChannelInfo)
@@ -241,11 +257,13 @@ onMounted(loadChannelInfo)
     <section v-if="alias || adminPrivacy" class="channel-link" @click="showQrCode = true">
       <h4>{{ t('频道别名') }}</h4>
       <div class="channel-link-info">
-        <span class="alias">{{ alias ? `@${alias}` : '' }}</span>
+        <span class="alias" @click.stop="copyAlias">{{ alias ? `@${alias}` : '' }}</span>
         <img class="code-icon" :src="codeIcon" alt="" />
         <span class="arrow">›</span>
       </div>
     </section>
+
+    <div v-if="toastMessage" class="toast">{{ toastMessage }}</div>
 
     <section class="panel-section intro-section" :class="{ clickable: canClearHistory }" @click="canClearHistory && openEditDesc()">
       <div class="section-head">
@@ -423,6 +441,7 @@ onMounted(loadChannelInfo)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .code-icon {
@@ -861,6 +880,36 @@ onMounted(loadChannelInfo)
       color: #000;
       font-weight: 300;
     }
+  }
+}
+
+.toast {
+  position: fixed;
+  bottom: 50%;
+  left: 50%;
+  transform: translate(-50%, 50%);
+  background: #333;
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-size: 14px;
+  z-index: 1000;
+  pointer-events: none;
+  animation: fadeInOut 2s ease-in-out;
+}
+
+@keyframes fadeInOut {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 </style>
