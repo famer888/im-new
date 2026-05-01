@@ -108,7 +108,7 @@ const list = computed((): ForwardItem[] => {
     const conv = chatStore.conversations.find(
       c => c.type === ConversationType.Friend && c.targetId === contact.id
     )
-    const convId = conv?.id ?? `friend_${contact.id}`
+    const convId = conv?.id ?? `${ConversationType.Friend}_${contact.id}`
     addItem({
       id: convId,
       name: contactStore.getDisplayName(contact.id),
@@ -123,7 +123,7 @@ const list = computed((): ForwardItem[] => {
     const conv = chatStore.conversations.find(
       c => c.type === ConversationType.Group && c.targetId === group.id
     )
-    const convId = conv?.id ?? `group_${group.id}`
+    const convId = conv?.id ?? `${ConversationType.Group}_${group.id}`
     addItem({
       id: convId,
       name: group.name ?? group.id,
@@ -138,7 +138,7 @@ const list = computed((): ForwardItem[] => {
     const conv = chatStore.conversations.find(
       c => c.type === ConversationType.Channel && c.targetId === channel.id
     )
-    const convId = conv?.id ?? `channel_${channel.id}`
+    const convId = conv?.id ?? `${ConversationType.Channel}_${channel.id}`
     addItem({
       id: convId,
       channelId: channel.channelId ?? channel.id,

@@ -9,6 +9,8 @@ const { t: $t } = useI18n()
 const props = defineProps<{
   visible: boolean
   files: File[]
+  /** 单图时拉大预览区（频道/群二维码转发等与老 im file-dialog 对齐） */
+  largeHeroPreview?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -214,6 +216,7 @@ onBeforeUnmount(() => {
             <ul
               :class="{
                 only: isOnlyImage,
+                'only-large': isOnlyImage && props.largeHeroPreview,
                 multiple: list.length > 1 || (list.length === 1 && !list[0].isImage),
               }"
             >
@@ -448,6 +451,13 @@ onBeforeUnmount(() => {
             max-width: 360px;
           }
         }
+      }
+    }
+
+    &.only-large.only {
+      > li > picture img {
+        max-height: 320px;
+        max-width: 340px;
       }
     }
 

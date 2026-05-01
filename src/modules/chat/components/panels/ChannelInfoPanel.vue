@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import QrcodeVue from 'qrcode.vue'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -7,10 +7,13 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { ConversationType } from '@/types'
+import { ConversationType, MessageType } from '@/types'
 import { getChannelDetail, getChannelUsers, updateMember, updateChannel } from '@/api/imChannel'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
+import Toast from '@/components/Toast.vue'
+import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
+import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import codeIcon from '@/assets/images/chat/code.png'
 
@@ -84,6 +87,15 @@ const channelId = computed(() => conv.value?.targetId || '')
 const channelName = computed(() =>
   String(detail.value.channelName || channel.value?.channelName || channel.value?.name || channelId.value),
 )
+
+/** 与二维码编码一致：邀请页链接 + id，供转发/复制（老 im 侧实质也是按链接里的 id 拉起频道） */
+const inviteUrlWithChannelId = computed(() => {
+  const base = String(detail.value.link || '').trim()
+  const id = channelId.value
+  if (!base || !id) return ''
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}id=${encodeURIComponent(id)}`
+})
 const alias = computed(() => String(detail.value.alias || ''))
 const description = computed(() =>
   String(detail.value.channelDesc || detail.value.remark || channel.value?.description || ''),
@@ -248,24 +260,79 @@ async function handleOk() {
   }
 }
 
+const qrToastVisible = ref(false)
+const qrToastMessage = ref('')
+const qrToastType = ref<'success' | 'error'>('success')
+const imageOverwriteVisible = ref(false)
+const imageOverwriteFileName = ref('')
+const imageOverwriteDirectoryName = ref('')
+let imageOverwriteResolver: ((value: boolean) => void) | null = null
+
+function showQrToast(msg: string, type: 'success' | 'error' = 'success') {
+  qrToastMessage.value = msg
+  qrToastType.value = type
+  qrToastVisible.value = true
+}
+
 function handleCopyQrLink() {
-  const qrLink = `${detail.value.link || ''}?id=${channelId.value}`
+  const qrLink = inviteUrlWithChannelId.value
+  if (!qrLink) {
+    showQrToast(t('复制失败'), 'error')
+    return
+  }
   navigator.clipboard.writeText(qrLink).then(() => {
-    console.log('[ChannelInfoPanel] qrcode link copied')
+    showQrToast(t('复制成功'))
   }).catch(() => {
-    console.warn('[ChannelInfoPanel] failed to copy qrcode link')
+    showQrToast(t('复制失败'), 'error')
   })
 }
 
+function pathBaseName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || filePath
+}
+
+function pathDirectoryName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments.length > 1 ? segments[segments.length - 2] : pathBaseName(filePath)
+}
+
+function resolveImageOverwrite(result: boolean) {
+  imageOverwriteVisible.value = false
+  const resolver = imageOverwriteResolver
+  imageOverwriteResolver = null
+  resolver?.(result)
+}
+
+function promptImageOverwrite(filePath: string): Promise<boolean> {
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
+
+  imageOverwriteFileName.value = pathBaseName(filePath)
+  imageOverwriteDirectoryName.value = pathDirectoryName(filePath)
+  imageOverwriteVisible.value = true
+
+  return new Promise((resolve) => {
+    imageOverwriteResolver = resolve
+  })
+}
+
+function isTauri(): boolean {
+  return !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+}
+
+/** 与老 im menu-qrcode「转发给朋友」一致：合成二维码图 → 选中会话后进输入区上传发送（见 MessageInput 对 data: 转发图的处理） */
 function handleForwardQrCode() {
   const qrCodeBase64 = buildChannelQrForwardImage()
   if (!qrCodeBase64) {
-    showBriefToast(t('转发失败'))
+    showQrToast(t('转发失败'), 'error')
     return
   }
   const imageName = channelQrImageFileName()
   uiStore.openForwardDialogWithPayload({
-    msgType: 1,
+    msgType: MessageType.Image,
     content: JSON.stringify({
       name: imageName,
       url: qrCodeBase64,
@@ -275,7 +342,49 @@ function handleForwardQrCode() {
 }
 
 function handleSaveQrCode() {
-  console.warn('[ChannelInfoPanel] save qrcode')
+  const dataUrl = buildChannelQrForwardImage()
+  if (!dataUrl) {
+    showQrToast(t('保存失败无画布'), 'error')
+    return
+  }
+  handleExportChannelQr(dataUrl)
+}
+
+async function handleExportChannelQr(qrCodeBase64: string) {
+  const suffix = '.png'
+  const fileName = channelQrImageFileName()
+
+  if (!isTauri()) {
+    const link = document.createElement('a')
+    link.download = fileName
+    link.href = qrCodeBase64
+    link.click()
+    showQrToast(t('保存成功'))
+    return
+  }
+
+  try {
+    const {
+      filePath,
+      canceled,
+      needsOverwriteConfirm,
+    } = await userSelectPngSavePathWithOverwrite(fileName)
+    if (!filePath || canceled) return
+    const finalPath = filePath.endsWith(suffix) ? filePath : `${filePath}${suffix}`
+    if (needsOverwriteConfirm) {
+      const confirmed = await promptImageOverwrite(finalPath)
+      if (!confirmed) return
+    }
+    const err = await exportBase64ImgToLocal(qrCodeBase64, finalPath)
+    if (err) {
+      showQrToast(t('保存失败详情', { detail: err.message }), 'error')
+      return
+    }
+    showQrToast(t('保存成功'))
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    showQrToast(t('保存失败详情', { detail: message }), 'error')
+  }
 }
 
 function copyAlias() {
@@ -349,16 +458,23 @@ function buildChannelQrForwardImage(): string | null {
   }
 }
 
-function showBriefToast(msg: string) {
-  toastMessage.value = msg
-  if (toastTimer.value) clearTimeout(toastTimer.value)
-  toastTimer.value = window.setTimeout(() => {
-    toastMessage.value = ''
-  }, 2000)
-}
-
 watch(channelId, loadChannelInfo)
+watch(
+  () => conv.value?.type,
+  (type) => {
+    if (type !== ConversationType.Channel) {
+      showQrCode.value = false
+    }
+  },
+)
 onMounted(loadChannelInfo)
+
+onBeforeUnmount(() => {
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
+})
 </script>
 
 <template>
@@ -427,7 +543,7 @@ onMounted(loadChannelInfo)
           <div v-if="channelId" ref="qrcodeWrapRef" class="qrcode-wrap">
             <QrcodeVue
               class="qrcode"
-              :value="`${detail.link || ''}?id=${channelId}`"
+              :value="inviteUrlWithChannelId"
               level="H"
               :size="180"
               render-as="canvas"
@@ -502,6 +618,21 @@ onMounted(loadChannelInfo)
         </li>
       </ul>
     </section>
+
+    <Toast
+      :visible="qrToastVisible"
+      :message="qrToastMessage"
+      :type="qrToastType"
+      @update:visible="qrToastVisible = $event"
+    />
+
+    <ImageOverwriteDialog
+      v-model:visible="imageOverwriteVisible"
+      :file-name="imageOverwriteFileName"
+      :directory-name="imageOverwriteDirectoryName"
+      @confirm="resolveImageOverwrite(true)"
+      @cancel="resolveImageOverwrite(false)"
+    />
   </div>
 </template>
 
