@@ -211,10 +211,6 @@ async function handleOk() {
   }
 }
 
-function handleResetQrCode() {
-  console.warn('[ChannelInfoPanel] reset qrcode')
-}
-
 function handleCopyQrLink() {
   const qrLink = `${detail.value.link || ''}?id=${channelId.value}`
   navigator.clipboard.writeText(qrLink).then(() => {
@@ -324,10 +320,6 @@ onMounted(loadChannelInfo)
             :size="180"
           />
           <h3>{{ t('二维码长期有效') }}</h3>
-          <p v-if="canClearHistory" @click="handleResetQrCode" class="reset-link">
-            <img class="refresh-icon" src="@/assets/images/common/refresh.png" alt="" />
-            {{ t('重置二维码') }}
-          </p>
         </section>
         <div class="qrcode-buttons">
           <div class="btn-item">
@@ -813,24 +805,6 @@ onMounted(loadChannelInfo)
     color: #787878;
     line-height: 30px;
     margin: 0;
-  }
-
-  .reset-link {
-    display: flex;
-    align-items: center;
-    font-size: 14px;
-    color: #333;
-    cursor: pointer;
-    margin-top: 10px;
-
-    &:hover {
-      color: #000;
-    }
-
-    .refresh-icon {
-      height: 18px;
-      margin-right: 4px;
-    }
   }
 }
 
