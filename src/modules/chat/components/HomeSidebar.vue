@@ -172,8 +172,16 @@ function handleClearSearch() {
 /** 与 im 搜索条一致：点击输入区域外缘仍可聚焦输入框，便于开始搜索 */
 function handleSearchBarClick(e: MouseEvent) {
   const el = e.target as HTMLElement
-  if (el.closest('.add-btn') || el.closest('.add-cancel') || el.closest('.icon-back')) return
+  if (el.closest('.add-btn') || el.closest('.add-cancel') || el.closest('.icon-back') || el.closest('.archive-back'))
+    return
   searchInputRef.value?.focus()
+}
+
+/** 对齐旧 im search.vue handleBack：退出归档并清空搜索框 */
+function handleArchiveSearchBack() {
+  uiStore.setChatArchiveListShow(false)
+  searchKeyword.value = ''
+  searchStore.clearResults()
 }
 
 function handleBackSpecifiedChat() {
@@ -397,36 +405,66 @@ onBeforeUnmount(() => {
     >
       <div
         class="sidebar-search"
-        :class="{ 'has-back': !!searchStore.searchSpecifiedChatInfo }"
+        :class="{
+          'has-back': !!searchStore.searchSpecifiedChatInfo,
+          'archive-chats-mode':
+            uiStore.sidebarTab === 'chats'
+            && uiStore.chatArchiveListShow
+            && !searchStore.searchSpecifiedChatInfo,
+        }"
         @click="handleSearchBarClick"
       >
-        <img
-          v-if="searchStore.searchSpecifiedChatInfo"
-          class="icon-back"
-          :src="backIcon"
-          alt=""
-          @click="handleBackSpecifiedChat"
-        />
-        <SearchInput
-          ref="searchInputRef"
-          v-model="searchKeyword"
-          :placeholder="searchPlaceholder"
-          @search="handleSearch"
-          @clear="handleClearSearch"
-        />
-        <span
-          v-if="uiStore.sidebarTab === 'contacts' && addAction"
-          class="add-cancel"
-          @click="handleCancelAddAction"
-        >取消</span>
-        <button
-          v-else-if="uiStore.sidebarTab === 'contacts'"
-          class="add-btn"
-          @click="handleAddAction"
-          :title="$t('添加')"
+        <!-- 归档内页：标题置顶居中 + 搜索行 + 返回在搜索框右侧（对齐 im com/search.vue） -->
+        <template
+          v-if="
+            uiStore.sidebarTab === 'chats'
+              && uiStore.chatArchiveListShow
+              && !searchStore.searchSpecifiedChatInfo
+          "
         >
-          <img :src="addBlueIcon" alt="add" />
-        </button>
+          <div class="archive-title">{{ $t('归档会话') }}</div>
+          <div class="search-line-archive">
+            <SearchInput
+              ref="searchInputRef"
+              v-model="searchKeyword"
+              :placeholder="searchPlaceholder"
+              @search="handleSearch"
+              @clear="handleClearSearch"
+            />
+            <span class="archive-back" role="button" tabindex="0" @click.stop="handleArchiveSearchBack">
+              <img class="archive-back-icon" :src="backIcon" alt="" />
+            </span>
+          </div>
+        </template>
+        <template v-else>
+          <img
+            v-if="searchStore.searchSpecifiedChatInfo"
+            class="icon-back"
+            :src="backIcon"
+            alt=""
+            @click="handleBackSpecifiedChat"
+          />
+          <SearchInput
+            ref="searchInputRef"
+            v-model="searchKeyword"
+            :placeholder="searchPlaceholder"
+            @search="handleSearch"
+            @clear="handleClearSearch"
+          />
+          <span
+            v-if="uiStore.sidebarTab === 'contacts' && addAction"
+            class="add-cancel"
+            @click="handleCancelAddAction"
+          >取消</span>
+          <button
+            v-else-if="uiStore.sidebarTab === 'contacts'"
+            class="add-btn"
+            @click="handleAddAction"
+            :title="$t('添加')"
+          >
+            <img :src="addBlueIcon" alt="add" />
+          </button>
+        </template>
       </div>
 
       <div class="sidebar-content">
@@ -642,6 +680,51 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 10px 10px 10px 16px;
   gap: 8px;
+
+  &.archive-chats-mode {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 7px 10px 10px 16px;
+  }
+
+  .archive-title {
+    text-align: center;
+    padding: 10px 0;
+    font-size: 14px;
+    color: #333;
+    font-weight: normal;
+    line-height: 1.2;
+  }
+
+  .search-line-archive {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 0;
+  }
+
+  .archive-back {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 30px;
+    flex-shrink: 0;
+    opacity: 0.8;
+    cursor: pointer;
+    user-select: none;
+
+    &:hover {
+      opacity: 1;
+    }
+  }
+
+  .archive-back-icon {
+    width: 14px;
+    height: 12px;
+    object-fit: contain;
+    display: block;
+  }
 
   &.has-back {
     padding-left: 10px;

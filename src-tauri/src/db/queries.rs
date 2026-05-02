@@ -49,6 +49,7 @@ pub fn get_conversations(conn: &Connection, limit: i64, offset: i64) -> Result<V
                 c.unread_count,
                 c.is_pinned,
                 c.is_muted,
+                c.is_archived,
                 c.draft,
                 c.updated_at
              FROM conversations c
@@ -69,8 +70,9 @@ pub fn get_conversations(conn: &Connection, limit: i64, offset: i64) -> Result<V
                 unread_count: row.get(6)?,
                 is_pinned: row.get::<_, i32>(7)? != 0,
                 is_muted: row.get::<_, i32>(8)? != 0,
-                draft: row.get(9)?,
-                updated_at: row.get(10)?,
+                is_archived: row.get::<_, i32>(9)? != 0,
+                draft: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })
         .map_err(|e| DbError::SqliteError(e.to_string()))?;
@@ -106,6 +108,7 @@ pub fn get_conversation_by_id(conn: &Connection, id: &str) -> Result<Option<Conv
                 c.unread_count,
                 c.is_pinned,
                 c.is_muted,
+                c.is_archived,
                 c.draft,
                 c.updated_at
              FROM conversations c
@@ -122,8 +125,9 @@ pub fn get_conversation_by_id(conn: &Connection, id: &str) -> Result<Option<Conv
             unread_count: row.get(6)?,
             is_pinned: row.get::<_, i32>(7)? != 0,
             is_muted: row.get::<_, i32>(8)? != 0,
-            draft: row.get(9)?,
-            updated_at: row.get(10)?,
+            is_archived: row.get::<_, i32>(9)? != 0,
+            draft: row.get(10)?,
+            updated_at: row.get(11)?,
         })
     });
 
