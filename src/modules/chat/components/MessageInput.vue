@@ -416,7 +416,13 @@ function saveDraft(conversationId: string | null | undefined) {
 
 function restoreDraft(conversationId: string) {
   const draft = getStoredDraft(conversationId)
-  setEditorText(draft)
+  if (draft) {
+    requestAnimationFrame(() => {
+      setEditorTextAndCaret(draft, draft.length)
+    })
+  } else {
+    setEditorText('')
+  }
   chatStore.setDraft(conversationId, null)
 }
 
