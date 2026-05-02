@@ -171,8 +171,8 @@ fn import_current_format_history(
             conn.execute(
                 "INSERT OR REPLACE INTO conversations
                  (id, type, target_id, last_msg_id, last_msg_time, last_msg_digest,
-                  unread_count, is_pinned, is_muted, draft, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                  unread_count, is_pinned, is_muted, is_archived, draft, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     conversation.id,
                     conversation.conv_type,
@@ -183,6 +183,7 @@ fn import_current_format_history(
                     conversation.unread_count,
                     conversation.is_pinned as i32,
                     conversation.is_muted as i32,
+                    conversation.is_archived as i32,
                     conversation.draft,
                     conversation.updated_at,
                 ],
@@ -397,7 +398,7 @@ fn get_all_conversations(conn: &Connection) -> Result<Vec<models::Conversation>,
     let mut stmt = conn
         .prepare_cached(
             "SELECT id, type, target_id, last_msg_id, last_msg_time, last_msg_digest,
-                    unread_count, is_pinned, is_muted, draft, updated_at
+                    unread_count, is_pinned, is_muted, is_archived, draft, updated_at
              FROM conversations
              ORDER BY updated_at DESC",
         )
@@ -415,8 +416,9 @@ fn get_all_conversations(conn: &Connection) -> Result<Vec<models::Conversation>,
                 unread_count: row.get(6)?,
                 is_pinned: row.get::<_, i32>(7)? != 0,
                 is_muted: row.get::<_, i32>(8)? != 0,
-                draft: row.get(9)?,
-                updated_at: row.get(10)?,
+                is_archived: row.get::<_, i32>(9)? != 0,
+                draft: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })
         .map_err(|e| DbError::SqliteError(e.to_string()))?;

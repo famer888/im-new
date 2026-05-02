@@ -23,6 +23,8 @@ export interface AddContactTarget {
 
 export const useUIStore = defineStore('ui', () => {
   const sidebarTab = ref<SidebarTab>('chats')
+  /** 消息列表「归档会话」内页（对齐旧 im archiveListShow + com/search.vue 布局） */
+  const chatArchiveListShow = ref(false)
   const rightPanel = ref<RightPanelType>('none')
   const detailView = ref<DetailViewType>('none')
 
@@ -70,6 +72,13 @@ export const useUIStore = defineStore('ui', () => {
 
   function setSidebarTab(tab: SidebarTab) {
     sidebarTab.value = tab
+    if (tab !== 'chats') {
+      chatArchiveListShow.value = false
+    }
+  }
+
+  function setChatArchiveListShow(show: boolean) {
+    chatArchiveListShow.value = show
   }
 
   function setRightPanel(panel: RightPanelType) {
@@ -205,6 +214,7 @@ export const useUIStore = defineStore('ui', () => {
 
   return {
     sidebarTab,
+    chatArchiveListShow,
     rightPanel,
     detailView,
     settingsVisible,
@@ -226,6 +236,7 @@ export const useUIStore = defineStore('ui', () => {
     contextMenuPosition,
     contextMenuData,
     setSidebarTab,
+    setChatArchiveListShow,
     setRightPanel,
     setDetailView,
     openSettings,

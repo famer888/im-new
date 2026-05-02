@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChatStore, isFileHelperTargetId, GROUP_NOTIFICATION_TARGET_ID, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
@@ -11,6 +11,7 @@ import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
+import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 
 const { t, locale } = useI18n()
@@ -20,8 +21,6 @@ const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
-
-const showArchive = ref(false)
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
 function isNotFileHelper(c: Conversation): boolean {
@@ -58,8 +57,18 @@ const archivedConversations = computed(() =>
   ),
 )
 
+/** 与旧 im 归档入口 archiveText 一致：归档会话名称逗号拼接预览 */
+const archivePreviewText = computed(() =>
+  archivedConversations.value.map((c) => getName(c)).filter(Boolean).join(','),
+)
+
+/** 归档会话汇总未读（旧 im archiveUnreadCount） */
+const archiveUnreadTotal = computed(() =>
+  archivedConversations.value.reduce((sum, c) => sum + (c.unreadCount || 0), 0),
+)
+
 const displayList = computed(() =>
-  showArchive.value ? archivedConversations.value : normalConversations.value,
+  uiStore.chatArchiveListShow ? archivedConversations.value : normalConversations.value,
 )
 
 function getName(conv: Conversation): string {
@@ -206,17 +215,22 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 
 <template>
   <div class="conversation-list">
-    <!-- 归档入口 -->
+    <!-- 归档入口（对齐旧 im chats/index.vue .archive） -->
     <div
-      v-if="archivedConversations.length > 0 && !showArchive"
+      v-if="archivedConversations.length > 0 && !uiStore.chatArchiveListShow"
       class="archive-entry"
-      @click="showArchive = true"
+      @click="uiStore.setChatArchiveListShow(true)"
     >
-      {{ $t('已归档会话') }} ({{ archivedConversations.length }})
-    </div>
-
-    <div v-if="showArchive" class="archive-header" @click="showArchive = false">
-      ← {{ $t('返回') }}
+      <img class="archive-entry-icon" :src="archiveIcon" alt="" />
+      <div class="archive-entry-main">
+        <div class="archive-entry-title-row">
+          <span class="archive-entry-title">{{ $t('归档会话') }}</span>
+          <span v-if="archiveUnreadTotal > 0" class="archive-entry-badge">
+            {{ archiveUnreadTotal > 99 ? '99+' : archiveUnreadTotal }}
+          </span>
+        </div>
+        <div v-if="archivePreviewText" class="archive-entry-preview">{{ archivePreviewText }}</div>
+      </div>
     </div>
 
     <div class="list">
@@ -268,7 +282,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
     </div>
 
     <div v-if="displayList.length === 0" class="empty-tip">
-      {{ showArchive ? $t('暂无归档会话') : '暂时没有新的聊天会话' }}
+      {{ uiStore.chatArchiveListShow ? $t('暂无归档会话') : '暂时没有新的聊天会话' }}
     </div>
   </div>
 </template>
@@ -288,24 +302,75 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 }
 
 .archive-entry {
-  padding: 10px 16px;
-  font-size: 13px;
-  color: #3369fe;
-  cursor: pointer;
-  text-align: center;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 59px;
+  padding: 8px 16px 8px 63px;
+  box-sizing: border-box;
+  background-color: #fcfcfc;
   border-bottom: 1px solid #f1f0f0;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
 
-  &:hover { background: #f5f5f5; }
+  &:hover { background: #f9f9f9; }
 }
 
-.archive-header {
-  padding: 10px 16px;
-  font-size: 13px;
-  color: #3369fe;
-  cursor: pointer;
-  border-bottom: 1px solid #f1f0f0;
+.archive-entry-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  width: 35px;
+  height: 35px;
+  transform: translateY(-50%);
+  object-fit: cover;
+}
 
-  &:hover { background: #f5f5f5; }
+.archive-entry-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.archive-entry-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.archive-entry-title {
+  font-size: 14px;
+  color: #333;
+  font-weight: normal;
+  line-height: 18px;
+}
+
+.archive-entry-badge {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  background: #666;
+  border-radius: 20px;
+  transform: scale(0.86);
+  color: #fff;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 20px;
+  text-align: center;
+}
+
+.archive-entry-preview {
+  font-size: 12px;
+  color: #999;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .conv-item {
