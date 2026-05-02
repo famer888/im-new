@@ -12,6 +12,8 @@ pub struct Conversation {
     pub unread_count: i32,
     pub is_pinned: bool,
     pub is_muted: bool,
+    #[serde(default)]
+    pub is_archived: bool,
     pub draft: Option<String>,
     pub updated_at: i64,
 }

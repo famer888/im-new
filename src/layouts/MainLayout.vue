@@ -1006,13 +1006,14 @@ const contextMenuVariant = computed(() =>
 const contextMenuItems = computed((): MenuItem[] => {
   const data = uiStore.contextMenuData
   if (data.type === 'conversation') {
+    // 与旧 im chats/index.vue 右键一致：删除 → 消息置顶 → 消息免打扰 → 归档（纯文案、无分隔线）
     return [
-      { key: 'pin', label: data.isPinned ? '取消置顶' : '置顶', icon: '📌' },
-      { key: 'mute', label: data.isMuted ? '取消免打扰' : '消息免打扰', icon: '🔇' },
-      { key: 'archive', label: data.isArchived ? '取消归档' : '归档', icon: '📦' },
-      { key: 'divider', label: '', divider: true },
-      { key: 'read', label: '标记已读', icon: '✓' },
-      { key: 'delete', label: '删除聊天', icon: '🗑', danger: true },
+      { key: 'delete', label: '删除聊天', danger: true },
+      { key: 'pin', label: data.isPinned ? '取消置顶' : '消息置顶' },
+      { key: 'mute', label: data.isMuted ? '取消消息免打扰' : '消息免打扰' },
+      { key: 'archive', label: data.isArchived ? '取消归档' : '归档' },
+      // im-new 扩展菜单（旧 im 无此项；按需恢复）
+      // { key: 'read', label: '标记已读' },
     ]
   }
   if (data.type === 'message') {
@@ -1073,9 +1074,9 @@ async function handleContextMenuSelect(key: string) {
       case 'mute':
         await chatStore.muteConversation(authStore.uid, convId, !data.isMuted)
         break
-      case 'read':
-        await chatStore.markAsRead(authStore.uid, convId)
-        break
+      // case 'read':
+      //   await chatStore.markAsRead(authStore.uid, convId)
+      //   break
       case 'archive':
         await chatStore.archiveConversation(authStore.uid, convId, !data.isArchived)
         break
