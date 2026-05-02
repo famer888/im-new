@@ -164,8 +164,12 @@ function formatDigestText(digest: string): string {
   return raw
 }
 
+function shouldShowDraft(conv: Conversation): boolean {
+  return Boolean(conv.draft) && conv.id !== chatStore.currentConversationId
+}
+
 function getDigest(conv: Conversation): string {
-  if (conv.draft) return `[草稿] ${conv.draft}`
+  if (shouldShowDraft(conv)) return conv.draft || ''
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
     return formatDigestText(conv.lastMsgDigest)
   }
@@ -267,9 +271,9 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
             <span class="conv-time">{{ formatTime(conv.lastMsgTime) }}</span>
           </div>
           <div class="conv-row-bottom">
-            <span v-if="conv.atMe" class="at-me">[有人@我]</span>
-            <span v-if="conv.draft" class="draft-tag">[{{ $t('草稿') }}]</span>
-            <span v-if="conv.senderName && !conv.draft" class="sender-name">{{ conv.senderName }}:</span>
+            <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[有人@我]</span>
+            <span v-if="shouldShowDraft(conv)" class="draft-tag">[{{ $t('草稿') }}]</span>
+            <span v-if="conv.senderName && !shouldShowDraft(conv)" class="sender-name">{{ conv.senderName }}:</span>
             <span class="conv-digest">{{ getDigest(conv) }}</span>
             <span v-if="conv.isMuted" class="muted-icon">
               <img :src="mdrIcon" alt="" />
@@ -478,7 +482,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   display: flex;
   align-items: center;
   font-size: 12px;
-  color: #999;
+  color: #aaaaaa;
   line-height: 20px;
   gap: 2px;
 }
@@ -490,18 +494,19 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 }
 
 .draft-tag {
-  color: #da2e2e;
+  color: #ff0000;
   font-size: 12px;
   flex-shrink: 0;
 }
 
 .sender-name {
-  color: #aaa;
+  color: #aaaaaa;
   font-size: 12px;
   flex-shrink: 0;
 }
 
 .conv-digest {
+  color: #aaaaaa;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

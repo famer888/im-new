@@ -352,7 +352,17 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function setDraft(conversationId: string, draft: string | null) {
-    updateConversation({ id: conversationId, draft })
+    const normalizedDraft = draft && draft.trim() ? draft : null
+    updateConversation({ id: conversationId, draft: normalizedDraft })
+    if (isTauri() && _persistUid) {
+      tauriInvoke('set_conversation_draft', {
+        uid: _persistUid,
+        conversationId,
+        draft: normalizedDraft,
+      }).catch((error) => {
+        console.warn('[ChatStore] set conversation draft failed:', error)
+      })
+    }
   }
 
   async function recallMessage(uid: string, messageId: string) {

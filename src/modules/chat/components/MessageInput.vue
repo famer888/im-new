@@ -125,6 +125,11 @@ const channelNotifyText = computed(() =>
     ? '永久静音'
     : '接收通知',
 )
+const inputPlaceholder = computed(() =>
+  settingStore.settings.sendShortcutKey === 'Ctrl+Enter'
+    ? t('CtrlEnter发送')
+    : t('Enter发送'),
+)
 const showInputNoticeOnly = computed(() =>
   showChannelDisabledTip.value || showChannelNotifyToggle.value || showShutupTip.value,
 )
@@ -379,9 +384,6 @@ watch(
   { immediate: true },
 )
 
-// 草稿保存
-const draftMap = new Map<string, string>()
-
 function focusEditor() {
   if (showShutupTip.value) return
   nextTick(() => {
@@ -391,24 +393,55 @@ function focusEditor() {
   })
 }
 
-watch(convId, (newId, oldId) => {
-  showQrForwardUpload.value = false
-  qrForwardPendingFiles.value = []
-  qrForwardAutoOpenToken.value = ''
-  if (oldId && content.value.trim()) {
-    draftMap.set(oldId, content.value)
+function getStoredDraft(conversationId: string) {
+  return chatStore.conversations.find((c) => c.id === conversationId)?.draft || ''
+}
+
+function setEditorText(text: string) {
+  content.value = text
+  if (editorRef.value) {
+    editorRef.value.textContent = text
   }
-  if (newId) {
-    const draft = draftMap.get(newId) || ''
-    content.value = draft
-    if (editorRef.value) editorRef.value.textContent = draft
-  }
-  uiStore.clearQuoteMessage()
-  uiStore.exitSelectionMode()
-  if (newId) {
-    focusEditor()
-  }
-})
+}
+
+function currentDraftText() {
+  const text = normalizeEditorText(content.value)
+  return text.trim() ? text : null
+}
+
+function saveDraft(conversationId: string | null | undefined) {
+  if (!conversationId) return
+  chatStore.setDraft(conversationId, currentDraftText())
+}
+
+function restoreDraft(conversationId: string) {
+  const draft = getStoredDraft(conversationId)
+  setEditorText(draft)
+  chatStore.setDraft(conversationId, null)
+}
+
+watch(
+  convId,
+  (newId, oldId) => {
+    showQrForwardUpload.value = false
+    qrForwardPendingFiles.value = []
+    qrForwardAutoOpenToken.value = ''
+    if (newId) {
+      if (oldId && oldId !== newId) {
+        saveDraft(oldId)
+      }
+      nextTick(() => restoreDraft(newId))
+    } else if (oldId) {
+      saveDraft(oldId)
+    }
+    uiStore.clearQuoteMessage()
+    uiStore.exitSelectionMode()
+    if (newId) {
+      focusEditor()
+    }
+  },
+  { immediate: true },
+)
 
 function parseForwardImageDataUrl(content: string): { dataUrl: string; fileName: string } | null {
   try {
@@ -526,7 +559,7 @@ async function handleSend() {
   }
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
-  if (convId.value) draftMap.delete(convId.value)
+  if (convId.value) chatStore.setDraft(convId.value, null)
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -1847,6 +1880,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  saveDraft(convId.value)
   eventBus.off('editor:focus', handleEditorFocusEvent)
   eventBus.off('editor:insert-emoji', handleEmojiSelect)
   eventBus.off('editor:insert-at', handleAtSelect)
@@ -1962,7 +1996,7 @@ onBeforeUnmount(() => {
           ref="editorRef"
           class="editor"
           contenteditable="true"
-          :placeholder="$t('输入消息...')"
+          :placeholder="inputPlaceholder"
           @input="handleInput"
           @keydown="handleKeydown"
           @paste="handlePaste"

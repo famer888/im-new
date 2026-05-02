@@ -1868,6 +1868,41 @@ pub async fn archive_conversation(
 }
 
 #[tauri::command]
+pub async fn set_conversation_draft(
+    db: State<'_, DbManager>,
+    uid: String,
+    conversation_id: String,
+    draft: Option<String>,
+) -> Result<(), String> {
+    db.with_connection(&uid, |conn| {
+        let (conv_type, target_id) = conversation_id
+            .split_once('_')
+            .and_then(|(raw_type, target_id)| raw_type.parse::<i32>().ok().map(|t| (t, target_id)))
+            .unwrap_or((0, conversation_id.as_str()));
+
+        conn.execute(
+            "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                &conversation_id,
+                conv_type,
+                target_id,
+                chrono::Utc::now().timestamp_millis()
+            ],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE conversations SET draft = ?1 WHERE id = ?2",
+            rusqlite::params![draft, &conversation_id],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn recall_message(
     db: State<'_, DbManager>,
     ws_mgr: State<'_, crate::ws::WsManager>,
