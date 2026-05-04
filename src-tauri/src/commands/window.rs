@@ -72,3 +72,13 @@ pub async fn close_chat_window(
         .close_chat_window(&app, &conversation_id)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn show_login_window(
+    app: tauri::AppHandle,
+    win_mgr: State<'_, WindowManager>,
+) -> Result<(), String> {
+    win_mgr
+        .switch_to_login(&app)
+        .map_err(|e| e.to_string())
+}

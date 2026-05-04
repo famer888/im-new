@@ -306,9 +306,11 @@ async function confirmLogout() {
   uiStore.setSidebarTab('chats')
 
   await authStore.logout({ keepHistoryOnLogout })
-  await router.replace('/login')
-  if (window.location.hash !== '#/login') {
-    window.location.hash = '#/login'
+  if (!(window as any).__TAURI_INTERNALS__) {
+    await router.replace('/login')
+    if (window.location.hash !== '#/login') {
+      window.location.hash = '#/login'
+    }
   }
 }
 

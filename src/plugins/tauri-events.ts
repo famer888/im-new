@@ -252,9 +252,11 @@ export async function setupTauriListeners() {
 
     try {
       await authStore.logout({ keepHistoryOnLogout: true })
-      await router.replace('/login')
-      if (window.location.hash !== '#/login') {
-        window.location.hash = '#/login'
+      if (!isTauri()) {
+        await router.replace('/login')
+        if (window.location.hash !== '#/login') {
+          window.location.hash = '#/login'
+        }
       }
     } finally {
       forceLogoutHandling = false

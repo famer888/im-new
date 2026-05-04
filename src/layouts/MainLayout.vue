@@ -197,7 +197,12 @@ onMounted(async () => {
     if (!authStore.uid) {
       isInitialized.value = true
       clearInitReloadTimer()
-      await router.replace('/login')
+      if ((window as any).__TAURI_INTERNALS__) {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('show_login_window')
+      } else {
+        await router.replace('/login')
+      }
       return
     }
 

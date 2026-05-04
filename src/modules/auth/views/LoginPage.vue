@@ -17,6 +17,7 @@ const showFileImport = ref(false)
 const isLoading = ref(false)
 const isRestoring = ref(true)
 const isMac = ref(false)
+const isLoginWindow = ref(!isTauri())
 const extraDomains = ref<string[]>([])
 
 function isTauri(): boolean {
@@ -26,6 +27,19 @@ function isTauri(): boolean {
 onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
   try {
+    if (isTauri()) {
+      isLoginWindow.value = getCurrentWindow().label === 'login'
+      if (!isLoginWindow.value) {
+        await authStore.initSession()
+        if (authStore.uid) {
+          await router.replace('/home')
+        } else {
+          await invoke('show_login_window')
+        }
+        return
+      }
+    }
+
     await authStore.initSession()
     if (authStore.uid) {
       if (isTauri()) {
@@ -35,6 +49,7 @@ onMounted(async () => {
             ws_url: '',
             aes_key: '',
             install_code: '',
+            session_id: authStore.session?.sessionId || '',
           },
         })
         return
@@ -69,7 +84,9 @@ async function handleLoginSuccess(session: {
   isLoading.value = true
   try {
     await authStore.login(session)
-    router.push('/home')
+    if (!isTauri()) {
+      await router.push('/home')
+    }
   } catch (e) {
     console.error('Login failed:', e)
   } finally {
@@ -109,7 +126,7 @@ function startWindowDrag(e: MouseEvent) {
       @close="showNetworkConfig = false"
     />
     <QRCodeLogin
-      v-else-if="!isRestoring"
+      v-else-if="isLoginWindow && !isRestoring"
       :loading="isLoading"
       :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
