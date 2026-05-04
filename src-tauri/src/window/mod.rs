@@ -146,6 +146,9 @@ impl WindowManager {
             }
         };
 
+        let _ = main_window.eval(
+            "if (window.location.hash !== '#/home') window.location.hash = '#/home';",
+        );
         main_window.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
         info!("Switched to main window");
         Ok(())

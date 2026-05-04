@@ -8,10 +8,16 @@ use crate::window::WindowManager;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
+    #[serde(default)]
     pub session_url: String,
+    #[serde(default)]
     pub ws_url: String,
+    #[serde(default)]
     pub aes_key: String,
+    #[serde(default)]
     pub install_code: String,
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,7 +31,7 @@ pub struct SessionInfo {
 #[tauri::command]
 pub async fn login(
     app: tauri::AppHandle,
-    db: State<'_, DbManager>,
+    _db: State<'_, DbManager>,
     win_mgr: State<'_, WindowManager>,
     request: LoginRequest,
 ) -> Result<SessionInfo, String> {
@@ -39,7 +45,7 @@ pub async fn login(
 
     Ok(SessionInfo {
         uid: String::new(),
-        session_id: String::new(),
+        session_id: request.session_id,
         nickname: String::new(),
         avatar: String::new(),
     })

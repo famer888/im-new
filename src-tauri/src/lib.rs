@@ -173,6 +173,7 @@ pub fn run() {
             commands::window::open_chat_window,
             commands::window::close_chat_window,
             commands::window::toggle_side_bar,
+            commands::window::show_login_window,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::repair::repair_clear_crypto_keys,
