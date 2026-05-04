@@ -178,6 +178,8 @@ const isAtBottom = ref(true)
 /** 进入会话 / 首屏加载：吸底；用户上滑看历史后为 false，避免加载更多后跳回底部 */
 const stickToBottom = ref(true)
 const lastMessageId = ref<string>('')
+const newMessageCount = ref(0)
+const latestNewMessageKey = ref('')
 let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
 let isProgrammaticScroll = false
 
@@ -189,6 +191,18 @@ function setBottomState(el: HTMLElement) {
   const gap = el.scrollHeight - el.scrollTop - el.clientHeight
   isAtBottom.value = gap < 50
   stickToBottom.value = gap < 40
+  if (isAtBottom.value) {
+    clearNewMessageTip()
+  }
+}
+
+function isVisibleIncomingMessage(message: Message): boolean {
+  return !message.isDeleted && message.senderId !== authStore.uid
+}
+
+function clearNewMessageTip() {
+  newMessageCount.value = 0
+  latestNewMessageKey.value = ''
 }
 
 function cancelScrollAnimation() {
@@ -285,6 +299,9 @@ function handleScroll() {
   const { scrollTop, scrollHeight, clientHeight } = containerRef.value
   const gap = scrollHeight - scrollTop - clientHeight
   isAtBottom.value = gap < 50
+  if (isAtBottom.value) {
+    clearNewMessageTip()
+  }
   if (!isProgrammaticScroll) {
     if (gap > 100) {
       stickToBottom.value = false
@@ -306,6 +323,7 @@ watch(
     await nextTick()
     lastMessageId.value = ''
     stickToBottom.value = true
+    clearNewMessageTip()
     const list = sortedMessages.value
     lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
     if (effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0) {
@@ -353,8 +371,24 @@ watch(
     lastMessageId.value = latestId
 
     const appendedNewMessage = !!latestId && latestId !== prevLatestId
-    if (appendedNewMessage && stickToBottom.value) {
+    const latestMessage = list.length > 0 ? list[list.length - 1] : null
+    const appendedSelfMessage = appendedNewMessage && latestMessage?.senderId === authStore.uid
+    if (appendedNewMessage && (stickToBottom.value || appendedSelfMessage)) {
+      clearNewMessageTip()
       await pinToLatest()
+      return
+    }
+
+    if (appendedNewMessage && prevLatestId) {
+      const prevIdx = list.findIndex((item) => item.id === prevLatestId)
+      const appended = prevIdx >= 0 ? list.slice(prevIdx + 1) : [list[list.length - 1]]
+      const visibleIncoming = appended.filter(isVisibleIncomingMessage)
+      if (visibleIncoming.length > 0) {
+        if (newMessageCount.value === 0) {
+          latestNewMessageKey.value = messageRenderKey(visibleIncoming[0])
+        }
+        newMessageCount.value += visibleIncoming.length
+      }
     }
   },
 )
@@ -374,6 +408,7 @@ onMounted(async () => {
 
 function onClickScrollToLatest() {
   stickToBottom.value = true
+  clearNewMessageTip()
   void pinToLatest(true)
 }
 
@@ -459,7 +494,9 @@ function scrollToRow(key: string) {
   const container = containerRef.value
   if (!container) return
   const rows = Array.from(container.querySelectorAll<HTMLElement>('.message-row'))
-  const target = rows.find((row) => row.dataset.rowKey === key)
+  const target = rows.find((row) =>
+    row.dataset.rowKey === key || row.dataset.rowCustomKey === key,
+  )
   if (target) {
     container.scrollTop = target.offsetTop
   }
@@ -519,6 +556,7 @@ function onUnreadBannerClick() {
             v-else
             class="message-row"
             :data-row-key="row.entry.message.id"
+            :data-row-custom-key="row.entry.message.customMsgId || ''"
             :data-show-time-day="row.entry.showTimeDay"
           >
             <MessageItem
@@ -530,15 +568,20 @@ function onUnreadBannerClick() {
         </template>
       </div>
 
-      <button
-        v-if="!isAtBottom"
-        class="scroll-bottom-btn"
-        type="button"
-        @click="onClickScrollToLatest"
-      >
-        ↓ {{ $t('最新消息') }}
-      </button>
     </div>
+
+    <button
+      v-if="!isAtBottom"
+      class="scroll-bottom-btn"
+      type="button"
+      @mousedown.stop.prevent
+      @click.stop="onClickScrollToLatest"
+    >
+      <span v-if="newMessageCount > 0" class="scroll-bottom-count">
+        {{ newMessageCount > 99 ? '99+' : newMessageCount }}
+      </span>
+      <img src="@/assets/images/message/arrow-down.png" alt="" />
+    </button>
   </div>
 </template>
 
@@ -653,12 +696,12 @@ function onUnreadBannerClick() {
   position: absolute;
   bottom: 16px;
   right: 16px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   background: #fff;
   border: 1px solid #ddd;
-  border-radius: 20px;
-  padding: 6px 16px;
-  font-size: 12px;
-  color: #3369fe;
+  border-radius: 999px;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   z-index: 10;
@@ -666,5 +709,33 @@ function onUnreadBannerClick() {
   &:hover {
     background: #f0f7ff;
   }
+
+  > img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    transform: translate(-50%, -50%);
+    object-fit: contain;
+  }
+}
+
+.scroll-bottom-count {
+  position: absolute;
+  left: 50%;
+  top: -10px;
+  transform: translateX(-50%);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: #178aff;
+  color: #fff;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+  z-index: 1;
 }
 </style>
