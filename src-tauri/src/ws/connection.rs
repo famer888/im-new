@@ -15,14 +15,6 @@ const RECONNECT_DELAY_MS: u64 = 4000;
 const FAST_RECONNECT_DELAY_MS: u64 = 300;
 const MAX_RECONNECT_ATTEMPTS: u32 = 100;
 
-#[derive(Debug, serde::Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ForceLogoutEvent {
-    cmd: u16,
-    reason: String,
-    kick_type: i32,
-}
-
 pub async fn run_connection(
     url: &str,
     aes_key: &str,
@@ -52,6 +44,7 @@ pub async fn run_connection(
             &status,
             &send_tx,
             &app_handle,
+            &reconnect_count,
             &pending,
         )
         .await
@@ -101,6 +94,7 @@ async fn connect_and_run(
     status: &Arc<RwLock<ConnectionStatus>>,
     send_tx: &Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: &AppHandle,
+    reconnect_count: &Arc<std::sync::atomic::AtomicU32>,
     pending: &Arc<DashMap<String, PendingMessage>>,
 ) -> Result<(), WsError> {
     info!("Connecting to WebSocket: {}", url);
@@ -111,6 +105,7 @@ async fn connect_and_run(
 
     info!("WebSocket connected");
     *status.write() = ConnectionStatus::Connected;
+    reconnect_count.store(0, std::sync::atomic::Ordering::Relaxed);
     let _ = app_handle.emit("ws:status", "connected");
 
     let (mut ws_sink, mut ws_stream_reader) = ws_stream.split();
@@ -153,18 +148,11 @@ async fn connect_and_run(
                             close_code,
                             close_reason
                         );
-                        *status.write() = ConnectionStatus::Disconnected;
-                        let reason = if close_reason.trim().is_empty() {
-                            "账号已在其他设备登录".to_string()
-                        } else {
+                        unexpected_disconnect = Some(format!(
+                            "closed by server code={} reason={}",
+                            close_code,
                             close_reason
-                        };
-                        let _ = app_handle.emit("auth:force-logout", ForceLogoutEvent {
-                            cmd: commands::FORCE_LOGOUT,
-                            reason,
-                            kick_type: 1,
-                        });
-                        let _ = app_handle.emit("ws:status", "disconnected");
+                        ));
                         break;
                     }
                     Some(Err(e)) => {
