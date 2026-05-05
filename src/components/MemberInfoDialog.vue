@@ -7,7 +7,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import TextAvatar from '@/components/TextAvatar.vue'
-import { findContactsList, updateContacts } from '@/api/imBase'
+import { contactsRelation, findContactsList, updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { eventBus } from '@/utils/eventBus'
 import editIcon from '@/assets/images/message/edit-icon.png'
@@ -24,6 +24,7 @@ const visible = computed(() => uiStore.memberInfoVisible)
 const target = computed(() => uiStore.memberInfoTarget)
 const userId = computed(() => target.value.userId)
 const groupId = computed(() => target.value.groupId)
+const profile = computed(() => target.value.profile || null)
 const candidateIds = computed(() => {
   const values = [
     target.value.userId,
@@ -37,17 +38,18 @@ const candidateIds = computed(() => {
 const isSelf = computed(() => userId.value === authStore.uid)
 
 const contactInfo = computed(() => contactStore.getContact(userId.value))
-const isFriend = computed(() => !!contactInfo.value)
+const isFriend = computed(() => !!contactInfo.value || profile.value?.isFriend === true)
 
 const groupMemberInfo = computed(() => {
   if (!groupId.value) return null
   return groupStore.getMembers(groupId.value).find(m => m.userId === userId.value)
 })
 
-const avatar = computed(() => contactInfo.value?.avatar || groupMemberInfo.value?.avatar || '')
-const nickname = computed(() => contactInfo.value?.nickname || groupMemberInfo.value?.nickname || userId.value)
-const remark = computed(() => contactInfo.value?.remark || '')
-const depict = computed(() => (contactInfo.value as any)?.depict || (groupMemberInfo.value as any)?.depict || '')
+const avatar = computed(() => contactInfo.value?.avatar || groupMemberInfo.value?.avatar || profile.value?.avatar || '')
+const nickname = computed(() => contactInfo.value?.nickname || groupMemberInfo.value?.nickname || profile.value?.nickname || userId.value)
+const remark = computed(() => contactInfo.value?.remark || profile.value?.remark || '')
+const depict = computed(() => (contactInfo.value as any)?.depict || (groupMemberInfo.value as any)?.depict || profile.value?.depict || '')
+const addToken = computed(() => profile.value?.addToken || '')
 
 const displayName = computed(() => {
   if (isSelf.value) return nickname.value
@@ -60,6 +62,10 @@ const remarkDraft = ref('')
 const depictDraft = ref('')
 const savingRemark = ref(false)
 const savingDepict = ref(false)
+const addVerifyVisible = ref(false)
+const addVerifyMessage = ref('')
+const sendingAdd = ref(false)
+const addFailed = ref(false)
 const remarkInputRef = ref<HTMLInputElement | null>(null)
 const depictInputRef = ref<HTMLInputElement | null>(null)
 
@@ -69,7 +75,16 @@ watch(visible, (val) => {
     depictDraft.value = depict.value
     editingRemark.value = false
     editingDepict.value = false
+    addVerifyVisible.value = false
+    addVerifyMessage.value = ''
+    sendingAdd.value = false
+    addFailed.value = false
   }
+})
+
+watch(addVerifyMessage, (value) => {
+  if (value.length <= 20) return
+  addVerifyMessage.value = value.slice(0, 20)
 })
 
 function close() {
@@ -227,6 +242,55 @@ async function handleSendMsg() {
     eventBus.emit('editor:focus')
   })
 }
+
+function defaultVerifyMessage() {
+  return `我是${authStore.nickname || authStore.uid || ''}`
+}
+
+function showAddVerifyDialog() {
+  if (!addToken.value || sendingAdd.value) return
+  addVerifyMessage.value = defaultVerifyMessage()
+  addFailed.value = false
+  addVerifyVisible.value = true
+}
+
+function closeAddVerifyDialog() {
+  if (sendingAdd.value) return
+  addVerifyVisible.value = false
+  addFailed.value = false
+}
+
+async function handleConfirmAdd() {
+  if (!addToken.value || sendingAdd.value) return
+  const targetUid = Number(userId.value)
+  if (!Number.isFinite(targetUid)) {
+    addFailed.value = true
+    return
+  }
+
+  sendingAdd.value = true
+  addFailed.value = false
+  try {
+    const resp = await contactsRelation({
+      targetUid,
+      msg: addVerifyMessage.value.trim() || defaultVerifyMessage(),
+      type: 0,
+      op: 0,
+      addToken: addToken.value,
+    })
+    const errCode = Number((resp as any)?.commonResult?.errCode ?? 0)
+    if (errCode === 200 || errCode === 0) {
+      addVerifyVisible.value = false
+    } else {
+      addFailed.value = true
+    }
+  } catch (error) {
+    console.warn('[MemberInfoDialog] add contact failed:', error)
+    addFailed.value = true
+  } finally {
+    sendingAdd.value = false
+  }
+}
 </script>
 
 <template>
@@ -283,7 +347,28 @@ async function handleSendMsg() {
         </div>
 
         <div v-if="!isSelf" class="bottom">
-          <button class="primaryBtn" @click="handleSendMsg">{{ t('发送消息') }}</button>
+          <button v-if="isFriend" class="primaryBtn" @click="handleSendMsg">{{ t('发送消息') }}</button>
+          <button v-else-if="addToken" class="primaryBtn" @click="showAddVerifyDialog">{{ t('添加') }}</button>
+        </div>
+
+        <div v-if="addVerifyVisible" class="inputContent">
+          <h3>{{ t('添加验证') }}：</h3>
+          <div>
+            <textarea
+              v-model="addVerifyMessage"
+              :placeholder="t('请输入内容')"
+              maxlength="20"
+              :disabled="sendingAdd"
+            />
+            <span>{{ 20 - addVerifyMessage.length }}</span>
+          </div>
+          <button class="primaryBtn verify-submit" :disabled="sendingAdd" @click="handleConfirmAdd">
+            {{ sendingAdd ? t('发送中...') : t('完成') }}
+          </button>
+          <button class="primaryBtn cancel" :disabled="sendingAdd" @click="closeAddVerifyDialog">
+            {{ t('取消') }}
+          </button>
+          <p v-if="addFailed" class="add-error">{{ t('添加失败，请稍后重试') }}</p>
         </div>
       </div>
     </div>
@@ -294,63 +379,72 @@ async function handleSendMsg() {
 .member-dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: 1800;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .member-dialog-content {
   position: relative;
-  width: 360px;
+  width: 400px;
+  box-sizing: border-box;
   background: #fff;
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-  padding: 30px 20px 20px;
+  padding: 10px 16px;
 }
 
 .close-btn {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 14px;
-  height: 14px;
+  top: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+  padding: 9px;
+  box-sizing: border-box;
   cursor: pointer;
-  opacity: 0.5;
-  &:hover { opacity: 1; }
+  opacity: 1;
+  &:hover { opacity: 0.8; }
 }
 
 .top {
+  height: 100px;
   display: flex;
   align-items: center;
-  margin-bottom: 24px;
-  gap: 16px;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 15px;
+  gap: 20px;
   
   .name-h2 {
     margin: 0;
-    font-size: 18px;
+    padding: 0 1em 0 0;
+    line-height: 30px;
+    font-size: 16px;
     color: #333;
     font-weight: 600;
     word-break: break-all;
+    max-height: 90px;
+    overflow: hidden;
   }
 }
 
 .info-list {
-  border-top: 1px solid #f1f1f1;
-  padding-top: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 0;
 
   dl {
     display: flex;
     align-items: center;
-    margin: 0 0 12px 0;
+    line-height: 30px;
+    margin: 0;
     font-size: 14px;
     
     dt {
-      width: 70px;
+      width: auto;
+      padding: 0 10px 0 0;
       color: #999;
       flex-shrink: 0;
+      white-space: nowrap;
     }
     
     dd {
@@ -362,27 +456,28 @@ async function handleSendMsg() {
       min-width: 0;
       
       .info-text {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        font-size: 14px;
+        max-width: calc(100% - 30px);
+        word-break: break-word;
       }
       
       .edit-input {
-        width: 200px;
-        height: 26px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 0 8px;
+        width: 100%;
+        height: 30px;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
         font-size: 14px;
+        font-family: PingFangSC-Regular, sans-serif;
       }
       
       .edit-icon {
-        width: 14px;
-        height: 14px;
-        margin-left: 8px;
+        width: 15px;
+        height: 15px;
+        margin-left: 10px;
         cursor: pointer;
-        opacity: 0.6;
-        &:hover { opacity: 1; }
+        opacity: 1;
+        &:hover { opacity: 0.8; }
       }
     }
   }
@@ -390,6 +485,8 @@ async function handleSendMsg() {
 
 .bottom {
   display: flex;
+  margin-top: 15px;
+  padding-bottom: 10px;
   
   .primaryBtn {
     background: #3369fe;
@@ -398,12 +495,79 @@ async function handleSendMsg() {
     border-radius: 4px;
     padding: 0 24px;
     height: 32px;
-    font-size: 14px;
+    line-height: 32px;
+    font-size: 12px;
     cursor: pointer;
     
     &:hover {
-      background: rgba(51, 105, 254, 0.9);
+      opacity: 0.8;
     }
   }
+}
+
+.inputContent {
+  margin-top: 4px;
+
+  > h3 {
+    margin: 0;
+    padding: 0;
+    line-height: 30px;
+    font-size: 14px;
+    font-weight: 400;
+  }
+
+  > div {
+    position: relative;
+    height: 80px;
+
+    textarea {
+      width: 100%;
+      height: 100%;
+      padding: 10px;
+      box-sizing: border-box;
+      border: 0;
+      border-radius: 6px;
+      background-color: rgb(245, 245, 245);
+      line-height: 20px;
+      resize: none;
+    }
+
+    span {
+      position: absolute;
+      right: 5px;
+      bottom: 5px;
+      color: #aaa;
+      font-size: 12px;
+    }
+  }
+
+  .primaryBtn {
+    margin-top: 15px;
+    margin-right: 10px;
+    height: 32px;
+    padding: 0 28px;
+    border: 0;
+    border-radius: 4px;
+    background: #3369fe;
+    color: #fff;
+    line-height: 32px;
+    font-size: 12px;
+    cursor: pointer;
+
+    &:hover {
+      opacity: 0.8;
+    }
+
+    &.cancel {
+      background: #999;
+    }
+  }
+}
+
+.add-error {
+  margin: 8px 0 0;
+  color: #f56c6c;
+  font-size: 12px;
+  line-height: 18px;
 }
 </style>

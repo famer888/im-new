@@ -33,6 +33,16 @@ export interface AddGroupTarget {
   joinSource?: 'alias' | 'link'
 }
 
+export interface MemberInfoProfile {
+  userId: string
+  nickname: string
+  avatar: string
+  remark?: string | null
+  depict?: string | null
+  addToken?: string
+  isFriend?: boolean
+}
+
 export const useUIStore = defineStore('ui', () => {
   const sidebarTab = ref<SidebarTab>('chats')
   /** 消息列表「归档会话」内页（对齐旧 im archiveListShow + com/search.vue 布局） */
@@ -60,10 +70,16 @@ export const useUIStore = defineStore('ui', () => {
   })
 
   const memberInfoVisible = ref(false)
-  const memberInfoTarget = ref<{ userId: string; groupId: string; candidateIds: string[] }>({
+  const memberInfoTarget = ref<{
+    userId: string
+    groupId: string
+    candidateIds: string[]
+    profile?: MemberInfoProfile | null
+  }>({
     userId: '',
     groupId: '',
     candidateIds: [],
+    profile: null,
   })
   const addContactTarget = ref<AddContactTarget | null>(null)
   const addGroupTarget = ref<AddGroupTarget | null>(null)
@@ -155,8 +171,13 @@ export const useUIStore = defineStore('ui', () => {
   }
   function closeUpVersion() { upVersionVisible.value = false }
 
-  function openMemberInfo(userId: string, groupId?: string, candidateIds: string[] = []) {
-    memberInfoTarget.value = { userId, groupId: groupId || '', candidateIds }
+  function openMemberInfo(
+    userId: string,
+    groupId?: string,
+    candidateIds: string[] = [],
+    profile?: MemberInfoProfile | null,
+  ) {
+    memberInfoTarget.value = { userId, groupId: groupId || '', candidateIds, profile: profile || null }
     memberInfoVisible.value = true
   }
   function closeMemberInfo() { memberInfoVisible.value = false }

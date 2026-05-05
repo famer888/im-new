@@ -5,11 +5,16 @@ import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
-import { useUIStore, type AddGroupTarget } from '@/stores/useUIStore'
+import { useUIStore, type AddGroupTarget, type MemberInfoProfile } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import { eventBus } from '@/utils/eventBus'
-import { groupQrUrlFromShortLink, queryGroupLink, type GroupDetailFromQrCodeResp } from '@/api/imBase'
+import {
+  groupOrUserDetail,
+  groupQrUrlFromShortLink,
+  queryGroupLink,
+  type GroupDetailFromQrCodeResp,
+} from '@/api/imBase'
 
 const props = defineProps<{
   message: Message
@@ -234,12 +239,80 @@ function parseGroupTarget(groupInfo: GroupDetailFromQrCodeResp): AddGroupTarget 
   }
 }
 
+function parseGroupTargetFromAlias(raw: any): AddGroupTarget | null {
+  const gd = raw?.groupDetail || raw?.groupAlias || raw
+  const gb = gd?.groupBase || gd?.groupBaseResp || gd
+  const id = String(gb?.groupId ?? gb?.id ?? '').trim()
+  if (!id) return null
+
+  return {
+    id,
+    name: String(gb.name ?? gb.groupName ?? ''),
+    avatar: String(gb.pic ?? gb.icon ?? gb.avatar ?? ''),
+    memberCount: Number(gb.memberCount ?? gb.member_count ?? 0),
+    groupAliasName: String(gb.groupAliasName ?? gb.groupAlias ?? ''),
+    ownerId: gb.hostId == null ? null : String(gb.hostId),
+    addToken: String(raw?.addToken ?? gd?.addToken ?? gb?.addToken ?? ''),
+    bfJoinCheck: Boolean(gb?.bfJoinCheck ?? gd?.bfJoinCheck ?? raw?.bfJoinCheck ?? false),
+    joinSource: 'alias',
+  }
+}
+
+function parseMemberProfile(raw: any): MemberInfoProfile | null {
+  const detail = raw?.targetUser || raw?.userDetail || raw?.contactsDetailBase || raw
+  const user = detail?.userInfo || detail?.userInfoBaseResp || detail
+  const userId = String(user?.uid ?? user?.id ?? '').trim()
+  if (!userId) return null
+
+  return {
+    userId,
+    nickname: String(user?.nickName ?? user?.nickname ?? ''),
+    avatar: String(user?.icon ?? user?.avatar ?? ''),
+    remark: user?.friendRelation?.remarkName ?? detail?.name ?? detail?.remarkName ?? null,
+    depict: detail?.depict ?? user?.depict ?? null,
+    addToken: String(detail?.addToken ?? raw?.addToken ?? ''),
+    isFriend: Boolean(user?.friendRelation?.bfFriend ?? detail?.bfFriend ?? false),
+  }
+}
+
 async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise<boolean> {
   if (serverMember || groupStore.getGroup(groupId)) return true
   if (authStore.uid && groupStore.groups.length === 0) {
     await groupStore.loadGroups(authStore.uid)
   }
   return Boolean(groupStore.getGroup(groupId))
+}
+
+async function openRemoteAliasTarget(label: string, groupId: string) {
+  const context = label.replace(/^@+/, '').trim()
+  if (!context) return false
+
+  try {
+    const resp = await groupOrUserDetail({ fromUid: authStore.uid || 0, context })
+    const profile = parseMemberProfile(resp)
+    if (profile) {
+      uiStore.openMemberInfo(profile.userId, groupId, [context, profile.nickname], profile)
+      return true
+    }
+
+    const groupTarget = parseGroupTargetFromAlias(resp)
+    if (groupTarget) {
+      if (groupTarget.id === groupId || (await isAlreadyInGroup(groupTarget.id, false))) {
+        eventBus.emit('show-toast', { message: '已在群聊中', type: 'success' })
+        return true
+      }
+
+      uiStore.setAddGroupTarget(groupTarget)
+      uiStore.setRightPanel('none')
+      uiStore.openAddGroupDialog()
+      return true
+    }
+  } catch (error) {
+    console.warn('[TextMessage] resolve alias target failed:', error)
+  }
+
+  eventBus.emit('show-toast', { message: '抱歉，该用户/群/频道不存在', type: 'error' })
+  return false
 }
 
 const contentSegments = computed<ContentSegment[]>(() => {
@@ -327,7 +400,12 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
     }
   }
 
-  uiStore.openMemberInfo(member?.userId || cleanLabel, groupId, [cleanLabel])
+  if (!member) {
+    await openRemoteAliasTarget(cleanLabel, groupId)
+    return
+  }
+
+  uiStore.openMemberInfo(member.userId, groupId, [cleanLabel])
 }
 
 async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegment, { type: 'link' }>) {
