@@ -107,14 +107,18 @@ impl WindowManager {
 
     /// Switch from login window to main window
     pub fn switch_to_main(&self, app: &AppHandle) -> Result<(), WindowError> {
-        if let Some(login) = app.get_webview_window("login") {
+        let login_was_visible = if let Some(login) = app.get_webview_window("login") {
+            let visible = login.is_visible().unwrap_or(false);
             login.hide().map_err(|e| WindowError::TauriError(e.to_string()))?;
-        }
+            visible
+        } else {
+            false
+        };
 
-        let main_window = match app.get_webview_window("main") {
+        let (main_window, reused_main_window) = match app.get_webview_window("main") {
             Some(w) => {
                 w.show().map_err(|e| WindowError::TauriError(e.to_string()))?;
-                w
+                (w, true)
             }
             None => {
                 let mut builder = WebviewWindowBuilder::new(
@@ -140,15 +144,20 @@ impl WindowManager {
                     builder = builder.decorations(false);
                 }
 
-                builder
+                let window = builder
                     .build()
-                    .map_err(|e| WindowError::TauriError(e.to_string()))?
+                    .map_err(|e| WindowError::TauriError(e.to_string()))?;
+                (window, false)
             }
         };
 
-        let _ = main_window.eval(
-            "if (window.location.hash !== '#/home') window.location.hash = '#/home';",
-        );
+        if reused_main_window && login_was_visible {
+            let _ = main_window.eval("window.location.hash = '#/home'; window.location.reload();");
+        } else {
+            let _ = main_window.eval(
+                "if (window.location.hash !== '#/home') window.location.hash = '#/home';",
+            );
+        }
         main_window.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
         info!("Switched to main window");
         Ok(())
