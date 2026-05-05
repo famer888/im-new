@@ -844,12 +844,13 @@ export const useMessageStore = defineStore('message', () => {
       console.warn('[msg] skip appendMessage: invalid conversationId', { conversationId, messageId: message.id })
       return
     }
-    const list = messageMap.value.get(conversationId) ?? []
-    const existIndex = list.findIndex(
+    const currentList = messageMap.value.get(conversationId) ?? []
+    const next = [...currentList]
+    const existIndex = next.findIndex(
       (m) => m.id === message.id || (m.customMsgId && m.customMsgId === message.customMsgId),
     )
     if (message.msgType === 12) {
-      const previous = existIndex >= 0 ? list[existIndex] : null
+      const previous = existIndex >= 0 ? next[existIndex] : null
       diceLog('appendMessage', {
         conversationId,
         incomingId: message.id,
@@ -865,10 +866,10 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
     if (existIndex >= 0) {
-      const previous = list[existIndex]
+      const previous = next[existIndex]
       const incomingDiceResult = getDiceResultFromContent(message.content)
       const previousDiceResult = getDiceResultFromContent(previous.content)
-      list[existIndex] = {
+      next[existIndex] = {
         ...previous,
         ...message,
         content: (
@@ -884,12 +885,12 @@ export const useMessageStore = defineStore('message', () => {
         deleteSeconds: message.deleteSeconds ?? previous.deleteSeconds,
       }
     } else {
-      list.push(message)
+      next.push(message)
     }
-    if (list.length > MAX_CACHED_MESSAGES) {
-      list.splice(0, list.length - MAX_CACHED_MESSAGES)
+    if (next.length > MAX_CACHED_MESSAGES) {
+      next.splice(0, next.length - MAX_CACHED_MESSAGES)
     }
-    messageMap.value.set(conversationId, list)
+    messageMap.value.set(conversationId, next)
   }
 
   function batchAppendMessages(messages: Message[]) {

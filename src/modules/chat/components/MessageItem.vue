@@ -227,7 +227,22 @@ onMounted(() => {
 <template>
   <div
     ref="itemRef"
-    v-memo="[message.status, message.readStatus, message.extra, message.deleteSeconds, message.quoteMessage, uiStore.selectionMode, isSelected, dateBannerText, isSearchHighlighted]"
+    v-memo="[
+      message.id,
+      message.customMsgId,
+      message.senderId,
+      message.msgType,
+      message.content,
+      message.status,
+      message.readStatus,
+      message.extra,
+      message.deleteSeconds,
+      message.quoteMessage,
+      uiStore.selectionMode,
+      isSelected,
+      dateBannerText,
+      isSearchHighlighted,
+    ]"
     :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
   >
     <span v-if="dateBannerText" class="showtimeDay">{{ dateBannerText }}</span>
