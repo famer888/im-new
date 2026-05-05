@@ -458,8 +458,38 @@ pub async fn send_message(
         is_deleted: false,
         extra: extra_json,
     };
-    db.with_connection(&uid, |conn| queries::insert_message(conn, &message))
-        .map_err(|e| e.to_string())?;
+    db.with_connection(&uid, |conn| {
+        queries::insert_message(conn, &message)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                &request.conversation_id,
+                conv_type,
+                &target_id,
+                now
+            ],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        conn.execute(
+            "UPDATE conversations
+             SET last_msg_id = ?1,
+                 last_msg_time = ?2,
+                 last_msg_digest = ?3,
+                 updated_at = ?2
+             WHERE id = ?4
+               AND (last_msg_time IS NULL OR last_msg_time <= ?2)",
+            rusqlite::params![
+                &msg_id,
+                now,
+                message_digest(request.msg_type, Some(&request.content)),
+                &request.conversation_id,
+            ],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())?;
 
     let mark_failed_and_return = |reason: String| -> Result<models::Message, String> {
         let failed_id = msg_id.clone();
@@ -1369,11 +1399,29 @@ pub async fn mark_message_sent(
             );
         }
 
-        // 同步会话 last_msg_id → 服务端 id，避免"发送成功后点进去重新加载消息"
-        // 出现一条重复的本地占位记录。
+        // 同步会话摘要 → 服务端 id / 服务端时间，避免左侧列表继续显示发送前旧摘要。
+        let digest = message_digest(local_msg_type, merged_content.as_deref());
         conn.execute(
-            "UPDATE conversations SET last_msg_id = ?1 WHERE id = ?2 AND last_msg_id = ?3",
-            rusqlite::params![server_id, request.conversation_id, request.custom_msg_id],
+            "UPDATE conversations
+             SET last_msg_id = ?1,
+                 last_msg_time = CASE WHEN ?2 > 0 THEN ?2 ELSE last_msg_time END,
+                 last_msg_digest = CASE WHEN ?3 <> '' THEN ?3 ELSE last_msg_digest END,
+                 updated_at = CASE WHEN ?2 > 0 THEN ?2 ELSE updated_at END
+             WHERE id = ?4
+               AND (
+                    last_msg_id = ?5
+                    OR last_msg_id = ?1
+                    OR last_msg_time IS NULL
+                    OR ?2 <= 0
+                    OR last_msg_time <= ?2
+               )",
+            rusqlite::params![
+                server_id,
+                next_sent_time,
+                digest,
+                request.conversation_id,
+                request.custom_msg_id,
+            ],
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         Ok(())

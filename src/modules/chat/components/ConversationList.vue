@@ -5,7 +5,7 @@ import { useChatStore, isFileHelperTargetId, GROUP_NOTIFICATION_TARGET_ID, type 
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
-import { useMessageStore } from '@/stores/useMessageStore'
+import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
@@ -146,7 +146,10 @@ function showFriendOnlineDot(conv: Conversation): boolean {
 function formatDigestText(digest: string): string {
   const raw = digest.trim()
   if (!raw) return ''
-  if (raw.includes('\uFFFD')) return '[名片]'
+  if (raw.includes('\uFFFD')) return `[${t('名片')}]`
+
+  const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子)\]$/)
+  if (bracketMatch) return `[${t(bracketMatch[1])}]`
 
   try {
     const parsed = JSON.parse(raw)
@@ -155,7 +158,7 @@ function formatDigestText(digest: string): string {
       && typeof parsed === 'object'
       && (parsed.url || parsed.fileUrl || parsed.thumbnailUrl || parsed.thumbUrl)
     ) {
-      return '[图片]'
+      return `[${t('图片')}]`
     }
   } catch {
     // 非 JSON 文本按原内容显示
@@ -168,23 +171,40 @@ function shouldShowDraft(conv: Conversation): boolean {
   return Boolean(conv.draft) && conv.id !== chatStore.currentConversationId
 }
 
+function getMessageDigest(message: Message): string {
+  const raw = (message.content || '').trim()
+  if (message.msgType === 1) return `[${t('图片')}]`
+  if (message.msgType === 2) return `[${t('语音')}]`
+  if (message.msgType === 3) return `[${t('视频')}]`
+  if (message.msgType === 5) return `[${t('名片')}]`
+  if (message.msgType === 7) return `[${t('文件')}]`
+  if (message.msgType === 12) return `[${t('骰子')}]`
+  return raw ? formatDigestText(raw) : ''
+}
+
+function getLoadedLatestDigest(conv: Conversation): string {
+  const loaded = messageStore.getMessages(conv.id)
+  if (loaded.length === 0) return ''
+  const latest = loaded[loaded.length - 1]
+  const isCurrentConversation = conv.id === chatStore.currentConversationId
+  const latestTime = Number(latest.sendTime || 0)
+  const convTime = Number(conv.lastMsgTime || 0)
+  const lastMsgId = String(conv.lastMsgId || '')
+  const latestMatchesSummary = Boolean(
+    lastMsgId
+    && (String(latest.id || '') === lastMsgId || String(latest.customMsgId || '') === lastMsgId),
+  )
+
+  if (!isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
+  return getMessageDigest(latest)
+}
+
 function getDigest(conv: Conversation): string {
   if (shouldShowDraft(conv)) return conv.draft || ''
+  const loadedDigest = getLoadedLatestDigest(conv)
+  if (loadedDigest) return loadedDigest
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
     return formatDigestText(conv.lastMsgDigest)
-  }
-
-  // 与 im 行为对齐：会话摘要为空时，兜底取已加载消息中的最后一条
-  const loaded = messageStore.getMessages(conv.id)
-  if (loaded.length > 0) {
-    const latest = loaded[loaded.length - 1]
-    const raw = (latest.content || '').trim()
-    if (latest.msgType === 1) return '[图片]'
-    if (latest.msgType === 2) return '[语音]'
-    if (latest.msgType === 3) return '[视频]'
-    if (latest.msgType === 5) return '[名片]'
-    if (latest.msgType === 7) return '[文件]'
-    if (raw) return formatDigestText(raw)
   }
 
   return ''

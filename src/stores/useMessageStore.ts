@@ -1346,8 +1346,14 @@ export const useMessageStore = defineStore('message', () => {
 
     const chatStore = useChatStore()
     const conv = chatStore.conversations.find((c) => c.id === params.conversationId)
-    if (conv && conv.lastMsgId === customMsgId) {
-      chatStore.addOrUpdateConversation({ ...conv, lastMsgId: serverId })
+    if (conv && (conv.lastMsgId === customMsgId || conv.lastMsgId === current.id || conv.lastMsgId === current.customMsgId)) {
+      chatStore.addOrUpdateConversation({
+        ...conv,
+        lastMsgId: serverId,
+        lastMsgTime: msg.sendTime || conv.lastMsgTime,
+        lastMsgDigest: getDigestByMessage(msg.msgType, msg.content) || conv.lastMsgDigest,
+        updatedAt: msg.sendTime || conv.updatedAt,
+      })
     }
     return true
   }
