@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useGroupStore } from '@/stores/useGroupStore'
+import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -38,6 +38,12 @@ function startChat() {
   uiStore.setSidebarTab('chats')
   uiStore.setDetailView('chat')
 }
+
+function handleMemberClick(member: GroupMember) {
+  const allMembers = groupStore.getMembers(props.groupId)
+  const candidateIds = allMembers.map(m => m.userId)
+  uiStore.openMemberInfo(member.userId, props.groupId, candidateIds)
+}
 </script>
 
 <template>
@@ -66,6 +72,7 @@ function startChat() {
           v-for="m in previewMembers"
           :key="m.userId"
           class="member-item"
+          @click="handleMemberClick(m)"
         >
           <TextAvatar
             :name="m.nickname || m.userId"
