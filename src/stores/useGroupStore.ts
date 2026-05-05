@@ -46,6 +46,14 @@ export const useGroupStore = defineStore('group', () => {
     const next = new Map(memberMap.value)
     next.set(groupId, members)
     memberMap.value = next
+
+    const group = getGroup(groupId)
+    if (group && members.length !== group.memberCount) {
+      upsertGroup({
+        ...group,
+        memberCount: members.length,
+      })
+    }
   }
 
   function normalizeGroup(item: any): Group {
@@ -73,7 +81,7 @@ export const useGroupStore = defineStore('group', () => {
         ...next,
         name: next.name || groups.value[idx].name,
         avatar: next.avatar || groups.value[idx].avatar,
-        memberCount: next.memberCount || groups.value[idx].memberCount,
+        memberCount: next.memberCount > 0 ? next.memberCount : groups.value[idx].memberCount,
       }
     } else {
       groups.value = [next, ...groups.value]
@@ -323,6 +331,7 @@ export const useGroupStore = defineStore('group', () => {
     loadGroups,
     loadMembers,
     upsertGroup,
+    setGroupMembers,
     getGroup,
     getMembers,
     applyOnlineStatusUpdates,
