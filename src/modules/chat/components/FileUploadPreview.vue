@@ -26,6 +26,7 @@ interface PreviewItem {
   isImage: boolean
   previewUrl: string
   isError: boolean
+  previewFailed: boolean
 }
 
 const list = ref<PreviewItem[]>([])
@@ -52,7 +53,7 @@ function formatFileSize(size: number): string {
 
 function createPreview(file: File): PreviewItem {
   const isImage = file.type.startsWith('image/')
-  const previewUrl = isImage ? URL.createObjectURL(new Blob([file])) : ''
+  const previewUrl = isImage ? URL.createObjectURL(file) : ''
   const maxSizeMb = getMaxSizeMb(file)
   return {
     file,
@@ -61,12 +62,26 @@ function createPreview(file: File): PreviewItem {
     isImage,
     previewUrl,
     isError: Math.ceil(file.size / 1024 / 1024) > maxSizeMb,
+    previewFailed: false,
   }
+}
+
+function revokePreviewUrl(url: string) {
+  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
 
 function revokePreviews(items: PreviewItem[]) {
   items.forEach((item) => {
-    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+    if (item.previewUrl) revokePreviewUrl(item.previewUrl)
+  })
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
   })
 }
 
@@ -117,12 +132,27 @@ function handleAddFiles(e: Event) {
 
 function handleRemove(index: number) {
   const item = list.value[index]
-  if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl)
+  if (item?.previewUrl) revokePreviewUrl(item.previewUrl)
   if (list.value.length === 1) {
     handleCancel()
     return
   }
   list.value = list.value.filter((_, i) => i !== index)
+}
+
+async function handlePreviewError(item: PreviewItem) {
+  if (item.previewFailed) return
+  item.previewFailed = true
+  const previousUrl = item.previewUrl
+  try {
+    const dataUrl = await fileToDataUrl(item.file)
+    if (previousUrl) revokePreviewUrl(previousUrl)
+    item.previewUrl = dataUrl
+    item.previewFailed = false
+  } catch {
+    if (previousUrl) revokePreviewUrl(previousUrl)
+    item.previewUrl = ''
+  }
 }
 
 function handleConfirm() {
@@ -229,7 +259,12 @@ onBeforeUnmount(() => {
                   {{ $t('上传文件不能超过') }}{{ item.isImage ? MAX_IMAGE_SIZE_MB : MAX_SIZE_MB }}M
                 </p>
                 <picture>
-                  <img v-if="item.isImage" :src="item.previewUrl" alt="" />
+                  <img
+                    v-if="item.isImage && item.previewUrl"
+                    :src="item.previewUrl"
+                    alt=""
+                    @error="handlePreviewError(item)"
+                  />
                   <div v-else class="file-fallback">📎</div>
                 </picture>
                 <span class="close-btn" @click="handleRemove(index)">
