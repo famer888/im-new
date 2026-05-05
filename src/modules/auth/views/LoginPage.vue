@@ -96,7 +96,9 @@ async function handleLoginSuccess(session: {
 
 async function handleClose() {
   try {
-    await getCurrentWindow().close()
+    const win = getCurrentWindow()
+    await win.minimize()
+    await win.hide()
   } catch {
     window.close()
   }

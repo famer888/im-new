@@ -5,6 +5,17 @@ use tauri::{
 };
 use tracing::info;
 
+fn show_first_available_window(app: &tauri::AppHandle) {
+    for label in ["main", "login"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            return;
+        }
+    }
+}
+
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -16,10 +27,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_first_available_window(app);
             }
             "quit" => {
                 info!("Quit requested from tray");
@@ -34,10 +42,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                 ..
             } => {
                 let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_first_available_window(app);
             }
             _ => {}
         })

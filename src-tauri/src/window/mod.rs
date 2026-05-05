@@ -4,7 +4,9 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +149,7 @@ impl WindowManager {
                 let window = builder
                     .build()
                     .map_err(|e| WindowError::TauriError(e.to_string()))?;
+                hide_to_tray_on_close(&window);
                 (window, false)
             }
         };
@@ -212,6 +215,10 @@ impl WindowManager {
 
                 builder
                     .build()
+                    .map(|window| {
+                        hide_to_tray_on_close(&window);
+                        window
+                    })
                     .map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
         }
@@ -284,6 +291,17 @@ impl WindowManager {
     pub fn has_chat_window(&self, conversation_id: &str) -> bool {
         self.chat_windows.contains_key(conversation_id)
     }
+}
+
+pub fn hide_to_tray_on_close(window: &WebviewWindow) {
+    let window_to_hide = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window_to_hide.minimize();
+            let _ = window_to_hide.hide();
+        }
+    });
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
