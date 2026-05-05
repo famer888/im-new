@@ -123,7 +123,8 @@ watch(() => uiStore.sidebarTab, (tab) => {
   searchKeyword.value = ''
   searchStore.clearResults()
   uiStore.setAddContactTarget(null)
-  if (uiStore.detailView === 'add-contact') {
+  uiStore.setAddGroupTarget(null)
+  if (uiStore.detailView === 'add-contact' || uiStore.detailView === 'add-group') {
     uiStore.setDetailView('none')
   }
   if (searchStore.searchSpecifiedChatInfo) {
@@ -160,7 +161,8 @@ function handleClearSearch() {
   searchStore.clearResults()
   if (uiStore.sidebarTab === 'contacts' && addAction.value) {
     uiStore.setAddContactTarget(null)
-    if (uiStore.detailView === 'add-contact') {
+    uiStore.setAddGroupTarget(null)
+    if (uiStore.detailView === 'add-contact' || uiStore.detailView === 'add-group') {
       uiStore.setDetailView('none')
     }
   }
@@ -195,6 +197,7 @@ function handleAddAction() {
   searchKeyword.value = ''
   searchStore.clearResults()
   uiStore.setAddContactTarget(null)
+  uiStore.setAddGroupTarget(null)
   uiStore.setRightPanel('none')
   uiStore.setDetailView('none')
 }
@@ -204,7 +207,8 @@ function handleCancelAddAction() {
   searchKeyword.value = ''
   searchStore.clearResults()
   uiStore.setAddContactTarget(null)
-  if (uiStore.detailView === 'add-contact') {
+  uiStore.setAddGroupTarget(null)
+  if (uiStore.detailView === 'add-contact' || uiStore.detailView === 'add-group') {
     uiStore.setDetailView('none')
   }
 }

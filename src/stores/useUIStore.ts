@@ -4,7 +4,7 @@ import type { QuoteMessageInfo } from './useMessageStore'
 
 export type SidebarTab = 'chats' | 'contacts' | 'transfer'
 export type RightPanelType = 'none' | 'friend-info' | 'group-info' | 'channel-info' | 'group-members' | 'group-notice' | 'group-manage' | 'channel-notice' | 'channel-manage'
-export type DetailViewType = 'none' | 'chat' | 'friend-detail' | 'group-detail' | 'channel-detail' | 'add-contact' | 'friend-examine' | 'group-invitation' | 'channel-notice-list'
+export type DetailViewType = 'none' | 'chat' | 'friend-detail' | 'group-detail' | 'channel-detail' | 'add-contact' | 'add-group' | 'friend-examine' | 'group-invitation' | 'channel-notice-list'
 
 export interface ForwardDraftItem {
   msgType: number
@@ -19,6 +19,17 @@ export interface AddContactTarget {
   avatar: string
   addToken: string
   isFriend: boolean
+}
+
+export interface AddGroupTarget {
+  id: string
+  name: string
+  avatar: string
+  memberCount: number
+  groupAliasName: string
+  ownerId: string | null
+  addToken: string
+  bfJoinCheck: boolean
 }
 
 export const useUIStore = defineStore('ui', () => {
@@ -54,6 +65,7 @@ export const useUIStore = defineStore('ui', () => {
     candidateIds: [],
   })
   const addContactTarget = ref<AddContactTarget | null>(null)
+  const addGroupTarget = ref<AddGroupTarget | null>(null)
 
   // Context menu
   const contextMenuVisible = ref(false)
@@ -149,6 +161,10 @@ export const useUIStore = defineStore('ui', () => {
 
   function setAddContactTarget(target: AddContactTarget | null) {
     addContactTarget.value = target
+  }
+
+  function setAddGroupTarget(target: AddGroupTarget | null) {
+    addGroupTarget.value = target
   }
 
   function showContextMenu(x: number, y: number, data: Record<string, unknown>) {
@@ -262,6 +278,8 @@ export const useUIStore = defineStore('ui', () => {
     closeMemberInfo,
     addContactTarget,
     setAddContactTarget,
+    addGroupTarget,
+    setAddGroupTarget,
     quoteMessage,
     forwardDraftItems,
     forwardDraftTargetId,

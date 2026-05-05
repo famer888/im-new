@@ -23,6 +23,7 @@ export interface Group {
   notice: string | null
   isMuted: boolean
   updatedAt: number
+  groupAliasName?: string | null
 }
 
 export interface GroupMember {
@@ -57,6 +58,25 @@ export const useGroupStore = defineStore('group', () => {
       notice: item.notice ?? null,
       isMuted: Boolean(item.isMuted ?? item.is_muted ?? item.bfShutup ?? false),
       updatedAt: Number(item.updatedAt ?? item.updated_at ?? item.createTime ?? 0),
+      groupAliasName: item.groupAliasName ?? item.group_alias_name ?? null,
+    }
+  }
+
+  function upsertGroup(item: Partial<Group> & Record<string, any>) {
+    const next = normalizeGroup(item)
+    if (!next.id) return
+
+    const idx = groups.value.findIndex((group) => group.id === next.id)
+    if (idx >= 0) {
+      groups.value[idx] = {
+        ...groups.value[idx],
+        ...next,
+        name: next.name || groups.value[idx].name,
+        avatar: next.avatar || groups.value[idx].avatar,
+        memberCount: next.memberCount || groups.value[idx].memberCount,
+      }
+    } else {
+      groups.value = [next, ...groups.value]
     }
   }
 
@@ -302,6 +322,7 @@ export const useGroupStore = defineStore('group', () => {
     loading,
     loadGroups,
     loadMembers,
+    upsertGroup,
     getGroup,
     getMembers,
     applyOnlineStatusUpdates,
