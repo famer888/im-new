@@ -32,8 +32,10 @@ const diceAnimationStates = diceGlobal.__OCS_DICE_ANIMATION_STATES__
 diceGlobal.__OCS_DICE_ANIMATION_STATES__ = diceAnimationStates
 const visibleResult = ref(0)
 let stopTimer: ReturnType<typeof window.setTimeout> | null = null
+const DICE_MESSAGE_DEBUG = false
 
 function diceMessageLog(message: string, data?: Record<string, unknown>) {
+  if (!DICE_MESSAGE_DEBUG) return
   const payload = {
     debugRunId: DICE_REPLAY_COMPONENT_DEBUG_RUN_ID,
     stateCount: diceAnimationStates.size,

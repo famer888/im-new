@@ -198,19 +198,99 @@ function diceLog(message: string, data?: Record<string, unknown>) {
   }).catch(() => {})
 }
 
-function diceReplaySummary(messages: Message[]) {
-  return messages
-    .filter((message) => message.msgType === 12)
-    .map((message) => ({
-      id: message.id,
-      customMsgId: message.customMsgId,
-      key: message.customMsgId || message.id,
-      content: message.content ?? '',
-      result: getDiceResultFromContent(message.content),
-      status: message.status,
-      readStatus: message.readStatus,
-      sendTime: message.sendTime,
-    }))
+const GROUP_IMAGE_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+
+function isGroupImageMessage(conversationId: string, msgType: number): boolean {
+  return String(conversationId || '').startsWith('1_') && Number(msgType) === 1
+}
+
+function shortLogText(value: unknown, max = 120): string {
+  const text = String(value ?? '')
+  return text.length > max ? `${text.slice(0, max)}...` : text
+}
+
+function imageContentSummary(content: string | null | undefined) {
+  const raw = String(content ?? '')
+  let parsed: Record<string, unknown> | null = null
+  try {
+    const value = JSON.parse(raw)
+    parsed = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  } catch {
+    parsed = null
+  }
+  const url = String(parsed?.url ?? parsed?.text ?? (raw.startsWith('data:image/') || raw.startsWith('http') ? raw : ''))
+  const thumbnailUrl = String(parsed?.thumbnailUrl ?? parsed?.thumbUrl ?? '')
+  return {
+    contentLen: raw.length,
+    contentHead: shortLogText(raw),
+    isJson: Boolean(parsed),
+    isDataUrl: raw.includes('data:image/') || url.startsWith('data:image/'),
+    urlLen: url.length,
+    urlHead: shortLogText(url),
+    thumbnailLen: thumbnailUrl.length,
+    thumbnailHead: shortLogText(thumbnailUrl),
+    width: parsed?.width ?? null,
+    height: parsed?.height ?? null,
+    size: parsed?.size ?? null,
+    name: parsed?.name ?? null,
+  }
+}
+
+function messageLogSummary(message: Message | null | undefined) {
+  if (!message) return null
+  return {
+    id: message.id,
+    customMsgId: message.customMsgId,
+    conversationId: message.conversationId,
+    senderId: message.senderId,
+    msgType: message.msgType,
+    status: message.status,
+    readStatus: message.readStatus,
+    sendTime: message.sendTime,
+    ...imageContentSummary(message.content),
+  }
+}
+
+function groupImageLog(
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  const payload = { debugRunId: GROUP_IMAGE_DEBUG_RUN_ID, ...(data || {}) }
+  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  log(`[group-image] ${message}`, payload)
+  if (!isTauri()) return
+  tauriInvoke('image_send_log', {
+    payload: {
+      level,
+      message: `[group-image] ${message}`,
+      data: payload,
+    },
+  }).catch(() => {})
+}
+
+function isSameMessageIdentity(a: Message, b: Message): boolean {
+  if (a.id && b.id && String(a.id) === String(b.id)) return true
+  if (a.customMsgId && b.customMsgId && String(a.customMsgId) === String(b.customMsgId)) return true
+  if (a.customMsgId && b.id && String(a.customMsgId) === String(b.id)) return true
+  if (a.id && b.customMsgId && String(a.id) === String(b.customMsgId)) return true
+  return false
+}
+
+function mergeLoadedMessagesWithLocal(conversationId: string, loaded: Message[], existing: Message[]) {
+  const localGroupImages = existing.filter((message) => (
+    isGroupImageMessage(conversationId, message.msgType)
+    && (message.status === 0 || message.status === -1)
+    && !loaded.some((item) => isSameMessageIdentity(item, message))
+  ))
+  if (localGroupImages.length === 0) {
+    return { messages: loaded, preserved: [] as Message[] }
+  }
+  const merged = [...loaded, ...localGroupImages].sort((a, b) => a.sendTime - b.sendTime)
+  if (merged.length > MAX_CACHED_MESSAGES) {
+    merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
+  }
+  return { messages: merged, preserved: localGroupImages }
 }
 
 function getDiceResultFromContent(content: string | null | undefined): number {
@@ -430,17 +510,21 @@ export const useMessageStore = defineStore('message', () => {
     return hasMoreMap.value.get(conversationId) ?? true
   }
 
-  async function loadMessages(uid: string, conversationId: string) {
+  async function loadMessages(uid: string, conversationId: string, force = false) {
     if (!isTauri()) return
-    if (isLoading(conversationId)) return
+    if (isLoading(conversationId) && !force) return
 
     const existingBeforeLoad = getMessages(conversationId)
-    diceLog('loadMessages start', {
-      uid,
-      conversationId,
-      existingCount: existingBeforeLoad.length,
-      existingDice: diceReplaySummary(existingBeforeLoad),
-    })
+    const existingGroupImages = existingBeforeLoad.filter((message) => isGroupImageMessage(conversationId, message.msgType))
+    if (existingGroupImages.length > 0) {
+      groupImageLog('loadMessages start', {
+        uid,
+        conversationId,
+        force,
+        existingCount: existingBeforeLoad.length,
+        existingGroupImages: existingGroupImages.slice(-5).map(messageLogSummary),
+      })
+    }
     loadingMap.value.set(conversationId, true)
     try {
       const result = await tauriInvoke<any[]>('get_messages', {
@@ -450,15 +534,20 @@ export const useMessageStore = defineStore('message', () => {
       })
       const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
       const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
-      messageMap.value.set(conversationId, filteredResult.messages)
-      diceLog('loadMessages done', {
-        uid,
-        conversationId,
-        rawCount: Array.isArray(result) ? result.length : 0,
-        normalizedDice: diceReplaySummary(normalized),
-        storedCount: filteredResult.messages.length,
-        storedDice: diceReplaySummary(filteredResult.messages),
-      })
+      const mergedResult = mergeLoadedMessagesWithLocal(conversationId, filteredResult.messages, existingBeforeLoad)
+      messageMap.value.set(conversationId, mergedResult.messages)
+      const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
+      if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
+        groupImageLog('loadMessages done', {
+          uid,
+          conversationId,
+          force,
+          rawCount: Array.isArray(result) ? result.length : 0,
+          storedCount: mergedResult.messages.length,
+          loadedGroupImages: loadedGroupImages.slice(-5).map(messageLogSummary),
+          preservedLocalGroupImages: mergedResult.preserved.map(messageLogSummary),
+        })
+      }
       hasMoreMap.value.set(
         conversationId,
         !filteredResult.hitLogoutClearBoundary && normalized.length >= PAGE_SIZE,
@@ -473,12 +562,6 @@ export const useMessageStore = defineStore('message', () => {
     if (isLoading(conversationId) || !hasMore(conversationId)) return
 
     const existing = getMessages(conversationId)
-    diceLog('loadOlderMessages start', {
-      uid,
-      conversationId,
-      existingCount: existing.length,
-      existingDice: diceReplaySummary(existing),
-    })
     const beforeTime = existing.length > 0 ? existing[0].sendTime : undefined
 
     loadingMap.value.set(conversationId, true)
@@ -497,21 +580,6 @@ export const useMessageStore = defineStore('message', () => {
           merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
         }
         messageMap.value.set(conversationId, merged)
-        diceLog('loadOlderMessages merged', {
-          uid,
-          conversationId,
-          rawCount: Array.isArray(result) ? result.length : 0,
-          olderDice: diceReplaySummary(filteredResult.messages),
-          mergedCount: merged.length,
-          mergedDice: diceReplaySummary(merged),
-        })
-      } else {
-        diceLog('loadOlderMessages empty', {
-          uid,
-          conversationId,
-          rawCount: Array.isArray(result) ? result.length : 0,
-          normalizedDice: diceReplaySummary(normalized),
-        })
       }
       hasMoreMap.value.set(
         conversationId,
@@ -598,6 +666,19 @@ export const useMessageStore = defineStore('message', () => {
     }
     appendMessage(conversationId, optimistic)
     syncConversationSummary(conversationId, optimistic)
+    if (isGroupImageMessage(conversationId, msgType)) {
+      groupImageLog('sendMessage optimistic appended', {
+        uid,
+        conversationId,
+        convType,
+        targetId,
+        optimisticId,
+        sendTime: clientFlag,
+        listSizeAfterAppend: getMessages(conversationId).length,
+        content: imageContentSummary(content),
+        extraKeys: Object.keys(sendExtra ?? {}),
+      })
+    }
     if (msgType === 12) {
       diceLog('sendMessage optimistic appended', {
         uid,
@@ -713,6 +794,14 @@ export const useMessageStore = defineStore('message', () => {
       }
       const rustStartedAt = performance.now()
       logSendStep('invoking Rust send_message')
+      if (isGroupImageMessage(conversationId, msgType)) {
+        groupImageLog('invoke Rust send_message', {
+          uid,
+          conversationId,
+          optimisticId,
+          content: imageContentSummary(content),
+        })
+      }
       if (convType === 2) {
         console.info('[channel] invoke send_message -> Rust', {
           conversationId,
@@ -737,6 +826,17 @@ export const useMessageStore = defineStore('message', () => {
         resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
         resultStatus: Number(result?.status ?? 0),
       })
+      if (isGroupImageMessage(conversationId, msgType)) {
+        groupImageLog('Rust send_message result', {
+          optimisticId,
+          stepMs: Math.round(performance.now() - rustStartedAt),
+          resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
+          resultCustomMsgId: String(result?.customMsgId || result?.custom_msg_id || ''),
+          resultStatus: Number(result?.status ?? 0),
+          resultReadStatus: Number(result?.readStatus ?? result?.read_status ?? 0),
+          resultContent: imageContentSummary(String(result?.content ?? '')),
+        })
+      }
       if (convType === 2) {
         console.info('[channel] Rust send_message returned', {
           optimisticId,
@@ -803,8 +903,20 @@ export const useMessageStore = defineStore('message', () => {
           syncConversationSummary(conversationId, normalized)
           return normalized
         } catch (retryErr) {
+          if (isGroupImageMessage(conversationId, msgType)) {
+            groupImageLog('send_message retry failed', {
+              optimisticId,
+              error: String((retryErr as any)?.message || retryErr || ''),
+            }, 'error')
+          }
           console.error('[send] retry after reconnect failed:', retryErr)
         }
+      }
+      if (isGroupImageMessage(conversationId, msgType)) {
+        groupImageLog('send_message failed', {
+          optimisticId,
+          error: errText,
+        }, 'error')
       }
       console.error('[send] send_message failed:', e)
       updateMessageStatus(optimisticId, -1)
@@ -849,6 +961,16 @@ export const useMessageStore = defineStore('message', () => {
     const existIndex = next.findIndex(
       (m) => m.id === message.id || (m.customMsgId && m.customMsgId === message.customMsgId),
     )
+    if (isGroupImageMessage(conversationId, message.msgType)) {
+      const previous = existIndex >= 0 ? next[existIndex] : null
+      groupImageLog('appendMessage', {
+        conversationId,
+        existIndex,
+        listSizeBefore: currentList.length,
+        incoming: messageLogSummary(message),
+        previous: messageLogSummary(previous),
+      })
+    }
     if (message.msgType === 12) {
       const previous = existIndex >= 0 ? next[existIndex] : null
       diceLog('appendMessage', {
@@ -898,6 +1020,14 @@ export const useMessageStore = defineStore('message', () => {
     for (const raw of messages as any[]) {
       const msg = normalizeMessage(raw)
       const convId = String(msg.conversationId || '')
+      if (isGroupImageMessage(convId, msg.msgType)) {
+        groupImageLog('batchAppendMessages normalized', {
+          rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),
+          rawCustomMsgId: String((raw as any)?.customMsgId ?? (raw as any)?.custom_msg_id ?? ''),
+          normalized: messageLogSummary(msg),
+          rawContent: imageContentSummary(String((raw as any)?.content ?? '')),
+        })
+      }
       if (msg.msgType === 12) {
         diceLog('batchAppendMessages normalized', {
           rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),
@@ -1074,36 +1204,45 @@ export const useMessageStore = defineStore('message', () => {
     flag: number | string
     serverMsgId: number | string
     sentOverTime?: number
-  }) {
+  }): boolean {
     const customMsgId = String(params.flag)
     const serverId = String(params.serverMsgId)
     const list = messageMap.value.get(params.conversationId)
     if (!list) {
-      diceLog('applySendReceipt no list', {
+      if (String(params.conversationId || '').startsWith('1_')) {
+        groupImageLog('applySendReceipt no list', {
+          conversationId: params.conversationId,
+          customMsgId,
+          serverId,
+          sentOverTime: Number(params.sentOverTime || 0),
+        }, 'warn')
+      }
+      return false
+    }
+    if (String(params.conversationId || '').startsWith('1_')) {
+      groupImageLog('applySendReceipt start', {
         conversationId: params.conversationId,
         customMsgId,
         serverId,
         sentOverTime: Number(params.sentOverTime || 0),
+        listSize: list.length,
+        tail: list.slice(-8).map(messageLogSummary),
       })
-      return
     }
     const idx = list.findIndex(
       (m) => m.customMsgId === customMsgId || m.id === customMsgId,
     )
     if (idx < 0) {
-      diceLog('applySendReceipt no optimistic message', {
-        conversationId: params.conversationId,
-        customMsgId,
-        serverId,
-        listSize: list.length,
-        ids: list.slice(-8).map((m) => ({
-          id: m.id,
-          customMsgId: m.customMsgId,
-          msgType: m.msgType,
-          content: m.content ?? '',
-        })),
-      })
-      return
+      if (String(params.conversationId || '').startsWith('1_')) {
+        groupImageLog('applySendReceipt no optimistic message', {
+          conversationId: params.conversationId,
+          customMsgId,
+          serverId,
+          listSize: list.length,
+          tail: list.slice(-8).map(messageLogSummary),
+        }, 'warn')
+      }
+      return false
     }
     const next = [...list]
     const duplicateIdx = next.findIndex((m, i) => i !== idx && m.id === serverId)
@@ -1146,6 +1285,19 @@ export const useMessageStore = defineStore('message', () => {
         nextContent,
       })
     }
+    if (isGroupImageMessage(params.conversationId, current.msgType) || (duplicate && isGroupImageMessage(params.conversationId, duplicate.msgType))) {
+      groupImageLog('applySendReceipt merge start', {
+        conversationId: params.conversationId,
+        customMsgId,
+        serverId,
+        idx,
+        duplicateIdx,
+        sentOverTime: Number(params.sentOverTime || 0),
+        current: messageLogSummary(current),
+        duplicate: messageLogSummary(duplicate),
+        nextContent: imageContentSummary(nextContent),
+      })
+    }
     const msg = {
       ...current,
       extra: duplicate?.extra ?? current.extra,
@@ -1181,12 +1333,23 @@ export const useMessageStore = defineStore('message', () => {
         finalSendTime: msg.sendTime,
       })
     }
+    if (isGroupImageMessage(params.conversationId, msg.msgType)) {
+      groupImageLog('applySendReceipt merge done', {
+        conversationId: params.conversationId,
+        customMsgId,
+        serverId,
+        nextIdx,
+        final: messageLogSummary(msg),
+        listSizeAfter: next.length,
+      })
+    }
 
     const chatStore = useChatStore()
     const conv = chatStore.conversations.find((c) => c.id === params.conversationId)
     if (conv && conv.lastMsgId === customMsgId) {
       chatStore.addOrUpdateConversation({ ...conv, lastMsgId: serverId })
     }
+    return true
   }
 
   function deleteMessage(conversationId: string, messageId: string) {

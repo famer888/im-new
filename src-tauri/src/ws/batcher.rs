@@ -1220,14 +1220,6 @@ impl MessageBatcher {
             sent_over_time: resp.sent_over_time,
             conversation_id: format!("1_{}", resp.group_id),
         };
-        warn!(
-            target: "dice",
-            "[dice] GROUP_MSG_SENT receipt flag={} msg_id={} group_id={} sent_over_time={}",
-            evt.flag,
-            evt.msg_id,
-            evt.group_id,
-            evt.sent_over_time
-        );
         info!(
             "GROUP_MSG_SENT flag={} msg_id={} group_id={}",
             evt.flag, evt.msg_id, evt.group_id

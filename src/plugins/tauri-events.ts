@@ -77,6 +77,17 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
 let screenshotShortcutBound = false
 let screenshotStarting = false
 let forceLogoutHandling = false
+const tauriListenersGlobal = globalThis as typeof globalThis & {
+  __OCS_TAURI_LISTENER_GENERATION__?: number
+  __OCS_TAURI_LISTENER_UNLISTENS__?: Array<() => void>
+  __OCS_TAURI_DOM_LISTENERS_BOUND__?: boolean
+}
+
+type TauriEvent<T> = { payload: T }
+type TauriListen = <T>(
+  eventName: string,
+  handler: (event: TauriEvent<T>) => void | Promise<void>,
+) => Promise<() => void>
 
 function isMacPlatform(): boolean {
   const text = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
@@ -115,15 +126,19 @@ export async function setupTauriListeners() {
   setupGlobalErrorHandler()
   let groupKeyWarmupPending: Promise<void> | null = null
 
-  window.addEventListener('online', () => {
-    const networkStore = useNetworkStore()
-    networkStore.setOnline(true)
-  })
+  if (!tauriListenersGlobal.__OCS_TAURI_DOM_LISTENERS_BOUND__) {
+    tauriListenersGlobal.__OCS_TAURI_DOM_LISTENERS_BOUND__ = true
 
-  window.addEventListener('offline', () => {
-    const networkStore = useNetworkStore()
-    networkStore.setOnline(false)
-  })
+    window.addEventListener('online', () => {
+      const networkStore = useNetworkStore()
+      networkStore.setOnline(true)
+    })
+
+    window.addEventListener('offline', () => {
+      const networkStore = useNetworkStore()
+      networkStore.setOnline(false)
+    })
+  }
 
   if (!isTauri()) {
     console.warn('[tauri-events] Not running in Tauri, skipping native event listeners')
@@ -132,7 +147,37 @@ export async function setupTauriListeners() {
 
   setupScreenshotShortcut()
 
-  const { listen } = await import('@tauri-apps/api/event')
+  for (const unlisten of tauriListenersGlobal.__OCS_TAURI_LISTENER_UNLISTENS__ ?? []) {
+    try {
+      unlisten()
+    } catch (err) {
+      console.warn('[tauri-events] unlisten stale listener failed:', err)
+    }
+  }
+  tauriListenersGlobal.__OCS_TAURI_LISTENER_UNLISTENS__ = []
+  const generation = (tauriListenersGlobal.__OCS_TAURI_LISTENER_GENERATION__ ?? 0) + 1
+  tauriListenersGlobal.__OCS_TAURI_LISTENER_GENERATION__ = generation
+
+  const { listen: rawListen } = await import('@tauri-apps/api/event') as { listen: TauriListen }
+  const listen = <T>(
+    eventName: string,
+    handler: (event: TauriEvent<T>) => void | Promise<void>,
+  ) => {
+    rawListen<T>(eventName, (event) => {
+      if (tauriListenersGlobal.__OCS_TAURI_LISTENER_GENERATION__ !== generation) return
+      void handler(event)
+    })
+      .then((unlisten) => {
+        if (tauriListenersGlobal.__OCS_TAURI_LISTENER_GENERATION__ !== generation) {
+          unlisten()
+          return
+        }
+        tauriListenersGlobal.__OCS_TAURI_LISTENER_UNLISTENS__?.push(unlisten)
+      })
+      .catch((err) => {
+        console.warn('[tauri-events] listen failed:', { eventName, err })
+      })
+  }
   const scheduleDeletionStore = useScheduleDeletionStore()
 
   scheduleDeletionStore.startCleanup((timer) => {
@@ -660,7 +705,7 @@ export async function setupTauriListeners() {
       })
     }
 
-    messageStore.applySendReceipt({
+    const receiptApplied = messageStore.applySendReceipt({
       conversationId: payload.conversationId,
       flag: payload.flag,
       serverMsgId: payload.msgId,
@@ -679,6 +724,9 @@ export async function setupTauriListeners() {
           sentOverTime: Number(payload.sentOverTime) || null,
         },
       })
+      if (!receiptApplied && String(payload.conversationId || '').startsWith('1_')) {
+        await messageStore.loadMessages(authStore.uid, payload.conversationId, true)
+      }
     } catch (err) {
       console.warn('[msg:sent] mark_message_sent failed:', err)
     }

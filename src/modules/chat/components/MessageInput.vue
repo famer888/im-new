@@ -62,6 +62,7 @@ const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
 const pendingFiles = ref<File[]>([])
 const showFilePreview = ref(false)
+const toolbarFileInputRef = ref<HTMLInputElement | null>(null)
 /** 二维码转发（data: 图）：与老 im file-dialog 一致，弹出 FileUploadPreview */
 const showQrForwardUpload = ref(false)
 const qrForwardPendingFiles = ref<File[]>([])
@@ -1033,17 +1034,16 @@ function handleLinkConfirm(data: { linkText: string; linkValue: string; selectTe
 }
 
 function handleFileSelect() {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.multiple = true
-  input.onchange = () => {
-    const files = Array.from(input.files ?? [])
-    if (files.length > 0) {
-      pendingFiles.value = files
-      showFilePreview.value = true
-    }
-  }
-  input.click()
+  toolbarFileInputRef.value?.click()
+}
+
+function handleToolbarFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (files.length === 0) return
+  pendingFiles.value = files
+  showFilePreview.value = true
 }
 
 function fileToDataURL(file: File): Promise<string> {
@@ -1983,6 +1983,14 @@ onBeforeUnmount(() => {
           <button class="tool-btn tool-btn-im-icon" type="button" :title="$t('文件')" @click="handleFileSelect">
             <img class="im-active-icon" :src="iconFileActive" alt="" width="20" height="20" />
           </button>
+          <input
+            ref="toolbarFileInputRef"
+            class="toolbar-file-input"
+            type="file"
+            multiple
+            tabindex="-1"
+            @change="handleToolbarFileChange"
+          />
         </div>
       </div>
 
@@ -2310,6 +2318,16 @@ onBeforeUnmount(() => {
 
 .tool-btn-im-icon:hover .im-active-icon {
   filter: unset;
+}
+
+.toolbar-file-input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  left: -9999px;
+  top: -9999px;
 }
 
 .editor-wrapper {
