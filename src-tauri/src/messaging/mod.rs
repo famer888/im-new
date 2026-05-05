@@ -350,7 +350,7 @@ pub fn build_send_group_message_req(
 ) -> Result<Vec<u8>, CryptoError> {
     let encrypted = encrypt_with_rel_key(rel_key, content_plain)?;
     let mut hasher = Md5::new();
-    hasher.update(&encrypted);
+    hasher.update(content_plain);
     let content_md5 = format!("{:x}", hasher.finalize());
 
     let group_msg = imweb::GroupMessage {
@@ -543,6 +543,9 @@ mod tests {
         assert_eq!(gm.group_id, 10086);
         assert_eq!(gm.send_uid, 88);
         assert_eq!(gm.version, 1);
+        let mut hasher = Md5::new();
+        hasher.update(&plain);
+        assert_eq!(gm.content_md5, format!("{:x}", hasher.finalize()));
 
         let dec = crypto::aes::decrypt_message(&gm.content, rel_key).unwrap();
         assert_eq!(dec, plain);
