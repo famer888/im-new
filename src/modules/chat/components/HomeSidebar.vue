@@ -395,8 +395,8 @@ onBeforeUnmount(() => {
         class="settings-menu"
         :style="settingsMenuStyle"
       >
-        <div class="settings-menu-item" @click="handleOpenSettings">系统设置</div>
-        <div class="settings-menu-item" @click="handleLogout">退出登录</div>
+        <div class="settings-menu-item" @click="handleOpenSettings">{{ t('系统设置') }}</div>
+        <div class="settings-menu-item" @click="handleLogout">{{ t('退出登录') }}</div>
       </div>
     </Teleport>
 
