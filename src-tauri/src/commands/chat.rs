@@ -1175,6 +1175,15 @@ pub struct MarkMessageSentRequest {
     pub sent_over_time: Option<i64>,
 }
 
+fn summarize_log_content(content: Option<&str>) -> (usize, String, bool) {
+    let raw = content.unwrap_or("");
+    let mut head: String = raw.chars().take(120).collect();
+    if raw.chars().count() > 120 {
+        head.push_str("...");
+    }
+    (raw.len(), head, raw.contains("data:image/"))
+}
+
 #[tauri::command]
 pub async fn mark_message_sent(
     db: State<'_, DbManager>,
@@ -1184,8 +1193,8 @@ pub async fn mark_message_sent(
     let server_id = request.server_msg_id.to_string();
     let sent_time = request.sent_over_time.unwrap_or(0);
     warn!(
-        target: "dice",
-        "[dice] mark_message_sent start uid={} conversation_id={} custom_msg_id={} server_msg_id={} sent_time={}",
+        target: "receipt",
+        "[receipt] mark_message_sent start uid={} conversation_id={} custom_msg_id={} server_msg_id={} sent_time={}",
         uid,
         request.conversation_id,
         request.custom_msg_id,
@@ -1240,18 +1249,30 @@ pub async fn mark_message_sent(
                 Some(dice_fallback_result(&server_id))
             }
         } else {
-            duplicate_content.clone()
+            duplicate_content.clone().or_else(|| local_content.clone())
         };
+        let (local_content_len, local_content_head, local_is_data_image) =
+            summarize_log_content(local_content.as_deref());
+        let (duplicate_content_len, duplicate_content_head, duplicate_is_data_image) =
+            summarize_log_content(duplicate_content.as_deref());
+        let (merged_content_len, merged_content_head, merged_is_data_image) =
+            summarize_log_content(merged_content.as_deref());
         warn!(
-            target: "dice",
-            "[dice] mark_message_sent merge local_exists={} local_msg_type={} local_content={:?} duplicate_content={:?} duplicate_dice_result={:?} local_dice_result={:?} merged_content={:?} duplicate_extra_present={} duplicate_read_status={} duplicate_send_time={} next_server_id={}",
+            target: "receipt",
+            "[receipt] mark_message_sent merge local_exists={} local_msg_type={} local_content_len={} local_content_head={:?} local_is_data_image={} duplicate_content_len={} duplicate_content_head={:?} duplicate_is_data_image={} duplicate_dice_result={:?} local_dice_result={:?} merged_content_len={} merged_content_head={:?} merged_is_data_image={} duplicate_extra_present={} duplicate_read_status={} duplicate_send_time={} next_server_id={}",
             local_exists,
             local_msg_type,
-            local_content.as_deref(),
-            duplicate_content.as_deref(),
+            local_content_len,
+            local_content_head,
+            local_is_data_image,
+            duplicate_content_len,
+            duplicate_content_head,
+            duplicate_is_data_image,
             duplicate_dice_result,
             local_dice_result,
-            merged_content.as_deref(),
+            merged_content_len,
+            merged_content_head,
+            merged_is_data_image,
             duplicate_extra.is_some(),
             duplicate_read_status,
             duplicate_send_time,
@@ -1262,6 +1283,19 @@ pub async fn mark_message_sent(
         } else {
             duplicate_send_time
         };
+        if request.conversation_id.starts_with("1_") && local_msg_type == 1 {
+            warn!(
+                target: "group-image",
+                "[group-image] mark_message_sent merge local_exists={} custom_msg_id={} server_id={} local_content_len={} duplicate_content_len={} merged_content_len={} next_sent_time={}",
+                local_exists,
+                request.custom_msg_id,
+                server_id,
+                local_content_len,
+                duplicate_content_len,
+                merged_content_len,
+                next_sent_time
+            );
+        }
 
         if local_exists {
             conn.execute(
@@ -1296,13 +1330,13 @@ pub async fn mark_message_sent(
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
             warn!(
-                target: "dice",
-                "[dice] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content={:?} merged_content={:?} next_sent_time={}",
+                target: "receipt",
+                "[receipt] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={} next_sent_time={}",
                 changed,
                 server_id,
                 request.custom_msg_id,
-                duplicate_content.as_deref(),
-                merged_content.as_deref(),
+                duplicate_content_len,
+                merged_content_len,
                 next_sent_time
             );
         } else {
@@ -1325,13 +1359,13 @@ pub async fn mark_message_sent(
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
             warn!(
-                target: "dice",
-                "[dice] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content={:?} merged_content={:?}",
+                target: "receipt",
+                "[receipt] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={}",
                 changed,
                 server_id,
                 request.custom_msg_id,
-                duplicate_content.as_deref(),
-                merged_content.as_deref()
+                duplicate_content_len,
+                merged_content_len
             );
         }
 

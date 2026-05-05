@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
@@ -15,6 +15,7 @@ const loadError = ref(false)
 const activeSrc = ref('')
 const localFilePath = ref('')
 const showPreview = ref(false)
+const imageElRef = ref<HTMLImageElement | null>(null)
 let downloadToken = 0
 let stopDownloadEvents: Array<() => void> = []
 
@@ -124,9 +125,8 @@ const downloadUrl = computed(() => {
 })
 const isVideo = computed(() => props.message.msgType === 3)
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
-const isSending = computed(() => Number(props.message.status) === 0)
 const showImageLoading = computed(() => !activeSrc.value || (!isLoaded.value && !loadError.value))
-const showImageOverlay = computed(() => !loadError.value && (showImageLoading.value || isSending.value))
+const showImageOverlay = computed(() => !loadError.value && showImageLoading.value)
 const canOpenPreview = computed(() => Boolean(previewSrc.value) && isLoaded.value && !loadError.value && !showImageOverlay.value)
 const imageBoxStyle = computed(() => {
   if (!activeSrc.value) {
@@ -180,7 +180,7 @@ const imageCacheKey = computed(() => [
   attachmentKey.value || '',
 ].join('|'))
 
-watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey, imageCacheKey], () => {
+watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
@@ -203,6 +203,7 @@ watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey, imageCacheKey], () => 
     return
   }
   activeSrc.value = thumbnailUrl.value
+  markLoadedIfImageAlreadyComplete()
 }, { immediate: true })
 
 function handleLoad() {
@@ -210,6 +211,18 @@ function handleLoad() {
   setCachedImage(imageCacheKey.value, {
     src: activeSrc.value,
     localFilePath: localFilePath.value,
+  })
+}
+
+function markLoadedIfImageAlreadyComplete() {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const img = imageElRef.value
+      if (!img || !activeSrc.value || loadError.value) return
+      if (img.complete && img.naturalWidth > 0) {
+        handleLoad()
+      }
+    })
   })
 }
 
@@ -350,6 +363,7 @@ async function downloadAndDecryptImage() {
       loadError.value = false
       isLoaded.value = false
       activeSrc.value = src
+      markLoadedIfImageAlreadyComplete()
       setCachedImage(imageCacheKey.value, {
         src,
         localFilePath: localFilePath.value,
@@ -393,6 +407,7 @@ onBeforeUnmount(() => {
     >
       <img
         v-if="activeSrc && !loadError"
+        ref="imageElRef"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"
         alt=""
