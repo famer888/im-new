@@ -89,7 +89,8 @@ pub fn run() {
                     builder = builder.decorations(false).transparent(true);
                 }
 
-                builder.build()?;
+                let window = builder.build()?;
+                window::hide_to_tray_on_close(&window);
                 info!("Login window created");
             }
 
