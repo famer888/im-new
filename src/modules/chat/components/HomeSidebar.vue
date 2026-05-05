@@ -2,7 +2,13 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useChatStore, FILE_HELPER_TARGET_ID, isFileHelperTargetId } from '@/stores/useChatStore'
+import {
+  GROUP_NOTIFICATION_TARGET_ID,
+  useChatStore,
+  FILE_HELPER_TARGET_ID,
+  isFileHelperTargetId,
+  type Conversation,
+} from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -11,6 +17,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
+import { ConversationType } from '@/types'
 import SearchInput from '@/components/SearchInput.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import ConversationList from './ConversationList.vue'
@@ -36,6 +43,9 @@ const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const settingStore = useSettingStore()
 const chatStore = useChatStore()
+const contactStore = useContactStore()
+const groupStore = useGroupStore()
+const channelStore = useChannelStore()
 const router = useRouter()
 
 const searchKeyword = ref('')
@@ -66,6 +76,34 @@ const searchPlaceholder = computed(() => {
     ? t('搜索手机号/ID/群别名')
     : t('搜索')
 })
+function isGroupNotification(conv: Conversation): boolean {
+  return conv.targetId === GROUP_NOTIFICATION_TARGET_ID
+}
+
+function isConversationInCurrentRelations(conv: Conversation): boolean {
+  if (isGroupNotification(conv)) return true
+  switch (conv.type) {
+    case ConversationType.Friend:
+      return Boolean(contactStore.getContact(conv.targetId))
+    case ConversationType.Group:
+      return Boolean(groupStore.getGroup(conv.targetId))
+    case ConversationType.Channel:
+      return Boolean(channelStore.getChannel(conv.targetId))
+    default:
+      return false
+  }
+}
+
+const visibleChatUnread = computed(() =>
+  chatStore.conversations
+    .filter((conv) =>
+      !conv.isMuted
+      && !conv.isArchived
+      && !isFileHelperTargetId(conv.targetId)
+      && isConversationInCurrentRelations(conv),
+    )
+    .reduce((sum, conv) => sum + Math.max(0, Number(conv.unreadCount || 0)), 0),
+)
 
 /** 与 im home-left/index.vue 一致：中间列表可左右拖拽改宽 */
 const NAV_BAR_WIDTH = 72
@@ -275,9 +313,6 @@ function handleLogout() {
 
 async function confirmLogout() {
   const messageStore = useMessageStore()
-  const contactStore = useContactStore()
-  const groupStore = useGroupStore()
-  const channelStore = useChannelStore()
   const currentUid = authStore.uid
   const keepHistoryOnLogout = settingStore.settings.keepHistoryOnLogout
 
@@ -374,8 +409,8 @@ onBeforeUnmount(() => {
       <ul class="nav-list">
         <li :class="{ active: uiStore.sidebarTab === 'chats' }" @click="uiStore.setSidebarTab('chats')">
           <img :src="uiStore.sidebarTab === 'chats' ? messageActiveIcon : messageIcon" alt="chat" />
-          <span v-if="chatStore.totalUnread > 0" class="nav-badge">
-            {{ chatStore.totalUnread > 99 ? '99+' : chatStore.totalUnread }}
+          <span v-if="visibleChatUnread > 0" class="nav-badge">
+            {{ visibleChatUnread > 99 ? '99+' : visibleChatUnread }}
           </span>
         </li>
         <li :class="{ active: uiStore.sidebarTab === 'contacts' }" @click="uiStore.setSidebarTab('contacts')">
