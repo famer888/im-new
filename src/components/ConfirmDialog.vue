@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { watch, onBeforeUnmount } from 'vue'
+import { computed, watch, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = withDefaults(defineProps<{
   visible: boolean
@@ -24,6 +25,12 @@ const emit = defineEmits<{
   (e: 'confirm'): void
   (e: 'cancel'): void
 }>()
+
+const { t } = useI18n()
+const displayTitle = computed(() => t(props.title))
+const displayContent = computed(() => t(props.content))
+const displayConfirmText = computed(() => t(props.confirmText))
+const displayCancelText = computed(() => t(props.cancelText))
 
 function close() {
   emit('update:visible', false)
@@ -75,22 +82,22 @@ onBeforeUnmount(() => {
       <div v-if="visible" class="modal-overlay" @click.self="handleCancel">
         <div class="modal-dialog" :class="{ 'modal-dialog--im': variant === 'im' }">
           <div class="modal-header" :class="{ 'modal-header--im': variant === 'im' }">
-            <span v-if="variant === 'default'" class="modal-title">{{ title }}</span>
+            <span v-if="variant === 'default'" class="modal-title">{{ displayTitle }}</span>
             <button
               type="button"
               class="modal-close"
               :class="{ 'modal-close--im': variant === 'im' }"
-              aria-label="关闭"
+              :aria-label="t('关闭')"
               @click="handleCancel"
             >×</button>
           </div>
           <div class="modal-body" :class="{ 'modal-body--im': variant === 'im' }">
-            <p>{{ content }}</p>
+            <p>{{ displayContent }}</p>
           </div>
           <div class="modal-footer" :class="{ 'modal-footer--im': variant === 'im' }">
-            <button type="button" class="btn btn-cancel" @click="handleCancel">{{ cancelText }}</button>
+            <button type="button" class="btn btn-cancel" @click="handleCancel">{{ displayCancelText }}</button>
             <button type="button" :class="['btn', variant === 'im' ? 'btn-im-primary' : `btn-${type}`]" @click="handleConfirm">
-              {{ confirmText }}
+              {{ displayConfirmText }}
             </button>
           </div>
         </div>
