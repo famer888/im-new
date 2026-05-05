@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import searchCloseIcon from '@/assets/images/headNav/search-close-icon.png'
 
@@ -8,9 +9,12 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   debounce?: number
 }>(), {
-  placeholder: '搜索',
+  placeholder: '',
   debounce: 300,
 })
+
+const { t } = useI18n()
+const effectivePlaceholder = computed(() => props.placeholder || t('搜索'))
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
@@ -48,7 +52,7 @@ defineExpose({ focus })
     <input
       ref="inputRef"
       :value="modelValue"
-      :placeholder="placeholder"
+      :placeholder="effectivePlaceholder"
       @input="handleInput"
     />
     <img
