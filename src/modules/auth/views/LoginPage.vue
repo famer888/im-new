@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useSettingStore } from '@/stores/useSettingStore'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
 import FileImport from '../components/FileImport.vue'
@@ -11,6 +13,8 @@ import top3Icon from '@/assets/images/system/top3.png'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const settingStore = useSettingStore()
+const { locale } = useI18n()
 
 const showNetworkConfig = ref(false)
 const showFileImport = ref(false)
@@ -27,6 +31,9 @@ function isTauri(): boolean {
 onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
   try {
+    await settingStore.loadSettings()
+    locale.value = settingStore.settings.language
+
     if (isTauri()) {
       isLoginWindow.value = getCurrentWindow().label === 'login'
       if (!isLoginWindow.value) {
