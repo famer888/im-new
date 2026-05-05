@@ -52,6 +52,12 @@ const currentReadBurnLabel = computed(() => readBurnDurationLabel(msgCancelTime.
 
 const conv = computed(() => chatStore.currentConversation)
 const contact = computed(() => (conv.value ? contactStore.getContact(conv.value.targetId) : undefined))
+const displayId = computed(() =>
+  contact.value?.identify
+  || conv.value?.targetId
+  || contact.value?.id
+  || '',
+)
 
 const readBurn = ref(false)
 const msgCancelTime = ref(30)
@@ -106,9 +112,9 @@ watch(
 )
 
 async function copyId() {
-  if (!contact.value?.id) return
+  if (!displayId.value) return
   try {
-    await navigator.clipboard.writeText(contact.value.id)
+    await navigator.clipboard.writeText(`@${displayId.value} `)
     showToast(t('复制成功'))
   } catch {
     // ignore clipboard failure
@@ -317,7 +323,7 @@ async function confirmDeleteContact() {
       <div class="profile-text">
         <h2>{{ contact.remark || contact.nickname || contact.id }}</h2>
         <p class="id-row">
-          <span class="id-line">{{ t('ID：') }}{{ contact.id }}</span>
+          <span class="id-line">{{ t('ID：') }}{{ displayId }}</span>
           <button type="button" class="copy-btn" @click="copyId">{{ t('复制') }}</button>
         </p>
       </div>

@@ -16,6 +16,7 @@ const chatStore = useChatStore()
 const uiStore = useUIStore()
 
 const contact = computed(() => contactStore.getContact(props.contactId))
+const displayId = computed(() => contact.value?.identify || contact.value?.id || '')
 const remarkDraft = ref('')
 const depictDraft = ref('')
 const editingRemark = ref(false)
@@ -38,10 +39,10 @@ function startChat() {
 }
 
 async function handleCopyId() {
-  const id = contact.value?.id || ''
+  const id = displayId.value
   if (!id) return
   try {
-    await navigator.clipboard.writeText(id)
+    await navigator.clipboard.writeText(`@${id} `)
     if (copyToastTimer) {
       clearTimeout(copyToastTimer)
     }
@@ -142,7 +143,7 @@ async function saveDepict() {
         <div>
           <span class="name">{{ contact.remark || contact.nickname || contact.id }}</span>
           <p class="id-row">
-            <span class="id-line">{{ t('ID：') }}{{ contact.id }}</span>
+            <span class="id-line">{{ t('ID：') }}{{ displayId }}</span>
             <button type="button" class="copy-btn" @click="handleCopyId">{{ t('复制') }}</button>
           </p>
         </div>
