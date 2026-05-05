@@ -457,7 +457,7 @@ onBeforeUnmount(() => {
             v-if="uiStore.sidebarTab === 'contacts' && addAction"
             class="add-cancel"
             @click="handleCancelAddAction"
-          >取消</span>
+          >{{ t('搜索取消') }}</span>
           <button
             v-else-if="uiStore.sidebarTab === 'contacts'"
             class="add-btn"

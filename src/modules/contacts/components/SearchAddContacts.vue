@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -33,6 +34,7 @@ const authStore = useAuthStore()
 const uiStore = useUIStore()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
+const { t } = useI18n()
 
 const searching = ref(false)
 const remoteSearchTriggered = ref(false)
@@ -265,7 +267,7 @@ function goNewFriendExamine() {
         >
           <div class="add-tip-left">
             <img class="icon-search" :src="searchBlueIcon" alt="" />
-            <span>搜索{{ trimmedQuery }}</span>
+            <span>{{ t('搜索关键词', { keyword: trimmedQuery }) }}</span>
           </div>
           <img class="arrow" :src="arrowRightIcon" alt="" />
         </button>
@@ -276,11 +278,11 @@ function goNewFriendExamine() {
           @click="goNewFriendExamine"
         >
           <img class="new-friend-icon" :src="addNewIcon" alt="" />
-          <span class="new-friend-title">新的好友</span>
+          <span class="new-friend-title">{{ t('新的好友') }}</span>
         </button>
 
         <div v-if="localContactHits.length > 0" class="local-section">
-          <div class="local-title">联系人</div>
+          <div class="local-title">{{ t('联系人') }}</div>
           <button
             v-for="contact in localContactHits"
             :key="contact.id"
@@ -300,7 +302,7 @@ function goNewFriendExamine() {
         </div>
       </template>
 
-      <div v-else-if="searching" class="state-loading">搜索中...</div>
+      <div v-else-if="searching" class="state-loading">{{ t('搜索中') }}</div>
       <template v-else>
         <div class="search-tabs">
           <button
@@ -311,7 +313,7 @@ function goNewFriendExamine() {
             :class="{ 'tab-active': tabAction === item.key }"
             @click="tabSelect(item.key)"
           >
-            {{ item.name }}
+            {{ t(item.name) }}
           </button>
         </div>
 
@@ -332,7 +334,7 @@ function goNewFriendExamine() {
           </button>
           <div v-else-if="searchDone" class="search-no-data-block">
             <img class="search-no-data-img" :src="searchNoDataImg" alt="" />
-            <span class="search-no-data-tip">搜索无结果</span>
+            <span class="search-no-data-tip">{{ t('搜索无结果') }}</span>
           </div>
         </div>
 
@@ -349,7 +351,7 @@ function goNewFriendExamine() {
           </button>
           <div v-if="searchDone && searchResultNone" class="search-no-data-block">
             <img class="search-no-data-img" :src="searchNoDataImg" alt="" />
-            <span class="search-no-data-tip">搜索无结果</span>
+            <span class="search-no-data-tip">{{ t('搜索无结果') }}</span>
           </div>
         </div>
       </template>

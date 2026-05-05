@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { findContactsList, contactsRelation } from '@/api/imBase'
 
@@ -7,6 +8,7 @@ const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
 const authStore = useAuthStore()
+const { t } = useI18n()
 
 type FoundContact = {
   uid: string
@@ -122,7 +124,7 @@ function handleClose() {
         <div class="add-dialog">
           <div class="dialog-header">
             <button v-if="selectedUser" class="back-btn" @click="handleBack">←</button>
-            <span>{{ selectedUser ? '添加好友' : '搜索联系人' }}</span>
+            <span>{{ selectedUser ? t('添加好友') : t('搜索联系人') }}</span>
             <button class="close-btn" @click="handleClose">×</button>
           </div>
 
@@ -132,11 +134,11 @@ function handleClose() {
               <div class="search-row">
                 <input
                   v-model="searchText"
-                  placeholder="输入通讯号/手机号搜索"
+                  :placeholder="t('输入通讯号/手机号搜索')"
                   @keyup.enter="handleSearch"
                 />
                 <button class="search-btn" :disabled="searching" @click="handleSearch">
-                  {{ searching ? '搜索中...' : '搜索' }}
+                  {{ searching ? t('搜索中') : t('搜索') }}
                 </button>
               </div>
 
@@ -162,7 +164,7 @@ function handleClose() {
               <!-- 搜索无结果 -->
               <div v-else-if="searchDone && !searching" class="no-result">
                 <div class="no-result-icon">🔍</div>
-                <span>搜索无结果</span>
+                <span>{{ t('搜索无结果') }}</span>
               </div>
             </div>
           </template>
