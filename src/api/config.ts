@@ -5,6 +5,7 @@ function isTauri(): boolean {
 const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
 const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
 const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
+const API_BASE_URL_KEY = 'api-base-url'
 
 export const API_CONFIG = {
   rawBaseUrl: RAW_BASE_URL,
@@ -21,7 +22,15 @@ export const API_CONFIG = {
   env: import.meta.env.VITE_APP_ENV || 'test',
 }
 
-let dynamicBaseUrl = ''
+function getStoredBaseUrl(): string {
+  try {
+    return localStorage.getItem(API_BASE_URL_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+let dynamicBaseUrl = getStoredBaseUrl()
 
 /**
  * In browser dev mode, use Vite proxy (/api) to avoid CORS.
@@ -31,6 +40,11 @@ export function getBaseUrl(): string {
   if (dynamicBaseUrl) {
     return isTauri() ? dynamicBaseUrl : '/api'
   }
+  const stored = getStoredBaseUrl()
+  if (stored) {
+    dynamicBaseUrl = stored
+    return isTauri() ? stored : '/api'
+  }
   return isTauri() ? RAW_BASE_URL : '/api'
 }
 
@@ -39,7 +53,16 @@ export function getDomainUrl(): string {
 }
 
 export function setBaseUrl(url: string) {
-  dynamicBaseUrl = url
+  dynamicBaseUrl = String(url || '').trim()
+  try {
+    if (dynamicBaseUrl) {
+      localStorage.setItem(API_BASE_URL_KEY, dynamicBaseUrl)
+    } else {
+      localStorage.removeItem(API_BASE_URL_KEY)
+    }
+  } catch {
+    // ignore storage failures
+  }
 }
 
 export function getRawBaseUrl(): string {

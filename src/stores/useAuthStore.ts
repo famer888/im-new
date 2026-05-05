@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getUserInfo } from '@/api/imBase'
+import { setBaseUrl } from '@/api/config'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -275,6 +276,10 @@ export const useAuthStore = defineStore('auth', () => {
     avatar?: string
     sessionId?: string
   }) {
+    if (request.sessionUrl) {
+      setBaseUrl(request.sessionUrl)
+    }
+
     if (isTauri()) {
       const optimisticSession: SessionInfo = {
         uid: request.uid || '',
