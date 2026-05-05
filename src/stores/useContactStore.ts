@@ -32,6 +32,16 @@ export interface Contact {
   bfShowOnline?: boolean
 }
 
+function assertOk(
+  resp: { commonResult?: { errCode?: number | string | null; errMsg?: string | null } | null },
+  label: string,
+) {
+  const errCode = Number(resp?.commonResult?.errCode ?? 200)
+  if (errCode !== 200 && errCode !== 0) {
+    throw new Error(`${label} failed: ${resp.commonResult?.errMsg || errCode}`)
+  }
+}
+
 export const useContactStore = defineStore('contact', () => {
   const contacts = ref<Contact[]>([])
   const searchResults = ref<Contact[]>([])
@@ -70,6 +80,7 @@ export const useContactStore = defineStore('contact', () => {
     while (hasMore) {
       try {
         const resp = await getContactsList({ pageNum, pageSize })
+        assertOk(resp, 'contactsList')
         const list = resp.contactsList || []
         for (const item of list) {
           const u = (item as any).userInfo || item
