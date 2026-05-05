@@ -531,7 +531,7 @@ onBeforeUnmount(() => {
     <ConfirmDialog
       v-model:visible="logoutConfirmVisible"
       variant="im"
-      content="退出后将无法收到新的消息，确认退出？"
+      :content="t('退出后将无法收到新的消息，确认退出？')"
       @confirm="confirmLogout"
     />
   </div>
