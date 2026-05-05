@@ -8,6 +8,7 @@ import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
+import { eventBus } from '@/utils/eventBus'
 
 const props = defineProps<{
   message: Message
@@ -31,6 +32,7 @@ type ContentSegment =
   | { type: 'text'; text: string }
   | { type: 'emoji'; name: string; src: string }
   | { type: 'at'; text: string; memberId?: string }
+  | { type: 'link'; text: string; href: string }
 
 interface MentionCandidate {
   label: string
@@ -113,6 +115,25 @@ function pushTextSegment(segments: ContentSegment[], text: string) {
   }
 }
 
+function detectLinkAtStart(content: string, start: number): { text: string; href: string } | null {
+  const rest = content.slice(start)
+
+  // URL中禁止的字符（空格、引号、HTML、中文、通用标点）
+  // Matches: spaces, quotes, HTML brackets, CJK characters, CJK symbols, fullwidth chars, general punctuation
+  const forbiddenChars = '\\s"\'<>\\u4e00-\\u9fa5\\u3000-\\u303F\\uFF00-\\uFFEF\\u2000-\\u206F'
+
+  // 安全结束字符：不得为标点符号或分隔符
+  const safeEndChar = `[^${forbiddenChars}\\.,;:?!()\\[\\]{}]`
+
+  const regex = new RegExp(`^(https?://[^${forbiddenChars}]*${safeEndChar})`)
+  const match = rest.match(regex)
+  if (!match) return null
+
+  const url = match[1]
+  if (url.length <= 7) return null // At least "http://" + one char
+  return { text: url, href: url }
+}
+
 function resolveEmojiSrc(name: string): string {
   const mapped = (emojiObj as Record<string, string>)[`[${name}]`]
   const fileName = mapped || (/^pet_emoji_\d+$/.test(name) ? name : '')
@@ -126,6 +147,15 @@ const contentSegments = computed<ContentSegment[]>(() => {
 
   while (index < content.length) {
     const rest = content.slice(index)
+
+    // Links take priority over emoji and mentions
+    const linkMatch = detectLinkAtStart(content, index)
+    if (linkMatch) {
+      segments.push({ type: 'link', text: linkMatch.text, href: linkMatch.href })
+      index += linkMatch.text.length
+      continue
+    }
+
     const emojiMatch = rest.match(/^\[([^\]]+)\]/)
     if (emojiMatch) {
       const name = emojiMatch[1]
@@ -197,6 +227,16 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
   uiStore.openMemberInfo(member?.userId || cleanLabel, groupId, [cleanLabel])
 }
+
+async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegment, { type: 'link' }>) {
+  event.preventDefault()
+  event.stopPropagation()
+
+  // For now, just open the link in a new tab
+  // TODO: Implement proper link type detection via API (group/friend/channel links)
+  window.open(segment.href, '_blank')
+  eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+}
 </script>
 
 <template>
@@ -217,6 +257,13 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
           :src="segment.src"
           :alt="segment.name"
         />
+        <span
+          v-else-if="segment.type === 'link'"
+          class="text-link"
+          @click.stop="handleLinkClick($event, segment)"
+        >
+          {{ segment.text }}
+        </span>
         <span v-else>{{ segment.text }}</span>
       </template>
     </div>
@@ -257,6 +304,16 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
       &:hover {
         opacity: 0.8;
+      }
+    }
+
+    .text-link {
+      color: #3369fe;
+      text-decoration: none;
+      cursor: pointer;
+
+      &:hover {
+        text-decoration: underline;
       }
     }
   }

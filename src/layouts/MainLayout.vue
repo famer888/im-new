@@ -320,6 +320,11 @@ onMounted(async () => {
     initReloadVisible.value = true
     console.warn('[init] bootstrap failed:', err)
   }
+
+  // Listen for toast events from other components
+  eventBus.on('show-toast', (payload) => {
+    showToast(payload.message, payload.type)
+  })
 })
 
 onBeforeUnmount(() => {
@@ -328,6 +333,7 @@ onBeforeUnmount(() => {
     imageOverwriteResolver(false)
     imageOverwriteResolver = null
   }
+  eventBus.off('show-toast')
 })
 
 function openInitResetConfirm() {

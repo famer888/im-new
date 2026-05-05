@@ -11,6 +11,7 @@ type Events = {
   'editor:drop-file-paths': string[]
   'chat:switch': string
   'notification:click': { conversationId: string }
+  'show-toast': { message: string; type?: 'success' | 'error' }
 }
 
 export const eventBus = mitt<Events>()
