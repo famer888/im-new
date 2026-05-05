@@ -30,6 +30,7 @@ export interface AddGroupTarget {
   ownerId: string | null
   addToken: string
   bfJoinCheck: boolean
+  joinSource?: 'alias' | 'link'
 }
 
 export const useUIStore = defineStore('ui', () => {
@@ -66,6 +67,7 @@ export const useUIStore = defineStore('ui', () => {
   })
   const addContactTarget = ref<AddContactTarget | null>(null)
   const addGroupTarget = ref<AddGroupTarget | null>(null)
+  const addGroupDialogVisible = ref(false)
 
   // Context menu
   const contextMenuVisible = ref(false)
@@ -165,6 +167,14 @@ export const useUIStore = defineStore('ui', () => {
 
   function setAddGroupTarget(target: AddGroupTarget | null) {
     addGroupTarget.value = target
+  }
+
+  function openAddGroupDialog() {
+    addGroupDialogVisible.value = true
+  }
+
+  function closeAddGroupDialog() {
+    addGroupDialogVisible.value = false
   }
 
   function showContextMenu(x: number, y: number, data: Record<string, unknown>) {
@@ -280,6 +290,9 @@ export const useUIStore = defineStore('ui', () => {
     setAddContactTarget,
     addGroupTarget,
     setAddGroupTarget,
+    addGroupDialogVisible,
+    openAddGroupDialog,
+    closeAddGroupDialog,
     quoteMessage,
     forwardDraftItems,
     forwardDraftTargetId,

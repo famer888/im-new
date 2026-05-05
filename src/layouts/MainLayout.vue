@@ -1349,6 +1349,11 @@ async function handleForward(targetConvId: string) {
     <!-- Global dialogs -->
     <SettingsDialog v-model:visible="uiStore.settingsVisible" />
     <AddContactDialog v-model:visible="uiStore.addContactVisible" />
+    <AddGroupPreview
+      mode="dialog"
+      :visible="uiStore.addGroupDialogVisible"
+      @close="uiStore.closeAddGroupDialog()"
+    />
     <ForwardSelectDialog
       v-model:visible="uiStore.forwardDialogVisible"
       :message-id="uiStore.forwardMessageId"

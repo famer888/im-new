@@ -5,10 +5,11 @@ import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
-import { useUIStore } from '@/stores/useUIStore'
+import { useUIStore, type AddGroupTarget } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import { eventBus } from '@/utils/eventBus'
+import { groupQrUrlFromShortLink, queryGroupLink, type GroupDetailFromQrCodeResp } from '@/api/imBase'
 
 const props = defineProps<{
   message: Message
@@ -38,6 +39,8 @@ interface MentionCandidate {
   label: string
   memberId: string
 }
+
+const GROUP_INVITE_HOSTS = new Set(['55chat.com', '97chat.com', 'ocs.com'])
 
 function parseConversationRef(conversationId: string): { type: number; targetId: string } {
   const i = conversationId.indexOf('_')
@@ -140,6 +143,105 @@ function resolveEmojiSrc(name: string): string {
   return fileName ? `/images/emoji/${fileName}.png` : ''
 }
 
+function normalizeUrl(raw: string): URL | null {
+  try {
+    return new URL(raw)
+  } catch {
+    try {
+      return new URL(`https://${raw}`)
+    } catch {
+      return null
+    }
+  }
+}
+
+function getSearchParam(url: URL, name: string): string {
+  const target = name.toLowerCase()
+  for (const [key, value] of url.searchParams.entries()) {
+    if (key.toLowerCase() === target) return value
+  }
+  return ''
+}
+
+function isGroupInviteLink(url: URL): boolean {
+  const host = url.hostname.replace(/^www\./, '').toLowerCase()
+  if (getSearchParam(url, 'qrCode') && getSearchParam(url, 'IdCode')) return true
+  return GROUP_INVITE_HOSTS.has(host) && url.search.length > 1
+}
+
+async function getGroupQrUrlFromLink(href: string): Promise<string> {
+  const url = normalizeUrl(href)
+  if (!url || !isGroupInviteLink(url)) return ''
+
+  if (getSearchParam(url, 'qrCode') && getSearchParam(url, 'IdCode')) {
+    return url.href
+  }
+
+  const resp = await groupQrUrlFromShortLink({ shortLink: href })
+  const common = resp.commonResult || {}
+  const errCode = Number(common.errCode ?? 0)
+  if (errCode !== 200 && errCode !== 0) {
+    throw new Error(common.errMsg || resp.errorDesc || '群聊链接解析失败')
+  }
+
+  return String(resp.qrUrl || '').trim()
+}
+
+async function resolveGroupInfoFromLink(href: string): Promise<GroupDetailFromQrCodeResp | null> {
+  const qrUrl = await getGroupQrUrlFromLink(href)
+  if (!qrUrl) return null
+
+  let parsed = normalizeUrl(qrUrl)
+  if (!parsed) {
+    try {
+      parsed = new URL(qrUrl, href)
+    } catch {
+      parsed = null
+    }
+  }
+  if (!parsed) throw new Error('群聊链接解析失败')
+
+  const qrCode = getSearchParam(parsed, 'qrCode')
+  const IdCode = getSearchParam(parsed, 'IdCode')
+  const groupId = getSearchParam(parsed, 'groupId')
+  if (!qrCode || !IdCode) throw new Error('群聊链接解析失败')
+
+  const resp = await queryGroupLink({ qrCode, IdCode, groupId: groupId || 0 })
+  const common = resp.commonResult || {}
+  const errCode = Number(common.errCode ?? 0)
+  if (errCode !== 200 && errCode !== 0) {
+    throw new Error(common.errMsg || resp.errorDesc || '加入群聊失败')
+  }
+
+  return resp
+}
+
+function parseGroupTarget(groupInfo: GroupDetailFromQrCodeResp): AddGroupTarget | null {
+  const groupBase = groupInfo.groupBase || {}
+  const id = String(groupBase.groupId ?? groupBase.id ?? '').trim()
+  if (!id) return null
+
+  return {
+    id,
+    name: String(groupBase.name ?? groupBase.groupName ?? ''),
+    avatar: String(groupBase.pic ?? groupBase.icon ?? groupBase.avatar ?? ''),
+    memberCount: Number(groupBase.memberCount ?? groupBase.member_count ?? 0),
+    groupAliasName: String(groupBase.groupAliasName ?? groupBase.groupAlias ?? ''),
+    ownerId: groupBase.hostId == null ? null : String(groupBase.hostId),
+    addToken: String(groupInfo.addToken ?? groupBase.addToken ?? ''),
+    bfJoinCheck: Boolean(groupBase.bfJoinCheck ?? false),
+    joinSource: 'link',
+  }
+}
+
+async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise<boolean> {
+  if (serverMember || groupStore.getGroup(groupId)) return true
+  if (authStore.uid && groupStore.groups.length === 0) {
+    await groupStore.loadGroups(authStore.uid)
+  }
+  return Boolean(groupStore.getGroup(groupId))
+}
+
 const contentSegments = computed<ContentSegment[]>(() => {
   const content = props.message.content ?? ''
   const segments: ContentSegment[] = []
@@ -232,10 +334,39 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   event.preventDefault()
   event.stopPropagation()
 
-  // For now, just open the link in a new tab
-  // TODO: Implement proper link type detection via API (group/friend/channel links)
-  window.open(segment.href, '_blank')
-  eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+  const url = normalizeUrl(segment.href)
+  if (!url || !isGroupInviteLink(url)) {
+    window.open(segment.href, '_blank')
+    eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+    return
+  }
+
+  try {
+    const groupInfo = await resolveGroupInfoFromLink(segment.href)
+    if (!groupInfo) {
+      window.open(segment.href, '_blank')
+      eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+      return
+    }
+
+    const target = parseGroupTarget(groupInfo)
+    if (!target) throw new Error('群聊链接解析失败')
+
+    uiStore.setAddContactTarget(null)
+
+    if (await isAlreadyInGroup(target.id, Boolean(groupInfo.bfMember))) {
+      uiStore.setAddGroupTarget(null)
+      eventBus.emit('show-toast', { message: '已在群聊中', type: 'success' })
+      return
+    }
+
+    uiStore.setAddGroupTarget(target)
+    uiStore.setRightPanel('none')
+    uiStore.openAddGroupDialog()
+  } catch (error) {
+    console.error('[TextMessage] resolve group invite link failed:', error)
+    eventBus.emit('show-toast', { message: (error as Error)?.message || '加入群聊失败', type: 'error' })
+  }
 }
 </script>
 
