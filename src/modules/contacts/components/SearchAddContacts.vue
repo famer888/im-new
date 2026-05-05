@@ -139,6 +139,7 @@ const localContactHits = computed(() => {
       contact.nickname || '',
       contact.remark || '',
       contact.pinyin || '',
+      contact.identify || '',
     ]
     return fields.some((field) => field.toUpperCase().includes(query))
   })
@@ -333,13 +334,18 @@ function goNewFriendExamine() {
             @click="handleSelectLocalContact(contact)"
           >
             <TextAvatar :name="getLocalContactName(contact)" :src="contact.avatar" :size="34" rounded />
-            <span class="result-name">
-              <span
-                v-for="(segment, index) in getHighlightSegments(getLocalContactName(contact))"
-                :key="`${index}-${segment.text}`"
-                :class="{ 'keyword-highlight': segment.matched }"
-              >{{ segment.text }}</span>
-            </span>
+            <div class="result-name-wrap">
+              <span class="result-name">
+                <span
+                  v-for="(segment, index) in getHighlightSegments(getLocalContactName(contact))"
+                  :key="`${index}-${segment.text}`"
+                  :class="{ 'keyword-highlight': segment.matched }"
+                >{{ segment.text }}</span>
+              </span>
+              <span v-if="contact.identify" class="result-sub">
+                No.:&nbsp;<span class="result-sub-val">{{ contact.identify }}</span>
+              </span>
+            </div>
           </button>
         </div>
       </template>
@@ -572,15 +578,35 @@ function goNewFriendExamine() {
   }
 }
 
-.result-name {
+.result-name-wrap {
   min-width: 0;
   margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.result-name {
   font-size: 14px;
   line-height: 20px;
   color: #333;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.result-sub {
+  font-size: 12px;
+  color: #999;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 16px;
+}
+
+.result-sub-val {
+  color: #3369fe;
 }
 
 .keyword-highlight {

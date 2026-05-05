@@ -19,6 +19,7 @@ export interface Contact {
   letter?: string | null
   remark: string | null
   depict?: string | null
+  identify?: string | null
   bfReadCancel?: boolean
   bfMyBlack?: boolean
   msgCancelTime?: number
@@ -101,6 +102,7 @@ export const useContactStore = defineStore('contact', () => {
             letter: (item as any).letter || null,
             remark: u.friendRelation?.remarkName || null,
             depict: u.depict || null,
+            identify: u.identify || null,
             status: Number(u.uid) > 0 ? 1 : 0,
             updatedAt: Number((item as any).updateTime || 0),
             ...onlinePatch,
