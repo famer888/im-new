@@ -1,18 +1,52 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import top1Icon from '@/assets/images/system/top1.png'
-import top2Icon from '@/assets/images/system/top2.png'
-import top3Icon from '@/assets/images/system/top3.png'
+import closeIcon from '@/assets/windows_control_icons/close-k-30.png'
+import maximizeIcon from '@/assets/windows_control_icons/max-k-30.png'
+import minimizeIcon from '@/assets/windows_control_icons/min-k-30.png'
+import restoreIcon from '@/assets/windows_control_icons/restore-k-30.png'
 
 const isMac = ref(false)
+const isMaximized = ref(false)
+let unlistenWindowEvents: Array<() => void> = []
 
-onMounted(() => {
+onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
+  if (!isTauri()) return
+  await syncMaximizedState()
+  const win = getCurrentWindow()
+  unlistenWindowEvents = await Promise.all([
+    win.onResized(() => {
+      void syncMaximizedState()
+    }),
+    win.onMoved(() => {
+      void syncMaximizedState()
+    }),
+    win.onScaleChanged(() => {
+      void syncMaximizedState()
+    }),
+  ])
+})
+
+onUnmounted(() => {
+  unlistenWindowEvents.forEach((unlisten) => unlisten())
+  unlistenWindowEvents = []
 })
 
 async function getTauriWindow() {
   return getCurrentWindow()
+}
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+async function syncMaximizedState() {
+  try {
+    isMaximized.value = await getCurrentWindow().isMaximized()
+  } catch {
+    isMaximized.value = false
+  }
 }
 
 function startWindowDrag(e: MouseEvent) {
@@ -31,9 +65,11 @@ async function maximize() {
     const win = await getTauriWindow()
     if (await win.isMaximized()) {
       await win.unmaximize()
+      isMaximized.value = false
       document.body.classList.remove('maximized')
     } else {
       await win.maximize()
+      isMaximized.value = true
       document.body.classList.add('maximized')
     }
   } catch { /* browser */ }
@@ -56,15 +92,24 @@ async function close() {
       @mousedown="startWindowDrag"
     ></div>
     <template v-if="!isMac">
-      <div class="box" @click="minimize">
-        <img :src="top1Icon" />
-      </div>
-      <div class="box maximize" @click="maximize">
-        <img :src="top2Icon" />
-      </div>
-      <div class="box" @click="close">
-        <img :src="top3Icon" />
-      </div>
+      <button class="box" type="button" @click.stop="minimize">
+        <span class="window-icon line" :style="{ backgroundImage: `url(${minimizeIcon})` }"></span>
+      </button>
+      <button class="box maximize" type="button" @click.stop="maximize">
+        <span
+          v-if="!isMaximized"
+          class="window-icon square"
+          :style="{ backgroundImage: `url(${maximizeIcon})` }"
+        ></span>
+        <span
+          v-else
+          class="window-icon restore"
+          :style="{ backgroundImage: `url(${restoreIcon})` }"
+        ></span>
+      </button>
+      <button class="box close" type="button" @click.stop="close">
+        <span class="window-icon close-x" :style="{ backgroundImage: `url(${closeIcon})` }"></span>
+      </button>
     </template>
   </div>
 </template>
@@ -97,21 +142,35 @@ async function close() {
   }
 
   .box {
-    padding: 0 12px;
+    width: 46px;
     height: 100%;
+    border: none;
+    background: transparent;
     display: flex;
     align-items: center;
-    justify-items: center;
+    justify-content: center;
     cursor: pointer;
+    position: relative;
     -webkit-app-region: no-drag;
 
     &:hover {
       background: #f0f0f0;
     }
 
-    img {
-      width: 16px;
-      height: 16px;
+    &.close:hover {
+      background: #e81123;
+    }
+
+    .window-icon {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 12px;
+      height: 12px;
+      transform: translate(-50%, -50%);
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
     }
   }
 }
