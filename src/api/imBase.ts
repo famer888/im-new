@@ -3,6 +3,7 @@
  */
 import { requestProto, proto, getDeviceConfig } from './request'
 import { API_CONFIG, getBaseUrl } from './config'
+import * as $protobuf from 'protobufjs/minimal'
 import {
   GroupMemberOnLineStatusListReq,
   GroupMemberOnLineStatusListResp,
@@ -139,6 +140,140 @@ export interface CheckUidListResp {
   data?: {
     checkList?: Array<number | string>
   }
+}
+
+export interface GroupQrUrlFromShortLinkResp {
+  commonResult?: {
+    errCode?: number
+    errMsg?: string
+  } | null
+  qrUrl?: string
+  errorDesc?: string
+}
+
+export interface GroupDetailFromQrCodeResp {
+  commonResult?: {
+    errCode?: number
+    errMsg?: string
+  } | null
+  groupBase?: Record<string, any> | null
+  expireTime?: number | string
+  bfMember?: boolean
+  addToken?: string
+  errorDesc?: string
+}
+
+const GroupQrUrlFromShortLinkReq = {
+  create(properties?: any) {
+    return properties || {}
+  },
+  encode(message: any, writer = $protobuf.Writer.create()) {
+    if (message.clientInfo) {
+      proto.ClientInfo.encode(message.clientInfo, writer.uint32(10).fork()).ldelim()
+    }
+    if (message.shortLink != null) {
+      writer.uint32(18).string(String(message.shortLink))
+    }
+    return writer
+  },
+  decode(reader: Uint8Array) {
+    return reader as any
+  },
+}
+
+const GroupQrUrlFromShortLinkRespProto = {
+  create(properties?: any) {
+    return properties || {}
+  },
+  encode(_message: any, writer = $protobuf.Writer.create()) {
+    return writer
+  },
+  decode(reader: Uint8Array): GroupQrUrlFromShortLinkResp {
+    const r = $protobuf.Reader.create(reader)
+    const message: GroupQrUrlFromShortLinkResp = { qrUrl: '' }
+    while (r.pos < r.len) {
+      const tag = r.uint32()
+      switch (tag >>> 3) {
+        case 1:
+          message.commonResult = proto.CommonResult.decode(r, r.uint32()) as any
+          break
+        case 2:
+          message.qrUrl = r.string()
+          break
+        default:
+          r.skipType(tag & 7)
+          break
+      }
+    }
+    return message
+  },
+}
+
+const GroupDetailFromQrCodeReq = {
+  create(properties?: any) {
+    return properties || {}
+  },
+  encode(message: any, writer = $protobuf.Writer.create()) {
+    if (message.clientInfo) {
+      proto.ClientInfo.encode(message.clientInfo, writer.uint32(10).fork()).ldelim()
+    }
+    if (message.groupId != null) {
+      writer.uint32(16).int64(message.groupId)
+    }
+    if (message.qrCode != null) {
+      writer.uint32(26).string(String(message.qrCode))
+    }
+    const idCode = message.IdCode ?? message.idCode
+    if (idCode != null) {
+      writer.uint32(34).string(String(idCode))
+    }
+    return writer
+  },
+  decode(reader: Uint8Array) {
+    return reader as any
+  },
+}
+
+const GroupDetailFromQrCodeRespProto = {
+  create(properties?: any) {
+    return properties || {}
+  },
+  encode(_message: any, writer = $protobuf.Writer.create()) {
+    return writer
+  },
+  decode(reader: Uint8Array): GroupDetailFromQrCodeResp {
+    const r = $protobuf.Reader.create(reader)
+    const message: GroupDetailFromQrCodeResp = {
+      groupBase: null,
+      expireTime: 0,
+      bfMember: false,
+      addToken: '',
+    }
+    while (r.pos < r.len) {
+      const tag = r.uint32()
+      switch (tag >>> 3) {
+        case 1:
+          message.commonResult = proto.CommonResult.decode(r, r.uint32()) as any
+          break
+        case 2:
+          message.groupBase = proto.GroupBase.decode(r, r.uint32()) as any
+          break
+        case 3:
+          message.expireTime = r.int64() as any
+          break
+        case 4:
+          message.bfMember = r.bool()
+          break
+        case 5:
+          message.addToken = r.string()
+          break
+        default:
+          r.skipType(tag & 7)
+          break
+      }
+    }
+    return message
+  },
 }
 
 /**
@@ -615,6 +750,36 @@ export async function groupQrCode(
     reqType: proto.GroupQrCodeReq,
     respType: proto.GroupQrCodeResp,
     data: { groupId: data.groupId, force: data.force ?? false },
+  })
+}
+
+export async function groupQrUrlFromShortLink(
+  data: { shortLink: string },
+  baseUrl?: string,
+): Promise<GroupQrUrlFromShortLinkResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupQrUrlFromShortLink`,
+    reqType: GroupQrUrlFromShortLinkReq,
+    respType: GroupQrUrlFromShortLinkRespProto,
+    data: { shortLink: data.shortLink },
+  })
+}
+
+export async function queryGroupLink(
+  data: { qrCode: string; IdCode: string; groupId?: number | string },
+  baseUrl?: string,
+): Promise<GroupDetailFromQrCodeResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupDetailFromQrCode`,
+    reqType: GroupDetailFromQrCodeReq,
+    respType: GroupDetailFromQrCodeRespProto,
+    data: {
+      groupId: data.groupId ?? 0,
+      qrCode: data.qrCode,
+      IdCode: data.IdCode,
+    },
   })
 }
 

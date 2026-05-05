@@ -7,6 +7,19 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { groupJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import emptyBrandImg from '@/assets/images/login/dock.png'
+import closeIcon from '@/assets/images/common/close-icon.png'
+
+const props = withDefaults(defineProps<{
+  mode?: 'page' | 'dialog'
+  visible?: boolean
+}>(), {
+  mode: 'page',
+  visible: true,
+})
+
+const emit = defineEmits<{
+  close: []
+}>()
 
 const uiStore = useUIStore()
 const chatStore = useChatStore()
@@ -19,6 +32,7 @@ const tipText = ref('')
 const tipType = ref<'success' | 'error'>('success')
 
 const target = computed(() => uiStore.addGroupTarget)
+const isDialog = computed(() => props.mode === 'dialog')
 const joinedGroup = computed(() => {
   const id = target.value?.id
   return id ? groupStore.getGroup(id) : undefined
@@ -48,11 +62,17 @@ function openGroupChat() {
   uiStore.setSidebarTab('chats')
   uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
+  closeDialog()
 }
 
 function showTip(message: string, type: 'success' | 'error') {
   tipText.value = message
   tipType.value = type
+}
+
+function closeDialog() {
+  if (!isDialog.value) return
+  emit('close')
 }
 
 async function handleJoinGroup() {
@@ -70,7 +90,7 @@ async function handleJoinGroup() {
   try {
     const resp = await groupJoin({
       groupId: current.id,
-      reqType: 15,
+      reqType: current.joinSource === 'link' ? 2 : 15,
       addToken: current.addToken,
       msg: '申请加入群聊',
     })
@@ -107,25 +127,35 @@ async function handleJoinGroup() {
 </script>
 
 <template>
-  <div class="add-group-preview">
-    <div v-if="target" class="preview-inner">
-      <TextAvatar
-        :name="displayName"
-        :src="target.avatar"
-        avatar-type="group"
-        :size="108"
-        rounded
-      />
-      <div class="preview-name">{{ displayName }}</div>
-      <div class="preview-count">{{ t('群成员共{value}人', { value: memberCount }) }}</div>
-      <button type="button" class="primary-btn" :disabled="joinDisabled" @click="handleJoinGroup">
-        {{ buttonText }}
+  <div
+    v-if="visible"
+    :class="['add-group-preview', { 'is-dialog': isDialog }]"
+    @click.self="closeDialog"
+  >
+    <div :class="isDialog ? 'dialog-card' : 'preview-card'">
+      <button v-if="isDialog" type="button" class="dialog-close" @click="closeDialog">
+        <img :src="closeIcon" alt="" />
       </button>
-      <div v-if="tipText" class="join-tip" :class="`tip-${tipType}`">{{ tipText }}</div>
-    </div>
 
-    <div v-else class="empty-state">
-      <img :src="emptyBrandImg" alt="" class="empty-brand-icon" />
+      <div v-if="target" class="preview-inner">
+        <TextAvatar
+          :name="displayName"
+          :src="target.avatar"
+          avatar-type="group"
+          :size="isDialog ? 62 : 108"
+          rounded
+        />
+        <div class="preview-name">{{ displayName }}</div>
+        <div class="preview-count">{{ t('群成员共{value}人', { value: memberCount }) }}</div>
+        <button type="button" class="primary-btn" :disabled="joinDisabled" @click="handleJoinGroup">
+          {{ buttonText }}
+        </button>
+        <div v-if="tipText" class="join-tip" :class="`tip-${tipType}`">{{ tipText }}</div>
+      </div>
+
+      <div v-else class="empty-state">
+        <img :src="emptyBrandImg" alt="" class="empty-brand-icon" />
+      </div>
     </div>
   </div>
 </template>
@@ -139,6 +169,11 @@ async function handleJoinGroup() {
   flex-direction: column;
   align-items: center;
   background: #fff;
+}
+
+.preview-card {
+  width: 100%;
+  height: 100%;
 }
 
 .preview-inner {
@@ -223,5 +258,92 @@ async function handleJoinGroup() {
   height: auto;
   display: block;
   border-radius: 8px;
+}
+
+.add-group-preview.is-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  flex: none;
+  width: 100%;
+  height: 100%;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.dialog-card {
+  position: relative;
+  width: min(420px, calc(100vw - 40px));
+  min-height: 236px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #fff;
+
+  .preview-inner {
+    padding: 26px 20px 30px;
+  }
+
+  .preview-name {
+    max-width: 360px;
+    margin-top: 10px;
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 600;
+    color: #333;
+  }
+
+  .preview-count {
+    margin-top: 10px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #999;
+    font-size: 12px;
+    line-height: 17px;
+  }
+
+  .primary-btn {
+    width: 206px;
+    height: 32px;
+    margin-top: 32px;
+    padding: 0;
+    border: 0;
+    font-size: 14px;
+    line-height: 32px;
+
+    &:hover {
+      opacity: 0.8;
+      background: #3369fe;
+    }
+  }
+
+  .join-tip {
+    max-width: 360px;
+    margin-top: 10px;
+    font-size: 12px;
+    line-height: 18px;
+  }
+}
+
+.dialog-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:hover {
+    opacity: 0.8;
+  }
+
+  > img {
+    display: block;
+  }
 }
 </style>
