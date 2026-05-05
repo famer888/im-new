@@ -5,7 +5,8 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
-import { findContactsList, groupSearch } from '@/api/imBase'
+import { useGroupStore } from '@/stores/useGroupStore'
+import { findContactsList, groupOrUserDetail, groupSearch } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import searchBlueIcon from '@/assets/images/headNav/search-blue.png'
 import arrowRightIcon from '@/assets/images/headNav/arrow-right.png'
@@ -28,12 +29,18 @@ type GroupHit = {
   id: string
   name: string
   avatar: string
+  memberCount: number
+  groupAliasName: string
+  ownerId: string | null
+  addToken: string
+  bfJoinCheck: boolean
 }
 
 const authStore = useAuthStore()
 const uiStore = useUIStore()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
+const groupStore = useGroupStore()
 const { t } = useI18n()
 
 const searching = ref(false)
@@ -66,7 +73,8 @@ function resetResultState() {
 
 function clearPreview() {
   uiStore.setAddContactTarget(null)
-  if (uiStore.detailView === 'add-contact') {
+  uiStore.setAddGroupTarget(null)
+  if (uiStore.detailView === 'add-contact' || uiStore.detailView === 'add-group') {
     uiStore.setDetailView('none')
   }
 }
@@ -82,6 +90,9 @@ watch(
 onMounted(() => {
   if (authStore.uid) {
     void contactStore.loadContacts(authStore.uid)
+    if (groupStore.groups.length === 0) {
+      void groupStore.loadGroups(authStore.uid)
+    }
   }
 })
 
@@ -139,8 +150,9 @@ function stringifyId(value: unknown): string {
 }
 
 function parseGroupHit(gs: unknown): GroupHit | null {
-  const gd = (gs as any)?.groupDetail
-  const gb = gd?.groupBase
+  const raw = gs as any
+  const gd = raw?.groupDetail || raw?.groupAlias || raw
+  const gb = gd?.groupBase || gd?.groupBaseResp || gd
   if (!gb) return null
   const id = stringifyId(gb.groupId ?? gb.id)
   if (!id) return null
@@ -148,6 +160,11 @@ function parseGroupHit(gs: unknown): GroupHit | null {
     id,
     name: String(gb.name ?? gb.groupName ?? ''),
     avatar: String(gb.pic ?? gb.icon ?? ''),
+    memberCount: Number(gb.memberCount ?? gb.member_count ?? 0),
+    groupAliasName: String(gb.groupAliasName ?? gb.groupAlias ?? ''),
+    ownerId: gb.hostId == null ? null : String(gb.hostId),
+    addToken: String(raw?.addToken ?? gd?.addToken ?? gb?.addToken ?? ''),
+    bfJoinCheck: Boolean(gb?.bfJoinCheck ?? gd?.bfJoinCheck ?? raw?.bfJoinCheck ?? false),
   }
 }
 
@@ -188,6 +205,16 @@ async function findContactsByQuery(query: string): Promise<FoundContact[]> {
   return mergeContacts([...phoneHits, ...mapContacts(byUid)])
 }
 
+async function findGroupByQuery(query: string): Promise<GroupHit | null> {
+  const fromUid = authStore.uid || 0
+  const primary = await groupSearch({ fromUid, context: query })
+  const primaryHit = parseGroupHit(primary)
+  if (primaryHit) return primaryHit
+
+  const detail = await groupOrUserDetail({ fromUid, context: query })
+  return parseGroupHit(detail)
+}
+
 async function handleSearch(query: string) {
   const val = query.trim()
   if (!val) return
@@ -200,23 +227,22 @@ async function handleSearch(query: string) {
   contactHits.value = []
   searchResultNone.value = false
 
-  const fromUid = Number(authStore.uid)
   const [groupResult, contactResult] = await Promise.allSettled([
-    groupSearch({ fromUid: Number.isFinite(fromUid) ? fromUid : 0, context: val }),
+    findGroupByQuery(val),
     findContactsByQuery(val),
   ])
 
   if (runId !== searchRunId) return
 
-  const nextGroup = groupResult.status === 'fulfilled' ? parseGroupHit(groupResult.value) : null
+  const nextGroup = groupResult.status === 'fulfilled' ? groupResult.value : null
   const nextContacts = contactResult.status === 'fulfilled' ? contactResult.value : []
 
   groupHit.value = nextGroup
   contactHits.value = nextContacts
-  tabAction.value = nextContacts.length > 0 ? 1 : nextGroup ? 0 : 1
+  tabAction.value = nextGroup ? 0 : nextContacts.length > 0 ? 1 : 1
   searchResultNone.value = !nextGroup && nextContacts.length === 0
 
-  if (nextContacts.length > 0) {
+  if (!nextGroup && nextContacts.length > 0) {
     handleSelectUser(nextContacts[0])
   }
 
@@ -225,6 +251,7 @@ async function handleSearch(query: string) {
 }
 
 function handleSelectUser(user: FoundContact) {
+  uiStore.setAddGroupTarget(null)
   uiStore.setAddContactTarget(user)
   uiStore.setRightPanel('none')
   uiStore.setDetailView('add-contact')
@@ -232,6 +259,7 @@ function handleSelectUser(user: FoundContact) {
 
 function handleSelectLocalContact(contact: (typeof contactStore.contacts)[0]) {
   uiStore.setAddContactTarget(null)
+  uiStore.setAddGroupTarget(null)
   const conv = chatStore.ensureConversation(0, contact.id)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setSidebarTab('chats')
@@ -239,18 +267,32 @@ function handleSelectLocalContact(contact: (typeof contactStore.contacts)[0]) {
   uiStore.setDetailView('chat')
 }
 
-function handleSelectGroup() {
+async function handleSelectGroup() {
   const g = groupHit.value
   if (!g?.id) return
   uiStore.setAddContactTarget(null)
-  const conv = chatStore.ensureConversation(1, g.id)
-  chatStore.setCurrentConversation(conv.id)
+
+  if (!groupStore.getGroup(g.id) && authStore.uid && groupStore.groups.length === 0) {
+    await groupStore.loadGroups(authStore.uid)
+  }
+
+  if (groupStore.getGroup(g.id)) {
+    uiStore.setAddGroupTarget(null)
+    const conv = chatStore.ensureConversation(1, g.id)
+    chatStore.setCurrentConversation(conv.id)
+    uiStore.setRightPanel('none')
+    uiStore.setDetailView('group-detail')
+    return
+  }
+
+  uiStore.setAddGroupTarget(g)
   uiStore.setRightPanel('none')
-  uiStore.setDetailView('chat')
+  uiStore.setDetailView('add-group')
 }
 
 function goNewFriendExamine() {
   uiStore.setAddContactTarget(null)
+  uiStore.setAddGroupTarget(null)
   uiStore.setRightPanel('none')
   uiStore.setDetailView('friend-examine')
 }

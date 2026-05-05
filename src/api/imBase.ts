@@ -380,7 +380,7 @@ export async function findContactsList(
  * POST /group/groupSearch
  */
 export async function groupSearch(
-  data: { fromUid: number; context: string },
+  data: { fromUid: number | string; context: string },
   baseUrl?: string,
 ): Promise<proto.GroupOrUserResp> {
   const base = baseUrl || getBaseUrl()
@@ -391,7 +391,27 @@ export async function groupSearch(
     data: {
       fromUid: data.fromUid,
       context: data.context,
-    },
+    } as any,
+  })
+}
+
+/**
+ * 通过群别名查群详情或 68 号查用户详情（老 im `groupOrUserDetail`）
+ * POST /group/groupOrUserDetail
+ */
+export async function groupOrUserDetail(
+  data: { fromUid: number | string; context: string },
+  baseUrl?: string,
+): Promise<proto.GroupOrUserResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupOrUserDetail`,
+    reqType: proto.GroupOrUserReq,
+    respType: proto.GroupOrUserResp,
+    data: {
+      fromUid: data.fromUid,
+      context: data.context,
+    } as any,
   })
 }
 
@@ -488,6 +508,31 @@ export async function groupUserCheckJoin(
     reqType: proto.GroupCheckJoinReq,
     respType: proto.GroupCheckJoinResp,
     data: { groupReqId: data.groupReqId, flag: data.flag },
+  })
+}
+
+export async function groupJoin(
+  data: {
+    groupId: number | string
+    msg: string
+    reqType: number
+    addToken?: string
+    fromUid?: number | string
+  },
+  baseUrl?: string,
+): Promise<proto.GroupJoinResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupJoin`,
+    reqType: proto.GroupJoinReq,
+    respType: proto.GroupJoinResp,
+    data: {
+      groupId: data.groupId,
+      msg: data.msg,
+      reqType: data.reqType,
+      addToken: data.addToken || '',
+      fromUid: data.fromUid ?? 0,
+    } as any,
   })
 }
 
