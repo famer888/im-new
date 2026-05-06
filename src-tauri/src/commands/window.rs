@@ -2,7 +2,7 @@ use tauri::State;
 use tauri::{PhysicalSize, Size};
 use std::sync::{Mutex, OnceLock};
 
-use crate::window::WindowManager;
+use crate::window::{NotificationData, WindowManager};
 
 const SIDEBAR_WIDTH: u32 = 256;
 const MIN_WINDOW_WIDTH: u32 = 400;
@@ -70,6 +70,29 @@ pub async fn close_chat_window(
 ) -> Result<(), String> {
     win_mgr
         .close_chat_window(&app, &conversation_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn show_notification_window(
+    app: tauri::AppHandle,
+    win_mgr: State<'_, WindowManager>,
+    data: NotificationData,
+) -> Result<(), String> {
+    win_mgr
+        .show_notification(&app, data)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resize_notification_window(
+    window: tauri::WebviewWindow,
+    win_mgr: State<'_, WindowManager>,
+    height: f64,
+    pinned: bool,
+) -> Result<(), String> {
+    win_mgr
+        .resize_notification(&window, height, pinned)
         .map_err(|e| e.to_string())
 }
 
