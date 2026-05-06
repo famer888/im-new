@@ -52,6 +52,10 @@ onMounted(async () => {
       if (isTauri()) {
         await invoke('login', {
           request: {
+            uid: authStore.uid,
+            nickname: authStore.nickname,
+            avatar: authStore.avatar,
+            source_id: authStore.session?.sourceId || null,
             session_url: '',
             ws_url: '',
             aes_key: '',

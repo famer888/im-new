@@ -20,6 +20,7 @@ interface NotificationData {
   avatar: string | null
   conversationType?: 'friend' | 'group' | 'channel'
   senderName?: string | null
+  unreadCount?: number | null
 }
 
 const { t } = useI18n()
@@ -40,6 +41,13 @@ const defaultAvatar = computed(() => {
   return friendIcon
 })
 const isGroup = computed(() => data.value?.conversationType === 'group')
+const messageText = computed(() => {
+  const count = Math.max(0, Number(data.value?.unreadCount || 0))
+  const body = String(data.value?.body || '')
+  if (count <= 0) return body
+  const summary = `${count}条${t('未读消息')}`
+  return body ? `${summary}：${body}` : summary
+})
 
 function readNotificationData(raw: unknown): NotificationData | null {
   const text = Array.isArray(raw) ? raw[0] : raw
@@ -142,7 +150,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
         </div>
         <div class="text-content">
           <span v-if="data.senderName" class="user-name">{{ data.senderName }}:</span>
-          <span class="msg-value">{{ data.body }}</span>
+          <span class="msg-value">{{ messageText }}</span>
         </div>
       </div>
       <button

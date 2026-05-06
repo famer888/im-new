@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { invoke } from '@tauri-apps/api/core'
 import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
-import { useAuthStore } from '@/stores/useAuthStore'
 import { getAllDomains } from '@/utils/domainPool'
 
 const props = defineProps<{
@@ -17,8 +16,6 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const router = useRouter()
-const authStore = useAuthStore()
 
 const emit = defineEmits<{
   (e: 'login-success', data: {
@@ -34,6 +31,7 @@ const officialUrl = ref('97chat.com')
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
 const isLoading = ref(false)
+const loginBlocked = ref(false)
 const lastLoginInfo = ref<{ icon?: string; name?: string }>({})
 
 const domainList = ref<string[]>([getBaseUrl()])
@@ -72,7 +70,16 @@ const currentBaseUrl = computed(() => {
   return domainList.value[index] || getBaseUrl()
 })
 
-const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
+const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value || loginBlocked.value)
+const overlayText = computed(() => {
+  if (loginBlocked.value) return '同一台电脑只能登录一个账号'
+  if (qrCodeUrlError.value) return t('登录二维码获取失败!')
+  return ''
+})
+
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
 
 function normalizeWsUrl(input: string): string {
   const raw = (input || '').trim()
@@ -106,8 +113,11 @@ async function handleGetQrCodeUrl() {
   isLoading.value = true
   qrCodeUrlError.value = false
   isOutTime.value = false
+  loginBlocked.value = false
 
   try {
+    if (!(await ensureCanLoginOnThisMachine())) return
+
     const res = await getQrCodeUrl(currentBaseUrl.value)
     isLoading.value = false
 
@@ -155,10 +165,11 @@ async function handleGetQrCodeUrl() {
 }
 
 function handleReGetQrCodeUrl() {
-  if (!qrCodeUrlError.value && !isOutTime.value) return
+  if (!qrCodeUrlError.value && !isOutTime.value && !loginBlocked.value) return
 
   qrCodeUrlError.value = false
   isOutTime.value = false
+  loginBlocked.value = false
   isLoading.value = true
 
   clearTimers()
@@ -171,6 +182,8 @@ async function handleIsLoginGet() {
   const device = getDeviceConfig()
 
   try {
+    if (!(await ensureCanLoginOnThisMachine())) return
+
     const res = await getIsLogin({
       token: loginToken.value,
       sysMac: device.sysMac,
@@ -181,13 +194,6 @@ async function handleIsLoginGet() {
     if (res && res.uid && Number(res.uid) > 0) {
       const loginId = String(res.uid)
       clearTimers()
-
-      authStore.addOrUpdateAccount({
-        id: loginId,
-        name: res.nickName || '',
-        icon: res.icon || undefined,
-        sessionId: res.sessionId || undefined,
-      })
 
       emit('login-success', {
         sessionUrl: currentBaseUrl.value,
@@ -211,6 +217,25 @@ async function handleIsLoginGet() {
       handleIsLoginGet()
     }, 1500)
   }
+}
+
+async function ensureCanLoginOnThisMachine() {
+  if (!isTauri()) return true
+
+  try {
+    const canLogin = await invoke<boolean>('ensure_can_login_on_this_machine')
+    if (canLogin) return true
+  } catch (error) {
+    console.warn('[auth] check local login lock failed:', error)
+    return true
+  }
+
+  clearTimers()
+  isLoading.value = false
+  qrCodeUrlError.value = false
+  isOutTime.value = false
+  loginBlocked.value = true
+  return false
 }
 
 function clearTimers() {
@@ -266,7 +291,7 @@ onBeforeUnmount(() => {
           :src="freshIcon"
           :class="{ load: isLoading }"
         />
-        <span v-if="qrCodeUrlError">{{ t('登录二维码获取失败!') }}</span>
+        <span v-if="overlayText">{{ overlayText }}</span>
       </p>
     </section>
     <p>{{ t('使用手机版扫描二维码登录') }}</p>

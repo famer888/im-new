@@ -79,16 +79,16 @@ export const useAuthStore = defineStore('auth', () => {
   const wsConnectConfig = ref<WsConnectConfig | null>(null)
 
   function normalizeTauriSession(
-    tauriSession: SessionInfo | (SessionInfo & { session_id?: string }) | null | undefined,
+    tauriSession: SessionInfo | (SessionInfo & { session_id?: string; source_id?: string }) | null | undefined,
     fallback?: { uid?: string; sessionId?: string; nickname?: string; avatar?: string },
   ): SessionInfo {
-    const ts = (tauriSession || {}) as SessionInfo & { session_id?: string }
+    const ts = (tauriSession || {}) as SessionInfo & { session_id?: string; source_id?: string }
     return {
       uid: ts.uid || fallback?.uid || '',
       sessionId: ts.session_id || ts.sessionId || fallback?.sessionId || '',
       nickname: ts.nickname || fallback?.nickname || '',
       avatar: ts.avatar || fallback?.avatar || '',
-      sourceId: ts.sourceId,
+      sourceId: ts.source_id || ts.sourceId,
     }
   }
 
@@ -198,18 +198,15 @@ export const useAuthStore = defineStore('auth', () => {
         if (autoLoginEnabled.value && accounts.value.length > 0) {
           const account = getPreferredAccount()
           if (account?.sessionId) {
-            const cachedSession: SessionInfo = {
-              uid: account.id,
-              sessionId: account.sessionId,
-              nickname: account.name,
-              avatar: account.icon || '',
-              sourceId: account.sourceId,
-            }
-            session.value = cachedSession
-            localStorage.setItem(CURRENT_UID_KEY, account.id)
             try {
               const tauriSession = await tauriInvoke<SessionInfo>('login', {
-                request: { session_id: account.sessionId },
+                request: {
+                  uid: account.id,
+                  nickname: account.name,
+                  avatar: account.icon || '',
+                  source_id: account.sourceId || null,
+                  session_id: account.sessionId,
+                },
               })
               const result = normalizeTauriSession(tauriSession, {
                 uid: account.id,
@@ -221,7 +218,10 @@ export const useAuthStore = defineStore('auth', () => {
                 session.value = result
                 localStorage.setItem(CURRENT_UID_KEY, result.uid)
               }
-            } catch { /* auto-login failed */ }
+            } catch {
+              console.warn('[auth] auto-login blocked or failed')
+              return
+            }
           }
         }
 
@@ -274,6 +274,7 @@ export const useAuthStore = defineStore('auth', () => {
     uid?: string
     nickname?: string
     avatar?: string
+    sourceId?: string
     sessionId?: string
   }) {
     if (request.sessionUrl) {
@@ -286,18 +287,11 @@ export const useAuthStore = defineStore('auth', () => {
         sessionId: request.sessionId || '',
         nickname: request.nickname || '',
         avatar: request.avatar || '',
+        sourceId: request.sourceId,
       }
+      const previousUid = localStorage.getItem(CURRENT_UID_KEY)
       if (optimisticSession.uid) {
-        // Keep the frontend cache ahead of the native window switch.
-        // Otherwise the freshly opened main window can boot before current-uid is persisted.
-        session.value = optimisticSession
         localStorage.setItem(CURRENT_UID_KEY, optimisticSession.uid)
-        addOrUpdateAccount({
-          id: optimisticSession.uid,
-          name: optimisticSession.nickname || optimisticSession.uid,
-          icon: optimisticSession.avatar,
-          sessionId: optimisticSession.sessionId,
-        })
       }
       if (request.wsUrl.trim() && request.aesKey.trim()) {
         saveWsConnectConfig({
@@ -306,15 +300,29 @@ export const useAuthStore = defineStore('auth', () => {
         })
       }
 
-      const tauriSession = await tauriInvoke<SessionInfo>('login', {
-        request: {
-          session_url: request.sessionUrl,
-          ws_url: request.wsUrl,
-          aes_key: request.aesKey,
-          install_code: request.installCode,
-          session_id: request.sessionId || '',
-        },
-      })
+      let tauriSession: SessionInfo
+      try {
+        tauriSession = await tauriInvoke<SessionInfo>('login', {
+          request: {
+            uid: optimisticSession.uid,
+            nickname: optimisticSession.nickname,
+            avatar: optimisticSession.avatar,
+            source_id: optimisticSession.sourceId || null,
+            session_url: request.sessionUrl,
+            ws_url: request.wsUrl,
+            aes_key: request.aesKey,
+            install_code: request.installCode,
+            session_id: request.sessionId || '',
+          },
+        })
+      } catch (error) {
+        if (previousUid) {
+          localStorage.setItem(CURRENT_UID_KEY, previousUid)
+        } else {
+          localStorage.removeItem(CURRENT_UID_KEY)
+        }
+        throw error
+      }
       const result = normalizeTauriSession(tauriSession, {
         uid: optimisticSession.uid,
         sessionId: optimisticSession.sessionId,
@@ -352,7 +360,13 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (isTauri()) {
       const tauriSession = await tauriInvoke<SessionInfo>('login', {
-        request: { session_id: account.sessionId },
+        request: {
+          uid: account.id,
+          nickname: account.name,
+          avatar: account.icon || '',
+          source_id: account.sourceId || null,
+          session_id: account.sessionId,
+        },
       })
       const result = normalizeTauriSession(tauriSession, {
         uid: account.id,
