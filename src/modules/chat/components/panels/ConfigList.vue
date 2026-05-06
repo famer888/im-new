@@ -76,33 +76,33 @@ async function handleClearSubmit(index: number) {
   <div class="config-list" v-if="conv">
     <div class="config-section">
       <div class="config-item">
-        <span>置顶聊天</span>
+        <span>{{ t('置顶聊天') }}</span>
         <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
       </div>
       <div class="config-item">
-        <span>消息免打扰</span>
+        <span>{{ t('消息免打扰') }}</span>
         <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
       </div>
     </div>
     <div v-if="conv.type === 1" class="config-section">
       <div class="config-item clickable" @click="openGroupNotice">
-        <span>群公告</span>
+        <span>{{ t('群公告') }}</span>
         <span class="arrow">›</span>
       </div>
       <div class="config-item clickable" @click="uiStore.setRightPanel('group-manage')">
-        <span>群管理</span>
+        <span>{{ t('群管理') }}</span>
         <span class="arrow">›</span>
       </div>
     </div>
     <div class="config-section">
       <div class="config-item clickable">
-        <span>查找聊天记录</span>
+        <span>{{ t('查找聊天记录') }}</span>
         <span class="arrow">›</span>
       </div>
     </div>
     <div class="config-section clear-section">
       <div class="config-item clickable danger" @click="openClearDialog">
-        <span>清空聊天记录</span>
+        <span>{{ t('清空聊天记录') }}</span>
       </div>
     </div>
 

@@ -124,7 +124,7 @@ const channelInfo = computed(() => {
 const channelSubtitle = computed(() => {
   if (conversation.value?.type !== ConversationType.Channel) return ''
   const count = Number(channelInfo.value?.memberCount ?? -1)
-  return count >= 0 ? `${count}位订阅者` : ''
+  return count >= 0 ? t('订阅者数量', { count }) : ''
 })
 
 const title = computed(() => {
@@ -278,12 +278,12 @@ watch(
   <div class="chat-header">
     <!-- Selection mode toolbar overlay (matches im top.vue) -->
     <section v-if="uiStore.selectionMode" class="selected-toolbar">
-      <span @click="handleBatchForward">转发 {{ selectedCount }}</span>
-      <span @click="handleBatchDeleteLocal">删除 {{ selectedCount }}</span>
+      <span @click="handleBatchForward">{{ t('操作数量', { action: t('转发'), count: selectedCount }) }}</span>
+      <span @click="handleBatchDeleteLocal">{{ t('操作数量', { action: t('删除'), count: selectedCount }) }}</span>
       <span v-if="allSelf" @click="handleBatchDeleteForAll">
-        {{ isFriendConv ? `为双方删除 ${selectedCount}` : `为所有人删除 ${selectedCount}` }}
+        {{ t('操作数量', { action: isFriendConv ? t('为双方删除') : t('为所有人删除'), count: selectedCount }) }}
       </span>
-      <span class="cancel" @click="handleCancelSelection">取消</span>
+      <span class="cancel" @click="handleCancelSelection">{{ t('取消') }}</span>
     </section>
     <div class="header-left">
       <!-- 与 im chat-window/top.vue 传输助手分支一致：cszs 图标 + 文案 + user-icon-v -->

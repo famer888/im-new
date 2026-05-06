@@ -291,8 +291,8 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
             <span class="conv-time">{{ formatTime(conv.lastMsgTime) }}</span>
           </div>
           <div class="conv-row-bottom">
-            <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[有人@我]</span>
-            <span v-if="shouldShowDraft(conv)" class="draft-tag">[{{ $t('草稿') }}]</span>
+            <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[{{ t('有人@我') }}]</span>
+            <span v-if="shouldShowDraft(conv)" class="draft-tag">[{{ t('草稿') }}]</span>
             <span v-if="conv.senderName && !shouldShowDraft(conv)" class="sender-name">{{ conv.senderName }}:</span>
             <span class="conv-digest">{{ getDigest(conv) }}</span>
             <span v-if="conv.isMuted" class="muted-icon">
@@ -306,7 +306,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
     </div>
 
     <div v-if="displayList.length === 0" class="empty-tip">
-      {{ uiStore.chatArchiveListShow ? $t('暂无归档会话') : '暂时没有新的聊天会话' }}
+      {{ uiStore.chatArchiveListShow ? t('暂无归档会话') : t('暂时没有新的聊天会话') }}
     </div>
   </div>
 </template>

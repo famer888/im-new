@@ -606,7 +606,7 @@ function canCopyMessageInfo(): boolean {
 }
 
 function groupReadCountLabel(data: Record<string, unknown>): string {
-  return `${getGroupReadTotal(data)}个已读`
+  return t('已读数量', { count: getGroupReadTotal(data) })
 }
 
 function messageSupportsImageOpenDirectory(data: Record<string, unknown>): boolean {
@@ -622,11 +622,11 @@ function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean
 
 function deleteEveryoneLabelForConversation(): string {
   const conv = chatStore.currentConversation
-  if (!conv) return '为所有人删除'
-  if (conv.type !== 0) return '为所有人删除'
+  if (!conv) return t('为所有人删除')
+  if (conv.type !== 0) return t('为所有人删除')
 
-  const targetName = contactStore.getDisplayName(conv.targetId) || conv.targetId || '对方'
-  return `从本地和${targetName}删除`
+  const targetName = contactStore.getDisplayName(conv.targetId) || conv.targetId || t('对方')
+  return t('从本地和{value}删除', { value: targetName })
 }
 
 function imageCacheSafeName(name: string): string {
@@ -1020,27 +1020,27 @@ const contextMenuItems = computed((): MenuItem[] => {
   if (data.type === 'conversation') {
     // 与旧 im chats/index.vue 右键一致：删除 → 消息置顶 → 消息免打扰 → 归档（纯文案、无分隔线）
     return [
-      { key: 'delete', label: '删除聊天', danger: true },
-      { key: 'pin', label: data.isPinned ? '取消置顶' : '消息置顶' },
-      { key: 'mute', label: data.isMuted ? '取消消息免打扰' : '消息免打扰' },
-      { key: 'archive', label: data.isArchived ? '取消归档' : '归档' },
+      { key: 'delete', label: t('删除聊天'), danger: true },
+      { key: 'pin', label: data.isPinned ? t('取消置顶') : t('消息置顶') },
+      { key: 'mute', label: data.isMuted ? t('取消消息免打扰') : t('消息免打扰') },
+      { key: 'archive', label: data.isArchived ? t('取消归档') : t('归档') },
       // im-new 扩展菜单（旧 im 无此项；按需恢复）
-      // { key: 'read', label: '标记已读' },
+      // { key: 'read', label: t('标记已读') },
     ]
   }
   if (data.type === 'message') {
     const items: MenuItem[] = []
 
     if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data)) {
-      items.push({ key: 'copy', label: '复制', iconSrc: menuCopy })
+      items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
     }
 
     if (messageSupportsImageSave(data)) {
-      items.push({ key: 'save_as', label: '另存为', iconSrc: menuSave })
+      items.push({ key: 'save_as', label: t('另存为'), iconSrc: menuSave })
     }
 
     if (messageSupportsImageOpenDirectory(data)) {
-      items.push({ key: 'open_directory', label: '打开目录', iconSrc: menuOpenDir })
+      items.push({ key: 'open_directory', label: t('打开目录'), iconSrc: menuOpenDir })
     }
 
     if (messageSupportsDeleteEverywhere(data)) {
@@ -1052,14 +1052,14 @@ const contextMenuItems = computed((): MenuItem[] => {
     }
 
     items.push(
-      { key: 'delete_local', label: '从本地删除', iconSrc: menuDelete },
-      { key: 'select', label: '选中', iconSrc: menuSelect },
-      { key: 'reply', label: '回复', iconSrc: menuReply },
-      { key: 'forward', label: '转发', iconSrc: menuForward },
+      { key: 'delete_local', label: t('从本地删除'), iconSrc: menuDelete },
+      { key: 'select', label: t('选中'), iconSrc: menuSelect },
+      { key: 'reply', label: t('回复'), iconSrc: menuReply },
+      { key: 'forward', label: t('转发'), iconSrc: menuForward },
     )
 
     if (canCopyMessageInfo()) {
-      items.push({ key: 'copy_msg_info', label: '复制消息信息', iconSrc: menuCopy })
+      items.push({ key: 'copy_msg_info', label: t('复制消息信息'), iconSrc: menuCopy })
     }
 
     if (messageSupportsGroupReadCount(data)) {

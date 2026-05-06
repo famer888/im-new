@@ -309,7 +309,7 @@ const canClearHistory = computed(() => {
 })
 
 function roleLabel(memberType: number): string {
-  if (memberType === 1) return '所有者'
+  if (memberType === 1) return t('所有者')
   if (memberType === 2) return t('管理员')
   return ''
 }
@@ -606,7 +606,7 @@ onBeforeUnmount(() => {
             :disabled="!canClearHistory"
           />
           <div v-else :style="{ height: '203px' }">
-            <p class="notice-view">{{ editDescDraft || '无简介' }}</p>
+            <p class="notice-view">{{ editDescDraft || t('无简介') }}</p>
           </div>
           <span v-if="canClearHistory && isEditDesc">{{ 800 - editDescDraft.length }}</span>
         </section>
@@ -668,18 +668,18 @@ onBeforeUnmount(() => {
 
     <section class="panel-section config-section">
       <div class="config-item">
-        <span>置顶聊天</span>
+        <span>{{ t('置顶聊天') }}</span>
         <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
       </div>
       <div class="config-item">
-        <span>接收通知</span>
+        <span>{{ t('接收通知') }}</span>
         <AppSwitch
           :model-value="receiveNotifications"
           :disabled="updatingDisturb"
           @update:model-value="setChannelReceiveNotifications"
         />
       </div>
-      <button v-if="canClearHistory" class="clear-btn" type="button" @click="clearHistory">清空聊天记录</button>
+      <button v-if="canClearHistory" class="clear-btn" type="button" @click="clearHistory">{{ t('清空聊天记录') }}</button>
     </section>
 
     <section v-if="adminPrivacy" class="manager-title">
