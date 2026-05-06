@@ -142,13 +142,26 @@ function setupTrayUnreadSync() {
 
       try {
         const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('update_tray_unread_count', { count })
+        await invoke('update_tray_unread_count', { count, flash: false })
       } catch (err) {
         console.warn('[tray] update unread count failed:', err)
       }
     },
     { immediate: true },
   )
+}
+
+async function flashTrayForIncomingMessage() {
+  if (!isTauri()) return
+
+  try {
+    const chatStore = useChatStore()
+    const count = Math.max(0, Math.floor(Number(chatStore.totalUnread || 0)))
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('update_tray_unread_count', { count, flash: true })
+  } catch (err) {
+    console.warn('[tray] flash incoming message failed:', err)
+  }
 }
 
 export async function setupTauriListeners() {
@@ -687,6 +700,15 @@ export async function setupTauriListeners() {
       messageStore.batchAppendMessages(normalized as Message[])
       const chatStore = useChatStore()
       const activeConversationId = chatStore.currentConversationId
+      const hasIncomingMessageForTray = Boolean(
+        currentUid
+        && normalized.some((m: any) => {
+          const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+          const senderId = String(m?.senderId ?? m?.sender_id ?? '')
+          if (!convId.includes('_') || !senderId || senderId === currentUid) return false
+          return !Boolean(m?.isDeleted ?? m?.is_deleted ?? false)
+        }),
+      )
       const hasIncomingForActiveConversation = Boolean(
         currentUid
         && activeConversationId
@@ -700,6 +722,9 @@ export async function setupTauriListeners() {
         void playNotificationSound()
       }
       void showMinimizedMessageReminder(normalized as Message[], currentUid)
+      if (hasIncomingMessageForTray) {
+        void flashTrayForIncomingMessage()
+      }
       if (authStore.uid) {
         const incoming = normalized.map((m: any) => ({
           id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),

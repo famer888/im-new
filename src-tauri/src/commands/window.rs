@@ -107,6 +107,10 @@ pub async fn show_login_window(
 }
 
 #[tauri::command]
-pub async fn update_tray_unread_count(app: tauri::AppHandle, count: u32) -> Result<(), String> {
-    window::tray::update_unread_count(&app, count)
+pub async fn update_tray_unread_count(
+    app: tauri::AppHandle,
+    count: u32,
+    flash: Option<bool>,
+) -> Result<(), String> {
+    window::tray::update_unread_count(&app, count, flash.unwrap_or(false))
 }
