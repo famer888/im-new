@@ -415,6 +415,7 @@ pub struct NotificationData {
     pub avatar: Option<String>,
     pub conversation_type: Option<String>,
     pub sender_name: Option<String>,
+    pub unread_count: Option<u32>,
 }
 
 #[derive(Debug, thiserror::Error)]

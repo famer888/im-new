@@ -152,6 +152,18 @@ function getReminderCandidates(messages: any[], currentUid: string) {
     )
 }
 
+function getConversationUnreadCount(conversationId: string, messages: any[]): number {
+  const chatStore = useChatStore()
+  const conversation = chatStore.conversations.find((item) => item.id === conversationId)
+  const storedUnread = Math.max(0, Number(conversation?.unreadCount || 0))
+  const incomingCount = messages.filter((item) => {
+    const convId = String(item?.conversationId ?? item?.conversation_id ?? '')
+    return convId === conversationId
+  }).length
+
+  return storedUnread + incomingCount
+}
+
 async function shouldShowMinimizedReminder(): Promise<boolean> {
   try {
     const { Window, getCurrentWindow } = await import('@tauri-apps/api/window')
@@ -178,7 +190,7 @@ async function requestDockAttention() {
   }
 }
 
-async function showNotificationWindow(message: any) {
+async function showNotificationWindow(message: any, unreadCount: number) {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const conversationId = String(message?.conversationId ?? message?.conversation_id ?? '')
@@ -202,6 +214,7 @@ async function showNotificationWindow(message: any) {
         avatar: getConversationAvatar(conversationId),
         conversationType,
         senderName: conversationType === 'group' || conversationType === 'channel' ? senderName : null,
+        unreadCount,
       },
     })
   } catch (error) {
@@ -227,5 +240,6 @@ export async function showMinimizedMessageReminder(rawMessages: Message[] | any[
 
   lastReminderAt = now
   await requestDockAttention()
-  await showNotificationWindow(candidates[0])
+  const conversationId = String(candidates[0]?.conversationId ?? candidates[0]?.conversation_id ?? '')
+  await showNotificationWindow(candidates[0], getConversationUnreadCount(conversationId, candidates))
 }
