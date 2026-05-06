@@ -12,6 +12,7 @@ import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
 import { showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
 import { router } from '@/router'
+import { watch, type WatchStopHandle } from 'vue'
 import {
   ensureChannelRelKey,
   ensureFriendRelKey,
@@ -82,6 +83,7 @@ const tauriListenersGlobal = globalThis as typeof globalThis & {
   __OCS_TAURI_LISTENER_GENERATION__?: number
   __OCS_TAURI_LISTENER_UNLISTENS__?: Array<() => void>
   __OCS_TAURI_DOM_LISTENERS_BOUND__?: boolean
+  __OCS_TRAY_UNREAD_WATCH_STOP__?: WatchStopHandle
 }
 
 type TauriEvent<T> = { payload: T }
@@ -123,6 +125,32 @@ function setupScreenshotShortcut() {
   }, true)
 }
 
+function setupTrayUnreadSync() {
+  if (!isTauri()) return
+
+  tauriListenersGlobal.__OCS_TRAY_UNREAD_WATCH_STOP__?.()
+
+  const chatStore = useChatStore()
+  let lastSynced = -1
+
+  tauriListenersGlobal.__OCS_TRAY_UNREAD_WATCH_STOP__ = watch(
+    () => chatStore.totalUnread,
+    async (value) => {
+      const count = Math.max(0, Math.floor(Number(value || 0)))
+      if (count === lastSynced) return
+      lastSynced = count
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('update_tray_unread_count', { count })
+      } catch (err) {
+        console.warn('[tray] update unread count failed:', err)
+      }
+    },
+    { immediate: true },
+  )
+}
+
 export async function setupTauriListeners() {
   setupGlobalErrorHandler()
   let groupKeyWarmupPending: Promise<void> | null = null
@@ -147,6 +175,7 @@ export async function setupTauriListeners() {
   }
 
   setupScreenshotShortcut()
+  setupTrayUnreadSync()
 
   for (const unlisten of tauriListenersGlobal.__OCS_TAURI_LISTENER_UNLISTENS__ ?? []) {
     try {
