@@ -123,8 +123,8 @@ const showChannelNotifyToggle = computed(() => {
 })
 const channelNotifyText = computed(() =>
   toBool(currentChannel.value?.isDisturb ?? chatStore.currentConversation?.isMuted ?? false)
-    ? '永久静音'
-    : '接收通知',
+    ? t('永久静音')
+    : t('接收通知'),
 )
 const inputPlaceholder = computed(() =>
   settingStore.settings.sendShortcutKey === 'Ctrl+Enter'
@@ -1903,7 +1903,7 @@ onBeforeUnmount(() => {
     @dragover="handleDragOver"
   >
     <div v-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
-      该频道已禁用
+      {{ t('该频道已禁用') }}
     </div>
     <button
       v-else-if="showChannelNotifyToggle"
