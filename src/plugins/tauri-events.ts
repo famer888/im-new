@@ -10,6 +10,7 @@ import { useSettingStore } from '@/stores/useSettingStore'
 import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
+import { showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
 import { router } from '@/router'
 import {
   ensureChannelRelKey,
@@ -246,6 +247,29 @@ export async function setupTauriListeners() {
       })().finally(() => {
         groupKeyWarmupPending = null
       })
+    }
+  })
+
+  listen<{ conversationId?: string }>('notification:click', async (event) => {
+    const conversationId = String(event.payload?.conversationId || '')
+    if (!conversationId) return
+
+    try {
+      const { Window } = await import('@tauri-apps/api/window')
+      const mainWindow = await Window.getByLabel('main')
+      if (mainWindow) {
+        await mainWindow.show().catch(() => {})
+        await mainWindow.unminimize().catch(() => {})
+        await mainWindow.setFocus().catch(() => {})
+      }
+    } catch (error) {
+      console.warn('[notification] focus main window failed:', error)
+    }
+
+    const chatStore = useChatStore()
+    chatStore.setCurrentConversation(conversationId)
+    if (router.currentRoute.value.path !== '/home') {
+      await router.replace('/home').catch(() => {})
     }
   })
 
@@ -646,6 +670,7 @@ export async function setupTauriListeners() {
       if (shouldPlaySound) {
         void playNotificationSound()
       }
+      void showMinimizedMessageReminder(normalized as Message[], currentUid)
       if (authStore.uid) {
         const incoming = normalized.map((m: any) => ({
           id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
@@ -678,6 +703,18 @@ export async function setupTauriListeners() {
         })
       }
     }
+  })
+
+  listen<Message>('msg:local-sent', (event) => {
+    const messageStore = useMessageStore()
+    const authStore = useAuthStore()
+    const currentUid = String(authStore.uid || '')
+    const payload: any = event.payload || {}
+    const senderId = String(payload?.senderId ?? payload?.sender_id ?? '')
+    const conversationId = String(payload?.conversationId ?? payload?.conversation_id ?? '')
+    if (!conversationId.includes('_')) return
+    if (currentUid && senderId && senderId !== currentUid) return
+    messageStore.batchAppendMessages([payload] as Message[])
   })
 
   /**

@@ -66,7 +66,10 @@ async function bootstrap() {
   app.use(router)
   app.use(i18n)
 
-  setupTauriListeners().catch(console.error)
+  const routeHash = window.location.hash || ''
+  if (!routeHash.startsWith('#/notification')) {
+    setupTauriListeners().catch(console.error)
+  }
 
   app.mount('#app')
 
