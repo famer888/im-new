@@ -51,6 +51,7 @@ const router = useRouter()
 const searchKeyword = ref('')
 const searchInputRef = ref<{ focus: () => void } | null>(null)
 const addAction = ref(false)
+const isMac = computed(() => navigator.platform.toLowerCase().includes('mac'))
 const avatarWrapRef = ref<HTMLElement | null>(null)
 const accountDialogPosition = ref({ x: 74, y: 56 })
 const SETTINGS_MENU_WIDTH = 102
@@ -380,7 +381,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="home-sidebar">
+  <div class="home-sidebar" :class="{ mac: isMac }">
     <!-- OCS Nav: 72px width, vertical icons -->
     <div ref="navBarRef" class="nav-bar">
       <div ref="avatarWrapRef" class="nav-avatar-wrap">
@@ -542,6 +543,13 @@ onBeforeUnmount(() => {
   display: flex;
   flex-shrink: 0;
   height: 100%;
+
+  &.mac {
+    .nav-bar {
+      height: calc(100% + 32px);
+      margin-top: -32px;
+    }
+  }
 }
 
 // OCS Nav bar: 72px wide
