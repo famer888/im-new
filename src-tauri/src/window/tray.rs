@@ -63,11 +63,14 @@ fn translucent_tray_icon(app: &AppHandle) -> Option<tauri::image::Image<'static>
 }
 
 pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(), String> {
-    let state = app.state::<TrayUnreadState>();
-    state
-        .unread_count
-        .store(count, std::sync::atomic::Ordering::Relaxed);
+    if !flash {
+        let state = app.state::<TrayUnreadState>();
+        state
+            .unread_count
+            .store(count, std::sync::atomic::Ordering::Relaxed);
+    }
     let generation = if flash {
+        let state = app.state::<TrayUnreadState>();
         Some(
             state
                 .blink_generation
@@ -80,22 +83,37 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
     #[cfg(not(target_os = "windows"))]
     let _ = generation;
 
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_tooltip(Some(tray_tooltip(count)))
-            .map_err(|e| e.to_string())?;
-        if count == 0 && !flash {
-            #[cfg(target_os = "windows")]
-            reset_tray_icon(app);
+    if !flash {
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            tray.set_tooltip(Some(tray_tooltip(count)))
+                .map_err(|e| e.to_string())?;
+            if count == 0 {
+                #[cfg(target_os = "windows")]
+                reset_tray_icon(app);
+            }
         }
     }
 
-    for label in ["main", "login"] {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = if count > 0 {
-                window.request_user_attention(Some(tauri::UserAttentionType::Critical))
-            } else {
-                window.request_user_attention(None)
-            };
+    if flash {
+        for label in ["main", "login"] {
+            if let Some(window) = app.get_webview_window(label) {
+                let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+            }
+        }
+    } else {
+        for label in ["main", "login"] {
+            if let Some(window) = app.get_webview_window(label) {
+                let _ = if count > 0 {
+                    window.request_user_attention(Some(tauri::UserAttentionType::Critical))
+                } else {
+                    window.request_user_attention(None)
+                };
+            }
+        }
+
+        if count > 0 {
+            #[cfg(target_os = "windows")]
+            reset_tray_icon(app);
         }
     }
 
