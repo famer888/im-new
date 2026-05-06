@@ -2,7 +2,7 @@ use tauri::State;
 use tauri::{PhysicalSize, Size};
 use std::sync::{Mutex, OnceLock};
 
-use crate::window::{NotificationData, WindowManager};
+use crate::window::{self, NotificationData, WindowManager};
 
 const SIDEBAR_WIDTH: u32 = 256;
 const MIN_WINDOW_WIDTH: u32 = 400;
@@ -104,4 +104,9 @@ pub async fn show_login_window(
     win_mgr
         .switch_to_login(&app)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_tray_unread_count(app: tauri::AppHandle, count: u32) -> Result<(), String> {
+    window::tray::update_unread_count(&app, count)
 }

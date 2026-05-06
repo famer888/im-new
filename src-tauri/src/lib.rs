@@ -177,6 +177,7 @@ pub fn run() {
             commands::window::resize_notification_window,
             commands::window::toggle_side_bar,
             commands::window::show_login_window,
+            commands::window::update_tray_unread_count,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::repair::repair_clear_crypto_keys,
