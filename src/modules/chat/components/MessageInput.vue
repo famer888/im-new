@@ -2,7 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessageType, ConversationType } from '@/types'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
@@ -93,7 +93,7 @@ const emojiChatType = computed(() => {
 const groupId = computed(() => chatStore.currentConversation?.targetId ?? '')
 /** 与 im 传输助手一致：工具栏仅表情 + 文件 */
 const isFileHelperChat = computed(
-  () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+  () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
 )
 const showShutupTip = computed(() => {
   const conv = chatStore.currentConversation
@@ -138,7 +138,7 @@ const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
 const currentContact = computed(() => {
   const conv = chatStore.currentConversation
-  if (!conv || conv.type !== ConversationType.Friend || conv.targetId === FILE_HELPER_TARGET_ID) return null
+  if (!conv || conv.type !== ConversationType.Friend || isFileHelperTargetId(conv.targetId)) return null
   return contactStore.getContact(conv.targetId) ?? null
 })
 const showReadBurnTip = computed(() =>

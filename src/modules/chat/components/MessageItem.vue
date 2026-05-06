@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
@@ -124,7 +124,7 @@ function getQuoteContentDigest(msgType: number, content: string | null): string 
 }
 
 const isFileHelperChat = computed(
-  () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+  () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
 )
 const isChannelChat = computed(
   () => chatStore.currentConversation?.type === ConversationType.Channel,

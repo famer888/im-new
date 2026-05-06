@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore } from '@/stores/useMessageStore'
-import { FILE_HELPER_TARGET_ID, useChatStore } from '@/stores/useChatStore'
+import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
@@ -29,7 +29,7 @@ const conversation = computed(() =>
 )
 const currentFriendContact = computed(() => {
   const conv = conversation.value
-  if (!conv || conv.type !== ConversationType.Friend || conv.targetId === FILE_HELPER_TARGET_ID) {
+  if (!conv || conv.type !== ConversationType.Friend || isFileHelperTargetId(conv.targetId)) {
     return null
   }
   return contactStore.getContact(conv.targetId) ?? null

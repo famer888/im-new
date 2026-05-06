@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { FILE_HELPER_TARGET_ID, useChatStore } from '@/stores/useChatStore'
+import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
 import fileImageIcon from '@/assets/images/message/file-image.png'
 import fileVideoIcon from '@/assets/images/message/file-video.png'
@@ -21,7 +21,7 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
-  () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+  () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
 )
 const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
 

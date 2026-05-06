@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { FILE_HELPER_TARGET_ID, useChatStore } from './useChatStore'
+import { isFileHelperTargetId, useChatStore } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
 import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
@@ -630,7 +630,7 @@ export const useMessageStore = defineStore('message', () => {
 
     const [typeRaw, targetId = ''] = conversationId.split('_')
     const convType = Number(typeRaw || 0)
-    const isFileHelperSend = convType === 0 && targetId === FILE_HELPER_TARGET_ID
+    const isFileHelperSend = convType === 0 && isFileHelperTargetId(targetId)
     if (convType === 2) {
       console.clear()
       console.info('[channel] ===== 清空旧日志，开始频道发送调试 =====', {
