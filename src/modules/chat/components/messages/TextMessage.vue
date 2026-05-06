@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { emojiObj } from '@/utils/emoji'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useUIStore, type AddGroupTarget, type MemberInfoProfile } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
@@ -28,7 +28,7 @@ const uiStore = useUIStore()
 const { t } = useI18n()
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
-  () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
+  () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
 )
 const isChannelChat = computed(
   () => chatStore.currentConversation?.type === ConversationType.Channel,

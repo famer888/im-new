@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -83,7 +83,7 @@ const conversation = computed(() =>
 )
 
 const isFileHelper = computed(
-  () => conversation.value?.targetId === FILE_HELPER_TARGET_ID,
+  () => isFileHelperTargetId(conversation.value?.targetId),
 )
 
 const isFriendChat = computed(
@@ -130,7 +130,7 @@ const channelSubtitle = computed(() => {
 const title = computed(() => {
   void locale.value
   if (!conversation.value) return ''
-  if (conversation.value.targetId === FILE_HELPER_TARGET_ID) return t('传输助手')
+  if (isFileHelperTargetId(conversation.value.targetId)) return t('传输助手')
   switch (conversation.value.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conversation.value.targetId)
@@ -149,7 +149,7 @@ const title = computed(() => {
 
 const avatar = computed(() => {
   if (!conversation.value) return ''
-  if (conversation.value.targetId === FILE_HELPER_TARGET_ID) return fileHelperIcon
+  if (isFileHelperTargetId(conversation.value.targetId)) return fileHelperIcon
   switch (conversation.value.type) {
     case ConversationType.Friend:
       return contactStore.getContact(conversation.value.targetId)?.avatar || ''

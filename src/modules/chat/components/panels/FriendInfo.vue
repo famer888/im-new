@@ -7,7 +7,7 @@ import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { contactsRelation, updateBlackContacts, updateContacts } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useChatStore, FILE_HELPER_TARGET_ID } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -247,7 +247,7 @@ async function confirmBlacklist() {
 const clearMsgTypeList = ref<string[]>([])
 const deleteConfirmVisible = ref(false)
 
-const isFileHelper = computed(() => conv.value?.targetId === FILE_HELPER_TARGET_ID)
+const isFileHelper = computed(() => isFileHelperTargetId(conv.value?.targetId))
 
 function openClearDialog() {
   if (!conv.value) return

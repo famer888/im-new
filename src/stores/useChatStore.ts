@@ -10,9 +10,9 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
-/** 与旧 im 一致：系统占位好友 id，会话 id 为 `0_10008` */
-export const FILE_HELPER_TARGET_ID = '10008'
-const LEGACY_FILE_HELPER_TARGET_ID = '9901'
+/** 与旧 im/文档一致：系统占位好友 id，会话 id 为 `0_9901` */
+export const FILE_HELPER_TARGET_ID = '9901'
+const LEGACY_FILE_HELPER_TARGET_ID = '10008'
 
 export function isFileHelperTargetId(targetId: string | number | null | undefined): boolean {
   const id = String(targetId ?? '')
