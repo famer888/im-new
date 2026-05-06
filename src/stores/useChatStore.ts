@@ -310,6 +310,15 @@ export const useChatStore = defineStore('chat', () => {
     if (!isTauri()) return
     const result = await tauriInvoke<ReadProcessingResult>('mark_as_read', { uid, conversationId })
     updateConversation({ id: conversationId, unreadCount: 0, atMe: false })
+    const unreadTotal = conversations.value
+      .filter((c) => !c.isMuted && !c.isArchived)
+      .reduce((sum, c) => sum + Math.max(0, Number(c.unreadCount || 0)), 0)
+    tauriInvoke('update_tray_unread_count', {
+      count: unreadTotal,
+      flash: false,
+    }).catch((error) => {
+      console.warn('[ChatStore] update tray unread after markAsRead failed:', error)
+    })
 
     const readMessageIds = Array.isArray(result?.readMessageIds) ? result.readMessageIds : []
     const scheduledDeletions = Array.isArray(result?.scheduledDeletions)
