@@ -4,10 +4,17 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::Arc;
 use tauri::{
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tracing::info;
+
+const NOTICE_WIDTH: f64 = 278.0;
+const NOTICE_HEIGHT: f64 = 64.0;
+const NOTICE_SPACING: f64 = 10.0;
+const NOTICE_MARGIN_RIGHT: f64 = 10.0;
+const NOTICE_MARGIN_BOTTOM: f64 = 10.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowConfig {
@@ -25,6 +32,7 @@ pub struct WindowConfig {
 pub struct WindowManager {
     chat_windows: DashMap<String, String>, // conversation_id → window_label
     notification_labels: RwLock<VecDeque<String>>,
+    notification_pinned: Arc<DashMap<String, bool>>,
     max_notifications: usize,
 }
 
@@ -33,7 +41,39 @@ impl WindowManager {
         Self {
             chat_windows: DashMap::new(),
             notification_labels: RwLock::new(VecDeque::new()),
-            max_notifications: 3,
+            notification_pinned: Arc::new(DashMap::new()),
+            max_notifications: 1,
+        }
+    }
+
+    fn position_notification_window(
+        window: &WebviewWindow,
+        index: usize,
+        logical_height: f64,
+    ) {
+        if let Ok(Some(monitor)) = window
+            .current_monitor()
+            .or_else(|_| window.primary_monitor())
+        {
+            let work_area = monitor.work_area();
+            let scale_factor = monitor.scale_factor();
+            let notice_width = (NOTICE_WIDTH * scale_factor).round() as i32;
+            let notice_height = (logical_height * scale_factor).round() as i32;
+            let notice_spacing = (NOTICE_SPACING * scale_factor).round() as i32;
+            let margin_right = (NOTICE_MARGIN_RIGHT * scale_factor).round() as i32;
+            let margin_bottom = (NOTICE_MARGIN_BOTTOM * scale_factor).round() as i32;
+            let x = work_area.position.x
+                + work_area.size.width as i32
+                - notice_width
+                - margin_right;
+            let y = work_area.position.y
+                + work_area.size.height as i32
+                - notice_height
+                - margin_bottom
+                - (index as i32 * (notice_height + notice_spacing));
+            let _ = window.set_position(tauri::Position::Physical(
+                tauri::PhysicalPosition::new(x, y),
+            ));
         }
     }
 
@@ -235,9 +275,21 @@ impl WindowManager {
     ) -> Result<(), WindowError> {
         let mut labels = self.notification_labels.write();
 
-        // Close oldest if at max
+        // Keep the active reply window stable; new reminders should not interrupt typing.
+        if labels.iter().any(|label| {
+            self.notification_pinned
+                .get(label)
+                .map(|value| *value.value())
+                .unwrap_or(false)
+                && app.get_webview_window(label).is_some()
+        }) {
+            return Ok(());
+        }
+
+        // Close existing reminder so the bottom-right area only shows the latest one.
         while labels.len() >= self.max_notifications {
             if let Some(old_label) = labels.pop_front() {
+                self.notification_pinned.remove(&old_label);
                 if let Some(w) = app.get_webview_window(&old_label) {
                     let _ = w.close();
                 }
@@ -246,45 +298,95 @@ impl WindowManager {
 
         let label = format!("notification_{}", chrono::Utc::now().timestamp_millis());
         let index = labels.len();
+        let data_json = serde_json::to_string(&data)
+            .map_err(|e| WindowError::TauriError(e.to_string()))?;
+        let data_query = url::form_urlencoded::byte_serialize(data_json.as_bytes())
+            .collect::<String>();
+        let notification_url = format!("/#/notification?data={}", data_query);
 
         let window = WebviewWindowBuilder::new(
             app,
             &label,
-            WebviewUrl::App("/notification".into()),
+            WebviewUrl::App(notification_url.into()),
         )
         .title("Notification")
-        .inner_size(320.0, 80.0)
+        .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
         .resizable(false)
         .decorations(false)
+        .transparent(true)
         .always_on_top(true)
         .build()
         .map_err(|e| WindowError::TauriError(e.to_string()))?;
 
-        // Position bottom-right
-        if let Ok(monitor) = window.current_monitor() {
-            if let Some(monitor) = monitor {
-                let size = monitor.size();
-                let x = size.width as f64 - 340.0;
-                let y = size.height as f64 - 100.0 - (index as f64 * 90.0);
-                let _ = window.set_position(tauri::Position::Physical(
-                    tauri::PhysicalPosition::new(x as i32, y as i32),
-                ));
-            }
-        }
+        // Keep the reminder above the Dock/taskbar by using the monitor work area.
+        Self::position_notification_window(&window, index, NOTICE_HEIGHT);
 
-        let _ = window.emit("notification:data", &data);
         labels.push_back(label);
 
         // Auto close after 5 seconds
         let app_clone = app.clone();
+        let pinned = self.notification_pinned.clone();
         let label_clone = labels.back().unwrap().clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if pinned
+                .get(&label_clone)
+                .map(|value| *value.value())
+                .unwrap_or(false)
+            {
+                return;
+            }
             if let Some(w) = app_clone.get_webview_window(&label_clone) {
                 let _ = w.close();
             }
         });
 
+        Ok(())
+    }
+
+    pub fn resize_notification(
+        &self,
+        window: &WebviewWindow,
+        height: f64,
+        pinned: bool,
+    ) -> Result<(), WindowError> {
+        let label = window.label().to_string();
+        if !label.starts_with("notification_") {
+            return Err(WindowError::TauriError("not a notification window".to_string()));
+        }
+
+        if pinned {
+            self.notification_pinned.insert(label.clone(), true);
+            let other_labels = {
+                let mut labels = self.notification_labels.write();
+                let other_labels = labels
+                    .iter()
+                    .filter(|item| *item != &label)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                labels.retain(|item| item == &label);
+                other_labels
+            };
+            for other_label in other_labels {
+                self.notification_pinned.remove(&other_label);
+                if let Some(other_window) = window.app_handle().get_webview_window(&other_label) {
+                    let _ = other_window.close();
+                }
+            }
+        } else {
+            self.notification_pinned.remove(&label);
+        }
+
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                NOTICE_WIDTH,
+                height,
+            )))
+            .map_err(|e| WindowError::TauriError(e.to_string()))?;
+
+        let labels = self.notification_labels.read();
+        let index = labels.iter().position(|item| item == &label).unwrap_or(0);
+        Self::position_notification_window(window, index, height);
         Ok(())
     }
 
@@ -305,11 +407,14 @@ pub fn hide_to_tray_on_close(window: &WebviewWindow) {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NotificationData {
     pub conversation_id: String,
     pub title: String,
     pub body: String,
     pub avatar: Option<String>,
+    pub conversation_type: Option<String>,
+    pub sender_name: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

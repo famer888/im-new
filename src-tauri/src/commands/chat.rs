@@ -402,6 +402,7 @@ fn read_user_id(value: &serde_json::Value) -> Option<i64> {
 
 #[tauri::command]
 pub async fn send_message(
+    app: AppHandle,
     db: State<'_, DbManager>,
     ws_mgr: State<'_, WsManager>,
     crypto: State<'_, CryptoEngine>,
@@ -490,6 +491,7 @@ pub async fn send_message(
         Ok(())
     })
     .map_err(|e| e.to_string())?;
+    let _ = app.emit("msg:local-sent", &message);
 
     let mark_failed_and_return = |reason: String| -> Result<models::Message, String> {
         let failed_id = msg_id.clone();

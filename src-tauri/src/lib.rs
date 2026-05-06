@@ -173,6 +173,8 @@ pub fn run() {
             commands::media::media_window_is_maximized,
             commands::window::open_chat_window,
             commands::window::close_chat_window,
+            commands::window::show_notification_window,
+            commands::window::resize_notification_window,
             commands::window::toggle_side_bar,
             commands::window::show_login_window,
             commands::settings::get_settings,
