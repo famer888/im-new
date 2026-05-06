@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { emojiObj } from '@/utils/emoji'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -24,6 +25,7 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 const groupStore = useGroupStore()
 const uiStore = useUIStore()
+const { t } = useI18n()
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
   () => chatStore.currentConversation?.targetId === FILE_HELPER_TARGET_ID,
@@ -298,7 +300,7 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
     const groupTarget = parseGroupTargetFromAlias(resp)
     if (groupTarget) {
       if (groupTarget.id === groupId || (await isAlreadyInGroup(groupTarget.id, false))) {
-        eventBus.emit('show-toast', { message: '已在群聊中', type: 'success' })
+        eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
         return true
       }
 
@@ -311,7 +313,7 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
     console.warn('[TextMessage] resolve alias target failed:', error)
   }
 
-  eventBus.emit('show-toast', { message: '抱歉，该用户/群/频道不存在', type: 'error' })
+  eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
   return false
 }
 
@@ -434,7 +436,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
 
     if (await isAlreadyInGroup(target.id, Boolean(groupInfo.bfMember))) {
       uiStore.setAddGroupTarget(null)
-      eventBus.emit('show-toast', { message: '已在群聊中', type: 'success' })
+      eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
       return
     }
 
