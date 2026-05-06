@@ -40,6 +40,20 @@ fn tray_tooltip(count: u32) -> String {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn transparent_tray_icon() -> tauri::image::Image<'static> {
+    tauri::image::Image::new_owned(vec![0; 32 * 32 * 4], 32, 32)
+}
+
+#[cfg(target_os = "windows")]
+fn reset_tray_icon(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if let Some(icon) = app.default_window_icon() {
+            let _ = tray.set_icon(Some(icon.clone()));
+        }
+    }
+}
+
 pub fn update_unread_count(app: &AppHandle, count: u32) -> Result<(), String> {
     let state = app.state::<TrayUnreadState>();
     state
@@ -56,7 +70,8 @@ pub fn update_unread_count(app: &AppHandle, count: u32) -> Result<(), String> {
         tray.set_tooltip(Some(tray_tooltip(count)))
             .map_err(|e| e.to_string())?;
         if count == 0 {
-            let _ = tray.set_visible(true);
+            #[cfg(target_os = "windows")]
+            reset_tray_icon(app);
         }
     }
 
@@ -72,9 +87,10 @@ pub fn update_unread_count(app: &AppHandle, count: u32) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     if count > 0 {
+        reset_tray_icon(&app);
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let mut visible = true;
+            let mut show_normal_icon = true;
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -87,15 +103,19 @@ pub fn update_unread_count(app: &AppHandle, count: u32) -> Result<(), String> {
                     .load(std::sync::atomic::Ordering::Relaxed);
 
                 if current_generation != generation || current_count == 0 {
-                    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                        let _ = tray.set_visible(true);
-                    }
+                    reset_tray_icon(&app);
                     break;
                 }
 
-                visible = !visible;
+                show_normal_icon = !show_normal_icon;
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                    let _ = tray.set_visible(visible);
+                    if show_normal_icon {
+                        if let Some(icon) = app.default_window_icon() {
+                            let _ = tray.set_icon(Some(icon.clone()));
+                        }
+                    } else {
+                        let _ = tray.set_icon(Some(transparent_tray_icon()));
+                    }
                 }
             }
         });
