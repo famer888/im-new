@@ -9,14 +9,12 @@ const TRAY_ID: &str = "ocs-main-tray";
 
 pub struct TrayUnreadState {
     unread_count: std::sync::atomic::AtomicU32,
-    blink_generation: std::sync::atomic::AtomicU64,
 }
 
 impl TrayUnreadState {
     fn new() -> Self {
         Self {
             unread_count: std::sync::atomic::AtomicU32::new(0),
-            blink_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -41,11 +39,6 @@ fn tray_tooltip(count: u32) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn transparent_tray_icon() -> tauri::image::Image<'static> {
-    tauri::image::Image::new_owned(vec![0; 32 * 32 * 4], 32, 32)
-}
-
-#[cfg(target_os = "windows")]
 fn reset_tray_icon(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         if let Some(icon) = app.default_window_icon() {
@@ -59,12 +52,6 @@ pub fn update_unread_count(app: &AppHandle, count: u32) -> Result<(), String> {
     state
         .unread_count
         .store(count, std::sync::atomic::Ordering::Relaxed);
-    let generation = state
-        .blink_generation
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        + 1;
-    #[cfg(not(target_os = "windows"))]
-    let _ = generation;
 
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         tray.set_tooltip(Some(tray_tooltip(count)))
@@ -88,37 +75,6 @@ pub fn update_unread_count(app: &AppHandle, count: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     if count > 0 {
         reset_tray_icon(&app);
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let mut show_normal_icon = true;
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-                let state = app.state::<TrayUnreadState>();
-                let current_generation = state
-                    .blink_generation
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let current_count = state
-                    .unread_count
-                    .load(std::sync::atomic::Ordering::Relaxed);
-
-                if current_generation != generation || current_count == 0 {
-                    reset_tray_icon(&app);
-                    break;
-                }
-
-                show_normal_icon = !show_normal_icon;
-                if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                    if show_normal_icon {
-                        if let Some(icon) = app.default_window_icon() {
-                            let _ = tray.set_icon(Some(icon.clone()));
-                        }
-                    } else {
-                        let _ = tray.set_icon(Some(transparent_tray_icon()));
-                    }
-                }
-            }
-        });
     }
 
     Ok(())
