@@ -51,7 +51,7 @@ const router = useRouter()
 const searchKeyword = ref('')
 const searchInputRef = ref<{ focus: () => void } | null>(null)
 const addAction = ref(false)
-const isMac = computed(() => navigator.platform.toLowerCase().includes('mac'))
+const extendNavToTitlebar = computed(() => !!(window as any).__TAURI_INTERNALS__)
 const avatarWrapRef = ref<HTMLElement | null>(null)
 const accountDialogPosition = ref({ x: 74, y: 56 })
 const SETTINGS_MENU_WIDTH = 102
@@ -381,7 +381,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="home-sidebar" :class="{ mac: isMac }">
+  <div class="home-sidebar" :class="{ 'titlebar-nav': extendNavToTitlebar }">
     <!-- OCS Nav: 72px width, vertical icons -->
     <div ref="navBarRef" class="nav-bar">
       <div ref="avatarWrapRef" class="nav-avatar-wrap">
@@ -544,7 +544,7 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   height: 100%;
 
-  &.mac {
+  &.titlebar-nav {
     .nav-bar {
       height: calc(100% + 32px);
       margin-top: -32px;
