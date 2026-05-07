@@ -146,6 +146,7 @@ function showFriendOnlineDot(conv: Conversation): boolean {
 function formatDigestText(digest: string): string {
   const raw = digest.trim()
   if (!raw) return ''
+  if (raw === '暂不支持该消息类型') return t('暂不支持该消息类型')
   if (raw.includes('\uFFFD')) return `[${t('名片')}]`
 
   const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子)\]$/)
@@ -179,6 +180,7 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 5) return `[${t('名片')}]`
   if (message.msgType === 7) return `[${t('文件')}]`
   if (message.msgType === 12) return `[${t('骰子')}]`
+  if (message.msgType === 10 || message.msgType === 15) return t('暂不支持该消息类型')
   return raw ? formatDigestText(raw) : ''
 }
 

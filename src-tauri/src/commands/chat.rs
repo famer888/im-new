@@ -140,6 +140,7 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
         5 => "[名片]".to_string(),
         7 => "[文件]".to_string(),
         12 => "[骰子]".to_string(),
+        10 | 15 => "暂不支持该消息类型".to_string(),
         _ => content
             .unwrap_or_default()
             .trim()

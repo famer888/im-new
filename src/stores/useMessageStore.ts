@@ -421,6 +421,7 @@ export const useMessageStore = defineStore('message', () => {
     if (msgType === 5) return '[名片]'
     if (msgType === 7) return '[文件]'
     if (msgType === 12) return '[骰子]'
+    if (msgType === 10 || msgType === 15) return '暂不支持该消息类型'
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
 
