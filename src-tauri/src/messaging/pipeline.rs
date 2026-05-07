@@ -21,7 +21,9 @@ use crate::ws::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
-    #[error("group rel key not cached for {0}; call derive_group_key or cache_group_rel_key first")]
+    #[error(
+        "group rel key not cached for {0}; call derive_group_key or cache_group_rel_key first"
+    )]
     MissingGroupKey(String),
     #[error("friend rel key not cached for {0}; call derive_friend_rel_key first")]
     MissingFriendKey(String),
@@ -65,13 +67,18 @@ pub fn send_group_message(
     let group_id: i64 = group_id_str
         .parse()
         .map_err(|_| SendError::InvalidId(format!("group_id '{}' not numeric", group_id_str)))?;
-    let sender_uid: i64 = sender_uid_str
-        .parse()
-        .map_err(|_| SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str)))?;
+    let sender_uid: i64 = sender_uid_str.parse().map_err(|_| {
+        SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str))
+    })?;
 
-    let rel_key = crypto
-        .get_group_key(group_id_str)
-        .ok_or_else(|| SendError::MissingGroupKey(group_id_str.to_string()))?;
+    let is_functional_set_image = msg_type == 12;
+    let rel_key = if is_functional_set_image {
+        String::new()
+    } else {
+        crypto
+            .get_group_key(group_id_str)
+            .ok_or_else(|| SendError::MissingGroupKey(group_id_str.to_string()))?
+    };
 
     let content_plain = super::encode_content_obj(msg_type, content);
     let attachment_file_key = super::extract_attachment_file_key(content);
@@ -204,12 +211,12 @@ pub fn send_private_message(
     flag: i64,
     snapchat_time: i32,
 ) -> Result<(), SendError> {
-    let friend_uid: i64 = friend_uid_str
-        .parse()
-        .map_err(|_| SendError::InvalidId(format!("friend_uid '{}' not numeric", friend_uid_str)))?;
-    let sender_uid: i64 = sender_uid_str
-        .parse()
-        .map_err(|_| SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str)))?;
+    let friend_uid: i64 = friend_uid_str.parse().map_err(|_| {
+        SendError::InvalidId(format!("friend_uid '{}' not numeric", friend_uid_str))
+    })?;
+    let sender_uid: i64 = sender_uid_str.parse().map_err(|_| {
+        SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str))
+    })?;
 
     // 获取各种终端的 rel_key 及其 version，并转换 version 为 i32
     let friend_app_key = crypto
@@ -226,7 +233,12 @@ pub fn send_private_message(
         .map(|(v, k)| (v as i32, k));
 
     let is_file_helper = friend_uid_str == FILE_HELPER_TARGET_ID;
-    if friend_app_key.is_none() && friend_web_key.is_none() && !is_file_helper {
+    let is_functional_set_image = msg_type == 12;
+    if friend_app_key.is_none()
+        && friend_web_key.is_none()
+        && !is_file_helper
+        && !is_functional_set_image
+    {
         return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));
     }
 

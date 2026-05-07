@@ -607,8 +607,8 @@ export const useMessageStore = defineStore('message', () => {
     const convType = Number(typeRaw || 0)
     const isFileHelperSend = convType === 0 && isFileHelperTargetId(targetId)
 
-    if (msgType === 12 && (convType !== 0 || isFileHelperSend)) {
-      throw new Error('骰子消息暂仅支持单聊')
+    if (msgType === 12 && !((convType === 0 && !isFileHelperSend) || convType === 1)) {
+      throw new Error('骰子消息暂仅支持单聊和群聊')
     }
 
     if (!isTauri()) {
@@ -724,7 +724,7 @@ export const useMessageStore = defineStore('message', () => {
     })
 
     // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。
-    if (convType === 1 && targetId) {
+    if (convType === 1 && targetId && msgType !== 12) {
       try {
         const stepStartedAt = performance.now()
         await ensureGroupRelKey(uid, targetId)
@@ -755,7 +755,7 @@ export const useMessageStore = defineStore('message', () => {
         updateMessageStatus(optimisticId, -1)
         throw e
       }
-    } else if (convType === 0 && targetId) {
+    } else if (convType === 0 && targetId && msgType !== 12) {
       try {
         const stepStartedAt = performance.now()
         await ensureFriendRelKey(uid, targetId)

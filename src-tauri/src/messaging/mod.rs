@@ -348,7 +348,12 @@ pub fn build_send_group_message_req(
     at_uids: Vec<i64>,
     attachment_file_key: Option<&str>,
 ) -> Result<Vec<u8>, CryptoError> {
-    let encrypted = encrypt_with_rel_key(rel_key, content_plain)?;
+    let is_functional_set_image = msg_type == 12;
+    let message_content = if is_functional_set_image {
+        content_plain.to_vec()
+    } else {
+        encrypt_with_rel_key(rel_key, content_plain)?
+    };
     let mut hasher = Md5::new();
     hasher.update(content_plain);
     let content_md5 = format!("{:x}", hasher.finalize());
@@ -357,15 +362,19 @@ pub fn build_send_group_message_req(
         send_uid: sender_uid,
         group_id,
         msg_type,
-        content: encrypted,
+        content: message_content,
         at_uids,
         send_time,
         msg_id: 0,
         send_member: None,
-        // 加密版本：与老 im 群消息一致固定 1。
-        version: 1,
+        // 骰子是旧 im 的功能表情，按明文 SetImageObj 发；普通群消息固定加密版本 1。
+        version: if is_functional_set_image { 0 } else { 1 },
         content_md5,
-        attachment_key: encrypt_attachment_key(rel_key, attachment_file_key)?,
+        attachment_key: if is_functional_set_image {
+            String::new()
+        } else {
+            encrypt_attachment_key(rel_key, attachment_file_key)?
+        },
         group_name: String::new(),
         snapchat_time: 0,
         at_users: Vec::new(),
@@ -447,6 +456,46 @@ pub fn build_send_private_message_req(
     let mut hasher = Md5::new();
     hasher.update(content_plain);
     let content_md5 = format!("{:x}", hasher.finalize());
+
+    if msg_type == 12 {
+        let raw_message_content = || imweb::MessageContent {
+            content: content_plain.to_vec(),
+            attachment_key: String::new(),
+            version: 0,
+        };
+        let one_to_one = imweb::OneToOneMessage {
+            msg_id: 0,
+            send_uid: sender_uid,
+            receive_uid,
+            msg_type,
+            content: content_plain.to_vec(),
+            send_time,
+            version: 0,
+            content_md5,
+            attachment_key: String::new(),
+            send_user: None,
+            snapchat_time,
+            source: 1,
+            app_content: Some(raw_message_content()),
+            web_content: Some(raw_message_content()),
+            myself_app_content: Some(raw_message_content()),
+            myself_web_content: Some(raw_message_content()),
+            group_send: false,
+            channel_type: 0,
+            msg_from: 0,
+            edit: 0,
+            links: Vec::new(),
+            sent_over_time: 0,
+            channel: 0,
+        };
+
+        let req = imweb::OneToOneMessageReq {
+            one_to_one_message: Some(one_to_one),
+            flag,
+        };
+
+        return Ok(req.encode_to_vec());
+    }
 
     let encrypt_content =
         |key_info: Option<(i32, String)>| -> Result<Option<imweb::MessageContent>, CryptoError> {
@@ -549,5 +598,57 @@ mod tests {
 
         let dec = crypto::aes::decrypt_message(&gm.content, rel_key).unwrap();
         assert_eq!(dec, plain);
+    }
+
+    #[test]
+    fn group_dice_is_sent_as_raw_set_image_obj() {
+        let plain = encode_set_image_obj("");
+        let req_bytes = build_send_group_message_req(
+            10086,
+            88,
+            12,
+            &plain,
+            "",
+            1_700_000_000_000,
+            42,
+            vec![],
+            None,
+        )
+        .unwrap();
+
+        let decoded = imweb::SendGroupMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let gm = decoded.group_msg.unwrap();
+        assert_eq!(gm.msg_type, 12);
+        assert_eq!(gm.version, 0);
+        assert_eq!(gm.attachment_key, "");
+        assert_eq!(gm.content, plain);
+    }
+
+    #[test]
+    fn private_dice_does_not_require_encrypted_content_blocks() {
+        let plain = encode_set_image_obj("");
+        let req_bytes = build_send_private_message_req(
+            10086,
+            88,
+            12,
+            &plain,
+            None,
+            None,
+            None,
+            None,
+            1_700_000_000_000,
+            42,
+            0,
+            None,
+        )
+        .unwrap();
+
+        let decoded = imweb::OneToOneMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let msg = decoded.one_to_one_message.unwrap();
+        assert_eq!(msg.msg_type, 12);
+        assert_eq!(msg.version, 0);
+        assert_eq!(msg.content, plain);
+        assert_eq!(msg.app_content.unwrap().content, plain);
+        assert_eq!(msg.web_content.unwrap().version, 0);
     }
 }
