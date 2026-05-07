@@ -316,13 +316,13 @@ function getDiceResultFromContent(content: string | null | undefined): number {
   }
 }
 
-function getDiceFallbackResult(seed: number | string): string {
-  let hash = 0
-  const raw = String(seed)
-  for (const char of raw) {
-    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0
-  }
-  return String((hash % 6) + 1)
+function getDiceReferenceFromContent(content: string | null | undefined): { result: string; refId: string } | null {
+  const raw = String(content ?? '').trim()
+  const [resultText = '', refText = ''] = raw.split('||')
+  const result = Number(resultText)
+  const refId = refText.trim()
+  if (!Number.isFinite(result) || result < 1 || result > 6 || !refId) return null
+  return { result: String(result), refId }
 }
 
 function sanitizeSendExtra(extra?: Record<string, unknown>) {
@@ -603,6 +603,13 @@ export const useMessageStore = defineStore('message', () => {
     const quoteMsg = (sendExtra?.quoteMessage as QuoteMessageInfo) ?? null
     const extraJson = sendExtra && Object.keys(sendExtra).length > 0 ? JSON.stringify(sendExtra) : null
     const { snapchatTime, deleteSeconds } = extractReadBurnMeta(sendExtra)
+    const [typeRaw, targetId = ''] = conversationId.split('_')
+    const convType = Number(typeRaw || 0)
+    const isFileHelperSend = convType === 0 && isFileHelperTargetId(targetId)
+
+    if (msgType === 12 && (convType !== 0 || isFileHelperSend)) {
+      throw new Error('骰子消息暂仅支持单聊')
+    }
 
     if (!isTauri()) {
       const now = Date.now()
@@ -629,9 +636,6 @@ export const useMessageStore = defineStore('message', () => {
       return localMsg
     }
 
-    const [typeRaw, targetId = ''] = conversationId.split('_')
-    const convType = Number(typeRaw || 0)
-    const isFileHelperSend = convType === 0 && isFileHelperTargetId(targetId)
     if (convType === 2) {
       console.clear()
       console.info('[channel] ===== 清空旧日志，开始频道发送调试 =====', {
@@ -959,6 +963,31 @@ export const useMessageStore = defineStore('message', () => {
     }
     const currentList = messageMap.value.get(conversationId) ?? []
     const next = [...currentList]
+    const diceRef = message.msgType === 12 ? getDiceReferenceFromContent(message.content) : null
+    if (diceRef) {
+      const refIndex = next.findIndex((m) => m.id === diceRef.refId || m.customMsgId === diceRef.refId)
+      if (refIndex >= 0) {
+        const previous = next[refIndex]
+        next[refIndex] = {
+          ...previous,
+          content: diceRef.result,
+          status: Math.max(Number(previous.status || 0), Number(message.status || 0), 1),
+          readStatus: Math.max(Number(previous.readStatus || 0), Number(message.readStatus || 0)),
+          sendTime: message.sendTime || previous.sendTime,
+          extra: message.extra ?? previous.extra,
+        }
+        messageMap.value.set(conversationId, next)
+        diceLog('appendMessage merged dice result ref', {
+          conversationId,
+          refId: diceRef.refId,
+          result: diceRef.result,
+          incomingId: message.id,
+          previousId: previous.id,
+          previousCustomMsgId: previous.customMsgId,
+        })
+        return
+      }
+    }
     const existIndex = next.findIndex(
       (m) => m.id === message.id || (m.customMsgId && m.customMsgId === message.customMsgId),
     )
@@ -1248,18 +1277,25 @@ export const useMessageStore = defineStore('message', () => {
     const next = [...list]
     const duplicateIdx = next.findIndex((m, i) => i !== idx && m.id === serverId)
     const duplicate = duplicateIdx >= 0 ? next[duplicateIdx] : null
+    const resultRefIdx = next.findIndex((m, i) => {
+      if (i === idx) return false
+      if (m.msgType !== 12) return false
+      return getDiceReferenceFromContent(m.content)?.refId === serverId
+    })
+    const resultRef = resultRefIdx >= 0 ? getDiceReferenceFromContent(next[resultRefIdx].content) : null
     const duplicateContent = duplicate?.content ?? null
     const current = next[idx]
     const duplicateDiceResult = getDiceResultFromContent(duplicateContent)
     const currentDiceResult = getDiceResultFromContent(current.content)
-    const fallbackDiceResult = getDiceFallbackResult(serverId)
     const nextContent = current.msgType === 12
       ? (
-          duplicateDiceResult > 0
+          resultRef
+            ? resultRef.result
+            : duplicateDiceResult > 0
             ? duplicateContent
             : currentDiceResult > 0
               ? current.content
-              : fallbackDiceResult
+              : current.content
         )
       : (duplicateContent && duplicateContent.length > 0 ? duplicateContent : current.content)
     if (current.msgType === 12 || duplicate?.msgType === 12) {
@@ -1269,6 +1305,7 @@ export const useMessageStore = defineStore('message', () => {
         serverId,
         idx,
         duplicateIdx,
+        resultRefIdx,
         sentOverTime: Number(params.sentOverTime || 0),
         currentId: current.id,
         currentCustomMsgId: current.customMsgId,
@@ -1282,7 +1319,7 @@ export const useMessageStore = defineStore('message', () => {
         duplicateReadStatus: duplicate?.readStatus ?? null,
         duplicateDiceResult,
         currentDiceResult,
-        fallbackDiceResult,
+        resultRef,
         nextContent,
       })
     }
@@ -1318,7 +1355,14 @@ export const useMessageStore = defineStore('message', () => {
     if (duplicateIdx >= 0) {
       next.splice(duplicateIdx, 1)
     }
-    const nextIdx = duplicateIdx >= 0 && duplicateIdx < idx ? idx - 1 : idx
+    const refIdxAfterDuplicate = resultRefIdx >= 0 && duplicateIdx >= 0 && duplicateIdx < resultRefIdx
+      ? resultRefIdx - 1
+      : resultRefIdx
+    if (refIdxAfterDuplicate >= 0 && refIdxAfterDuplicate !== (duplicateIdx >= 0 && duplicateIdx < idx ? idx - 1 : idx)) {
+      next.splice(refIdxAfterDuplicate, 1)
+    }
+    const removedBeforeIdx = Number(duplicateIdx >= 0 && duplicateIdx < idx) + Number(refIdxAfterDuplicate >= 0 && refIdxAfterDuplicate < idx)
+    const nextIdx = idx - removedBeforeIdx
     next[nextIdx] = msg
     messageMap.value.set(params.conversationId, next)
     if (msg.msgType === 12) {
