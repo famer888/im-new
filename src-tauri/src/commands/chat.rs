@@ -2090,6 +2090,16 @@ pub async fn delete_conversation(
 ) -> Result<(), String> {
     db.with_connection(&uid, |conn| {
         conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ?1",
+            rusqlite::params![conversation_id],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM schedule_deletion WHERE conversation_id = ?1",
+            rusqlite::params![conversation_id],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        conn.execute(
             "DELETE FROM conversations WHERE id = ?1",
             rusqlite::params![conversation_id],
         )

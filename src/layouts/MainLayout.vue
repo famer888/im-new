@@ -84,6 +84,8 @@ const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
+const deleteConversationConfirmVisible = ref(false)
+const pendingDeleteConversationId = ref('')
 
 const isInitialized = ref(false)
 const initText = ref('')
@@ -136,6 +138,32 @@ function promptImageOverwrite(filePath: string): Promise<boolean> {
   return new Promise((resolve) => {
     imageOverwriteResolver = resolve
   })
+}
+
+function openDeleteConversationConfirm(conversationId: string) {
+  pendingDeleteConversationId.value = conversationId
+  deleteConversationConfirmVisible.value = true
+}
+
+function cancelDeleteConversation() {
+  pendingDeleteConversationId.value = ''
+}
+
+async function confirmDeleteConversation() {
+  const conversationId = pendingDeleteConversationId.value
+  pendingDeleteConversationId.value = ''
+  if (!conversationId) return
+
+  try {
+    await chatStore.deleteConversation(authStore.uid, conversationId)
+    messageStore.clearConversationMessages(conversationId)
+    if (chatStore.currentConversationId === null) {
+      uiStore.setDetailView('none')
+      uiStore.setRightPanel('none')
+    }
+  } catch (error) {
+    showToast((error as Error)?.message || t('操作失败'), 'error')
+  }
 }
 
 function startInitReloadTimer() {
@@ -1093,7 +1121,7 @@ async function handleContextMenuSelect(key: string) {
         await chatStore.archiveConversation(authStore.uid, convId, !data.isArchived)
         break
       case 'delete':
-        await chatStore.deleteConversation(authStore.uid, convId)
+        openDeleteConversationConfirm(convId)
         break
     }
   }
@@ -1416,6 +1444,13 @@ async function handleForward(targetConvId: string) {
       variant="im"
       :content="$t('确认退出，并重置缓存数据？')"
       @confirm="confirmInitReset"
+    />
+    <ConfirmDialog
+      v-model:visible="deleteConversationConfirmVisible"
+      variant="im"
+      :content="$t('删除聊天后，将同时删除记录。包括聊天中的文件、图片、视频等内容')"
+      @confirm="confirmDeleteConversation"
+      @cancel="cancelDeleteConversation"
     />
   </div>
 </template>
