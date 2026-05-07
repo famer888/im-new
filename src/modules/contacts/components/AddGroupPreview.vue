@@ -6,7 +6,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { groupJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
-import emptyBrandImg from '@/assets/images/login/dock.png'
+import emptyBrandImg from '@/assets/images/logo/dock.png'
 import closeIcon from '@/assets/images/common/close-icon.png'
 
 const props = withDefaults(defineProps<{
@@ -254,7 +254,7 @@ async function handleJoinGroup() {
 }
 
 .empty-brand-icon {
-  width: 160px;
+  width: 140px;
   height: auto;
   display: block;
   border-radius: 8px;

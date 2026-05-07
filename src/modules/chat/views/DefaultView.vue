@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import emptyBrandImg from '@/assets/images/login/dock.png'
+import emptyBrandImg from '@/assets/images/logo/dock.png'
 </script>
 
 <template>
@@ -27,7 +27,7 @@ import emptyBrandImg from '@/assets/images/login/dock.png'
 }
 
 .empty-brand-icon {
-  width: 160px;
+  width: 140px;
   height: auto;
   display: block;
   border-radius: 8px;
