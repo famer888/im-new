@@ -180,7 +180,7 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 5) return `[${t('名片')}]`
   if (message.msgType === 7) return `[${t('文件')}]`
   if (message.msgType === 12) return `[${t('骰子')}]`
-  if (message.msgType === 10 || message.msgType === 15) return t('暂不支持该消息类型')
+  if ([10, 13, 14, 15].includes(message.msgType)) return t('暂不支持该消息类型')
   return raw ? formatDigestText(raw) : ''
 }
 
