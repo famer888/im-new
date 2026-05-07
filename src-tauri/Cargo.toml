@@ -15,6 +15,7 @@ prost-build = "0.13"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+objc2 = "0.6.4"
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-deep-link = "=2.4.7"
 tauri-plugin-updater = "=2.10.0"
