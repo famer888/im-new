@@ -380,8 +380,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function deleteConversation(uid: string, conversationId: string) {
-    if (!isTauri()) return
-    await tauriInvoke('delete_conversation', { uid, conversationId })
+    if (isTauri()) {
+      await tauriInvoke('delete_conversation', { uid, conversationId })
+    }
     conversations.value = conversations.value.filter(c => c.id !== conversationId)
     if (currentConversationId.value === conversationId) {
       currentConversationId.value = null
