@@ -93,8 +93,6 @@ const useOuterTimeOverlay = computed(() => {
     case MessageType.SetImage:
     case MessageType.AnimatedGame:
     case MessageType.Html2:
-    case MessageType.ChatTransfer:
-    case MessageType.ChatTransferResult:
       return true
     default:
       return false
@@ -116,7 +114,7 @@ function getQuoteContentDigest(msgType: number, content: string | null): string 
   if (msgType === MessageType.Location) return '[位置]'
   if (msgType === MessageType.NameCard) return '[名片]'
   if (msgType === MessageType.RedPacket || msgType === MessageType.RedPacketResult) return '暂不支持该消息类型'
-  if (msgType === MessageType.ChatTransfer || msgType === MessageType.ChatTransferResult) return '[转账]'
+  if (msgType === MessageType.ChatTransfer || msgType === MessageType.ChatTransferResult) return '暂不支持该消息类型'
   if (msgType === MessageType.Html2) return '[富文本]'
   return (content || '').slice(0, 60) || '消息'
 }

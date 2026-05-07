@@ -1856,7 +1856,12 @@ function getQuoteDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.File) return '[文件]'
   if (msgType === MessageType.Location) return '[位置]'
   if (msgType === MessageType.NameCard) return '[名片]'
-  if (msgType === MessageType.RedPacket || msgType === MessageType.RedPacketResult) return '暂不支持该消息类型'
+  if (
+    msgType === MessageType.RedPacket ||
+    msgType === MessageType.RedPacketResult ||
+    msgType === MessageType.ChatTransfer ||
+    msgType === MessageType.ChatTransferResult
+  ) return '暂不支持该消息类型'
   return (content || '').slice(0, 80)
 }
 
@@ -1868,7 +1873,12 @@ function getForwardDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.File) return '[文件]'
   if (msgType === MessageType.Location) return '[位置]'
   if (msgType === MessageType.NameCard) return '[名片]'
-  if (msgType === MessageType.RedPacket || msgType === MessageType.RedPacketResult) return '暂不支持该消息类型'
+  if (
+    msgType === MessageType.RedPacket ||
+    msgType === MessageType.RedPacketResult ||
+    msgType === MessageType.ChatTransfer ||
+    msgType === MessageType.ChatTransferResult
+  ) return '暂不支持该消息类型'
   return (content || '').slice(0, 80)
 }
 
