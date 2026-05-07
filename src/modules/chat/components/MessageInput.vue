@@ -984,7 +984,7 @@ function handleEmojiSelect(emoji: string) {
 }
 
 function handleDiceSelect() {
-  if (!isFriend.value || isFileHelperChat.value || showShutupTip.value) return
+  if ((!isFriend.value && !isGroup.value) || isFileHelperChat.value || showShutupTip.value) return
   terminalLog('[dice] picker select', {
     conversationId: chatStore.currentConversationId,
     conversationType: chatStore.currentConversation?.type,
