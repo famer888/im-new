@@ -21,7 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const activeTab = ref<'emoji' | 'sticker'>('emoji')
-const showCustomTab = computed(() => !props.definedHidden && props.chatType !== 'channel')
+const showCustomTab = computed(() => !props.definedHidden && props.chatType === 'friend')
 
 watch(showCustomTab, (visible) => {
   if (!visible) activeTab.value = 'emoji'

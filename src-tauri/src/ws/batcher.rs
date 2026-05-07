@@ -122,6 +122,16 @@ fn set_image_obj_to_legacy_content(obj: imweb::SetImageObj) -> String {
     obj.current_image.to_string()
 }
 
+fn decode_raw_set_image_content(raw: &[u8]) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    imweb::SetImageObj::decode(raw)
+        .ok()
+        .map(set_image_obj_to_legacy_content)
+        .filter(|content| !content.trim().is_empty())
+}
+
 fn dice_result_from_content(content: &str) -> Option<i32> {
     let value = content
         .trim()
@@ -825,6 +835,52 @@ impl MessageBatcher {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        if om.msg_type == 12 {
+            let content = [
+                om.app_content.as_ref().map(|v| v.content.as_slice()),
+                if om.content.is_empty() { None } else { Some(om.content.as_slice()) },
+                om.web_content.as_ref().map(|v| v.content.as_slice()),
+                om.myself_app_content.as_ref().map(|v| v.content.as_slice()),
+                om.myself_web_content.as_ref().map(|v| v.content.as_slice()),
+            ]
+            .into_iter()
+            .flatten()
+            .find_map(decode_raw_set_image_content);
+
+            if let Some(content) = content {
+                warn!(
+                    target: "dice",
+                    "[dice] PRIVATE_MSG_RECEIVED raw SetImageObj parsed sender_uid={} receive_uid={} msg_id={} content='{}'",
+                    om.send_uid,
+                    om.receive_uid,
+                    om.msg_id,
+                    content
+                );
+                return Ok(vec![DecodedMessage {
+                    cmd: cmds::PRIVATE_MSG_RECEIVED,
+                    msg_id: om.msg_id.to_string(),
+                    conversation_id,
+                    sender_id: om.send_uid.to_string(),
+                    msg_type: om.msg_type,
+                    content,
+                    send_time: om.send_time,
+                    status: 1,
+                    read_status: 0,
+                    extra: serde_json::json!({
+                        "receiveUid": om.receive_uid,
+                        "version": om.version,
+                        "snapchatTime": om.snapchat_time,
+                        "deleteSeconds": if om.snapchat_time > 0 { i64::from(om.snapchat_time) * 1000 } else { 0 },
+                        "decryptPending": false,
+                        "friendIdCandidates": candidate_ids,
+                        "cipherHex": primary_cipher_hex,
+                        "cipherCandidates": cipher_candidates,
+                        "attachmentKey": om.attachment_key,
+                    }),
+                }]);
+            }
+        }
 
         let mut decrypted: Result<Vec<u8>, crate::crypto::CryptoError> =
             Err(crate::crypto::CryptoError::KeyNotFound);

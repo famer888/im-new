@@ -191,14 +191,6 @@ fn dice_result_from_content(content: Option<&str>) -> Option<i32> {
     }
 }
 
-fn dice_fallback_result(seed: &str) -> String {
-    let mut hash = 0u32;
-    for ch in seed.chars() {
-        hash = hash.wrapping_mul(31).wrapping_add(ch as u32);
-    }
-    ((hash % 6) + 1).to_string()
-}
-
 fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
     if obj.icon.is_empty() {
         format!("{}*|*|*{}", obj.nick_name, obj.uid)
@@ -507,7 +499,8 @@ pub async fn send_message(
         Err(reason)
     };
 
-    // 按会话类型分流。文本、图片、语音、文件、骰子走 WS 发送链路，其余未实现类型先保持原来的
+    // 按会话类型分流。文本、图片、语音、文件走 WS 发送链路；骰子暂只开放单聊。
+    // 其余未实现类型先保持原来的
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
         (1, 0) => {
@@ -584,7 +577,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (1, 1) | (1, 2) | (1, 7) | (1, 12) => {
+        (1, 1) | (1, 2) | (1, 7) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -631,7 +624,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (2, 1) | (2, 2) | (2, 7) | (2, 12) => {
+        (2, 1) | (2, 2) | (2, 7) => {
             if let Err(e) = pipeline::send_channel_message(
                 &ws_mgr,
                 &crypto,
@@ -649,6 +642,9 @@ pub async fn send_message(
                 );
                 return mark_failed_and_return(e.to_string());
             }
+        }
+        (1, 12) | (2, 12) => {
+            return mark_failed_and_return("dice message is only supported in friend chats".to_string());
         }
         (1, _) => {
             warn!(
@@ -1279,7 +1275,7 @@ pub async fn mark_message_sent(
             } else if local_dice_result.is_some() {
                 local_content.clone()
             } else {
-                Some(dice_fallback_result(&server_id))
+                local_content.clone()
             }
         } else {
             duplicate_content.clone().or_else(|| local_content.clone())
