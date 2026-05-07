@@ -1,4 +1,6 @@
 use tauri::{
+    image::Image,
+    include_image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Manager,
@@ -6,6 +8,9 @@ use tauri::{
 use tracing::info;
 
 const TRAY_ID: &str = "ocs-main-tray";
+const TRAY_ICON: Image<'static> = include_image!("./icons/tray.png");
+#[cfg(target_os = "macos")]
+const MACOS_TRAY_ICON_HEIGHT: f64 = 20.0;
 
 pub struct TrayUnreadState {
     unread_count: std::sync::atomic::AtomicU32,
@@ -43,23 +48,45 @@ fn tray_tooltip(count: u32) -> String {
 #[cfg(target_os = "windows")]
 fn reset_tray_icon(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        if let Some(icon) = app.default_window_icon() {
-            let _ = tray.set_icon(Some(icon.clone()));
-        }
+        let _ = tray.set_icon(Some(TRAY_ICON));
     }
 }
 
 #[cfg(target_os = "windows")]
-fn translucent_tray_icon(app: &AppHandle) -> Option<tauri::image::Image<'static>> {
-    app.default_window_icon().map(|icon| {
-        let mut rgba = icon.rgba().to_vec();
-        for pixel in rgba.chunks_exact_mut(4) {
-            if pixel[3] > 0 {
-                pixel[3] = 24;
-            }
+fn translucent_tray_icon() -> tauri::image::Image<'static> {
+    let mut rgba = TRAY_ICON.rgba().to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        if pixel[3] > 0 {
+            pixel[3] = 24;
         }
-        tauri::image::Image::new_owned(rgba, icon.width(), icon.height())
-    })
+    }
+    tauri::image::Image::new_owned(rgba, TRAY_ICON.width(), TRAY_ICON.height())
+}
+
+#[cfg(target_os = "macos")]
+fn resize_macos_tray_icon<R: tauri::Runtime>(tray: &tauri::tray::TrayIcon<R>) {
+    let _ = tray.with_inner_tray_icon(|inner| {
+        let Some(status_item) = inner.ns_status_item() else {
+            return;
+        };
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return;
+        };
+        let Some(button) = status_item.button(mtm) else {
+            return;
+        };
+        let Some(image) = button.image() else {
+            return;
+        };
+
+        let mut size = image.size();
+        if size.height > 0.0 {
+            size.width *= MACOS_TRAY_ICON_HEIGHT / size.height;
+            size.height = MACOS_TRAY_ICON_HEIGHT;
+            image.setSize(size);
+            button.setImage(Some(&image));
+        }
+    });
 }
 
 pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(), String> {
@@ -139,11 +166,9 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
                 show_normal_icon = !show_normal_icon;
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
                     if show_normal_icon {
-                        if let Some(icon) = app.default_window_icon() {
-                            let _ = tray.set_icon(Some(icon.clone()));
-                        }
-                    } else if let Some(icon) = translucent_tray_icon(&app) {
-                        let _ = tray.set_icon(Some(icon));
+                        let _ = tray.set_icon(Some(TRAY_ICON));
+                    } else {
+                        let _ = tray.set_icon(Some(translucent_tray_icon()));
                     }
                 }
 
@@ -166,8 +191,8 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
-    let _tray = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(app.default_window_icon().unwrap().clone())
+    let tray = TrayIconBuilder::with_id(TRAY_ID)
+        .icon(TRAY_ICON)
         .tooltip("OCS Chat")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -193,6 +218,9 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         })
         .build(app)?;
+
+    #[cfg(target_os = "macos")]
+    resize_macos_tray_icon(&tray);
 
     Ok(())
 }
