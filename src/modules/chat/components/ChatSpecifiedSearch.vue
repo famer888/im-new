@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -17,6 +18,7 @@ const props = defineProps<{
 const searchStore = useSearchStore()
 const authStore = useAuthStore()
 const contactStore = useContactStore()
+const { t } = useI18n()
 
 const info = computed(() => searchStore.searchSpecifiedChatInfo)
 
@@ -46,10 +48,10 @@ function highlightHtml(content: string, q: string): string {
 }
 
 function previewContent(m: Message): string {
-  if (m.msgType === 1) return '[图片]'
-  if (m.msgType === 2) return '[语音]'
-  if (m.msgType === 3) return '[视频]'
-  if (m.msgType === 7) return '[文件]'
+  if (m.msgType === 1) return `[${t('图片')}]`
+  if (m.msgType === 2) return `[${t('语音')}]`
+  if (m.msgType === 3) return `[${t('视频')}]`
+  if (m.msgType === 7) return `[${t('文件')}]`
   return (m.content || '').trim().replace(/\s+/g, ' ')
 }
 
@@ -62,7 +64,7 @@ function avatarForSender(m: Message): { name: string; src: string | null } {
   if (m.senderId === authStore.uid) {
     const self = contactStore.getContact(authStore.uid || '')
     return {
-      name: self?.nickname || '我',
+      name: self?.nickname || t('我'),
       src: self?.avatar ?? null,
     }
   }
@@ -96,7 +98,7 @@ function linkTo(m: Message) {
 <template>
   <div class="search-specified-chat">
     <div class="head-spec">
-      <div class="title">搜索消息的范围</div>
+      <div class="title">{{ t('搜索消息的范围') }}</div>
       <div v-if="info" class="chat-info">
         <TextAvatar
           class="img-head"
@@ -108,7 +110,7 @@ function linkTo(m: Message) {
         />
         <span class="name nowrap">{{ info.name }}</span>
       </div>
-      <div class="title">找到{{ searchStore.chatSearchResults.length || 0 }}条消息</div>
+      <div class="title">{{ t('找到消息数量', { count: searchStore.chatSearchResults.length || 0 }) }}</div>
     </div>
 
     <ul
@@ -141,11 +143,11 @@ function linkTo(m: Message) {
     <!-- 与 im `search-specified-chat.vue`：无关键字 / 无结果 两套插图 -->
     <div v-if="!searchText.trim()" class="search-tip">
       <img class="icon-tip" :src="searchDataImg" alt="" />
-      <span class="tip-msg">搜索消息</span>
+      <span class="tip-msg">{{ t('搜索消息') }}</span>
     </div>
     <div v-else-if="searchText.trim() && searchStore.chatSearchResults.length === 0" class="search-tip">
       <img class="icon-tip" :src="searchNoDataImg" alt="" />
-      <span class="tip-msg">搜索无结果</span>
+      <span class="tip-msg">{{ t('搜索无结果') }}</span>
     </div>
   </div>
 </template>
