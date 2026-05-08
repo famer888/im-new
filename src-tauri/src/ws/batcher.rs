@@ -390,6 +390,22 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::FRIEND_REQ_NUM_PUSH => {
+                match imweb::PushFriendReqNumResp::decode(decoded_payload.as_slice()) {
+                    Ok(resp) => {
+                        let total = resp.friend_req_num.max(0);
+                        let _ = self.app_handle.emit(
+                            "friend:req-num",
+                            serde_json::json!({ "total": total }),
+                        );
+                        info!("FRIEND_REQ_NUM_PUSH emitted total={}", total);
+                    }
+                    Err(e) => {
+                        warn!("decode PushFriendReqNumResp: {}", e);
+                    }
+                }
+                return;
+            }
             // 20601 用户上下线推送（与 im `PushUserOnOrOffLineMessageResp` 一致）
             cmds::USER_ONLINE_STATUS_PUSH => {
                 match imweb::PushUserOnOrOffLineMessageResp::decode(decoded_payload.as_slice()) {

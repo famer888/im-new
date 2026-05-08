@@ -1,13 +1,28 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FriendList from '../components/FriendList.vue'
 import GroupList from '../components/GroupList.vue'
 import ChannelList from '../components/ChannelList.vue'
 import { useUIStore } from '@/stores/useUIStore'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 import addNewIcon from '@/assets/images/headNav/add-new-icon.png'
 
 const { t } = useI18n()
 const uiStore = useUIStore()
+const authStore = useAuthStore()
+const contactStore = useContactStore()
+
+function openFriendExamine() {
+  contactStore.setNewFriendReqTotal(0, String(authStore.uid || ''))
+  uiStore.setDetailView('friend-examine')
+}
+
+onMounted(() => {
+  const uid = String(authStore.uid || '')
+  if (uid) void contactStore.refreshNewFriendReqTotal(uid)
+})
 </script>
 
 <template>
@@ -25,9 +40,12 @@ const uiStore = useUIStore()
     </div>
     -->
 
-    <div class="new-friend" @click="uiStore.setDetailView('friend-examine')">
+    <div class="new-friend" @click="openFriendExamine">
       <img class="new-friend-icon" :src="addNewIcon" alt="new-friend" />
       <span class="new-friend-title">{{ t('新的好友') }}</span>
+      <span v-if="contactStore.newFriendReqTotal > 0" class="new-friend-badge">
+        {{ contactStore.newFriendReqTotal > 99 ? '99+' : contactStore.newFriendReqTotal }}
+      </span>
     </div>
 
     <div class="book-content">
@@ -66,6 +84,7 @@ const uiStore = useUIStore()
   align-items: center;
   padding: 10px 20px 14px;
   cursor: pointer;
+  position: relative;
 }
 
 .new-friend-icon {
@@ -79,6 +98,23 @@ const uiStore = useUIStore()
   font-size: 14px;
   font-weight: 600;
   color: #000;
+}
+
+.new-friend-badge {
+  position: absolute;
+  left: 42px;
+  top: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #ff4d4f;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  transform: translateX(-50%);
 }
 
 .book-content {
