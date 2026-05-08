@@ -29,13 +29,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.85.1
           targets: x86_64-pc-windows-msvc
 
       - name: Install protobuf compiler (Windows)
         run: choco install protoc
 
       - name: Install frontend deps
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
         run: pnpm build
@@ -45,7 +46,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --bundles nsis
+          args: --bundles nsis -- --locked
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
