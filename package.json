@@ -34,7 +34,6 @@
     "@tauri-apps/plugin-fs": "2.4.5",
     "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-shell": "2.3.5",
-    "@tauri-apps/plugin-updater": "2.10.0",
     "crypto-js": "^4.2.0",
     "dayjs": "^1.11.10",
     "dompurify": "^3.0.9",

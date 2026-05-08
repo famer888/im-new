@@ -10,7 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [],
     "security": {
       "dangerousDisableAssetCspModification": [
@@ -52,12 +51,6 @@
     },
     "shell": {
       "open": "(https?://.*)|((/|[A-Za-z]:\\\\\\\\).*(/|\\\\\\\\)image-cache((/|\\\\\\\\).*)?)"
-    },
-    "updater": {
-      "endpoints": [
-        "https://your-server.com/api/update/{{target}}/{{arch}}/{{current_version}}"
-      ],
-      "pubkey": ""
     }
   }
 }
