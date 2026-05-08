@@ -31,7 +31,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.1
           targets: x86_64-pc-windows-msvc
 
       - name: Rust version (CI must be >= 1.80 for time crate)
@@ -41,7 +40,7 @@ jobs:
         run: choco install protoc
 
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       - name: Build frontend
         run: pnpm build
@@ -52,7 +51,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUSTUP_TOOLCHAIN: 1.85.1
         with:
-          args: --bundles nsis -- --locked
+          args: --bundles nsis
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
