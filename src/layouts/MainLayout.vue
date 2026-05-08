@@ -51,7 +51,7 @@ import { ensureFriendRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 
 import { API_CONFIG } from '@/api/config'
 import { getGroupReqList } from '@/api/imBase'
-import emptyBrandImg from '@/assets/images/logo/dock.png'
+import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
 import menuCopy from '@/assets/images/menu/copy.png'
 import menuDelete from '@/assets/images/menu/delete.png'
 import menuSelect from '@/assets/images/menu/select.png'
@@ -1494,10 +1494,9 @@ async function handleForward(targetConvId: string) {
 }
 
 .empty-brand-icon {
-  width: 140px;
+  width: 144px;
   height: auto;
   display: block;
-  border-radius: 8px;
 }
 
 .network-bar {

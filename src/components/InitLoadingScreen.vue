@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import brandIcon from '@/assets/images/logo/dock.png'
+import brandIcon from '@/assets/images/common/defalut-icon.png'
 
 defineProps<{
   visible: boolean
@@ -118,8 +118,8 @@ const { t } = useI18n()
 
 .brand-icon {
   display: block;
-  width: 140px;
-  height: 140px;
+  width: 144px;
+  height: 144px;
   object-fit: contain;
 }
 
