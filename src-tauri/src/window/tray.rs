@@ -1,10 +1,12 @@
 use tauri::{
+    Emitter,
     image::Image,
     include_image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Manager,
 };
+use serde::Serialize;
 use tracing::info;
 
 const TRAY_ID: &str = "ocs-main-tray";
@@ -15,6 +17,11 @@ const MACOS_TRAY_ICON_HEIGHT: f64 = 20.0;
 pub struct TrayUnreadState {
     unread_count: std::sync::atomic::AtomicU32,
     blink_generation: std::sync::atomic::AtomicU64,
+}
+
+#[derive(Clone, Serialize)]
+struct TrayLogoutPayload {
+    quit: bool,
 }
 
 impl TrayUnreadState {
@@ -187,9 +194,11 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(TrayUnreadState::new());
 
-    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let open = MenuItem::with_id(app, "open", "打开 ocs", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let logout = MenuItem::with_id(app, "logout", "注销", true, None::<&str>)?;
+    let quit_logout = MenuItem::with_id(app, "quit_logout", "退出程序并注销", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &settings, &logout, &quit_logout])?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(TRAY_ICON)
@@ -197,8 +206,22 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
+            "open" => {
                 show_first_available_window(app);
+            }
+            "settings" => {
+                show_first_available_window(app);
+                let _ = app.emit("tray:open-settings", ());
+            }
+            "logout" => {
+                info!("Logout requested from tray");
+                show_first_available_window(app);
+                let _ = app.emit("tray:logout", TrayLogoutPayload { quit: false });
+            }
+            "quit_logout" => {
+                info!("Quit and logout requested from tray");
+                show_first_available_window(app);
+                let _ = app.emit("tray:logout", TrayLogoutPayload { quit: true });
             }
             "quit" => {
                 info!("Quit requested from tray");

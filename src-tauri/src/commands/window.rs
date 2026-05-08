@@ -114,3 +114,9 @@ pub async fn update_tray_unread_count(
 ) -> Result<(), String> {
     window::tray::update_unread_count(&app, count, flash.unwrap_or(false))
 }
+
+#[tauri::command]
+pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}

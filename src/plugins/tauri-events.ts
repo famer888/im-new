@@ -57,6 +57,10 @@ interface ForceLogoutPayload {
   kickType?: number
 }
 
+interface TrayLogoutPayload {
+  quit?: boolean
+}
+
 function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): boolean {
   if (!currentUid) return false
 
@@ -80,6 +84,7 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
 let screenshotShortcutBound = false
 let screenshotStarting = false
 let forceLogoutHandling = false
+let trayLogoutHandling = false
 const tauriListenersGlobal = globalThis as typeof globalThis & {
   __OCS_TAURI_LISTENER_GENERATION__?: number
   __OCS_TAURI_LISTENER_UNLISTENS__?: Array<() => void>
@@ -160,6 +165,31 @@ async function flashTrayForIncomingMessage() {
   }
 }
 
+function resetClientStateAfterLogout() {
+  const chatStore = useChatStore()
+  const messageStore = useMessageStore()
+  const contactStore = useContactStore()
+  const groupStore = useGroupStore()
+  const channelStore = useChannelStore()
+  const uiStore = useUIStore()
+  const networkStore = useNetworkStore()
+
+  networkStore.setWsStatus('disconnected')
+  chatStore.enablePersistence('')
+  chatStore.currentConversationId = null
+  chatStore.conversations = []
+  messageStore.clearAllMessageCaches()
+  contactStore.contacts = []
+  contactStore.searchResults = []
+  groupStore.groups = []
+  groupStore.memberMap = new Map()
+  channelStore.channels = []
+  uiStore.setDetailView('none')
+  uiStore.setRightPanel('none')
+  uiStore.setSidebarTab('chats')
+  uiStore.closeSettings()
+}
+
 export async function setupTauriListeners() {
   setupGlobalErrorHandler()
   let groupKeyWarmupPending: Promise<void> | null = null
@@ -232,6 +262,36 @@ export async function setupTauriListeners() {
       .catch((err) => {
         console.warn('[read-burn] delete_message failed:', err)
       })
+  })
+
+  listen('tray:open-settings', async () => {
+    const authStore = useAuthStore()
+    const uiStore = useUIStore()
+
+    if (authStore.isLoggedIn && router.currentRoute.value.path !== '/home') {
+      await router.replace('/home').catch(() => {})
+    }
+    uiStore.openSettings()
+  })
+
+  listen<TrayLogoutPayload>('tray:logout', async (event) => {
+    if (trayLogoutHandling) return
+    trayLogoutHandling = true
+
+    try {
+      const authStore = useAuthStore()
+      resetClientStateAfterLogout()
+      await authStore.logout()
+      if (!isTauri()) {
+        await router.replace('/login').catch(() => {})
+      }
+      if (event.payload?.quit) {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('exit_app')
+      }
+    } finally {
+      trayLogoutHandling = false
+    }
   })
 
   listen<string>('ws:status', (event) => {
@@ -333,12 +393,6 @@ export async function setupTauriListeners() {
     forceLogoutHandling = true
 
     const authStore = useAuthStore()
-    const chatStore = useChatStore()
-    const messageStore = useMessageStore()
-    const contactStore = useContactStore()
-    const groupStore = useGroupStore()
-    const channelStore = useChannelStore()
-    const uiStore = useUIStore()
     const networkStore = useNetworkStore()
 
     console.warn('[auth] force logout received', event.payload)
@@ -350,18 +404,7 @@ export async function setupTauriListeners() {
         console.warn('[auth] disconnect ws after force logout failed:', err)
       })
 
-    chatStore.enablePersistence('')
-    chatStore.currentConversationId = null
-    chatStore.conversations = []
-    messageStore.clearAllMessageCaches()
-    contactStore.contacts = []
-    contactStore.searchResults = []
-    groupStore.groups = []
-    groupStore.memberMap = new Map()
-    channelStore.channels = []
-    uiStore.setDetailView('none')
-    uiStore.setRightPanel('none')
-    uiStore.setSidebarTab('chats')
+    resetClientStateAfterLogout()
 
     try {
       await authStore.logout({ keepHistoryOnLogout: true })
