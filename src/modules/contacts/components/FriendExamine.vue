@@ -32,6 +32,7 @@ const pendingRequests = computed(() => requests.value.filter((req) => req.status
 const recentRequests = computed(() => requests.value.filter((req) => req.status !== 'pending'))
 
 onMounted(() => {
+  contactStore.setNewFriendReqTotal(0, String(authStore.uid || ''))
   loadApplyList()
 })
 

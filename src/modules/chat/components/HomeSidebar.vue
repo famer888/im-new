@@ -105,6 +105,7 @@ const visibleChatUnread = computed(() =>
     )
     .reduce((sum, conv) => sum + Math.max(0, Number(conv.unreadCount || 0)), 0),
 )
+const visibleContactUnread = computed(() => Math.max(0, Number(contactStore.newFriendReqTotal || 0)))
 
 /** 与 im home-left/index.vue 一致：中间列表可左右拖拽改宽 */
 const NAV_BAR_WIDTH = 72
@@ -365,6 +366,9 @@ async function openFileHelper() {
 }
 
 onMounted(() => {
+  const uid = String(authStore.uid || '')
+  contactStore.loadNewFriendReqTotal(uid)
+  if (uid) void contactStore.refreshNewFriendReqTotal(uid)
   updateListWidthMax()
   window.addEventListener('resize', updateListWidthMax)
   document.addEventListener('mousemove', handleListResizeMouseMove)
@@ -416,6 +420,9 @@ onBeforeUnmount(() => {
         </li>
         <li :class="{ active: uiStore.sidebarTab === 'contacts' }" @click="uiStore.setSidebarTab('contacts')">
           <img :src="uiStore.sidebarTab === 'contacts' ? contactsActiveIcon : contactsIcon" alt="contacts" />
+          <span v-if="visibleContactUnread > 0" class="nav-badge">
+            {{ visibleContactUnread > 99 ? '99+' : visibleContactUnread }}
+          </span>
         </li>
         <li :class="{ active: uiStore.sidebarTab === 'transfer' }" @click="openFileHelper">
           <img :src="uiStore.sidebarTab === 'transfer' ? transferActiveIcon : transferIcon" alt="transfer" />

@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getContactsDetail, getContactsList } from '@/api/imBase'
+import { getContactsApplyList, getContactsDetail, getContactsList } from '@/api/imBase'
+
+const NEW_FRIEND_REQ_TOTAL_SUFFIX = '-newFriendReqTotal'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -46,10 +48,52 @@ function assertOk(
 export const useContactStore = defineStore('contact', () => {
   const contacts = ref<Contact[]>([])
   const searchResults = ref<Contact[]>([])
+  const newFriendReqTotal = ref(0)
   const loading = ref(false)
   const loadedDetailIds = new Set<string>()
   const detailRequestMap = new Map<string, Promise<void>>()
   const detailRevisionMap = new Map<string, number>()
+
+  function getNewFriendReqTotalCacheKey(uid: string) {
+    return `${uid}${NEW_FRIEND_REQ_TOTAL_SUFFIX}`
+  }
+
+  function loadNewFriendReqTotal(uid: string) {
+    if (!uid) {
+      newFriendReqTotal.value = 0
+      return
+    }
+    try {
+      const raw = localStorage.getItem(getNewFriendReqTotalCacheKey(uid))
+      const total = Number(raw || 0)
+      newFriendReqTotal.value = Number.isFinite(total) ? Math.max(0, total) : 0
+    } catch {
+      newFriendReqTotal.value = 0
+    }
+  }
+
+  function setNewFriendReqTotal(total: number, uid?: string) {
+    const nextTotal = Math.max(0, Number(total || 0))
+    newFriendReqTotal.value = nextTotal
+    if (!uid) return
+    try {
+      localStorage.setItem(getNewFriendReqTotalCacheKey(uid), String(nextTotal))
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  async function refreshNewFriendReqTotal(uid?: string) {
+    try {
+      const resp = await getContactsApplyList({ version: 0 })
+      const total = Array.isArray((resp as any)?.unRecordList)
+        ? (resp as any).unRecordList.length
+        : 0
+      setNewFriendReqTotal(total, uid)
+    } catch (e) {
+      console.warn('[ContactStore] refresh new friend request total failed:', e)
+    }
+  }
 
   async function loadContacts(uid: string) {
     loading.value = true
@@ -243,7 +287,11 @@ export const useContactStore = defineStore('contact', () => {
   return {
     contacts,
     searchResults,
+    newFriendReqTotal,
     loading,
+    loadNewFriendReqTotal,
+    setNewFriendReqTotal,
+    refreshNewFriendReqTotal,
     loadContacts,
     searchContacts,
     getContact,

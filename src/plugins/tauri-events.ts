@@ -322,6 +322,12 @@ export async function setupTauriListeners() {
     groupStore.applyOnlineStatusUpdates(raw)
   })
 
+  listen<{ total: number }>('friend:req-num', (event) => {
+    const authStore = useAuthStore()
+    const contactStore = useContactStore()
+    contactStore.setNewFriendReqTotal(Number(event.payload?.total || 0), String(authStore.uid || ''))
+  })
+
   listen<ForceLogoutPayload>('auth:force-logout', async (event) => {
     if (forceLogoutHandling) return
     forceLogoutHandling = true
