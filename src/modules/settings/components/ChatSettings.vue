@@ -16,7 +16,7 @@ const messageStore = useMessageStore()
 
 const sendShortcutKeyList = ['Enter', 'Ctrl+Enter'] as const
 const screenshotShortcutText = computed(() => (
-  navigator.platform.toLowerCase().includes('mac') ? 'command + shift + a' : 'ctrl + shift + a'
+  navigator.platform.toLowerCase().includes('mac') ? 'control + shift + a' : 'ctrl + shift + a'
 ))
 const sendShortcutKeyIndex = computed(() => {
   const i = sendShortcutKeyList.indexOf(

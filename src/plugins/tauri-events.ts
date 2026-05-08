@@ -11,6 +11,7 @@ import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
 import { showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
+import { eventBus } from '@/utils/eventBus'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -92,15 +93,10 @@ type TauriListen = <T>(
   handler: (event: TauriEvent<T>) => void | Promise<void>,
 ) => Promise<() => void>
 
-function isMacPlatform(): boolean {
-  const text = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
-  return text.includes('mac')
-}
-
 function isScreenshotShortcut(e: KeyboardEvent): boolean {
   const isA = e.key.toLowerCase() === 'a' || e.code === 'KeyA'
   if (!isA || !e.shiftKey) return false
-  return isMacPlatform() ? e.metaKey : e.ctrlKey
+  return e.ctrlKey
 }
 
 function setupScreenshotShortcut() {
@@ -947,7 +943,9 @@ export async function setupTauriListeners() {
   )
 
   listen<{ filePath: string }>('screenshots-ok', (event) => {
-    console.log('Screenshot saved:', event.payload.filePath)
+    const filePath = String(event.payload?.filePath || '')
+    if (!filePath) return
+    eventBus.emit('editor:drop-file-paths', [filePath])
   })
 
   listen<string>('deep-link', (event) => {
