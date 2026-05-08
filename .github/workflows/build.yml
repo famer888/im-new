@@ -11,6 +11,8 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.1
 
     permissions:
       contents: write
@@ -32,6 +34,9 @@ jobs:
           toolchain: 1.85.1
           targets: x86_64-pc-windows-msvc
 
+      - name: Rust version (CI must be >= 1.80 for time crate)
+        run: rustc -Vv
+
       - name: Install protobuf compiler (Windows)
         run: choco install protoc
 
@@ -45,6 +50,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTUP_TOOLCHAIN: 1.85.1
         with:
           args: --bundles nsis -- --locked
 
