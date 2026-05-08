@@ -6,7 +6,6 @@ mod logger;
 mod messaging;
 mod platform;
 mod proto;
-mod updater;
 mod window;
 mod ws;
 
@@ -18,7 +17,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -86,7 +84,7 @@ pub fn run() {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    builder = builder.decorations(false).transparent(true);
+                    builder = builder.decorations(false);
                 }
 
                 let window = builder.build()?;
