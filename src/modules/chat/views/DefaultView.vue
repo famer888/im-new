@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import emptyBrandImg from '@/assets/images/logo/dock.png'
+import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
 </script>
 
 <template>
@@ -27,9 +27,8 @@ import emptyBrandImg from '@/assets/images/logo/dock.png'
 }
 
 .empty-brand-icon {
-  width: 140px;
+  width: 144px;
   height: auto;
   display: block;
-  border-radius: 8px;
 }
 </style>
