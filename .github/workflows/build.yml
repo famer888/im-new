@@ -11,9 +11,6 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      RUSTUP_TOOLCHAIN: 1.85.1
-
     permissions:
       contents: write
 
@@ -49,7 +46,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUSTUP_TOOLCHAIN: 1.85.1
         with:
           args: --bundles nsis
 
