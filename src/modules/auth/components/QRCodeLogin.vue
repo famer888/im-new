@@ -7,7 +7,7 @@ import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
-import { getAllDomains } from '@/utils/domainPool'
+import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss } from '@/utils/domainPool'
 
 const props = defineProps<{
   loading?: boolean
@@ -34,6 +34,7 @@ const lastLoginInfo = ref<{ icon?: string; name?: string }>({})
 
 const domainList = ref<string[]>([getBaseUrl()])
 const urlIndex = ref(0)
+let qrRequestSeq = 0
 
 // 接收来自 NetworkConfig 检测出的有效域名，合并后切到首个有效域名重新拉取二维码
 watch(() => props.extraDomains, (newDomains) => {
@@ -89,6 +90,27 @@ function inferSessionWsUrl(baseUrl: string): string {
   return normalizeWsUrl(base.replace(/webbiz/gi, 'websession'))
 }
 
+function refreshDomainList() {
+  const base = getBaseUrl()
+  const poolDomains = getAllDomains('webBiz').map(d => d.domain).filter(Boolean)
+  domainList.value = [...new Set([base, ...poolDomains.filter(d => d !== base)])]
+  if (urlIndex.value >= domainList.value.length) {
+    urlIndex.value = Math.max(0, domainList.value.length - 1)
+  }
+}
+
+function retryNextDomain(): boolean {
+  if (urlIndex.value >= domainList.value.length - 1) return false
+  urlIndex.value++
+  qrCodeUrlError.value = false
+  isOutTime.value = false
+  clearTimers()
+  setTimeout(() => {
+    handleGetQrCodeUrl()
+  }, 300)
+  return true
+}
+
 function loadLastLoginInfo() {
   try {
     const stored = localStorage.getItem('login-account-list')
@@ -102,6 +124,7 @@ function loadLastLoginInfo() {
 }
 
 async function handleGetQrCodeUrl() {
+  const requestSeq = ++qrRequestSeq
   clearTimers()
   isLoading.value = true
   qrCodeUrlError.value = false
@@ -109,17 +132,16 @@ async function handleGetQrCodeUrl() {
 
   try {
     const res = await getQrCodeUrl(currentBaseUrl.value)
+    if (requestSeq !== qrRequestSeq) return
     isLoading.value = false
 
     const errCode = Number(res?.commonResult?.errCode || 0)
     if (errCode && errCode !== 200) {
       console.error('[QRCode] Server error:', res.commonResult?.errMsg)
-      qrCodeUrlError.value = true
       isLoading.value = false
       // 与老 im 一致：当前域名失败后切到下一个域名重试
-      if (domainList.value.length > 1) {
-        urlIndex.value++
-      }
+      if (retryNextDomain()) return
+      qrCodeUrlError.value = true
       return
     }
 
@@ -137,20 +159,17 @@ async function handleGetQrCodeUrl() {
         handleIsLoginGet()
       }, 1500)
     } else {
-      qrCodeUrlError.value = true
       // 与老 im 一致：token 无效也尝试切换域名
-      if (domainList.value.length > 1) {
-        urlIndex.value++
-      }
+      if (retryNextDomain()) return
+      qrCodeUrlError.value = true
     }
   } catch (err) {
+    if (requestSeq !== qrRequestSeq) return
     console.error('[QRCode] Failed to get QR code URL:', err)
     isLoading.value = false
-    qrCodeUrlError.value = true
 
-    if (domainList.value.length > 1) {
-      urlIndex.value++
-    }
+    if (retryNextDomain()) return
+    qrCodeUrlError.value = true
   }
 }
 
@@ -217,16 +236,17 @@ function clearTimers() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   getDeviceConfig()
   loadLastLoginInfo()
 
-  // 从缓存预加载可用域名，避免首次启动只有一个兜底域名
-  const poolDomains = getAllDomains('webBiz').map(d => d.domain).filter(Boolean)
-  if (poolDomains.length) {
-    const base = getBaseUrl()
-    domainList.value = [...new Set([base, ...poolDomains.filter(d => d !== base)])]
-  }
+  // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。
+  refreshDomainList()
+  await initDomainPoolFromOss()
+  refreshDomainList()
+  initDomainPoolFromApi()
+    .then(refreshDomainList)
+    .catch(() => {})
 
   handleGetQrCodeUrl()
 })

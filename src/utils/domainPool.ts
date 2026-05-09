@@ -61,6 +61,7 @@ function getOssBizUrls(): string[] {
 
 const DIRECT_FALLBACK_URLS = [
   'https://blo.yimengwh.xyz',
+  'https://openchat-loginv2.evanth.xyz',
   'https://a1.uuds.xyz',
 ]
 
