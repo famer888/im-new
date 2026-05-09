@@ -576,6 +576,27 @@ pub async fn save_base64_image(file_path: String, base64_data: String) -> Result
 }
 
 #[tauri::command]
+pub async fn copy_file_overwrite(source_path: String, target_path: String) -> Result<(), String> {
+    let source = PathBuf::from(&source_path);
+    if !source.is_file() {
+        return Err(format!("source file not found: {}", source_path));
+    }
+
+    let target = PathBuf::from(&target_path);
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create parent dir failed: {}", e))?;
+    }
+
+    tokio::fs::copy(&source, &target)
+        .await
+        .map_err(|e| format!("copy file failed: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn file_exists(path: String) -> Result<bool, String> {
     Ok(tokio::fs::metadata(PathBuf::from(path)).await.is_ok())
 }
