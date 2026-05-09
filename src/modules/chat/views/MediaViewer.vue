@@ -1,17 +1,33 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
+import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
+import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
+import Toast from '@/components/Toast.vue'
+import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
 import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
 import minimizeIcon from '@/assets/windows_control_icons/min-w-30.png'
 import squareIcon from '@/assets/windows_control_icons/max-w-30.png'
 import restoreIcon from '@/assets/windows_control_icons/restore-w-30.png'
 
+const { t } = useI18n()
 const payload = ref<MediaViewerPayload | null>(null)
 const isMaximized = ref(false)
 const rotation = ref(0)
+const menuVisible = ref(false)
+const menuX = ref(0)
+const menuY = ref(0)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+const imageOverwriteVisible = ref(false)
+const imageOverwriteFileName = ref('')
+const imageOverwriteDirectoryName = ref('')
+let imageOverwriteResolver: ((value: boolean) => void) | null = null
 
 function ensureMediaSrc(src: string): string {
   const raw = String(src || '').trim()
@@ -57,6 +73,28 @@ const imageSrc = computed(() => ensureMediaSrc(payload.value?.src || payload.val
 const canOpenWithDefaultApp = computed(() =>
   Boolean(String(payload.value?.filePath || payload.value?.src || '').trim()),
 )
+const localImagePath = computed(() => {
+  const filePath = String(payload.value?.filePath || '').trim()
+  if (filePath) return fileUrlToLocalPath(filePath)
+  const src = String(payload.value?.src || '').trim()
+  if (/^file:/i.test(src)) return fileUrlToLocalPath(src)
+  return ''
+})
+const canOpenDirectory = computed(() => Boolean(localImagePath.value))
+const contextMenuItems = computed<MenuItem[]>(() => {
+  const items: MenuItem[] = [
+    { key: 'copy', label: t('复制') },
+    { key: 'save_as', label: t('另存为') },
+  ]
+  if (canOpenDirectory.value) {
+    items.push({ key: 'open_directory', label: t('打开目录') })
+  }
+  if (canOpenWithDefaultApp.value) {
+    items.push({ key: 'open_default', label: t('使用默认应用打开') })
+  }
+  items.push({ key: 'rotate', label: t('向右旋转') })
+  return items
+})
 
 let unsubscribe: (() => void) | null = null
 let unlistenWindowEvents: Array<() => void> = []
@@ -69,9 +107,174 @@ function currentMediaWindow() {
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   payload.value = nextPayload
   rotation.value = 0
+  menuVisible.value = false
   if (nextPayload?.title) {
     document.title = nextPayload.title
   }
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+}
+
+function pathBaseName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments[segments.length - 1] || filePath
+}
+
+function pathDirectoryName(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter(Boolean)
+  return segments.length > 1 ? segments[segments.length - 2] : pathBaseName(filePath)
+}
+
+function normalizeImageFileName(name: string): string {
+  const cleaned = String(name || 'image')
+    .trim()
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\.[^.]+$/, '') || 'image'
+  return `${cleaned || 'image'}.png`
+}
+
+function suggestedImageFileName(): string {
+  const title = String(payload.value?.title || '').trim()
+  if (title && title !== '图片') return normalizeImageFileName(title)
+  const filePath = String(payload.value?.filePath || '').trim()
+  if (filePath) return normalizeImageFileName(pathBaseName(filePath))
+  const src = String(payload.value?.src || '').trim()
+  if (src && !/^data:/i.test(src)) {
+    try {
+      return normalizeImageFileName(pathBaseName(new URL(src).pathname))
+    } catch {
+      return normalizeImageFileName(pathBaseName(src.split('?')[0] || 'image'))
+    }
+  }
+  return 'image.png'
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('blob read failed'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+function blobToPng(blob: Blob): Promise<Blob> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const src = await blobToDataUrl(blob)
+      const image = new Image()
+      image.onload = () => {
+        const canvas = document.createElement('canvas')
+        const width = image.naturalWidth || image.width
+        const height = image.naturalHeight || image.height
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('canvas context unavailable'))
+          return
+        }
+        ctx.drawImage(image, 0, 0, width, height)
+        canvas.toBlob((pngBlob) => {
+          if (!pngBlob) {
+            reject(new Error('png conversion failed'))
+            return
+          }
+          resolve(pngBlob)
+        }, 'image/png')
+      }
+      image.onerror = () => reject(new Error('image decode failed'))
+      image.src = src
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('png conversion failed'))
+    }
+  })
+}
+
+async function fetchImageAsPngDataUrl(): Promise<string> {
+  const src = imageSrc.value
+  if (!src) throw new Error('image source unavailable')
+  const response = await fetch(src)
+  if (!response.ok) {
+    throw new Error(`image fetch failed: ${response.status}`)
+  }
+  let blob = await response.blob()
+  if ((blob.type || 'image/png') !== 'image/png') {
+    blob = await blobToPng(blob)
+  }
+  return blobToDataUrl(blob)
+}
+
+async function copyImageToClipboard() {
+  const dataUrl = await fetchImageAsPngDataUrl()
+  const dataBase64 = dataUrl.split(',', 2)[1] || ''
+  if (!dataBase64) {
+    throw new Error('image base64 encode failed')
+  }
+
+  if ((window as any).__TAURI_INTERNALS__) {
+    await invoke('write_clipboard_image', { dataBase64 })
+    return
+  }
+
+  const blob = await (await fetch(dataUrl)).blob()
+  const ClipboardItemCtor = window.ClipboardItem
+  if (!ClipboardItemCtor || !navigator.clipboard?.write) {
+    throw new Error('clipboard image write unsupported')
+  }
+  await navigator.clipboard.write([new ClipboardItemCtor({ 'image/png': blob })])
+}
+
+function promptImageOverwrite(filePath: string): Promise<boolean> {
+  if (imageOverwriteResolver) {
+    imageOverwriteResolver(false)
+    imageOverwriteResolver = null
+  }
+
+  imageOverwriteFileName.value = pathBaseName(filePath)
+  imageOverwriteDirectoryName.value = pathDirectoryName(filePath)
+  imageOverwriteVisible.value = true
+
+  return new Promise((resolve) => {
+    imageOverwriteResolver = resolve
+  })
+}
+
+function resolveImageOverwrite(result: boolean) {
+  imageOverwriteVisible.value = false
+  const resolver = imageOverwriteResolver
+  imageOverwriteResolver = null
+  resolver?.(result)
+}
+
+async function saveImageAs() {
+  const dataUrl = await fetchImageAsPngDataUrl()
+  if ((window as any).__TAURI_INTERNALS__) {
+    const { filePath, canceled, needsOverwriteConfirm } =
+      await userSelectPngSavePathWithOverwrite(suggestedImageFileName())
+    if (!filePath || canceled) return
+    const finalPath = filePath.toLowerCase().endsWith('.png') ? filePath : `${filePath}.png`
+    if (needsOverwriteConfirm) {
+      const confirmed = await promptImageOverwrite(finalPath)
+      if (!confirmed) return
+    }
+    const err = await exportBase64ImgToLocal(dataUrl, finalPath)
+    if (err) throw err
+    showToast(t('保存成功'))
+    return
+  }
+
+  const link = document.createElement('a')
+  link.download = suggestedImageFileName()
+  link.href = dataUrl
+  link.click()
+  showToast(t('保存成功'))
 }
 
 function startWindowDrag(e: MouseEvent) {
@@ -147,6 +350,54 @@ function rotateImage() {
   rotation.value += 90
 }
 
+function handleContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  menuX.value = event.clientX
+  menuY.value = event.clientY
+  menuVisible.value = true
+}
+
+async function openImageDirectory() {
+  const path = localImagePath.value
+  if (!path) return
+  await invoke('reveal_file_in_directory', { path })
+}
+
+async function handleMenuSelect(key: string) {
+  try {
+    switch (key) {
+      case 'copy':
+        await copyImageToClipboard()
+        showToast(t('复制成功'))
+        break
+      case 'save_as':
+        await saveImageAs()
+        break
+      case 'open_directory':
+        await openImageDirectory()
+        break
+      case 'open_default':
+        await openWithDefaultApp()
+        break
+      case 'rotate':
+        rotateImage()
+        break
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    if (key === 'copy') {
+      showToast(t('复制失败'), 'error')
+    } else if (key === 'save_as') {
+      showToast(t('保存失败详情', { detail }), 'error')
+    } else if (key === 'open_directory') {
+      showToast(t('打开目录失败详情', { detail }), 'error')
+    } else {
+      console.warn('[media-viewer] context menu action failed:', { key, error })
+    }
+  }
+}
+
 onMounted(async () => {
   applyPayload(mediaViewerState.get())
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
@@ -177,11 +428,13 @@ onUnmounted(() => {
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
   unlistenWindowEvents = []
+  imageOverwriteResolver?.(false)
+  imageOverwriteResolver = null
 })
 </script>
 
 <template>
-  <div class="media-viewer">
+  <div class="media-viewer" @contextmenu="handleContextMenu">
     <div class="media-titlebar">
       <div class="media-drag-layer" @mousedown="startWindowDrag" @dblclick="maximize"></div>
       <span class="media-title">{{ payload?.title || '图片' }}</span>
@@ -250,9 +503,32 @@ onUnmounted(() => {
             d="M10 3.778a6.222 6.222 0 1 0 3.726 11.205l-4.869-4.869v2.208a.889.889 0 0 1-1.778 0V7.968c0-.49.398-.889.89-.889h4.353a.889.889 0 0 1 0 1.778h-2.208l4.87 4.87A6.193 6.193 0 0 0 16.221 10 6.222 6.222 0 0 0 10 3.778ZM2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Z"
           />
         </svg>
-        使用默认应用打开
+        {{ t('使用默认应用打开') }}
       </button>
     </div>
+
+    <ContextMenu
+      v-model:visible="menuVisible"
+      :x="menuX"
+      :y="menuY"
+      :items="contextMenuItems"
+      variant="im"
+      @select="handleMenuSelect"
+    />
+
+    <ImageOverwriteDialog
+      v-model:visible="imageOverwriteVisible"
+      :file-name="imageOverwriteFileName"
+      :directory-name="imageOverwriteDirectoryName"
+      @confirm="resolveImageOverwrite(true)"
+      @cancel="resolveImageOverwrite(false)"
+    />
+
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </div>
 </template>
 

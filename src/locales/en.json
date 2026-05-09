@@ -136,6 +136,8 @@
   "操作数量": "{action} {count}",
   "另存为": "Save as",
   "打开目录": "Open directory",
+  "使用默认应用打开": "Open with default app",
+  "向右旋转": "Rotate right",
   "回复": "Reply",
   "复制消息信息": "Copy message info",
   "对方": "the other side",
