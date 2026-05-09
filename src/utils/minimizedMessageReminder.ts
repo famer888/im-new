@@ -182,15 +182,6 @@ async function shouldShowMinimizedReminder(): Promise<boolean> {
   }
 }
 
-async function requestDockAttention() {
-  try {
-    const { UserAttentionType, getCurrentWindow } = await import('@tauri-apps/api/window')
-    await getCurrentWindow().requestUserAttention(UserAttentionType.Informational)
-  } catch (error) {
-    console.warn('[messageReminder] request user attention failed:', error)
-  }
-}
-
 async function showNotificationWindow(message: any, unreadCount: number) {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
@@ -240,7 +231,6 @@ export async function showMinimizedMessageReminder(rawMessages: Message[] | any[
   if (!(await shouldShowMinimizedReminder())) return
 
   lastReminderAt = now
-  await requestDockAttention()
   const conversationId = String(candidates[0]?.conversationId ?? candidates[0]?.conversation_id ?? '')
   await showNotificationWindow(candidates[0], getConversationUnreadCount(conversationId, candidates))
 }
