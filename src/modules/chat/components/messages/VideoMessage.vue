@@ -291,14 +291,11 @@ async function openMediaWindow(pathOrUrl: string) {
     import('@tauri-apps/api/window') as Promise<any>,
   ])
   const currentWindow = windowApi.getCurrentWindow()
-  const [position, size] = await Promise.all([
+  const position = await (
     typeof currentWindow.outerPosition === 'function'
       ? currentWindow.outerPosition()
-      : currentWindow.innerPosition?.(),
-    typeof currentWindow.outerSize === 'function'
-      ? currentWindow.outerSize()
-      : currentWindow.innerSize?.(),
-  ])
+      : currentWindow.innerPosition?.()
+  )
 
   mediaViewerState.send({
     title: '视频',
@@ -316,8 +313,8 @@ async function openMediaWindow(pathOrUrl: string) {
     title: '视频',
     x: typeof position?.x === 'number' ? Math.round(position.x) : null,
     y: typeof position?.y === 'number' ? Math.round(position.y) : null,
-    width: typeof size?.width === 'number' ? Math.round(size.width) : null,
-    height: typeof size?.height === 'number' ? Math.round(size.height) : null,
+    width: 900,
+    height: 600,
   })
 }
 
