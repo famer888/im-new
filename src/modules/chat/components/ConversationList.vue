@@ -7,7 +7,7 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { ConversationType } from '@/types'
+import { ConversationType, isHiddenMessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
@@ -138,7 +138,7 @@ function showFriendOnlineDot(conv: Conversation): boolean {
 function formatDigestText(digest: string): string {
   const raw = digest.trim()
   if (!raw) return ''
-  if (raw === '暂不支持该消息类型') return t('暂不支持该消息类型')
+  if (raw === '暂不支持该消息类型') return ''
   if (raw.includes('\uFFFD')) return `[${t('名片')}]`
 
   const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子)\]$/)
@@ -172,14 +172,15 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 5) return `[${t('名片')}]`
   if (message.msgType === 7) return `[${t('文件')}]`
   if (message.msgType === 12) return `[${t('骰子')}]`
-  if ([10, 13, 14, 15].includes(message.msgType)) return t('暂不支持该消息类型')
+  if (isHiddenMessageType(message.msgType)) return ''
   return raw ? formatDigestText(raw) : ''
 }
 
 function getLoadedLatestDigest(conv: Conversation): string {
   const loaded = messageStore.getMessages(conv.id)
   if (loaded.length === 0) return ''
-  const latest = loaded[loaded.length - 1]
+  const latest = [...loaded].reverse().find((message) => !isHiddenMessageType(message.msgType))
+  if (!latest) return ''
   const isCurrentConversation = conv.id === chatStore.currentConversationId
   const latestTime = Number(latest.sendTime || 0)
   const convTime = Number(conv.lastMsgTime || 0)
