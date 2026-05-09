@@ -4,6 +4,7 @@ import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
+import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 
 const props = defineProps<{
   message: Message
@@ -248,12 +249,7 @@ async function openPreview() {
       import('@tauri-apps/api/core'),
       import('@tauri-apps/api/window') as Promise<any>,
     ])
-    const currentWindow = windowApi.getCurrentWindow()
-    const position = await (
-      typeof currentWindow.outerPosition === 'function'
-        ? currentWindow.outerPosition()
-        : currentWindow.innerPosition?.()
-    )
+    const bounds = await getMediaWindowBounds(windowApi)
 
     mediaViewerState.send({
       title: '图片',
@@ -266,10 +262,7 @@ async function openPreview() {
 
     await invoke('open_media_window', {
       title: '图片',
-      x: typeof position?.x === 'number' ? Math.round(position.x) : null,
-      y: typeof position?.y === 'number' ? Math.round(position.y) : null,
-      width: 900,
-      height: 600,
+      ...bounds,
     })
   } catch (error) {
     console.warn('[image] open media window failed:', error)

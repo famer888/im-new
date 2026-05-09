@@ -1,6 +1,6 @@
 use std::sync::{Mutex, OnceLock};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl,
+    AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl,
     WebviewWindowBuilder,
 };
 
@@ -29,12 +29,13 @@ pub async fn open_media_window(
     let next_title = title.unwrap_or_else(|| "图片".to_string());
     let next_width = width.unwrap_or(900).max(1);
     let next_height = height.unwrap_or(600).max(1);
-    let min_size = Size::Physical(PhysicalSize::new(600, 500));
+    let window_size = Size::Logical(LogicalSize::new(next_width as f64, next_height as f64));
+    let min_size = Size::Logical(LogicalSize::new(600.0, 500.0));
 
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.set_title(&next_title);
         let _ = window.set_min_size(Some(min_size));
-        let _ = window.set_size(Size::Physical(PhysicalSize::new(next_width, next_height)));
+        let _ = window.set_size(window_size);
         if let (Some(next_x), Some(next_y)) = (x, y) {
             let _ = window.set_position(Position::Physical(PhysicalPosition::new(next_x, next_y)));
         }
@@ -56,7 +57,7 @@ pub async fn open_media_window(
         .visible(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;
-    let _ = window.set_size(Size::Physical(PhysicalSize::new(next_width, next_height)));
+    let _ = window.set_size(window_size);
     if let (Some(next_x), Some(next_y)) = (x, y) {
         let _ = window.set_position(Position::Physical(PhysicalPosition::new(next_x, next_y)));
     } else {
