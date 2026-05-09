@@ -16,8 +16,14 @@ import restoreIcon from '@/assets/windows_control_icons/restore-w-30.png'
 
 const { t } = useI18n()
 const payload = ref<MediaViewerPayload | null>(null)
+const videoRef = ref<HTMLVideoElement | null>(null)
 const isMaximized = ref(false)
 const rotation = ref(0)
+const isVideoPlaying = ref(false)
+const videoCurrentTime = ref(0)
+const videoDuration = ref(0)
+const videoVolume = ref(1)
+const isVideoMuted = ref(false)
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
@@ -80,6 +86,11 @@ const videoSrc = computed(() => {
   return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
 })
 const isVideo = computed(() => payload.value?.mediaType === 'video')
+const videoProgressPercent = computed(() => {
+  if (!videoDuration.value) return 0
+  return Math.min(100, Math.max(0, (videoCurrentTime.value / videoDuration.value) * 100))
+})
+const videoVolumePercent = computed(() => isVideoMuted.value ? 0 : Math.round(videoVolume.value * 100))
 const canOpenWithDefaultApp = computed(() =>
   Boolean(String(payload.value?.filePath || payload.value?.src || '').trim()),
 )
@@ -120,6 +131,7 @@ function currentMediaWindow() {
 }
 
 function applyPayload(nextPayload: MediaViewerPayload | null) {
+  resetVideoState()
   payload.value = nextPayload
   rotation.value = 0
   menuVisible.value = false
@@ -128,6 +140,90 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
   } else if (nextPayload?.mediaType === 'video') {
     document.title = '视频'
   }
+}
+
+function resetVideoState() {
+  const video = videoRef.value
+  if (video) {
+    video.pause()
+    video.removeAttribute('src')
+    video.load()
+  }
+  isVideoPlaying.value = false
+  videoCurrentTime.value = 0
+  videoDuration.value = 0
+  videoVolume.value = 1
+  isVideoMuted.value = false
+}
+
+function formatVideoTime(value: number): string {
+  const seconds = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
+}
+
+function syncVideoState() {
+  const video = videoRef.value
+  if (!video) return
+  videoCurrentTime.value = video.currentTime || 0
+  videoDuration.value = Number.isFinite(video.duration) ? video.duration : 0
+  videoVolume.value = video.volume
+  isVideoMuted.value = video.muted
+  isVideoPlaying.value = !video.paused && !video.ended
+}
+
+async function toggleVideoPlayback() {
+  const video = videoRef.value
+  if (!video) return
+  if (video.paused || video.ended) {
+    try {
+      await video.play()
+    } catch (error) {
+      console.warn('[media-viewer] video play failed:', error)
+    }
+  } else {
+    video.pause()
+  }
+  syncVideoState()
+}
+
+function handleVideoSeek(event: Event) {
+  const video = videoRef.value
+  if (!video || !videoDuration.value) return
+  const next = Number((event.target as HTMLInputElement).value)
+  video.currentTime = (Math.min(100, Math.max(0, next)) / 100) * videoDuration.value
+  syncVideoState()
+}
+
+function toggleVideoMuted() {
+  const video = videoRef.value
+  if (!video) return
+  video.muted = !video.muted
+  if (!video.muted && video.volume === 0) {
+    video.volume = 0.5
+  }
+  syncVideoState()
+}
+
+function handleVideoVolume(event: Event) {
+  const video = videoRef.value
+  if (!video) return
+  const next = Number((event.target as HTMLInputElement).value)
+  video.volume = Math.min(1, Math.max(0, next / 100))
+  video.muted = video.volume === 0
+  syncVideoState()
+}
+
+function toggleVideoFullscreen() {
+  const stage = document.querySelector('.media-stage')
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {})
+    return
+  }
+  stage?.requestFullscreen?.().catch((error) => {
+    console.warn('[media-viewer] request fullscreen failed:', error)
+  })
 }
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
@@ -442,6 +538,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  resetVideoState()
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
   unlistenWindowEvents = []
@@ -486,14 +583,96 @@ onUnmounted(() => {
     <div class="media-stage" :class="{ 'is-video': isVideo }">
       <video
         v-if="videoSrc"
+        ref="videoRef"
         class="media-video"
         :src="videoSrc"
         :poster="payload?.cover"
-        controls
         autoplay
         playsinline
-        @click.stop
+        preload="metadata"
+        @click.stop="toggleVideoPlayback"
+        @loadedmetadata="syncVideoState"
+        @durationchange="syncVideoState"
+        @timeupdate="syncVideoState"
+        @play="syncVideoState"
+        @pause="syncVideoState"
+        @ended="syncVideoState"
+        @volumechange="syncVideoState"
       ></video>
+      <button
+        v-if="videoSrc && !isVideoPlaying"
+        class="video-overlaid-play"
+        type="button"
+        aria-label="Play"
+        @click.stop="toggleVideoPlayback"
+      >
+        <span></span>
+      </button>
+      <div
+        v-if="videoSrc"
+        class="video-controls"
+        @click.stop
+        @contextmenu.stop
+      >
+        <button
+          class="video-control-btn video-play-btn"
+          type="button"
+          :aria-label="isVideoPlaying ? 'Pause' : 'Play'"
+          @click="toggleVideoPlayback"
+        >
+          <span v-if="isVideoPlaying" class="pause-glyph">
+            <i></i>
+            <i></i>
+          </span>
+          <span v-else class="play-glyph"></span>
+        </button>
+        <input
+          class="video-range video-progress"
+          type="range"
+          min="0"
+          max="100"
+          step="0.1"
+          :value="videoProgressPercent"
+          :style="{ '--fill': `${videoProgressPercent}%` }"
+          aria-label="Progress"
+          @input="handleVideoSeek"
+        />
+        <span class="video-time">{{ formatVideoTime(videoCurrentTime) }} / {{ formatVideoTime(videoDuration) }}</span>
+        <button
+          class="video-control-btn video-volume-btn"
+          type="button"
+          :aria-label="isVideoMuted ? 'Unmute' : 'Mute'"
+          @click="toggleVideoMuted"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+            <path v-if="!isVideoMuted && videoVolumePercent > 0" d="M16 8.5c1.2 1.2 1.2 5.8 0 7" />
+            <path v-if="!isVideoMuted && videoVolumePercent > 45" d="M18.5 6c2.4 2.4 2.4 9.6 0 12" />
+            <path v-if="isVideoMuted || videoVolumePercent === 0" d="M17 9l5 5m0-5-5 5" />
+          </svg>
+        </button>
+        <input
+          class="video-range video-volume"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :value="videoVolumePercent"
+          :style="{ '--fill': `${videoVolumePercent}%` }"
+          aria-label="Volume"
+          @input="handleVideoVolume"
+        />
+        <button
+          class="video-control-btn video-fullscreen-btn"
+          type="button"
+          aria-label="Fullscreen"
+          @click="toggleVideoFullscreen"
+        >
+          <svg viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M10 3h3.6l-4 4L11 8.4l4-4V8h2V1h-7v2ZM7 9.6l-4 4V10H1v7h7v-2H4.4l4-4L7 9.6Z" />
+          </svg>
+        </button>
+      </div>
       <div
         v-else-if="imageSrc"
         class="media-image-wrap"
@@ -682,6 +861,10 @@ onUnmounted(() => {
   }
 }
 
+.media-stage:fullscreen {
+  background: rgba(0, 0, 0, 0.82);
+}
+
 .media-image-wrap {
   width: 100%;
   height: 100%;
@@ -704,6 +887,194 @@ onUnmounted(() => {
   max-height: 100vh;
   background: #000;
   outline: none;
+}
+
+.video-overlaid-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 90;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(123, 130, 255, 0.86);
+  color: #fff;
+  cursor: pointer;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.24);
+
+  &:hover {
+    background: rgba(123, 130, 255, 0.96);
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.85);
+    outline-offset: 3px;
+  }
+
+  span {
+    width: 0;
+    height: 0;
+    margin-left: 4px;
+    border-style: solid;
+    border-width: 13px 0 13px 20px;
+    border-color: transparent transparent transparent #fff;
+  }
+}
+
+.video-controls {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(600px, calc(100vw - 48px));
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.82);
+  box-sizing: border-box;
+}
+
+.video-control-btn {
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+
+  &:hover {
+    background: #7b82ff;
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgba(123, 130, 255, 0.85);
+    outline-offset: 2px;
+  }
+
+  svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+}
+
+.video-fullscreen-btn svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.play-glyph {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-style: solid;
+  border-width: 8px 0 8px 12px;
+  border-color: transparent transparent transparent #fff;
+}
+
+.pause-glyph {
+  display: inline-flex;
+  gap: 4px;
+
+  i {
+    display: block;
+    width: 4px;
+    height: 16px;
+    border-radius: 1px;
+    background: #fff;
+  }
+}
+
+.video-range {
+  --fill: 0%;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  flex: 1 1 auto;
+  min-width: 72px;
+
+  &:focus-visible {
+    outline: none;
+  }
+
+  &::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 99px;
+    background: linear-gradient(to right, #7b82ff 0 var(--fill), rgba(255, 255, 255, 0.45) var(--fill) 100%);
+  }
+
+  &::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border: 0;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.38);
+  }
+
+  &::-moz-range-track {
+    height: 4px;
+    border-radius: 99px;
+    background: rgba(255, 255, 255, 0.45);
+  }
+
+  &::-moz-range-progress {
+    height: 4px;
+    border-radius: 99px;
+    background: #7b82ff;
+  }
+
+  &::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 0;
+    border-radius: 50%;
+    background: #fff;
+  }
+}
+
+.video-progress {
+  flex-basis: 280px;
+}
+
+.video-volume {
+  flex: 0 0 84px;
+  min-width: 64px;
+}
+
+.video-time {
+  flex: 0 0 auto;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .bottom-actions {
