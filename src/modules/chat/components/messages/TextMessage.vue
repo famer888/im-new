@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { emojiObj } from '@/utils/emoji'
 import type { Message } from '@/stores/useMessageStore'
@@ -47,7 +47,16 @@ interface MentionCandidate {
   memberId: string
 }
 
+type AliasTarget =
+  | { type: 'member'; context: string; profile: MemberInfoProfile }
+  | { type: 'joined-group' }
+  | { type: 'add-group'; target: AddGroupTarget }
+  | { type: 'missing' }
+
 const GROUP_INVITE_HOSTS = new Set(['55chat.com', '97chat.com', 'ocs.com'])
+const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
+const openingMentionKeys = new Set<string>()
+const resolvingMentionKeys = ref(new Set<string>())
 
 function parseConversationRef(conversationId: string): { type: number; targetId: string } {
   const i = conversationId.indexOf('_')
@@ -285,36 +294,67 @@ async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise
   return Boolean(groupStore.getGroup(groupId))
 }
 
-async function openRemoteAliasTarget(label: string, groupId: string) {
+function aliasTargetCacheKey(label: string, groupId: string): string {
+  return `${groupId}:${label.replace(/^@+/, '').trim()}`
+}
+
+function setMentionResolving(key: string, resolving: boolean) {
+  const next = new Set(resolvingMentionKeys.value)
+  if (resolving) next.add(key)
+  else next.delete(key)
+  resolvingMentionKeys.value = next
+}
+
+async function resolveRemoteAliasTarget(label: string, groupId: string): Promise<AliasTarget> {
   const context = label.replace(/^@+/, '').trim()
-  if (!context) return false
+  if (!context) return { type: 'missing' }
 
   try {
     const resp = await groupOrUserDetail({ fromUid: authStore.uid || 0, context })
     const profile = parseMemberProfile(resp)
     if (profile) {
-      uiStore.openMemberInfo(profile.userId, groupId, [context, profile.nickname], profile)
-      return true
+      return { type: 'member', context, profile }
     }
 
     const groupTarget = parseGroupTargetFromAlias(resp)
     if (groupTarget) {
       if (groupTarget.id === groupId || (await isAlreadyInGroup(groupTarget.id, false))) {
-        eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
-        return true
+        return { type: 'joined-group' }
       }
 
-      uiStore.setAddGroupTarget(groupTarget)
-      uiStore.setRightPanel('none')
-      uiStore.openAddGroupDialog()
-      return true
+      return { type: 'add-group', target: groupTarget }
     }
   } catch (error) {
     console.warn('[TextMessage] resolve alias target failed:', error)
   }
 
-  eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
-  return false
+  return { type: 'missing' }
+}
+
+async function openRemoteAliasTarget(label: string, groupId: string) {
+  const key = aliasTargetCacheKey(label, groupId)
+  let request = aliasTargetCache.get(key)
+  if (!request) {
+    request = resolveRemoteAliasTarget(label, groupId).catch((error) => {
+      aliasTargetCache.delete(key)
+      throw error
+    })
+    aliasTargetCache.set(key, request)
+  }
+
+  const target = await request
+  if (target.type === 'member') {
+    uiStore.openMemberInfo(target.profile.userId, groupId, [target.context, target.profile.nickname], target.profile)
+  } else if (target.type === 'joined-group') {
+    eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
+  } else if (target.type === 'add-group') {
+    uiStore.setAddGroupTarget(target.target)
+    uiStore.setRightPanel('none')
+    uiStore.openAddGroupDialog()
+  } else {
+    aliasTargetCache.delete(key)
+    eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
+  }
 }
 
 const contentSegments = computed<ContentSegment[]>(() => {
@@ -385,29 +425,39 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
   const cleanLabel = segment.text.replace(/^@+/, '').trim()
   if (!cleanLabel || cleanLabel === '所有人' || cleanLabel === '全体成员') return
+  const openingKey = aliasTargetCacheKey(cleanLabel, groupId)
+  if (openingMentionKeys.has(openingKey)) return
+  openingMentionKeys.add(openingKey)
 
-  let members = groupMembers.value
-  let member = segment.memberId
-    ? members.find((item) => item.userId === segment.memberId)
-    : findMentionMember(segment.text, members)
+  try {
+    const members = groupMembers.value
+    const member = segment.memberId
+      ? members.find((item) => item.userId === segment.memberId)
+      : findMentionMember(segment.text, members)
 
-  if (!member && authStore.uid) {
-    try {
-      members = await groupStore.loadMembers(authStore.uid, groupId)
-      member = segment.memberId
-        ? members.find((item) => item.userId === segment.memberId)
-        : findMentionMember(segment.text, members)
-    } catch {
-      // 成员列表加载失败时仍允许按文本兜底打开，与旧 im 的 atClick 交互保持一致。
+    if (!member) {
+      const slowTimer = window.setTimeout(() => {
+        setMentionResolving(openingKey, true)
+      }, 350)
+      try {
+        await openRemoteAliasTarget(cleanLabel, groupId)
+      } finally {
+        window.clearTimeout(slowTimer)
+        setMentionResolving(openingKey, false)
+      }
+      return
     }
-  }
 
-  if (!member) {
-    await openRemoteAliasTarget(cleanLabel, groupId)
-    return
+    uiStore.openMemberInfo(member.userId, groupId, [cleanLabel])
+  } finally {
+    openingMentionKeys.delete(openingKey)
   }
+}
 
-  uiStore.openMemberInfo(member.userId, groupId, [cleanLabel])
+function isAtResolving(segment: Extract<ContentSegment, { type: 'at' }>): boolean {
+  const groupId = messageGroupId.value
+  if (!groupId) return false
+  return resolvingMentionKeys.value.has(aliasTargetCacheKey(segment.text, groupId))
 }
 
 async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegment, { type: 'link' }>) {
@@ -457,7 +507,8 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
       <template v-for="(segment, index) in contentSegments" :key="index">
         <span
           v-if="segment.type === 'at'"
-          class="at-mention"
+          :class="['at-mention', { resolving: isAtResolving(segment) }]"
+          @pointerdown.left.stop.prevent="handleAtClick(segment)"
           @click.stop="handleAtClick(segment)"
         >
           {{ segment.text }}
@@ -512,9 +563,30 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
       display: inline-block;
       cursor: pointer;
       font-weight: normal;
+      position: relative;
 
       &:hover {
         opacity: 0.8;
+      }
+
+      &.resolving {
+        cursor: progress;
+        padding-right: 16px;
+        opacity: 0.75;
+      }
+
+      &.resolving::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        right: 2px;
+        width: 9px;
+        height: 9px;
+        margin-top: -5px;
+        border: 1px solid rgba(51, 105, 254, 0.35);
+        border-top-color: #3369fe;
+        border-radius: 50%;
+        animation: mention-resolving-spin 0.7s linear infinite;
       }
     }
 
@@ -542,5 +614,11 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   display: inline-block;
   position: relative;
   top: 4px;
+}
+
+@keyframes mention-resolving-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
