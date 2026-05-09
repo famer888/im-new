@@ -1,25 +1,33 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 
 const props = defineProps<{
   message: Message
 }>()
 
+const { t } = useI18n()
+
+function translateNoticeText(text: string): string {
+  const translated = t(text)
+  return translated === text ? text : translated
+}
+
 const parsedNotice = computed(() => {
   const content = props.message.content || ''
   if (!content.startsWith('!@#')) {
-    return { prefix: '', text: content }
+    return { prefix: '', text: translateNoticeText(content) }
   }
 
   const endIndex = content.lastIndexOf('!@#')
   if (endIndex <= 0) {
-    return { prefix: '', text: content }
+    return { prefix: '', text: translateNoticeText(content) }
   }
 
   return {
     prefix: content.slice(3, endIndex),
-    text: content.slice(endIndex + 3),
+    text: translateNoticeText(content.slice(endIndex + 3)),
   }
 })
 </script>
