@@ -117,13 +117,13 @@ const contextMenuItems = computed<MenuItem[]>(() => {
       { key: 'save_as', label: t('另存为') },
     )
   }
-  if (canOpenDirectory.value) {
-    items.push({ key: 'open_directory', label: t('打开目录') })
-  }
-  if (canOpenWithDefaultApp.value) {
-    items.push({ key: 'open_default', label: t('使用默认应用打开') })
-  }
   if (!isVideo.value) {
+    if (canOpenDirectory.value) {
+      items.push({ key: 'open_directory', label: t('打开目录') })
+    }
+    if (canOpenWithDefaultApp.value) {
+      items.push({ key: 'open_default', label: t('使用默认应用打开') })
+    }
     items.push({ key: 'rotate', label: t('向右旋转') })
   }
   return items
@@ -491,6 +491,10 @@ function rotateImage() {
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
+  if (contextMenuItems.value.length === 0) {
+    menuVisible.value = false
+    return
+  }
   menuX.value = event.clientX
   menuY.value = event.clientY
   menuVisible.value = true

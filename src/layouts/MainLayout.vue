@@ -841,6 +841,8 @@ function suggestedVideoSaveName(data: Record<string, unknown>): string {
   return `${name}${videoExtFromUrl(source.url)}`
 }
 
+const SAVE_EXTENSION_GUARD = '\u2063\u2063\u2063'
+
 function isMacOS(): boolean {
   return /mac/i.test(navigator.platform || '')
 }
@@ -848,6 +850,17 @@ function isMacOS(): boolean {
 function ensureVideoSaveExtension(filePath: string, extension: string): string {
   const ext = extension.startsWith('.') ? extension : `.${extension}`
   return filePath.toLowerCase().endsWith(ext.toLowerCase()) ? filePath : `${filePath}${ext}`
+}
+
+function addSaveExtensionGuard(fileName: string, extension: string): string {
+  const normalized = ensureVideoSaveExtension(fileName, extension)
+  const lastDotIndex = normalized.lastIndexOf('.')
+  if (lastDotIndex <= 0) return `${normalized}${SAVE_EXTENSION_GUARD}`
+  return `${normalized.slice(0, lastDotIndex)}${SAVE_EXTENSION_GUARD}${normalized.slice(lastDotIndex)}`
+}
+
+function stripSaveExtensionGuard(filePath: string): string {
+  return filePath.split(SAVE_EXTENSION_GUARD).join('')
 }
 
 function isRemoteUrl(url: string): boolean {
@@ -948,7 +961,9 @@ async function saveVideoAs(data: Record<string, unknown>) {
   const { save } = await import('@tauri-apps/plugin-dialog')
   const suggestedName = suggestedVideoSaveName(data)
   const extension = videoExtFromUrl(suggestedName)
-  const defaultFileName = ensureVideoSaveExtension(suggestedName, extension)
+  const defaultFileName = isMacOS()
+    ? addSaveExtensionGuard(suggestedName, extension)
+    : ensureVideoSaveExtension(suggestedName, extension)
   let defaultPath = defaultFileName
   if (isMacOS()) {
     try {
@@ -966,10 +981,17 @@ async function saveVideoAs(data: Record<string, unknown>) {
   })
   if (!selectedPath) return
 
-  const finalPath = ensureVideoSaveExtension(selectedPath, extension)
+  const finalPath = ensureVideoSaveExtension(stripSaveExtensionGuard(selectedPath), extension)
+  if (await tauriFileExists(finalPath)) {
+    const confirmed = await promptImageOverwrite(finalPath)
+    if (!confirmed) return
+  }
   const localPath = await ensureVideoLocalFile(data)
-  const { copyFile } = await import('@tauri-apps/plugin-fs')
-  await copyFile(localPath, finalPath)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('copy_file_overwrite', {
+    sourcePath: localPath,
+    targetPath: finalPath,
+  })
   showToast(t('保存成功'))
 }
 

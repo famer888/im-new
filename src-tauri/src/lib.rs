@@ -163,6 +163,7 @@ pub fn run() {
             commands::file::stop_audio_file,
             commands::file::get_download_progress,
             commands::file::save_base64_image,
+            commands::file::copy_file_overwrite,
             commands::file::file_exists,
             commands::file::reveal_file_in_directory,
             commands::media::open_media_window,
