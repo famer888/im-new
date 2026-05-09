@@ -24,6 +24,7 @@ const videoCurrentTime = ref(0)
 const videoDuration = ref(0)
 const videoVolume = ref(1)
 const isVideoMuted = ref(false)
+const isVideoFullscreen = ref(false)
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
@@ -215,15 +216,44 @@ function handleVideoVolume(event: Event) {
   syncVideoState()
 }
 
-function toggleVideoFullscreen() {
-  const stage = document.querySelector('.media-stage')
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {})
-    return
+async function syncVideoFullscreenState() {
+  const currentWindow = currentMediaWindow()
+  if (currentWindow) {
+    try {
+      isVideoFullscreen.value = await currentWindow.isFullscreen()
+      return
+    } catch {
+      // fallback below
+    }
   }
-  stage?.requestFullscreen?.().catch((error) => {
+  isVideoFullscreen.value = Boolean(document.fullscreenElement)
+}
+
+async function toggleVideoFullscreen() {
+  const currentWindow = currentMediaWindow()
+  if (currentWindow) {
+    try {
+      const nextFullscreen = !(await currentWindow.isFullscreen())
+      await currentWindow.setFullscreen(nextFullscreen)
+      isVideoFullscreen.value = nextFullscreen
+      return
+    } catch (error) {
+      console.warn('[media-viewer] window fullscreen failed:', error)
+    }
+  }
+
+  const stage = document.querySelector<HTMLElement>('.media-stage')
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen()
+    } else {
+      await stage?.requestFullscreen?.()
+    }
+  } catch (error) {
     console.warn('[media-viewer] request fullscreen failed:', error)
-  })
+  } finally {
+    await syncVideoFullscreenState()
+  }
 }
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
@@ -516,29 +546,35 @@ onMounted(async () => {
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
     applyPayload(nextPayload)
   })
+  document.addEventListener('fullscreenchange', syncVideoFullscreenState)
 
   const currentWindow = currentMediaWindow()
   if (!currentWindow) {
     isMaximized.value = false
+    void syncVideoFullscreenState()
     return
   }
 
   await syncMaximizedState()
+  await syncVideoFullscreenState()
   unlistenWindowEvents = await Promise.all([
     currentWindow.onResized(() => {
       void syncMaximizedState()
+      void syncVideoFullscreenState()
     }),
     currentWindow.onMoved(() => {
       void syncMaximizedState()
     }),
     currentWindow.onScaleChanged(() => {
       void syncMaximizedState()
+      void syncVideoFullscreenState()
     }),
   ])
 })
 
 onUnmounted(() => {
   resetVideoState()
+  document.removeEventListener('fullscreenchange', syncVideoFullscreenState)
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
   unlistenWindowEvents = []
