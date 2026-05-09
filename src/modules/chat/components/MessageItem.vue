@@ -288,6 +288,7 @@ onMounted(() => {
               'non-text-bubble-host',
               {
                 'image-like-bubble-host': isImageLikeBubble,
+                'video-bubble-host': message.msgType === MessageType.Video,
                 'name-card-bubble-host': message.msgType === MessageType.NameCard,
               },
             ]"
@@ -450,6 +451,15 @@ onMounted(() => {
 
 .image-like-bubble-host {
   padding-bottom: 25px;
+}
+
+.video-bubble-host {
+  margin-left: 16px;
+
+  .is-self & {
+    margin-left: 0;
+    margin-right: 16px;
+  }
 }
 
 .name-card-bubble-host {
