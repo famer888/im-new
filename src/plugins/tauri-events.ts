@@ -26,6 +26,21 @@ function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
 }
 
+function groupInviteDebug(message: string, data?: Record<string, unknown>) {
+  const payload = data || {}
+  console.warn(`[group-invite-debug][front] ${message}`, payload)
+  if (!isTauri()) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level: 'warn',
+        message: `[group-invite-debug][front] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 
 function getLogoutClearedHistoryAt(uid: string): number {
@@ -742,8 +757,87 @@ export async function setupTauriListeners() {
         }
       }
 
-      messageStore.batchAppendMessages(normalized as Message[])
       const chatStore = useChatStore()
+      const groupStore = useGroupStore()
+      const groupEventMessages = normalized.filter((m: any) => {
+        const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+        const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
+        const source = String(extra?.source || '')
+        return convId.startsWith('1_') && source.includes('group-event')
+      })
+      if (groupEventMessages.length > 0) {
+        groupInviteDebug('msg:batch received group event messages', {
+          count: groupEventMessages.length,
+          items: groupEventMessages.map((m: any) => ({
+            id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
+            conversationId: String(m?.conversationId ?? m?.conversation_id ?? ''),
+            senderId: String(m?.senderId ?? m?.sender_id ?? ''),
+            msgType: Number(m?.msgType ?? m?.msg_type ?? 0),
+            content: String(m?.content ?? '').slice(0, 120),
+            extra: m?.extra ?? null,
+          })),
+          conversationCountBefore: chatStore.conversations.length,
+          groupCountBefore: groupStore.groups.length,
+        })
+      }
+      for (const m of normalized) {
+        const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+        const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
+        const source = String(extra?.source || '')
+        if (!convId.startsWith('1_') || !source.includes('group-event')) continue
+
+        const groupId = String(extra?.groupId || convId.split('_')[1] || '')
+        if (!groupId) continue
+
+        groupInviteDebug('upsert group before append message', {
+          conversationId: convId,
+          groupId,
+          groupName: String(extra?.groupName || ''),
+          existedBefore: Boolean(groupStore.getGroup(groupId)),
+          memberCount: Number(extra?.memberCount || 0),
+        })
+        groupStore.upsertGroup({
+          id: groupId,
+          groupId,
+          name: String(extra?.groupName || groupStore.getGroup(groupId)?.name || groupId),
+          avatar: extra?.groupAvatar || null,
+          memberCount: Number(extra?.memberCount || groupStore.getGroup(groupId)?.memberCount || 0),
+          isMuted: Boolean(extra?.groupMuted || false),
+          updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
+        })
+
+        if (Array.isArray(extra?.members) && extra.members.length > 0) {
+          groupStore.setGroupMembers(groupId, extra.members.map((item: any) => ({
+            groupId,
+            userId: String(item?.userId || ''),
+            nickname: item?.nickname || null,
+            avatar: item?.avatar || null,
+            role: Number(item?.role || 0),
+          })).filter((item: any) => item.userId))
+          groupInviteDebug('set group members before append message', {
+            groupId,
+            count: extra.members.length,
+          })
+        }
+      }
+      messageStore.batchAppendMessages(normalized as Message[])
+      if (groupEventMessages.length > 0) {
+        groupInviteDebug('after batchAppendMessages', {
+          conversationCountAfter: chatStore.conversations.length,
+          groupCountAfter: groupStore.groups.length,
+          conversations: groupEventMessages.map((m: any) => {
+            const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+            const conv = chatStore.conversations.find((item) => item.id === convId)
+            return {
+              conversationId: convId,
+              exists: Boolean(conv),
+              targetId: conv?.targetId || null,
+              lastMsgDigest: conv?.lastMsgDigest || null,
+              lastMsgTime: conv?.lastMsgTime || null,
+            }
+          }),
+        })
+      }
       const activeConversationId = chatStore.currentConversationId
       const hasIncomingMessageForTray = Boolean(
         currentUid

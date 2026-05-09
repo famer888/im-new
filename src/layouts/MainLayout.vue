@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
 import {
-  GROUP_NOTIFICATION_TARGET_ID,
   useChatStore,
   isFileHelperTargetId,
   type Conversation,
@@ -26,7 +25,6 @@ import AddGroupPreview from '@/modules/contacts/components/AddGroupPreview.vue'
 import GroupDetail from '@/modules/groups/views/GroupDetail.vue'
 import ChannelDetail from '@/modules/channels/views/ChannelDetail.vue'
 import RightPanel from '@/modules/chat/components/panels/RightPanel.vue'
-import GroupInvitation from '@/modules/groups/views/GroupInvitation.vue'
 
 import SettingsDialog from '@/modules/settings/views/SettingsDialog.vue'
 import AddContactDialog from '@/modules/contacts/components/AddContactDialog.vue'
@@ -50,7 +48,6 @@ import { eventBus } from '@/utils/eventBus'
 import { ensureFriendRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 
 import { API_CONFIG } from '@/api/config'
-import { getGroupReqList } from '@/api/imBase'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
 import menuCopy from '@/assets/images/menu/copy.png'
 import menuDelete from '@/assets/images/menu/delete.png'
@@ -195,7 +192,6 @@ function setFirstInitProgress(friend: number, chat: number) {
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return true
-  if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
   if (conv.type === ConversationType.Friend) return Boolean(contactStore.getContact(conv.targetId))
   if (conv.type === ConversationType.Group) return Boolean(groupStore.getGroup(conv.targetId))
   if (conv.type === ConversationType.Channel) return Boolean(channelStore.getChannel(conv.targetId))
@@ -277,7 +273,7 @@ onMounted(async () => {
       // Bootstrap: if no real conversations exist, seed from contacts/groups
       // (mirrors old im project's behavior of building the chat list from synced data)
       const hasRealConversations = chatStore.conversations.some(
-        (c) => !isFileHelperTargetId(c.targetId) && c.targetId !== GROUP_NOTIFICATION_TARGET_ID,
+        (c) => !isFileHelperTargetId(c.targetId) && isConversationInCurrentRelations(c),
       )
       if (!hasRealConversations && !skipBootstrapAfterLogoutClear) {
         for (const contact of contactStore.contacts) {
@@ -334,7 +330,6 @@ onMounted(async () => {
         console.warn('[ws] connect failed:', err)
       }
 
-      loadGroupNotificationPreview()
     }
 
     setInitText(t('完成'))
@@ -421,29 +416,6 @@ async function confirmInitReset() {
   await router.replace('/login')
 }
 
-async function loadGroupNotificationPreview() {
-  try {
-    const res = await getGroupReqList({ pageNum: 1, pageSize: 100 })
-    const items = res?.groupReqs || []
-    if (items.length > 0) {
-      const latest = items[0]
-      const pendingCount = items.filter((i: any) => !i.groupReqStatus).length
-      chatStore.updateGroupNotificationConv(
-        latest.msg
-          || (latest.groupName
-            ? t('群通知条目摘要', { name: String(latest.groupName) })
-            : t('群通知')),
-        Number(latest.updateTime || latest.createTime || 0),
-        pendingCount,
-      )
-    } else {
-      chatStore.removeGroupNotificationConversation()
-    }
-  } catch {
-    /* silent */
-  }
-}
-
 const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?? '')
 
 /** 传输助手会话仅在侧栏「传输」选中时显示聊天窗，防止通讯录/消息下误显 */
@@ -453,6 +425,48 @@ const showChatWindow = computed(() => {
   if (isFileHelper && uiStore.sidebarTab !== 'transfer') return false
   return true
 })
+
+const fallbackChatConversation = computed(() => {
+  if (uiStore.sidebarTab !== 'chats') return null
+  return chatStore.conversations.find((conv) => {
+    if (conv.isArchived !== uiStore.chatArchiveListShow) return false
+    if (isFileHelperTargetId(conv.targetId)) return false
+    return isConversationInCurrentRelations(conv)
+  }) ?? null
+})
+
+function recoverBlankChatSelection() {
+  if (uiStore.sidebarTab !== 'chats') return
+  if (uiStore.detailView !== 'chat' && uiStore.detailView !== 'none') return
+  if (chatStore.currentConversationId) return
+
+  const conv = fallbackChatConversation.value
+  if (!conv) return
+
+  console.warn('[main-layout] recover blank chat selection', {
+    id: conv.id,
+    type: conv.type,
+    targetId: conv.targetId,
+    detailBefore: uiStore.detailView,
+    archiveList: uiStore.chatArchiveListShow,
+  })
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
+}
+
+watch(
+  [
+    () => uiStore.sidebarTab,
+    () => uiStore.detailView,
+    () => uiStore.chatArchiveListShow,
+    () => chatStore.currentConversationId,
+    () => chatStore.conversations,
+    fallbackChatConversation,
+  ],
+  recoverBlankChatSelection,
+  { deep: true, immediate: true },
+)
 
 const inviteExistingMemberIds = computed(() => {
   const members = groupStore.getMembers(uiStore.inviteFriendGroupId)
@@ -1348,9 +1362,6 @@ async function handleForward(targetConvId: string) {
         </template>
         <template v-else-if="uiStore.detailView === 'add-group'">
           <AddGroupPreview />
-        </template>
-        <template v-else-if="uiStore.detailView === 'group-invitation'">
-          <GroupInvitation />
         </template>
         <template v-else>
           <div class="default-content">

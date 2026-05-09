@@ -329,6 +329,23 @@ impl MessageBatcher {
                 payload.len()
             );
         }
+        if matches!(
+            cmd,
+            cmds::GROUP_MSG_SENT
+                | cmds::GROUP_MSG_RECEIVED
+                | cmds::GROUP_REQ_NUM_PUSH
+                | cmds::GROUP_REQ_MSG_PUSH
+                | cmds::GROUP_READ_RECEIPT_PUSH
+                | cmds::GROUP_EVENT_PUSH
+        ) {
+            info!(
+                "[group-invite-debug][rust] WS frame received cmd={} ({}) encrypted={} payload_len={}",
+                cmd,
+                cmds::cmd_name(cmd),
+                is_encrypted,
+                payload.len()
+            );
+        }
 
         let decoded_payload = if is_encrypted == 0x01 {
             match crypto::aes::decrypt_transport(payload, &self.aes_key) {
@@ -341,6 +358,22 @@ impl MessageBatcher {
         } else {
             payload.to_vec()
         };
+        if matches!(
+            cmd,
+            cmds::GROUP_MSG_SENT
+                | cmds::GROUP_MSG_RECEIVED
+                | cmds::GROUP_REQ_NUM_PUSH
+                | cmds::GROUP_REQ_MSG_PUSH
+                | cmds::GROUP_READ_RECEIPT_PUSH
+                | cmds::GROUP_EVENT_PUSH
+        ) {
+            info!(
+                "[group-invite-debug][rust] WS frame decrypted cmd={} ({}) decoded_payload_len={}",
+                cmd,
+                cmds::cmd_name(cmd),
+                decoded_payload.len()
+            );
+        }
 
         match cmd {
             cmds::HEARTBEAT_RESP => {
@@ -485,14 +518,76 @@ impl MessageBatcher {
                 }
                 return;
             }
+            // 20701 群事件：邀请入群、成员加入/退出、群信息变更等。
+            // 老 im 会把其中的 groupReqEventMsgDto 写成群内系统提示，例如
+            // “你邀请 185... 加入群聊”。这里转成 msgType=8 的系统消息走同一条 msg:batch 链路。
+            cmds::GROUP_EVENT_PUSH => {
+                match self.decode_group_event_push(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        info!("GROUP_EVENT_PUSH decoded system messages count={}", msgs.len());
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("decode GROUP_EVENT_PUSH failed: {}", e);
+                    }
+                }
+                return;
+            }
             cmds::KEY_PAIR_CHANGE_PUSH => {
                 if let Err(e) = self.handle_key_pair_change(&decoded_payload) {
                     warn!("decode KEY_PAIR_CHANGE_PUSH failed: {}", e);
                 }
                 return;
             }
-            // 这些命令不是聊天正文，不进消息列表，避免干扰日志与 UI。
-            cmds::GROUP_REQ_NUM_PUSH | cmds::GROUP_REQ_MSG_PUSH | cmds::LOGIN_RESP => {
+            // 20401/20402 是“群通知/入群申请”入口；当前先按老 im 直接进群的体验处理，
+            // 不再 emit 到前端生成单独的“群通知”会话。
+            cmds::GROUP_REQ_NUM_PUSH => {
+                match self.decode_group_req_num_push(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        info!(
+                            "[group-invite-debug][rust] GROUP_REQ_NUM_PUSH converted system messages count={}",
+                            msgs.len()
+                        );
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[group-invite-debug][rust] decode GROUP_REQ_NUM_PUSH failed: {}", e);
+                    }
+                }
+                return;
+            }
+            cmds::GROUP_REQ_MSG_PUSH => {
+                match self.decode_group_req_msg_push(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        info!(
+                            "[group-invite-debug][rust] GROUP_REQ_MSG_PUSH converted system messages count={}",
+                            msgs.len()
+                        );
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[group-invite-debug][rust] decode GROUP_REQ_MSG_PUSH failed: {}", e);
+                    }
+                }
+                return;
+            }
+            // 登录回执不是聊天正文，不进消息列表，避免干扰日志与 UI。
+            cmds::LOGIN_RESP => {
                 return;
             }
             // 其余命令先保留老逻辑，走批处理（后续补上对应 proto 解码）。
@@ -722,6 +817,175 @@ impl MessageBatcher {
             });
         }
         Ok(out)
+    }
+
+    fn decode_group_event_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushGroupEventMessage::decode(payload)
+            .map_err(|e| format!("decode PushGroupEventMessage: {}", e))?;
+        info!(
+            "[group-invite-debug][rust] GROUP_EVENT_PUSH decoded raw req_events={} update_events={}",
+            resp.group_req_event_msg_dto.len(),
+            resp.group_update_event_msg_dto.len()
+        );
+        let mut out = Vec::new();
+
+        for item in resp.group_req_event_msg_dto {
+            let Some(common) = item.common_msg_dto.as_ref() else {
+                warn!(
+                    "[group-invite-debug][rust] skip req event: missing common from_uid={} receive_uid={} req_type={} req_status={}",
+                    item.from_uid, item.receive_uid, item.group_req_type, item.group_req_status
+                );
+                continue;
+            };
+            let Some(group) = common.group_base_info.as_ref() else {
+                warn!(
+                    "[group-invite-debug][rust] skip req event: missing group msg_id={} from_uid={} receive_uid={} common_msg={}",
+                    common.msg_id, item.from_uid, item.receive_uid, common.msg
+                );
+                continue;
+            };
+            if group.group_id <= 0 || common.msg_id <= 0 {
+                warn!(
+                    "[group-invite-debug][rust] skip req event: invalid ids group_id={} msg_id={} from_uid={} receive_uid={}",
+                    group.group_id, common.msg_id, item.from_uid, item.receive_uid
+                );
+                continue;
+            }
+
+            let content = group_event_content(&item, common);
+            if content.trim().is_empty() {
+                warn!(
+                    "[group-invite-debug][rust] skip req event: empty content group_id={} msg_id={} from_uid={} receive_uid={}",
+                    group.group_id, common.msg_id, item.from_uid, item.receive_uid
+                );
+                continue;
+            }
+
+            info!(
+                "[group-invite-debug][rust] emit req event conv=1_{} msg_id={} from_uid={} receive_uid={} req_type={} req_status={} group_name={} content={}",
+                group.group_id,
+                common.msg_id,
+                item.from_uid,
+                item.receive_uid,
+                item.group_req_type,
+                item.group_req_status,
+                group.group_name,
+                content
+            );
+            out.push(DecodedMessage {
+                cmd: cmds::GROUP_EVENT_PUSH,
+                msg_id: common.msg_id.to_string(),
+                conversation_id: format!("1_{}", group.group_id),
+                sender_id: item.from_uid.to_string(),
+                msg_type: 8,
+                content,
+                send_time: normalize_timestamp(common.update_time),
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "group-event",
+                    "groupId": group.group_id.to_string(),
+                    "groupName": group.group_name,
+                    "groupAvatar": group.pic,
+                    "groupMuted": group.group_shutup,
+                    "memberCount": item.group_member.len(),
+                    "members": item.group_member.iter().map(group_member_to_json).collect::<Vec<_>>(),
+                    "groupReqType": item.group_req_type,
+                    "groupReqStatus": item.group_req_status,
+                    "eventType": common.even_type,
+                    "groupMsgType": common.msg_type,
+                    "receiveUid": item.receive_uid.to_string(),
+                    "fromUid": item.from_uid.to_string(),
+                    "checkUid": item.check_uid.to_string(),
+                }),
+            });
+        }
+
+        for item in resp.group_update_event_msg_dto {
+            let Some(common) = item.common_msg_dto.as_ref() else {
+                warn!(
+                    "[group-invite-debug][rust] skip update event: missing common from_uid={} handle_type={}",
+                    item.from_uid, item.handle_type
+                );
+                continue;
+            };
+            let Some(group) = common.group_base_info.as_ref() else {
+                warn!(
+                    "[group-invite-debug][rust] skip update event: missing group msg_id={} from_uid={} common_msg={}",
+                    common.msg_id, item.from_uid, common.msg
+                );
+                continue;
+            };
+            if group.group_id <= 0 || common.msg_id <= 0 || common.msg.trim().is_empty() {
+                warn!(
+                    "[group-invite-debug][rust] skip update event: invalid/empty group_id={} msg_id={} from_uid={} handle_type={} common_msg={}",
+                    group.group_id, common.msg_id, item.from_uid, item.handle_type, common.msg
+                );
+                continue;
+            }
+
+            info!(
+                "[group-invite-debug][rust] emit update event conv=1_{} msg_id={} from_uid={} handle_type={} group_name={} content={}",
+                group.group_id,
+                common.msg_id,
+                item.from_uid,
+                item.handle_type,
+                group.group_name,
+                common.msg.trim()
+            );
+            out.push(DecodedMessage {
+                cmd: cmds::GROUP_EVENT_PUSH,
+                msg_id: common.msg_id.to_string(),
+                conversation_id: format!("1_{}", group.group_id),
+                sender_id: item.from_uid.to_string(),
+                msg_type: 8,
+                content: common.msg.trim().to_string(),
+                send_time: normalize_timestamp(common.update_time),
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "group-update-event",
+                    "groupId": group.group_id.to_string(),
+                    "groupName": group.group_name,
+                    "groupAvatar": group.pic,
+                    "groupMuted": group.group_shutup,
+                    "memberCount": item.group_member.len(),
+                    "members": item.group_member.iter().map(group_member_to_json).collect::<Vec<_>>(),
+                    "eventType": common.even_type,
+                    "groupMsgType": common.msg_type,
+                    "handleType": item.handle_type,
+                    "fromUid": item.from_uid.to_string(),
+                }),
+            });
+        }
+
+        Ok(out)
+    }
+
+    fn decode_group_req_num_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushGroupReqNumResp::decode(payload)
+            .map_err(|e| format!("decode PushGroupReqNumResp: {}", e))?;
+        let Some(item) = resp.group_req_msg.as_ref() else {
+            info!("[group-invite-debug][rust] GROUP_REQ_NUM_PUSH empty group_req_msg");
+            return Ok(Vec::new());
+        };
+        Ok(group_req_items_to_system_messages(
+            cmds::GROUP_REQ_NUM_PUSH,
+            std::slice::from_ref(item),
+        ))
+    }
+
+    fn decode_group_req_msg_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushGroupReqMessageResp::decode(payload)
+            .map_err(|e| format!("decode PushGroupReqMessageResp: {}", e))?;
+        info!(
+            "[group-invite-debug][rust] GROUP_REQ_MSG_PUSH decoded items={}",
+            resp.group_req_msg.len()
+        );
+        Ok(group_req_items_to_system_messages(
+            cmds::GROUP_REQ_MSG_PUSH,
+            resp.group_req_msg.as_slice(),
+        ))
     }
 
     fn decode_private_msg_received(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
@@ -1462,6 +1726,214 @@ impl MessageBatcher {
         }
         Ok(())
     }
+}
+
+fn normalize_timestamp(ts: i64) -> i64 {
+    if ts > 0 {
+        ts
+    } else {
+        chrono::Utc::now().timestamp_millis()
+    }
+}
+
+fn group_event_content(item: &imweb::GroupReqEventMsgDto, common: &imweb::CommonMsgDto) -> String {
+    let raw = common.msg.trim();
+    if !raw.is_empty() {
+        return raw.to_string();
+    }
+
+    if let Some(notice) = item.group_notice_msg_dto.as_ref() {
+        let notice_msg = notice.notice_msg.trim();
+        if !notice_msg.is_empty() {
+            return notice_msg.to_string();
+        }
+    }
+
+    let actor = if item.from_uid > 0 {
+        item.from_uid.to_string()
+    } else {
+        String::new()
+    };
+
+    let names = item
+        .group_member
+        .iter()
+        .filter_map(|member| member.user.as_ref())
+        .map(|user| {
+            let nick = user.nick_name.trim();
+            if nick.is_empty() {
+                user.uid.to_string()
+            } else {
+                nick.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("，");
+
+    let invited = if names.is_empty() {
+        "你".to_string()
+    } else {
+        names
+    };
+
+    match (item.group_req_type, item.group_req_status) {
+        (1 | 3, 0 | 1) => {
+            if actor.is_empty() {
+                format!("邀请{}加入群聊", invited)
+            } else {
+                format!("{} 邀请{}加入群聊", actor, invited)
+            }
+        }
+        (2 | 4, 0 | 1) => format!("{}通过扫描二维码加入了群聊", invited),
+        (14, 0 | 1) => format!("{}通过群链接加入了群聊", invited),
+        (15, 0 | 1) => format!("{}通过群别名加入了群聊", invited),
+        (6, _) => format!("{}被移出群聊", invited),
+        (7, _) => format!("{}退出群聊", invited),
+        (_, 2) => format!("{}拒绝加入群聊", invited),
+        _ => "群聊事件".to_string(),
+    }
+}
+
+fn group_member_to_json(member: &imweb::GroupMemberBase) -> serde_json::Value {
+    let user = member.user.as_ref();
+    serde_json::json!({
+        "groupId": member.group_id.to_string(),
+        "userId": user.map(|u| u.uid.to_string()).unwrap_or_default(),
+        "nickname": user.map(|u| u.nick_name.clone()).unwrap_or_default(),
+        "avatar": user.map(|u| u.icon.clone()).unwrap_or_default(),
+        "role": member.r#type,
+    })
+}
+
+fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto]) -> Vec<DecodedMessage> {
+    let mut out = Vec::new();
+    for item in items {
+        info!(
+            "[group-invite-debug][rust] GROUP_REQ item group_id={} group_name={} send_uid={} receive_uid={} req_id={} req_type={} req_status={} unread={} msg={}",
+            item.group_id,
+            item.group_name,
+            item.send_uid,
+            item.receive_uid,
+            item.group_req_id,
+            item.group_req_type,
+            item.group_req_status,
+            item.un_read_num,
+            item.msg
+        );
+
+        if item.group_id <= 0 {
+            warn!(
+                "[group-invite-debug][rust] skip GROUP_REQ item invalid group_id={} req_id={}",
+                item.group_id, item.group_req_id
+            );
+            continue;
+        }
+
+        let content = group_req_notice_content(item);
+        if content.trim().is_empty() {
+            info!(
+                "[group-invite-debug][rust] skip GROUP_REQ item empty notice group_id={} req_id={} req_type={}",
+                item.group_id, item.group_req_id, item.group_req_type
+            );
+            continue;
+        }
+
+        let msg_id = if item.group_req_id > 0 {
+            item.group_req_id.to_string()
+        } else if !item.r_id.trim().is_empty() {
+            item.r_id.trim().to_string()
+        } else {
+            format!(
+                "group-req-{}-{}-{}-{}",
+                item.group_id,
+                item.send_uid,
+                item.receive_uid,
+                normalize_timestamp(item.update_time)
+            )
+        };
+        let group_member = item.group_member.as_ref().map(group_member_to_json);
+        let member_count = if group_member.is_some() { 1 } else { 0 };
+
+        info!(
+            "[group-invite-debug][rust] emit GROUP_REQ as group notice conv=1_{} msg_id={} content={}",
+            item.group_id, msg_id, content
+        );
+        out.push(DecodedMessage {
+            cmd,
+            msg_id,
+            conversation_id: format!("1_{}", item.group_id),
+            sender_id: item.send_uid.to_string(),
+            msg_type: 8,
+            content,
+            send_time: normalize_timestamp(item.update_time),
+            status: 1,
+            read_status: 0,
+            extra: serde_json::json!({
+                "source": "group-event-req",
+                "groupId": item.group_id.to_string(),
+                "groupName": item.group_name,
+                "groupAvatar": item.pic,
+                "groupMuted": item.group_shutup,
+                "memberCount": member_count,
+                "members": group_member.into_iter().collect::<Vec<_>>(),
+                "groupReqId": item.group_req_id,
+                "groupReqType": item.group_req_type,
+                "groupReqStatus": item.group_req_status,
+                "sendUid": item.send_uid.to_string(),
+                "receiveUid": item.receive_uid.to_string(),
+                "checkUserType": item.check_user_type,
+                "handleType": item.handle_type,
+                "unReadNum": item.un_read_num,
+            }),
+        });
+    }
+    out
+}
+
+fn group_req_notice_content(item: &imweb::GroupReqMsgDto) -> String {
+    let raw = item.msg.trim();
+    if !raw.is_empty() {
+        return raw.to_string();
+    }
+
+    let target_name = item
+        .target_user
+        .as_ref()
+        .map(display_user_base_name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| {
+            if item.receive_uid > 0 {
+                item.receive_uid.to_string()
+            } else {
+                "你".to_string()
+            }
+        });
+
+    match (item.group_req_type, item.group_req_status) {
+        (1 | 3, 0 | 1) => {
+            if item.send_uid > 0 {
+                format!("{} 邀请{}加入群聊", item.send_uid, target_name)
+            } else {
+                format!("邀请{}加入群聊", target_name)
+            }
+        }
+        (2 | 4, 0 | 1) => format!("{}通过扫描二维码加入了群聊", target_name),
+        (14, 0 | 1) => format!("{}通过群链接加入了群聊", target_name),
+        (15, 0 | 1) => format!("{}通过群别名加入了群聊", target_name),
+        (_, 2) => format!("{}拒绝加入群聊", target_name),
+        _ => String::new(),
+    }
+}
+
+fn display_user_base_name(user: &imweb::UserBase) -> String {
+    let nick = user.nick_name.trim();
+    if !nick.is_empty() {
+        return nick.to_string();
+    }
+    if user.uid > 0 {
+        return user.uid.to_string();
+    }
+    String::new()
 }
 
 fn group_by_conversation(messages: &[DecodedMessage]) -> HashMap<String, Vec<DecodedMessage>> {
