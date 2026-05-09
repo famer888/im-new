@@ -841,6 +841,15 @@ function suggestedVideoSaveName(data: Record<string, unknown>): string {
   return `${name}${videoExtFromUrl(source.url)}`
 }
 
+function isMacOS(): boolean {
+  return /mac/i.test(navigator.platform || '')
+}
+
+function ensureVideoSaveExtension(filePath: string, extension: string): string {
+  const ext = extension.startsWith('.') ? extension : `.${extension}`
+  return filePath.toLowerCase().endsWith(ext.toLowerCase()) ? filePath : `${filePath}${ext}`
+}
+
 function isRemoteUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
 }
@@ -937,15 +946,30 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
 async function saveVideoAs(data: Record<string, unknown>) {
   if (!(window as any).__TAURI_INTERNALS__) return
   const { save } = await import('@tauri-apps/plugin-dialog')
+  const suggestedName = suggestedVideoSaveName(data)
+  const extension = videoExtFromUrl(suggestedName)
+  const defaultFileName = ensureVideoSaveExtension(suggestedName, extension)
+  let defaultPath = defaultFileName
+  if (isMacOS()) {
+    try {
+      const { downloadDir, join } = await import('@tauri-apps/api/path')
+      defaultPath = await join(await downloadDir(), defaultFileName)
+    } catch {
+      defaultPath = defaultFileName
+    }
+  }
   const selectedPath = await save({
-    defaultPath: suggestedVideoSaveName(data),
-    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'webm', 'ogg', 'm4v'] }],
+    defaultPath,
+    ...(!isMacOS()
+      ? { filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'webm', 'ogg', 'm4v'] }] }
+      : {}),
   })
   if (!selectedPath) return
 
+  const finalPath = ensureVideoSaveExtension(selectedPath, extension)
   const localPath = await ensureVideoLocalFile(data)
   const { copyFile } = await import('@tauri-apps/plugin-fs')
-  await copyFile(localPath, selectedPath)
+  await copyFile(localPath, finalPath)
   showToast(t('保存成功'))
 }
 
