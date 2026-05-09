@@ -491,6 +491,12 @@ function messageSupportsImageSave(data: Record<string, unknown>): boolean {
     && data.imageSrc.trim().length > 0
 }
 
+function messageSupportsVideoFileActions(data: Record<string, unknown>): boolean {
+  return chatStore.currentConversation?.type === ConversationType.Friend
+    && Number(data.msgType) === MessageType.Video
+    && Boolean(getVideoFileSource(data).url)
+}
+
 function parseMessageExtra(data: Record<string, unknown>): Record<string, unknown> {
   const raw = data.extra
   if (!raw) return {}
@@ -656,6 +662,10 @@ function messageSupportsImageOpenDirectory(data: Record<string, unknown>): boole
   return !!(window as any).__TAURI_INTERNALS__ && messageSupportsImageSave(data)
 }
 
+function messageSupportsVideoOpenDirectory(data: Record<string, unknown>): boolean {
+  return !!(window as any).__TAURI_INTERNALS__ && messageSupportsVideoFileActions(data)
+}
+
 function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean {
   const conv = chatStore.currentConversation
   if (!conv || Number(data.readStatus ?? 0) === -1) return false
@@ -757,6 +767,190 @@ async function ensureImageCacheFile(data: Record<string, unknown>): Promise<stri
 
 async function openImageDirectory(data: Record<string, unknown>) {
   const filePath = await ensureImageCacheFile(data)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('reveal_file_in_directory', { path: filePath })
+}
+
+function normalizeVideoUrl(value: unknown): string {
+  const raw = String(value || '').trim()
+  if (raw.startsWith('//')) return `https:${raw}`
+  return raw
+}
+
+function fileUrlToLocalPath(src: string): string {
+  const raw = String(src || '').trim()
+  if (!/^file:/i.test(raw)) return raw
+  try {
+    const parsed = new URL(raw)
+    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
+    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return raw.replace(/^file:\/\/?/i, '')
+  }
+}
+
+function getVideoFileSource(data: Record<string, unknown>): { url: string; fileKey: string; fileName: string } {
+  const extra = parseMessageExtra(data)
+  const rawContent = String(data.content || '').trim()
+  let url = ''
+  let fileName = ''
+  let fileKey = String(extra.fileKey || extra.file_key || '').trim()
+
+  try {
+    const parsed = JSON.parse(rawContent) as Record<string, unknown>
+    url = normalizeVideoUrl(parsed.url || parsed.fileUrl || parsed.path || '')
+    fileName = String(parsed.name || parsed.fileName || parsed.file_name || '').trim()
+    fileKey = String(parsed.fileKey || parsed.file_key || fileKey).trim()
+  } catch {
+    const [head = ''] = rawContent.split('||')
+    const [legacyUrl = ''] = head.split('*P')
+    url = normalizeVideoUrl(legacyUrl)
+  }
+
+  if (!fileName && url) {
+    const cleanUrl = url.split('?')[0]
+    const rawFileName = cleanUrl.split(/[\\/]/).pop() || ''
+    try {
+      fileName = decodeURIComponent(rawFileName)
+    } catch {
+      fileName = rawFileName
+    }
+  }
+
+  return {
+    url,
+    fileKey,
+    fileName: sanitizeMediaFileName(fileName || String(data.messageId || 'video')),
+  }
+}
+
+function sanitizeMediaFileName(fileName: string): string {
+  return String(fileName || 'video').replace(/[\\/:*?"<>|]/g, '_').trim() || 'video'
+}
+
+function videoExtFromUrl(url: string): string {
+  const matched = String(url || '').split('?')[0].match(/\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i)
+  return matched?.[0]?.toLowerCase() || '.mp4'
+}
+
+function suggestedVideoSaveName(data: Record<string, unknown>): string {
+  const source = getVideoFileSource(data)
+  const name = sanitizeMediaFileName(source.fileName || String(data.messageId || 'video'))
+  if (/\.[A-Za-z0-9]{2,5}$/.test(name)) return name
+  return `${name}${videoExtFromUrl(source.url)}`
+}
+
+function isRemoteUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
+
+function isBlobOrDataUrl(url: string): boolean {
+  return /^(blob|data):/i.test(url)
+}
+
+async function waitForDownloadFile(url: string, fileKey: string, savePath: string, msgId: string) {
+  const [{ invoke }, { listen }] = await Promise.all([
+    import('@tauri-apps/api/core'),
+    import('@tauri-apps/api/event'),
+  ])
+
+  await new Promise<void>(async (resolve, reject) => {
+    let settled = false
+    let unlistenDone: (() => void) | null = null
+    let unlistenError: (() => void) | null = null
+    const cleanup = () => {
+      unlistenDone?.()
+      unlistenError?.()
+      unlistenDone = null
+      unlistenError = null
+    }
+
+    try {
+      unlistenDone = await listen(`file:done:${msgId}`, () => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve()
+      })
+      unlistenError = await listen<{ error?: string }>(`file:error:${msgId}`, (event) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(new Error(event.payload?.error || '视频下载失败'))
+      })
+      await invoke('download_file', {
+        url,
+        fileKey,
+        savePath,
+        msgId,
+        logTag: 'video',
+      })
+    } catch (error) {
+      if (!settled) {
+        settled = true
+        cleanup()
+        reject(error)
+      }
+    }
+  })
+}
+
+async function writeRemoteFile(url: string, savePath: string) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`video fetch failed: ${response.status}`)
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  const { writeFile } = await import('@tauri-apps/plugin-fs')
+  await writeFile(savePath, bytes)
+}
+
+async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<string> {
+  const source = getVideoFileSource(data)
+  const url = source.url
+  if (!url || isBlobOrDataUrl(url)) throw new Error('video source unavailable')
+
+  if (!isRemoteUrl(url)) {
+    const localPath = fileUrlToLocalPath(url)
+    if (await tauriFileExists(localPath)) return localPath
+    throw new Error('video file not found')
+  }
+
+  const savePath = await (async () => {
+    const { appDataDir, join } = await import('@tauri-apps/api/path')
+    const baseDir = await appDataDir()
+    const messageId = imageCacheSafeName(String(data.messageId || data.msgId || 'video'))
+    return join(baseDir, 'video-cache', `${messageId}${videoExtFromUrl(url)}`)
+  })()
+
+  if (await tauriFileExists(savePath)) return savePath
+
+  if (source.fileKey) {
+    await waitForDownloadFile(url, source.fileKey, savePath, `video-menu-${Date.now()}`)
+  } else {
+    await writeRemoteFile(url, savePath)
+  }
+  return savePath
+}
+
+async function saveVideoAs(data: Record<string, unknown>) {
+  if (!(window as any).__TAURI_INTERNALS__) return
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const selectedPath = await save({
+    defaultPath: suggestedVideoSaveName(data),
+    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'webm', 'ogg', 'm4v'] }],
+  })
+  if (!selectedPath) return
+
+  const localPath = await ensureVideoLocalFile(data)
+  const { copyFile } = await import('@tauri-apps/plugin-fs')
+  await copyFile(localPath, selectedPath)
+  showToast(t('保存成功'))
+}
+
+async function openVideoDirectory(data: Record<string, unknown>) {
+  const filePath = await ensureVideoLocalFile(data)
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('reveal_file_in_directory', { path: filePath })
 }
@@ -1078,11 +1272,11 @@ const contextMenuItems = computed((): MenuItem[] => {
       items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
     }
 
-    if (messageSupportsImageSave(data)) {
+    if (messageSupportsImageSave(data) || messageSupportsVideoFileActions(data)) {
       items.push({ key: 'save_as', label: t('另存为'), iconSrc: menuSave })
     }
 
-    if (messageSupportsImageOpenDirectory(data)) {
+    if (messageSupportsImageOpenDirectory(data) || messageSupportsVideoOpenDirectory(data)) {
       items.push({ key: 'open_directory', label: t('打开目录'), iconSrc: menuOpenDir })
     }
 
@@ -1153,6 +1347,15 @@ async function handleContextMenuSelect(key: string) {
         break
       }
       case 'save_as': {
+        if (messageSupportsVideoFileActions(data)) {
+          try {
+            await saveVideoAs(data)
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            showToast(t('保存失败详情', { detail }), 'error')
+          }
+          break
+        }
         if (!messageSupportsImageSave(data)) break
         const imageSrc = String(data.imageSrc || '').trim()
         if (!imageSrc) break
@@ -1165,6 +1368,15 @@ async function handleContextMenuSelect(key: string) {
         break
       }
       case 'open_directory': {
+        if (messageSupportsVideoOpenDirectory(data)) {
+          try {
+            await openVideoDirectory(data)
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            showToast(t('打开目录失败详情', { detail }), 'error')
+          }
+          break
+        }
         if (!messageSupportsImageOpenDirectory(data)) break
         try {
           await openImageDirectory(data)
