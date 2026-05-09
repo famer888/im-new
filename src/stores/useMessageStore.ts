@@ -236,6 +236,19 @@ function imageContentSummary(content: string | null | undefined) {
   }
 }
 
+function groupInviteDebug(message: string, data?: Record<string, unknown>) {
+  const payload = data || {}
+  console.warn(`[group-invite-debug][message-store] ${message}`, payload)
+  if (!isTauri()) return
+  tauriInvoke('image_send_log', {
+    payload: {
+      level: 'warn',
+      message: `[group-invite-debug][message-store] ${message}`,
+      data: payload,
+    },
+  }).catch(() => {})
+}
+
 function messageLogSummary(message: Message | null | undefined) {
   if (!message) return null
   return {
@@ -432,6 +445,18 @@ export const useMessageStore = defineStore('message', () => {
     }
     const digest = getDigestByMessage(msg.msgType, msg.content)
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
+    if (conversationId.startsWith('1_') && msg.msgType === 8) {
+      groupInviteDebug('syncConversationSummary for group notice', {
+        conversationId,
+        msgId: msg.id,
+        senderId: msg.senderId,
+        msgType: msg.msgType,
+        content: msg.content,
+        digest,
+        existedBefore: Boolean(existing),
+        conversationCount: chatStore.conversations.length,
+      })
+    }
     if (existing) {
       chatStore.addOrUpdateConversation({
         ...existing,
@@ -1050,6 +1075,16 @@ export const useMessageStore = defineStore('message', () => {
     for (const raw of messages as any[]) {
       const msg = normalizeMessage(raw)
       const convId = String(msg.conversationId || '')
+      if (convId.startsWith('1_') && msg.msgType === 8) {
+        groupInviteDebug('batchAppendMessages normalized group notice', {
+          rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),
+          conversationId: convId,
+          senderId: msg.senderId,
+          msgType: msg.msgType,
+          content: msg.content,
+          extra: msg.extra,
+        })
+      }
       if (isGroupImageMessage(convId, msg.msgType)) {
         groupImageLog('batchAppendMessages normalized', {
           rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),

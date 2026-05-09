@@ -3,7 +3,6 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import {
-  GROUP_NOTIFICATION_TARGET_ID,
   useChatStore,
   FILE_HELPER_TARGET_ID,
   isFileHelperTargetId,
@@ -77,12 +76,7 @@ const searchPlaceholder = computed(() => {
     ? t('搜索手机号/ID/群别名')
     : t('搜索')
 })
-function isGroupNotification(conv: Conversation): boolean {
-  return conv.targetId === GROUP_NOTIFICATION_TARGET_ID
-}
-
 function isConversationInCurrentRelations(conv: Conversation): boolean {
-  if (isGroupNotification(conv)) return true
   switch (conv.type) {
     case ConversationType.Friend:
       return Boolean(contactStore.getContact(conv.targetId))

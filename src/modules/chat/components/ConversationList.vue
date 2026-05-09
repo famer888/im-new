@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, isFileHelperTargetId, GROUP_NOTIFICATION_TARGET_ID, type Conversation } from '@/stores/useChatStore'
+import { useChatStore, isFileHelperTargetId, type Conversation } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -12,7 +12,6 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
-import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 
 const { t, locale } = useI18n()
 const chatStore = useChatStore()
@@ -27,12 +26,7 @@ function isNotFileHelper(c: Conversation): boolean {
   return !isFileHelperTargetId(c.targetId)
 }
 
-function isGroupNotification(conv: Conversation): boolean {
-  return conv.targetId === GROUP_NOTIFICATION_TARGET_ID
-}
-
 function isConversationInCurrentRelations(conv: Conversation): boolean {
-  if (isGroupNotification(conv)) return true
   switch (conv.type) {
     case ConversationType.Friend:
       return Boolean(contactStore.getContact(conv.targetId))
@@ -72,7 +66,6 @@ const displayList = computed(() =>
 )
 
 function getName(conv: Conversation): string {
-  if (isGroupNotification(conv)) return t('群通知')
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conv.targetId)
@@ -88,7 +81,6 @@ function getName(conv: Conversation): string {
 }
 
 function getAvatar(conv: Conversation): string | null {
-  if (isGroupNotification(conv)) return groupNotificationIcon
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getContact(conv.targetId)?.avatar ?? null
@@ -219,12 +211,7 @@ function handleSelect(conv: Conversation) {
   chatStore.setCurrentConversation(conv.id)
   // 点击会话项后收起右侧信息面板（与 im 交互一致）
   uiStore.setRightPanel('none')
-  if (isGroupNotification(conv)) {
-    uiStore.setDetailView('group-invitation')
-    chatStore.clearGroupNotificationUnread()
-  } else {
-    uiStore.setDetailView('chat')
-  }
+  uiStore.setDetailView('chat')
 }
 
 function handleContextMenu(e: MouseEvent, conv: Conversation) {
