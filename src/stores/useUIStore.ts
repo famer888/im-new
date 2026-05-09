@@ -11,6 +11,7 @@ export interface ForwardDraftItem {
   content: string
   extra?: Record<string, unknown>
   senderName: string
+  previewSrc?: string
 }
 
 export interface AddContactTarget {

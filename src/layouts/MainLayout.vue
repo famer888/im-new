@@ -1277,6 +1277,9 @@ function buildForwardDraftItems(): ForwardDraftItem[] {
       }
     })(),
     senderName: getForwardSenderName(msg.senderId),
+    previewSrc: msg.msgType === MessageType.Image && String(uiStore.contextMenuData.messageId || '') === msg.id
+      ? String(uiStore.contextMenuData.imageSrc || '')
+      : undefined,
   }))
 }
 
