@@ -666,6 +666,10 @@ function messageSupportsVideoOpenDirectory(data: Record<string, unknown>): boole
   return !!(window as any).__TAURI_INTERNALS__ && messageSupportsVideoFileActions(data)
 }
 
+function messageSupportsVideoCopy(data: Record<string, unknown>): boolean {
+  return !!(window as any).__TAURI_INTERNALS__ && messageSupportsVideoFileActions(data)
+}
+
 function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean {
   const conv = chatStore.currentConversation
   if (!conv || Number(data.readStatus ?? 0) === -1) return false
@@ -1001,6 +1005,12 @@ async function openVideoDirectory(data: Record<string, unknown>) {
   await invoke('reveal_file_in_directory', { path: filePath })
 }
 
+async function copyVideoToClipboard(data: Record<string, unknown>) {
+  const filePath = await ensureVideoLocalFile(data)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('write_clipboard_file', { path: filePath })
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -1314,7 +1324,7 @@ const contextMenuItems = computed((): MenuItem[] => {
   if (data.type === 'message') {
     const items: MenuItem[] = []
 
-    if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data)) {
+    if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data) || messageSupportsVideoCopy(data)) {
       items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
     }
 
@@ -1385,6 +1395,15 @@ async function handleContextMenuSelect(key: string) {
     const convId = chatStore.currentConversationId
     switch (key) {
       case 'copy': {
+        if (messageSupportsVideoCopy(data)) {
+          try {
+            await copyVideoToClipboard(data)
+            showToast(t('复制成功'))
+          } catch {
+            /* clipboard may be unavailable */
+          }
+          break
+        }
         if (messageSupportsImageCopy(data)) {
           try { await copyMessageImage(data) } catch { /* clipboard may be unavailable */ }
           break
