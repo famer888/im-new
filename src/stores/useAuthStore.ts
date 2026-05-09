@@ -137,7 +137,12 @@ export const useAuthStore = defineStore('auth', () => {
   function addOrUpdateAccount(info: AccountInfo) {
     const idx = accounts.value.findIndex(a => a.id === info.id)
     if (idx >= 0) {
-      accounts.value[idx] = { ...accounts.value[idx], ...info }
+      const merged = { ...accounts.value[idx], ...info }
+      accounts.value = [
+        ...accounts.value.slice(0, idx),
+        ...accounts.value.slice(idx + 1),
+        merged,
+      ]
     } else {
       accounts.value.push(info)
     }
