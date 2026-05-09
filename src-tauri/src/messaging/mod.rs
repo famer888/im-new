@@ -135,6 +135,97 @@ pub fn encode_audio_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将前端视频内容编码为旧 im 使用的 VideoObj protobuf。
+///
+/// 兼容：
+/// - 新项目 JSON：`{ url, thumbUrl/thumbnailUrl, duration, width, height, size }`
+/// - 旧 im 内容串：`url*PthumbUrl||duration||fileSize||width||height`
+pub fn encode_video_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (url, thumb_url, duration, file_size, width, height) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let url = value
+                .get("url")
+                .or_else(|| value.get("fileUrl"))
+                .or_else(|| value.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let thumb_url = value
+                .get("thumbUrl")
+                .or_else(|| value.get("thumbnailUrl"))
+                .or_else(|| value.get("thumbnail"))
+                .or_else(|| value.get("cover"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let duration = value
+                .get("duration")
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+                })
+                .unwrap_or(0) as i32;
+            let file_size = value
+                .get("size")
+                .or_else(|| value.get("fileSize"))
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+                })
+                .unwrap_or(0);
+            let width = value
+                .get("width")
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+                })
+                .unwrap_or(0) as i32;
+            let height = value
+                .get("height")
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+                })
+                .unwrap_or(0) as i32;
+            (url, thumb_url, duration, file_size, width, height)
+        } else {
+            let parts: Vec<&str> = raw.split("||").collect();
+            let head = parts.get(0).copied().unwrap_or_default();
+            let media_parts: Vec<&str> = head.split("*P").collect();
+            let url = media_parts.get(0).copied().unwrap_or_default().to_string();
+            let thumb_url = media_parts.get(1).copied().unwrap_or_default().to_string();
+            let duration = parts
+                .get(1)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            let file_size = parts
+                .get(2)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            let width = parts
+                .get(3)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            let height = parts
+                .get(4)
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            (url, thumb_url, duration, file_size, width, height)
+        };
+
+    let obj = imweb::VideoObj {
+        width,
+        height,
+        file_size,
+        url,
+        thumb_url,
+        r#ref: None,
+        duration,
+    };
+    obj.encode_to_vec()
+}
+
 /// 将前端文件内容编码为旧 im 使用的 FileObj protobuf。
 pub fn encode_file_obj(content: &str) -> Vec<u8> {
     let raw = content.trim();
@@ -291,6 +382,7 @@ pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
         2 => encode_audio_obj(content),
+        3 => encode_video_obj(content),
         5 => encode_name_card_obj(content),
         7 => encode_file_obj(content),
         12 => encode_set_image_obj(content),
