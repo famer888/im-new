@@ -39,18 +39,11 @@ jobs:
       - name: Install frontend deps
         run: pnpm install
 
-      - name: Build frontend
-        run: pnpm build
-
-      - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --bundles nsis
+      - name: Build Windows installers
+        run: pnpm release:dist:win:installers
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: release-dist/*.exe

@@ -87,33 +87,25 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build frontend
-        run: pnpm build
+      - name: Build Windows installers
+        run: pnpm release:dist:win:installers
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --bundles nsis
-
-      - name: Find and upload Windows installer
+      - name: Upload Windows installers
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          EXE_PATH=$(find ./src-tauri/target/release/bundle/nsis -name "*.exe" 2>/dev/null | head -1)
-          if [ -z "$EXE_PATH" ]; then
-            echo "Error: EXE file not found"
-            ls -la ./src-tauri/target/release/bundle/nsis/ || echo "nsis directory not found"
+          mapfile -t EXE_PATHS < <(find ./release-dist -maxdepth 1 -name "*.exe" -type f 2>/dev/null | sort)
+          if [ "${#EXE_PATHS[@]}" -eq 0 ]; then
+            echo "Error: Windows installer files not found"
+            ls -la ./release-dist/ || echo "release-dist directory not found"
             exit 1
           fi
-          echo "Found EXE: $EXE_PATH"
           TAG_NAME="${{ github.ref_name }}"
           if [[ "${{ github.ref }}" != refs/tags/* ]]; then
             TAG_NAME="dev-run-${{ github.run_number }}"
           fi
-          gh release upload "$TAG_NAME" "$EXE_PATH" --clobber
+          gh release upload "$TAG_NAME" "${EXE_PATHS[@]}" --clobber
 
   build-macos:
     needs: create-release
