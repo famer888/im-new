@@ -52,6 +52,7 @@ pub async fn open_media_window(
         .resizable(true)
         .min_inner_size(600.0, 500.0)
         .decorations(false)
+        .transparent(true)
         .visible(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;

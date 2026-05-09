@@ -87,6 +87,12 @@ const videoSrc = computed(() => {
   return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
 })
 const isVideo = computed(() => payload.value?.mediaType === 'video')
+const isPortraitVideo = computed(() => {
+  const w = Number(payload.value?.width || 0)
+  const h = Number(payload.value?.height || 0)
+  if (w > 0 && h > 0) return h > w
+  return true
+})
 const videoProgressPercent = computed(() => {
   if (!videoDuration.value) return 0
   return Math.min(100, Math.max(0, (videoCurrentTime.value / videoDuration.value) * 100))
@@ -122,6 +128,8 @@ const contextMenuItems = computed<MenuItem[]>(() => {
   }
   return items
 })
+
+const mediaViewerPageClass = 'media-viewer-page'
 
 let unsubscribe: (() => void) | null = null
 let unlistenWindowEvents: Array<() => void> = []
@@ -529,6 +537,9 @@ async function handleMenuSelect(key: string) {
 }
 
 onMounted(async () => {
+  document.documentElement.classList.add(mediaViewerPageClass)
+  document.body.classList.add(mediaViewerPageClass)
+  document.getElementById('app')?.classList.add(mediaViewerPageClass)
   applyPayload(mediaViewerState.get())
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
     applyPayload(nextPayload)
@@ -558,6 +569,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.documentElement.classList.remove(mediaViewerPageClass)
+  document.body.classList.remove(mediaViewerPageClass)
+  document.getElementById('app')?.classList.remove(mediaViewerPageClass)
   resetVideoState()
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
@@ -608,33 +622,38 @@ onUnmounted(() => {
       class="media-stage"
       :class="{ 'is-video': isVideo, 'is-video-fullscreen': isVideoFullscreen }"
     >
-      <video
+      <div
         v-if="videoSrc"
-        ref="videoRef"
-        class="media-video"
-        :src="videoSrc"
-        :poster="payload?.cover"
-        autoplay
-        playsinline
-        preload="metadata"
-        @click.stop="toggleVideoPlayback"
-        @loadedmetadata="syncVideoState"
-        @durationchange="syncVideoState"
-        @timeupdate="syncVideoState"
-        @play="syncVideoState"
-        @pause="syncVideoState"
-        @ended="syncVideoState"
-        @volumechange="syncVideoState"
-      ></video>
-      <button
-        v-if="videoSrc && !isVideoPlaying"
-        class="video-overlaid-play"
-        type="button"
-        aria-label="Play"
-        @click.stop="toggleVideoPlayback"
+        class="media-video-shell"
+        :class="{ 'is-landscape-video': isVideo && !isPortraitVideo }"
       >
-        <span></span>
-      </button>
+        <video
+          ref="videoRef"
+          class="media-video"
+          :src="videoSrc"
+          :poster="payload?.cover"
+          autoplay
+          playsinline
+          preload="metadata"
+          @click.stop="toggleVideoPlayback"
+          @loadedmetadata="syncVideoState"
+          @durationchange="syncVideoState"
+          @timeupdate="syncVideoState"
+          @play="syncVideoState"
+          @pause="syncVideoState"
+          @ended="syncVideoState"
+          @volumechange="syncVideoState"
+        ></video>
+        <button
+          v-if="!isVideoPlaying"
+          class="video-overlaid-play"
+          type="button"
+          aria-label="Play"
+          @click.stop="toggleVideoPlayback"
+        >
+          <span></span>
+        </button>
+      </div>
       <div
         v-if="videoSrc"
         class="video-controls"
@@ -781,7 +800,8 @@ onUnmounted(() => {
 }
 
 .media-viewer.is-video-mode {
-  background: rgba(0, 0, 0, 0.65);
+  background: transparent;
+  --media-chrome-bg: rgba(16, 16, 20, 0.95);
 }
 
 .media-viewer.is-desktop-fullscreen {
@@ -803,6 +823,26 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   z-index: 20;
+}
+
+.media-viewer.is-video-mode .media-titlebar {
+  background: transparent;
+  pointer-events: none;
+}
+
+.media-viewer.is-video-mode .media-titlebar .media-drag-layer,
+.media-viewer.is-video-mode .media-titlebar .media-actions {
+  pointer-events: auto;
+}
+
+.media-viewer.is-video-mode .media-title {
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.9),
+    0 0 12px rgba(0, 0, 0, 0.65);
+}
+
+.media-viewer.is-video-mode .titlebar-btn {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.75));
 }
 
 .media-drag-layer {
@@ -909,6 +949,43 @@ onUnmounted(() => {
   background: #000;
 }
 
+.media-video-shell {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 0;
+  min-width: 0;
+  background: var(--media-chrome-bg);
+}
+
+.media-viewer.is-video-mode:not(.is-desktop-fullscreen) .media-video-shell {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.media-viewer.is-video-mode:not(.is-desktop-fullscreen) .media-video-shell.is-landscape-video {
+  align-items: center;
+}
+
+.media-stage.is-video-fullscreen .media-video-shell {
+  top: 0;
+  inset: 0;
+  align-items: center;
+  background: #000;
+}
+
+.media-viewer.is-video-mode .media-video {
+  background-color: var(--media-chrome-bg);
+}
+
+.media-viewer.is-desktop-fullscreen .media-video {
+  background-color: #000;
+}
+
 .media-image-wrap {
   width: 100%;
   height: 100%;
@@ -925,9 +1002,13 @@ onUnmounted(() => {
 
 .media-video {
   display: block;
-  width: 100%;
-  height: 100%;
-  background: transparent;
+  flex: 0 1 auto;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
   outline: none;
 }
@@ -987,6 +1068,15 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
   box-sizing: border-box;
+}
+
+.media-viewer.is-video-mode .video-controls {
+  background: var(--media-chrome-bg);
+  backdrop-filter: none;
+}
+
+.media-viewer.is-desktop-fullscreen .video-controls {
+  background: rgba(0, 0, 0, 0.72);
 }
 
 .video-control-btn {
@@ -1192,5 +1282,13 @@ onUnmounted(() => {
   &:hover svg {
     fill: #fff;
   }
+}
+</style>
+
+<style lang="scss">
+html.media-viewer-page,
+body.media-viewer-page,
+#app.media-viewer-page {
+  background-color: transparent !important;
 }
 </style>
