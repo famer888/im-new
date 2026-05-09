@@ -96,7 +96,9 @@ watch(
   () => contact.value?.id,
   (contactId) => {
     if (!contactId) return
-    void contactStore.ensureContactDetailLoaded(contactId)
+    // The same contact can be updated from mobile while PC keeps a stale cached detail.
+    // Refresh on panel entry so relation toggles such as blacklist match the server.
+    void contactStore.ensureContactDetailLoaded(contactId, { force: true })
   },
   { immediate: true },
 )
