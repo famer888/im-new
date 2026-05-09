@@ -3,11 +3,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="OCS Chat"
-PKG_IDENTIFIER="cn.97.chat"
+APP_NAME="${APP_NAME:-OCS Chat}"
+PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.97.chat}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/macos}"
 BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/ocs-chat-target-macos}"
 TAURI_TARGET="${TAURI_TARGET:-}"
+TAURI_CONFIG="${TAURI_CONFIG:-}"
+TAURI_BUNDLES="${TAURI_BUNDLES:-app,dmg}"
+COPY_APP_BUNDLE="${COPY_APP_BUNDLE:-1}"
+COPY_DMG="${COPY_DMG:-1}"
 
 require_node() {
   local major
@@ -53,7 +57,11 @@ VERSION="$(json_get version)"
 mkdir -p "$RELEASE_DIST_DIR"
 mkdir -p "$BUILD_TARGET_DIR"
 
-TAURI_ARGS=(build --bundles app,dmg)
+TAURI_ARGS=(build --bundles "$TAURI_BUNDLES")
+if [[ -n "$TAURI_CONFIG" ]]; then
+  TAURI_ARGS+=(--config "$TAURI_CONFIG")
+fi
+
 if [[ -n "$TAURI_TARGET" ]]; then
   TAURI_ARGS+=(--target "$TAURI_TARGET")
 fi
@@ -100,9 +108,11 @@ pkgbuild \
   --component-plist "$PKG_COMPONENT_PLIST" \
   "$PKG_OUTPUT_PATH" >/dev/null
 
-ditto "$APP_PATH" "$RELEASE_DIST_DIR/$APP_NAME.app"
+if [[ "$COPY_APP_BUNDLE" == "1" ]]; then
+  ditto "$APP_PATH" "$RELEASE_DIST_DIR/$APP_NAME.app"
+fi
 
-if [[ -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
+if [[ "$COPY_DMG" == "1" && -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
   cp -f "$DMG_PATH" "$RELEASE_DIST_DIR/"
 fi
 
