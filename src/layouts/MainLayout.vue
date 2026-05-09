@@ -32,6 +32,7 @@ import ForwardSelectDialog from '@/modules/chat/components/ForwardSelectDialog.v
 import FileImport from '@/modules/auth/components/FileImport.vue'
 import CreateGroupDialog from '@/modules/groups/components/CreateGroupDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
+import AddChannelDialog from '@/modules/channels/components/AddChannelDialog.vue'
 import GroupQRCode from '@/modules/chat/components/panels/GroupQRCode.vue'
 import UpVersionDialog from '@/components/UpVersionDialog.vue'
 import MemberInfoDialog from '@/components/MemberInfoDialog.vue'
@@ -1392,6 +1393,10 @@ async function handleForward(targetConvId: string) {
       mode="dialog"
       :visible="uiStore.addGroupDialogVisible"
       @close="uiStore.closeAddGroupDialog()"
+    />
+    <AddChannelDialog
+      :visible="uiStore.addChannelDialogVisible"
+      @close="uiStore.closeAddChannelDialog()"
     />
     <ForwardSelectDialog
       v-model:visible="uiStore.forwardDialogVisible"
