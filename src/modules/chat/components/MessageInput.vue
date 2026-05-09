@@ -462,6 +462,31 @@ function parseForwardImageDataUrl(content: string): { dataUrl: string; fileName:
   }
 }
 
+function getForwardImagePreviewSrc(item: { msgType: number; content: string | null }): string {
+  if (item.msgType !== MessageType.Image) return ''
+  try {
+    const o = JSON.parse(item.content || '{}') as {
+      url?: string
+      fileUrl?: string
+      thumbnailUrl?: string
+      thumbUrl?: string
+      thumbnail?: string
+      thumbBase64?: string
+    }
+    return String(
+      o.thumbnailUrl ||
+      o.thumbUrl ||
+      o.thumbnail ||
+      o.thumbBase64 ||
+      o.url ||
+      o.fileUrl ||
+      '',
+    ).trim()
+  } catch {
+    return ''
+  }
+}
+
 function dataUrlToFile(dataUrl: string, fileName: string): File {
   const segments = dataUrl.split(',')
   const header = segments[0] || ''
@@ -1969,6 +1994,12 @@ onBeforeUnmount(() => {
           @click="forwardPreviewQrSrc && openQrForwardFileDialogFromDraft()"
         >
           <template v-if="currentForwardDraftItems.length === 1">
+            <img
+              v-if="getForwardImagePreviewSrc(currentForwardDraftItems[0])"
+              class="forward-preview-thumb"
+              :src="getForwardImagePreviewSrc(currentForwardDraftItems[0])"
+              alt=""
+            />
             <div class="forward-preview-info">
               <h3 class="forward-preview-sender">{{ currentForwardDraftItems[0].senderName }}</h3>
               <p class="forward-preview-text">
@@ -2190,6 +2221,16 @@ onBeforeUnmount(() => {
   flex-direction: column;
   justify-content: center;
   min-width: 0;
+}
+
+.forward-preview-thumb {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  margin-right: 10px;
+  object-fit: cover;
+  border-radius: 2px;
+  background: #f2f2f2;
 }
 
 .forward-preview-sender,
