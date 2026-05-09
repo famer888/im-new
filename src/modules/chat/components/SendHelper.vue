@@ -49,7 +49,7 @@ onMounted(async () => {
         <div>
           <img class="login-num-icon" :src="logoNumIcon" alt="" />
         </div>
-        <div class="version">{{ t('版本') }} {{ appVersion }}</div>
+        <div class="version">{{ t('版本信息') }} {{ appVersion }}</div>
       </div>
     </div>
 
