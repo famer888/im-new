@@ -1245,11 +1245,35 @@ function getCurrentConversationForwardSenderName() {
   return conv.targetId || '我'
 }
 
+function normalizeForwardImageContent(content: string, extra?: Record<string, unknown>): string {
+  const raw = String(content || '').trim()
+  const fileKey = String(extra?.fileKey || extra?.file_key || '').trim()
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return JSON.stringify({
+      ...parsed,
+      ...(fileKey ? { fileKey } : {}),
+    })
+  } catch {
+    const [url = '', thumbnailUrl = '', size = '0', sizeType = '0'] = raw.split('||')
+    return JSON.stringify({
+      url: url.trim(),
+      thumbnailUrl: (thumbnailUrl || url).trim(),
+      size: Number(size || 0),
+      sizeType: Number(sizeType || 0),
+      ...(fileKey ? { fileKey } : {}),
+    })
+  }
+}
+
 function buildForwardDraftItems(): ForwardDraftItem[] {
   if (uiStore.forwardMessagePayload) {
     return [{
       msgType: uiStore.forwardMessagePayload.msgType,
-      content: uiStore.forwardMessagePayload.content,
+      content: uiStore.forwardMessagePayload.msgType === MessageType.Image
+        ? normalizeForwardImageContent(uiStore.forwardMessagePayload.content, uiStore.forwardMessagePayload.extra)
+        : uiStore.forwardMessagePayload.content,
       extra: uiStore.forwardMessagePayload.extra,
       senderName: getCurrentConversationForwardSenderName(),
     }]
@@ -1265,22 +1289,28 @@ function buildForwardDraftItems(): ForwardDraftItem[] {
     ? messages.filter(m => selectedIds.has(m.id))
     : messages.filter(m => m.id === msgId)
 
-  return msgsToForward.map((msg) => ({
-    msgType: msg.msgType,
-    content: msg.content ?? '',
-    extra: (() => {
+  return msgsToForward.map((msg) => {
+    const extra = (() => {
       if (!msg.extra) return undefined
       try {
         return JSON.parse(msg.extra)
       } catch {
         return undefined
       }
-    })(),
-    senderName: getForwardSenderName(msg.senderId),
-    previewSrc: msg.msgType === MessageType.Image && String(uiStore.contextMenuData.messageId || '') === msg.id
-      ? String(uiStore.contextMenuData.imageSrc || '')
-      : undefined,
-  }))
+    })()
+
+    return {
+      msgType: msg.msgType,
+      content: msg.msgType === MessageType.Image
+        ? normalizeForwardImageContent(msg.content ?? '', extra)
+        : msg.content ?? '',
+      extra,
+      senderName: getForwardSenderName(msg.senderId),
+      previewSrc: msg.msgType === MessageType.Image && String(uiStore.contextMenuData.messageId || '') === msg.id
+        ? String(uiStore.contextMenuData.imageSrc || '')
+        : undefined,
+    }
+  })
 }
 
 function normalizeForwardTargetConvId(targetConvId: string): string {
