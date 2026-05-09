@@ -26,7 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const loginToken = ref('')
-const officialUrl = ref('97chat.com')
+const officialUrl = ref(API_CONFIG.officialUrl)
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
 const isLoading = ref(false)
@@ -196,9 +196,8 @@ async function handleGetQrCodeUrl() {
 
     if (res?.token) {
       loginToken.value = res.token
-      // 注意：与老 im 完全一致——*不* 用 res.officialUrl 覆盖默认值。
-      // 二维码必须始终保持 `97chat.com?token=X&imQrCodeType=2` 格式，
-      // 手机 App 只认这个固定 host，其它 host 扫了没反应 → loginStatus 永远是 NOT_SCAN=0。
+      // 注意：与老 im 一致——*不* 用 res.officialUrl 覆盖当前包的固定官网域名。
+      // 二维码必须保持 `{brand}chat.com?token=X&imQrCodeType=2` 格式。
 
       timerOutTimer = setTimeout(() => {
         isOutTime.value = true
@@ -333,7 +332,7 @@ onBeforeUnmount(() => {
         <span v-if="overlayText">{{ overlayText }}</span>
       </p>
     </section>
-    <p>{{ t('使用手机版扫描二维码登录') }}</p>
+    <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
     <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
     <button class="btn-primary importBtn" @click="emit('show-import')">
       {{ t('载入账户设置') }}

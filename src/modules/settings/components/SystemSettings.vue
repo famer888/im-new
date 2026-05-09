@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { checkVersion } from '@/api/imBase'
+import { API_CONFIG } from '@/api/config'
 import AppSwitch from '@/components/AppSwitch.vue'
 import Toast from '@/components/Toast.vue'
 import pkg from '../../../../package.json'
@@ -46,7 +47,7 @@ function getVersionNumber(text: string): number {
 }
 
 async function openVersionSite() {
-  const url = 'https://97chat.com'
+  const url = `https://${API_CONFIG.officialUrl}`
   if ((window as any).__TAURI_INTERNALS__) {
     const { open } = await import('@tauri-apps/plugin-shell')
     await open(url)

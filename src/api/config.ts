@@ -7,6 +7,15 @@ const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-dom
 const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
 const API_BASE_URL_KEY = 'api-base-url'
 
+function normalizeBrandId(input?: string): '45' | '55' | '97' {
+  const value = String(input || '').trim()
+  if (value === '45' || value === '55' || value === '97') return value
+  return '97'
+}
+
+const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)
+const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID}chat.com`).trim()
+
 export const API_CONFIG = {
   rawBaseUrl: RAW_BASE_URL,
   aesKey: import.meta.env.VITE_APP_AES_KEY || '1234567890123456',
@@ -20,6 +29,8 @@ export const API_CONFIG = {
   rawDomainUrl: RAW_DOMAIN_URL,
   rawOpenChatDomain: RAW_OPEN_CHAT_DOMAIN,
   env: import.meta.env.VITE_APP_ENV || 'test',
+  brandId: BRAND_ID,
+  officialUrl: OFFICIAL_URL,
 }
 
 function getStoredBaseUrl(): string {
