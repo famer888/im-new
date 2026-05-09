@@ -249,14 +249,11 @@ async function openPreview() {
       import('@tauri-apps/api/window') as Promise<any>,
     ])
     const currentWindow = windowApi.getCurrentWindow()
-    const [position, size] = await Promise.all([
+    const position = await (
       typeof currentWindow.outerPosition === 'function'
         ? currentWindow.outerPosition()
-        : currentWindow.innerPosition?.(),
-      typeof currentWindow.outerSize === 'function'
-        ? currentWindow.outerSize()
-        : currentWindow.innerSize?.(),
-    ])
+        : currentWindow.innerPosition?.()
+    )
 
     mediaViewerState.send({
       title: '图片',
@@ -271,8 +268,8 @@ async function openPreview() {
       title: '图片',
       x: typeof position?.x === 'number' ? Math.round(position.x) : null,
       y: typeof position?.y === 'number' ? Math.round(position.y) : null,
-      width: typeof size?.width === 'number' ? Math.round(size.width) : null,
-      height: typeof size?.height === 'number' ? Math.round(size.height) : null,
+      width: 900,
+      height: 600,
     })
   } catch (error) {
     console.warn('[image] open media window failed:', error)

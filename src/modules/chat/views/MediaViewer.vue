@@ -227,10 +227,19 @@ async function syncVideoFullscreenState() {
 async function toggleVideoFullscreen() {
   try {
     isVideoFullscreen.value = await invoke<boolean>('media_window_toggle_fullscreen')
+    return
   } catch (error) {
     console.warn('[media-viewer] window fullscreen failed:', error)
-  } finally {
-    await syncVideoFullscreenState()
+  }
+
+  const currentWindow = currentMediaWindow()
+  if (!currentWindow) return
+  try {
+    const nextFullscreen = !isVideoFullscreen.value
+    await currentWindow.setFullscreen(nextFullscreen)
+    isVideoFullscreen.value = nextFullscreen
+  } catch (error) {
+    console.warn('[media-viewer] window fullscreen fallback failed:', error)
   }
 }
 
@@ -561,7 +570,7 @@ onUnmounted(() => {
 <template>
   <div
     class="media-viewer"
-    :class="{ 'is-desktop-fullscreen': isVideoFullscreen }"
+    :class="{ 'is-video-mode': isVideo, 'is-desktop-fullscreen': isVideoFullscreen }"
     @contextmenu="handleContextMenu"
   >
     <div class="media-titlebar">
@@ -703,7 +712,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="!isVideo" class="bottom-actions">
+    <div v-if="!isVideo || canOpenWithDefaultApp" class="bottom-actions">
       <button
         v-if="!isVideo"
         class="action-btn"
@@ -764,10 +773,15 @@ onUnmounted(() => {
 .media-viewer {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.82);
+  background: rgba(0, 0, 0, 0.65);
   color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden;
   border-radius: 5px;
+}
+
+.media-viewer.is-video-mode {
+  background: rgba(0, 0, 0, 0.65);
 }
 
 .media-viewer.is-desktop-fullscreen {
@@ -784,7 +798,7 @@ onUnmounted(() => {
   top: 0;
   left: 0;
   right: 0;
-  height: 34px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -817,7 +831,7 @@ onUnmounted(() => {
 
 .titlebar-btn {
   width: 46px;
-  height: 34px;
+  height: 32px;
   border: none;
   background: transparent;
   color: rgba(136, 136, 136) !important;
@@ -911,11 +925,10 @@ onUnmounted(() => {
 
 .media-video {
   display: block;
-  width: auto;
-  height: auto;
-  max-width: 100vw;
-  max-height: 100vh;
-  background: #000;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  object-fit: contain;
   outline: none;
 }
 
@@ -966,11 +979,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 9px;
-  width: min(600px, calc(100vw - 48px));
-  height: 44px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.82);
+  width: 70%;
+  max-width: 600px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
   box-sizing: border-box;
 }
 
@@ -1114,6 +1129,14 @@ onUnmounted(() => {
   z-index: 100;
   display: flex;
   gap: 8px;
+}
+
+.media-viewer.is-video-mode .bottom-actions {
+  z-index: 130;
+}
+
+.media-viewer.is-desktop-fullscreen .bottom-actions {
+  display: none;
 }
 
 .action-btn {
