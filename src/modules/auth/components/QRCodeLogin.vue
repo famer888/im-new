@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
-import { getQrCodeUrl, getIsLogin } from '@/api/imBase'
+import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss } from '@/utils/domainPool'
@@ -30,7 +30,8 @@ const officialUrl = ref('97chat.com')
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
 const isLoading = ref(false)
-const lastLoginInfo = ref<{ icon?: string; name?: string }>({})
+const lastLoginInfo = ref<{ id?: string | number; icon?: string; name?: string; sessionId?: string }>({})
+const lastAvatarLoadError = ref(false)
 
 const domainList = ref<string[]>([getBaseUrl()])
 const urlIndex = ref(0)
@@ -56,7 +57,11 @@ watch(() => props.extraDomains, (newDomains) => {
 let timerOutTimer: ReturnType<typeof setTimeout> | null = null
 let loginPollingTimer: ReturnType<typeof setTimeout> | null = null
 
-const avatarSrc = computed(() => lastLoginInfo.value.icon || defaultLogo)
+const avatarSrc = computed(() => String(lastLoginInfo.value.icon || '').trim())
+const lastAvatarDisplaySrc = computed(() => {
+  if (avatarSrc.value && !lastAvatarLoadError.value) return avatarSrc.value
+  return defaultLogo
+})
 
 const qrCodeValue = computed(() => {
   if (!loginToken.value) return ''
@@ -117,10 +122,54 @@ function loadLastLoginInfo() {
     if (stored) {
       const list = JSON.parse(stored)
       if (Array.isArray(list) && list.length > 0) {
-        lastLoginInfo.value = list[list.length - 1]
+        const last = list[list.length - 1] || {}
+        lastLoginInfo.value = {
+          ...last,
+          name: String(last.name || last.nickname || last.nickName || last.id || ''),
+          icon: String(last.icon || last.avatar || last.pic || last.headUrl || ''),
+        }
+        lastAvatarLoadError.value = false
       }
     }
   } catch { /* ignore */ }
+}
+
+async function refreshLastLoginAvatar() {
+  const id = Number(lastLoginInfo.value.id || 0)
+  if (!Number.isFinite(id) || id <= 0) return
+  if (avatarSrc.value) return
+
+  try {
+    const response = await getUserInfo({ uid: id }, currentBaseUrl.value)
+    const userInfo = response.userInfo
+    const icon = String(userInfo?.icon || '').trim()
+    if (!icon) return
+
+    lastLoginInfo.value = {
+      ...lastLoginInfo.value,
+      name: lastLoginInfo.value.name || String(userInfo?.nickName || id),
+      icon,
+    }
+    lastAvatarLoadError.value = false
+
+    const stored = localStorage.getItem('login-account-list')
+    const list = stored ? JSON.parse(stored) : []
+    if (!Array.isArray(list)) return
+    const index = list.findIndex((item: any) => String(item?.id || '') === String(id))
+    if (index < 0) return
+    list[index] = {
+      ...list[index],
+      name: lastLoginInfo.value.name,
+      icon,
+    }
+    localStorage.setItem('login-account-list', JSON.stringify(list))
+  } catch {
+    // 登录页头像只是展示增强，失败时保持二维码登录可用。
+  }
+}
+
+function handleLastAvatarError() {
+  lastAvatarLoadError.value = true
 }
 
 async function handleGetQrCodeUrl() {
@@ -239,6 +288,7 @@ function clearTimers() {
 onMounted(async () => {
   getDeviceConfig()
   loadLastLoginInfo()
+  refreshLastLoginAvatar()
 
   // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。
   refreshDomainList()
@@ -260,7 +310,8 @@ onBeforeUnmount(() => {
   <div class="comEcode">
     <div class="lastBox">
       <img
-        :src="avatarSrc"
+        :src="lastAvatarDisplaySrc"
+        @error="handleLastAvatarError"
         @click="emit('show-network')"
       />
       <div v-if="lastLoginInfo.name">{{ lastLoginInfo.name }}</div>
@@ -369,9 +420,11 @@ onBeforeUnmount(() => {
     > img {
       display: block;
       margin: 0 auto;
-      width: 60px;
-      height: 60px;
-      border-radius: 100%;
+      max-width: 60px;
+      max-height: 60px;
+      width: auto;
+      height: auto;
+      object-fit: contain;
       cursor: pointer;
     }
 

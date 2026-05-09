@@ -145,7 +145,6 @@ pub async fn ensure_can_login_on_this_machine(app: tauri::AppHandle) -> Result<b
     let path = active_login_lock_path(&app)?;
     if let Some(active) = read_active_login_lock(&path) {
         if active.pid != std::process::id() && is_process_running(active.pid) {
-            show_single_account_warning(&app, &active);
             return Ok(false);
         }
         let _ = std::fs::remove_file(path);

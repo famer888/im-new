@@ -47,6 +47,11 @@ onMounted(async () => {
       }
     }
 
+    if (isTauri()) {
+      const canRestorePreviousSession = await invoke<boolean>('ensure_can_login_on_this_machine')
+      if (!canRestorePreviousSession) return
+    }
+
     await authStore.initSession()
     if (authStore.uid) {
       if (isTauri()) {
