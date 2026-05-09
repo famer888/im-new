@@ -210,6 +210,7 @@ end try
     let file_text = String::from_utf8_lossy(&file_output.stdout).trim().to_string();
     if !file_text.is_empty() {
         paths.push(std::path::PathBuf::from(file_text));
+        return Ok(paths);
     }
 
     let png_path = std::env::temp_dir().join(format!(

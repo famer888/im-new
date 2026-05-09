@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import EmojiPicker from './send/EmojiPicker.vue'
+import fileVideoIcon from '@/assets/images/message/file-video.png'
 
 const { t: $t } = useI18n()
 
@@ -24,6 +25,7 @@ interface PreviewItem {
   name: string
   sizeLabel: string
   isImage: boolean
+  isVideo: boolean
   previewUrl: string
   isError: boolean
   previewFailed: boolean
@@ -40,9 +42,22 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const MAX_IMAGE_SIZE_MB = 10
 const MAX_SIZE_MB = 50
+const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg'])
 
 function getMaxSizeMb(file: File): number {
   return file.type.startsWith('image/') ? MAX_IMAGE_SIZE_MB : MAX_SIZE_MB
+}
+
+function getFileSuffix(file: File): string {
+  const name = file.name || ''
+  const dot = name.lastIndexOf('.')
+  if (dot >= 0 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase()
+  const subtype = (file.type || '').split('/')[1] || ''
+  return subtype.split(';')[0].toLowerCase()
+}
+
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith('video/') || VIDEO_FILE_EXTENSIONS.has(getFileSuffix(file))
 }
 
 function formatFileSize(size: number): string {
@@ -53,6 +68,7 @@ function formatFileSize(size: number): string {
 
 function createPreview(file: File): PreviewItem {
   const isImage = file.type.startsWith('image/')
+  const isVideo = isVideoFile(file)
   const previewUrl = isImage ? URL.createObjectURL(file) : ''
   const maxSizeMb = getMaxSizeMb(file)
   return {
@@ -60,6 +76,7 @@ function createPreview(file: File): PreviewItem {
     name: file.name,
     sizeLabel: formatFileSize(file.size),
     isImage,
+    isVideo,
     previewUrl,
     isError: Math.ceil(file.size / 1024 / 1024) > maxSizeMb,
     previewFailed: false,
@@ -265,6 +282,12 @@ onBeforeUnmount(() => {
                     alt=""
                     @error="handlePreviewError(item)"
                   />
+                  <img
+                    v-else-if="item.isVideo"
+                    class="video-file-icon"
+                    :src="fileVideoIcon"
+                    alt=""
+                  />
                   <div v-else class="file-fallback">📎</div>
                 </picture>
                 <span class="close-btn" @click="handleRemove(index)">
@@ -390,6 +413,13 @@ onBeforeUnmount(() => {
           display: block;
           width: 100%;
           height: 100%;
+          object-fit: contain;
+        }
+
+        .video-file-icon {
+          width: 52px;
+          height: 52px;
+          margin: 4px auto 0;
           object-fit: contain;
         }
 

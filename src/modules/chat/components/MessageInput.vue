@@ -186,6 +186,7 @@ const GROUP_IMAGE_MIN_DIMENSION = 480
 const GROUP_IMAGE_MIN_QUALITY = 0.42
 const FILE_ENCRYPT_CHUNK_SIZE = 102400
 const VISIBLE_TRAILING_SPACE = '\u00a0'
+const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg'])
 
 interface UploadedImagePayload {
   url: string
@@ -206,6 +207,24 @@ interface UploadedFilePayload {
   fileKey: string
 }
 
+interface VideoMetadata {
+  thumbDataUrl: string
+  width: number
+  height: number
+  duration: number
+}
+
+interface UploadedVideoPayload {
+  url: string
+  thumbUrl: string
+  width: number
+  height: number
+  duration: number
+  size: number
+  name: string
+  fileKey: string
+}
+
 interface ImageSendTrace {
   id: string
   startedAt: number
@@ -219,6 +238,11 @@ interface LocalImagePreview {
 }
 
 interface LocalFilePreview {
+  optimisticId: string
+}
+
+interface LocalVideoPreview {
+  url: string
   optimisticId: string
 }
 
@@ -974,21 +998,29 @@ function createLocalPathFile(meta: LocalFileMetaPayload): File {
 }
 
 // 粘贴图片/文件
-function handlePaste(e: ClipboardEvent) {
+async function handlePaste(e: ClipboardEvent) {
+  e.preventDefault()
   const items = e.clipboardData?.items
-  if (!items) return
 
   const files: File[] = []
-  for (const item of items) {
-    if (item.kind === 'file') {
-      const file = item.getAsFile()
-      if (file) files.push(file)
+  if (items) {
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
     }
   }
 
   if (files.length > 0) {
-    e.preventDefault()
     pendingFiles.value = files
+    showFilePreview.value = true
+    return
+  }
+
+  const nativeFiles = await readClipboardFiles()
+  if (nativeFiles.length > 0) {
+    pendingFiles.value = nativeFiles
     showFilePreview.value = true
     return
   }
@@ -996,7 +1028,6 @@ function handlePaste(e: ClipboardEvent) {
   // 纯文本粘贴，防止带格式
   const text = e.clipboardData?.getData('text/plain')
   if (text) {
-    e.preventDefault()
     insertPlainTextAtSelection(text)
   }
 }
@@ -1202,6 +1233,55 @@ async function appendLocalImagePreview(
   return { url: previewUrl, width, height, optimisticId }
 }
 
+function appendLocalVideoPreview(
+  file: File,
+  fileKey: string,
+  metadata: VideoMetadata,
+  trace: ImageSendTrace,
+): LocalVideoPreview | null {
+  const conversationId = convId.value
+  const uid = authStore.uid
+  if (!conversationId || !uid) return null
+
+  const previewUrl = URL.createObjectURL(file)
+  const optimisticId = createOptimisticImageId()
+  const extra = withReadBurnExtra({ fileKey, uploadPending: true, videoTraceId: trace.id })
+  messageStore.appendMessage(conversationId, {
+    id: optimisticId,
+    customMsgId: optimisticId,
+    conversationId,
+    senderId: uid,
+    msgType: MessageType.Video,
+    content: JSON.stringify({
+      url: previewUrl,
+      thumbUrl: metadata.thumbDataUrl,
+      thumbnailUrl: metadata.thumbDataUrl,
+      width: metadata.width,
+      height: metadata.height,
+      duration: metadata.duration,
+      size: file.size,
+      name: file.name,
+      fileKey,
+    }),
+    sendTime: Date.now(),
+    status: 0,
+    readStatus: 0,
+    version: 0,
+    isDeleted: false,
+    extra: extra ? JSON.stringify(extra) : null,
+  })
+  fileTraceLog(trace, 'local video preview appended', {
+    optimisticId,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    width: metadata.width,
+    height: metadata.height,
+    duration: metadata.duration,
+  })
+  return { url: previewUrl, optimisticId }
+}
+
 function appendLocalFilePreview(
   file: File,
   fileKey: string,
@@ -1249,6 +1329,11 @@ function appendLocalFilePreview(
 
 function getFileSizeLimitBytes(file: File): number {
   return file.type.startsWith('image/') ? MAX_IMAGE_SIZE_BYTES : MAX_FILE_SIZE_BYTES
+}
+
+function isVideoFile(file: File): boolean {
+  const suffix = getFileSuffix(file)
+  return file.type.startsWith('video/') || VIDEO_FILE_EXTENSIONS.has(suffix)
 }
 
 function getDataUrlByteLength(dataUrl: string): number {
@@ -1302,6 +1387,10 @@ function getUploadContentType(file: File, suffix: string): string {
   if (suffix === 'png') return 'image/png'
   if (suffix === 'gif') return 'image/gif'
   if (suffix === 'webp') return 'image/webp'
+  if (suffix === 'mp4' || suffix === 'm4v') return 'video/mp4'
+  if (suffix === 'mov') return 'video/quicktime'
+  if (suffix === 'webm') return 'video/webm'
+  if (suffix === 'ogg') return 'video/ogg'
   return 'application/octet-stream'
 }
 
@@ -1655,6 +1744,179 @@ async function uploadFileLikeIm(
   }
 }
 
+function getVideoMetadata(file: File): Promise<VideoMetadata> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video')
+    const canvas = document.createElement('canvas')
+    const objectUrl = URL.createObjectURL(file)
+    let settled = false
+    let timer = 0
+
+    const cleanup = () => {
+      window.clearTimeout(timer)
+      URL.revokeObjectURL(objectUrl)
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+
+    const finish = () => {
+      if (settled) return
+      const sourceWidth = video.videoWidth || 0
+      const sourceHeight = video.videoHeight || 0
+      if (!sourceWidth || !sourceHeight) return
+
+      settled = true
+      const maxThumbEdge = 720
+      const scale = Math.min(1, maxThumbEdge / Math.max(sourceWidth, sourceHeight))
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale))
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale))
+      const context = canvas.getContext('2d')
+      if (!context) {
+        cleanup()
+        reject(new Error('生成视频封面失败'))
+        return
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const thumbDataUrl = canvas.toDataURL('image/jpeg', 0.82)
+      const duration = Number.isFinite(video.duration) ? Math.max(0, Math.round(video.duration)) : 0
+      cleanup()
+      resolve({
+        thumbDataUrl,
+        width: sourceWidth,
+        height: sourceHeight,
+        duration,
+      })
+    }
+
+    const fail = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(new Error('视频预览生成失败'))
+    }
+
+    timer = window.setTimeout(fail, 10000)
+    video.preload = 'metadata'
+    video.muted = true
+    video.playsInline = true
+    video.addEventListener('loadedmetadata', () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0
+      if (duration > 0.2) {
+        try {
+          video.currentTime = 0.1
+          return
+        } catch {
+          finish()
+          return
+        }
+      }
+      finish()
+    })
+    video.addEventListener('loadeddata', finish)
+    video.addEventListener('seeked', finish)
+    video.addEventListener('error', fail)
+    video.src = objectUrl
+    video.load()
+  })
+}
+
+async function uploadVideoLikeIm(
+  file: File,
+  metadata: VideoMetadata,
+  options?: {
+    fileKey?: string
+    trace?: ImageSendTrace
+  },
+): Promise<UploadedVideoPayload> {
+  const trace = options?.trace ?? createImageTrace()
+  const fileKey = options?.fileKey || createFileKey()
+  const thumbFile = dataUrlToFile(metadata.thumbDataUrl, `${file.name || 'video'}-thumb.jpg`)
+  const uploadedThumb = await uploadImageLikeIm(thumbFile, {
+    fileKey,
+    width: metadata.width,
+    height: metadata.height,
+    trace,
+  })
+
+  fileTraceLog(trace, 'video upload start', {
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    width: metadata.width,
+    height: metadata.height,
+    duration: metadata.duration,
+  })
+  const encrypted = await encryptFileForUpload(file, fileKey)
+  const suffix = getFileSuffix(file)
+  const contentType = getUploadContentType(file, suffix)
+  fileTraceLog(trace, 'video encrypt done', {
+    originalBytes: file.size,
+    encryptedBytes: encrypted.byteLength,
+    suffix,
+    contentType,
+    fileKeyHead: safeHead(fileKey),
+    fileKeyLen: fileKey.length,
+  })
+  const [uploadUrlInfo, token] = await Promise.all([
+    getUploadUrl({
+      attachType: getUploadAttachType(MessageType.Video),
+      attachWorkspaceType: 1,
+      fileSize: encrypted.byteLength,
+      suffix,
+    }),
+    getUploadToken(),
+  ])
+
+  const objectKey = String(uploadUrlInfo.fileId || '').trim()
+  const endpoint = normalizeOssEndpoint(String(token.ossEndpoint || ''))
+  const bucket = String(token.ossBucket || '').trim()
+  const responseUrl = String(uploadUrlInfo.url || '').trim()
+  const accessKeyId = String(token.accessKeyId || '').trim()
+  const accessKeySecret = String(token.accessKeySecret || '').trim()
+  const securityToken = String(token.securityToken || '').trim()
+  if (!objectKey || !bucket || !endpoint || !accessKeyId || !accessKeySecret || !securityToken) {
+    throw new Error('上传视频失败：OSS 参数缺失')
+  }
+
+  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
+  await putObjectToOss({
+    url: uploadUrl,
+    bucket,
+    objectKey,
+    accessKeyId,
+    accessKeySecret,
+    securityToken,
+    body: encrypted,
+    contentType,
+    trace,
+    logPrefix: '[video-send] ',
+  })
+
+  const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
+  fileTraceLog(trace, 'video upload done', {
+    originalBytes: file.size,
+    encryptedBytes: encrypted.byteLength,
+    finalUrlHost: (() => {
+      try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
+    })(),
+    thumbUrlHost: (() => {
+      try { return new URL(uploadedThumb.thumbnailUrl).host } catch { return uploadedThumb.thumbnailUrl.slice(0, 60) }
+    })(),
+  })
+
+  return {
+    url: finalUrl,
+    thumbUrl: uploadedThumb.thumbnailUrl,
+    width: metadata.width,
+    height: metadata.height,
+    duration: metadata.duration,
+    size: file.size,
+    name: file.name,
+    fileKey,
+  }
+}
+
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -1820,6 +2082,68 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
         }
         terminalLog('image send prepare/upload failed', {
+          message: (error as Error)?.message || String(error),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        }, 'error')
+        showToast((error as Error)?.message || t('操作失败'), 'error')
+      }
+    } else if (isVideoFile(file)) {
+      const trace = createImageTrace()
+      const fileKey = createFileKey()
+      let localPreview: LocalVideoPreview | null = null
+      try {
+        fileTraceLog(trace, 'handle video file', {
+          conversationId: convId.value,
+          isGroup: isGroup.value,
+          isFriend: isFriend.value,
+          isFileHelper: isFileHelperChat.value,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        })
+        const metadata = await getVideoMetadata(file)
+        localPreview = appendLocalVideoPreview(file, fileKey, metadata, trace)
+        const uploaded = await uploadVideoLikeIm(file, metadata, { fileKey, trace })
+        fileTraceLog(trace, 'emit uploaded video message', {
+          conversationId: convId.value,
+          optimisticId: localPreview?.optimisticId || '',
+          urlHost: (() => {
+            try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
+          })(),
+          thumbUrlHost: (() => {
+            try { return new URL(uploaded.thumbUrl).host } catch { return uploaded.thumbUrl.slice(0, 60) }
+          })(),
+          fileKeyHead: safeHead(uploaded.fileKey),
+          fileKeyLen: uploaded.fileKey.length,
+        })
+        emit('send', JSON.stringify({
+          url: uploaded.url,
+          thumbUrl: uploaded.thumbUrl,
+          thumbnailUrl: uploaded.thumbUrl,
+          duration: uploaded.duration,
+          width: uploaded.width,
+          height: uploaded.height,
+          size: uploaded.size,
+          name: uploaded.name,
+          fileKey: uploaded.fileKey,
+        }), MessageType.Video, withReadBurnExtra({
+          fileKey: uploaded.fileKey,
+          ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
+        }))
+        if (localPreview?.url.startsWith('blob:')) {
+          window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
+        }
+      } catch (error) {
+        console.error('[message-input] video upload failed:', error)
+        if (localPreview?.optimisticId) {
+          messageStore.updateMessageStatus(localPreview.optimisticId, -1)
+        }
+        if (localPreview?.url.startsWith('blob:')) {
+          window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
+        }
+        fileTraceLog(trace, 'video upload failed', {
           message: (error as Error)?.message || String(error),
           name: file.name,
           size: file.size,

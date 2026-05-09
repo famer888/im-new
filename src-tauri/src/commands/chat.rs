@@ -516,7 +516,7 @@ pub async fn send_message(
         Err(reason)
     };
 
-    // 按会话类型分流。文本、图片、语音、文件走 WS 发送链路；骰子暂开放单聊和群聊。
+    // 按会话类型分流。文本、图片、语音、视频、文件走 WS 发送链路；骰子暂开放单聊和群聊。
     // 其余未实现类型先保持原来的
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
@@ -594,7 +594,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (1, 1) | (1, 2) | (1, 7) | (1, 12) => {
+        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 12) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -622,7 +622,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) | (0, 7) | (0, 12) => {
+        (0, 1) | (0, 2) | (0, 3) | (0, 7) | (0, 12) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,
@@ -641,7 +641,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (2, 1) | (2, 2) | (2, 7) => {
+        (2, 1) | (2, 2) | (2, 3) | (2, 7) => {
             if let Err(e) = pipeline::send_channel_message(
                 &ws_mgr,
                 &crypto,
@@ -943,6 +943,20 @@ pub fn decrypt_private_incoming(
                 .to_string());
             }
         }
+        3 => {
+            if let Ok(obj) = crate::proto::imweb::VideoObj::decode(plain.as_slice()) {
+                return Ok(serde_json::json!({
+                    "url": obj.url,
+                    "thumbUrl": obj.thumb_url,
+                    "thumbnailUrl": obj.thumb_url,
+                    "duration": obj.duration,
+                    "width": obj.width,
+                    "height": obj.height,
+                    "size": obj.file_size,
+                })
+                .to_string());
+            }
+        }
         5 => {
             if let Ok(obj) = crate::proto::imweb::NameCardObj::decode(plain.as_slice()) {
                 return Ok(name_card_obj_to_legacy_content(obj));
@@ -1014,6 +1028,20 @@ pub fn decrypt_group_incoming(
                         return Ok(serde_json::json!({
                             "url": obj.url,
                             "duration": obj.duration,
+                            "size": obj.file_size,
+                        })
+                        .to_string());
+                    }
+                }
+                3 => {
+                    if let Ok(obj) = crate::proto::imweb::VideoObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "thumbUrl": obj.thumb_url,
+                            "thumbnailUrl": obj.thumb_url,
+                            "duration": obj.duration,
+                            "width": obj.width,
+                            "height": obj.height,
                             "size": obj.file_size,
                         })
                         .to_string());
@@ -1129,6 +1157,20 @@ pub fn decrypt_channel_incoming(
                         return Ok(serde_json::json!({
                             "url": obj.url,
                             "duration": obj.duration,
+                            "size": obj.file_size,
+                        })
+                        .to_string());
+                    }
+                }
+                3 => {
+                    if let Ok(obj) = crate::proto::imweb::VideoObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "thumbUrl": obj.thumb_url,
+                            "thumbnailUrl": obj.thumb_url,
+                            "duration": obj.duration,
+                            "width": obj.width,
+                            "height": obj.height,
                             "size": obj.file_size,
                         })
                         .to_string());
