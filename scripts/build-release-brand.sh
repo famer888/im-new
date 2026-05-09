@@ -42,7 +42,8 @@ case "$BRAND_ID" in
 esac
 
 ICON_SOURCE_DIR="$ROOT_DIR/resources/icons_$BRAND_ID"
-ICON_TARGET_DIR="$ROOT_DIR/src-tauri/icons"
+ICON_TARGET_REL=".generated-icons/icons_$BRAND_ID"
+ICON_TARGET_DIR="$ROOT_DIR/src-tauri/$ICON_TARGET_REL"
 
 find_png_size() {
   local path="$1"
@@ -103,23 +104,17 @@ APP_NAME="${APP_NAME:-OCS Chat $BRAND_ID}"
 PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.$BRAND_ID.chat}"
 OFFICIAL_URL="${OFFICIAL_URL:-${BRAND_ID}chat.com}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/$PLATFORM/icons_$BRAND_ID}"
-BACKUP_DIR="$(mktemp -d)"
 TAURI_CONFIG_FILE="$(mktemp "$ROOT_DIR/.tauri-brand-$BRAND_ID.XXXXXX.json")"
 
-restore_icons() {
-  if [[ -d "$BACKUP_DIR/icons" ]]; then
-    rm -rf "$ICON_TARGET_DIR"
-    mkdir -p "$ICON_TARGET_DIR"
-    cp -R "$BACKUP_DIR/icons/." "$ICON_TARGET_DIR/"
-  fi
-  rm -rf "$BACKUP_DIR"
+cleanup_generated() {
+  rm -rf "$ICON_TARGET_DIR"
   rm -f "$TAURI_CONFIG_FILE"
 }
 
-trap restore_icons EXIT
+trap cleanup_generated EXIT
 
-mkdir -p "$BACKUP_DIR/icons"
-cp -R "$ICON_TARGET_DIR/." "$BACKUP_DIR/icons/"
+rm -rf "$ICON_TARGET_DIR"
+mkdir -p "$ICON_TARGET_DIR"
 
 cd "$ROOT_DIR"
 
@@ -134,7 +129,23 @@ if [[ "$USE_SOURCE_ICNS" == "1" && -f "$ICON_SOURCE_DIR/icon.icns" ]] && file "$
   cp -f "$ICON_SOURCE_DIR/icon.icns" "$ICON_TARGET_DIR/icon.icns"
 fi
 
-node -e 'const fs = require("fs"); const [out, productName, identifier] = process.argv.slice(1); fs.writeFileSync(out, JSON.stringify({ productName, identifier }, null, 2));' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER"
+node -e '
+  const fs = require("fs");
+  const [out, productName, identifier, iconDir] = process.argv.slice(1);
+  fs.writeFileSync(out, JSON.stringify({
+    productName,
+    identifier,
+    bundle: {
+      icon: [
+        `${iconDir}/32x32.png`,
+        `${iconDir}/128x128.png`,
+        `${iconDir}/128x128@2x.png`,
+        `${iconDir}/icon.icns`,
+        `${iconDir}/icon.ico`,
+      ],
+    },
+  }, null, 2));
+' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL"
 
 echo "Building $APP_NAME ($PKG_IDENTIFIER) with icons_$BRAND_ID for $PLATFORM"
 
