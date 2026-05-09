@@ -30,11 +30,13 @@ const officialUrl = ref(API_CONFIG.officialUrl)
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
 const isLoading = ref(false)
+const hasLoadedFirstQr = ref(false)
 const lastLoginInfo = ref<{ id?: string | number; icon?: string; name?: string; sessionId?: string }>({})
 const lastAvatarLoadError = ref(false)
 
 const domainList = ref<string[]>([getBaseUrl()])
 const urlIndex = ref(0)
+const activeQrBaseUrl = ref('')
 let qrRequestSeq = 0
 
 // 接收来自 NetworkConfig 检测出的有效域名，合并后切到首个有效域名重新拉取二维码
@@ -75,6 +77,7 @@ const currentBaseUrl = computed(() => {
 })
 
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
+const showStartupLoading = computed(() => !hasLoadedFirstQr.value && !loginToken.value && !qrCodeUrlError.value)
 const overlayText = computed(() => {
   if (qrCodeUrlError.value) return t('登录二维码获取失败!')
   return ''
@@ -174,13 +177,15 @@ function handleLastAvatarError() {
 
 async function handleGetQrCodeUrl() {
   const requestSeq = ++qrRequestSeq
+  const baseUrl = currentBaseUrl.value
+  activeQrBaseUrl.value = baseUrl
   clearTimers()
   isLoading.value = true
   qrCodeUrlError.value = false
   isOutTime.value = false
 
   try {
-    const res = await getQrCodeUrl(currentBaseUrl.value)
+    const res = await getQrCodeUrl(baseUrl)
     if (requestSeq !== qrRequestSeq) return
     isLoading.value = false
 
@@ -195,6 +200,7 @@ async function handleGetQrCodeUrl() {
     }
 
     if (res?.token) {
+      hasLoadedFirstQr.value = true
       loginToken.value = res.token
       // 注意：与老 im 一致——*不* 用 res.officialUrl 覆盖当前包的固定官网域名。
       // 二维码必须保持 `{brand}chat.com?token=X&imQrCodeType=2` 格式。
@@ -209,6 +215,7 @@ async function handleGetQrCodeUrl() {
     } else {
       // 与老 im 一致：token 无效也尝试切换域名
       if (retryNextDomain()) return
+      hasLoadedFirstQr.value = true
       qrCodeUrlError.value = true
     }
   } catch (err) {
@@ -217,6 +224,7 @@ async function handleGetQrCodeUrl() {
     isLoading.value = false
 
     if (retryNextDomain()) return
+    hasLoadedFirstQr.value = true
     qrCodeUrlError.value = true
   }
 }
@@ -236,13 +244,14 @@ function handleReGetQrCodeUrl() {
 
 async function handleIsLoginGet() {
   const device = getDeviceConfig()
+  const baseUrl = activeQrBaseUrl.value || currentBaseUrl.value
 
   try {
     const res = await getIsLogin({
       token: loginToken.value,
       sysMac: device.sysMac,
       sysModel: device.sysModel,
-    }, currentBaseUrl.value)
+    }, baseUrl)
 
     // 与老 im 一致：扫码登录成功仅以 uid > 0 为准
     if (res && res.uid && Number(res.uid) > 0) {
@@ -250,8 +259,8 @@ async function handleIsLoginGet() {
       clearTimers()
 
       emit('login-success', {
-        sessionUrl: currentBaseUrl.value,
-        wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(currentBaseUrl.value),
+        sessionUrl: baseUrl,
+        wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(baseUrl),
         aesKey: API_CONFIG.aesKey,
         installCode: '',
         uid: loginId,
@@ -291,13 +300,14 @@ onMounted(async () => {
 
   // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。
   refreshDomainList()
-  await initDomainPoolFromOss()
-  refreshDomainList()
+  handleGetQrCodeUrl()
+
+  initDomainPoolFromOss()
+    .then(refreshDomainList)
+    .catch(() => {})
   initDomainPoolFromApi()
     .then(refreshDomainList)
     .catch(() => {})
-
-  handleGetQrCodeUrl()
 })
 
 onBeforeUnmount(() => {
@@ -307,36 +317,45 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="comEcode">
-    <div class="lastBox">
-      <img
-        :src="lastAvatarDisplaySrc"
-        @error="handleLastAvatarError"
-        @click="emit('show-network')"
-      />
-      <div v-if="lastLoginInfo.name">{{ lastLoginInfo.name }}</div>
-    </div>
-    <section @click="handleReGetQrCodeUrl">
-      <qrcode-vue
-        v-if="loginToken"
-        class="ecode"
-        :value="qrCodeValue"
-        level="H"
-        :size="160"
-      />
-      <div v-else class="ecode ecode-placeholder" />
-      <p v-if="showOverlay">
+    <template v-if="showStartupLoading">
+      <div class="startupBox">
+        <img :src="defaultLogo" />
+        <span class="startupSpinner"></span>
+      </div>
+    </template>
+
+    <template v-else>
+      <div class="lastBox">
         <img
-          :src="freshIcon"
-          :class="{ load: isLoading }"
+          :src="lastAvatarDisplaySrc"
+          @error="handleLastAvatarError"
+          @click="emit('show-network')"
         />
-        <span v-if="overlayText">{{ overlayText }}</span>
-      </p>
-    </section>
-    <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
-    <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
-    <button class="btn-primary importBtn" @click="emit('show-import')">
-      {{ t('载入账户设置') }}
-    </button>
+        <div v-if="lastLoginInfo.name">{{ lastLoginInfo.name }}</div>
+      </div>
+      <section @click="handleReGetQrCodeUrl">
+        <qrcode-vue
+          v-if="loginToken"
+          class="ecode"
+          :value="qrCodeValue"
+          level="H"
+          :size="160"
+        />
+        <div v-else class="ecode ecode-placeholder" />
+        <p v-if="showOverlay">
+          <img
+            :src="freshIcon"
+            :class="{ load: isLoading }"
+          />
+          <span v-if="overlayText">{{ overlayText }}</span>
+        </p>
+      </section>
+      <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
+      <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
+      <button class="btn-primary importBtn" @click="emit('show-import')">
+        {{ t('载入账户设置') }}
+      </button>
+    </template>
   </div>
 </template>
 
@@ -345,6 +364,30 @@ onBeforeUnmount(() => {
   position: relative;
   text-align: center;
   margin-top: 40px;
+
+  .startupBox {
+    height: 340px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+
+    > img {
+      width: 64px;
+      height: 64px;
+      object-fit: contain;
+    }
+  }
+
+  .startupSpinner {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid rgba(51, 105, 254, 0.16);
+    border-top-color: #3369fe;
+    animation: load 0.8s linear infinite;
+  }
 
   a {
     position: relative;
