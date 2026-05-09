@@ -462,28 +462,66 @@ function parseForwardImageDataUrl(content: string): { dataUrl: string; fileName:
   }
 }
 
-function getForwardImagePreviewSrc(item: { msgType: number; content: string | null }): string {
+function isLikelyBase64ImagePayload(value: string): boolean {
+  const raw = value.trim()
+  if (!raw || raw.length < 32 || raw.length % 4 !== 0) return false
+  if (/^(https?:|blob:|file:|asset:|tauri:|\/)/i.test(raw)) return false
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) return false
+  return /^(iVBORw0KGgo|\/9j\/|R0lGOD|UklGR|Qk|AAAAIGZ0eXBhdmlm|PD94bWw|PHN2Z)/.test(raw)
+}
+
+function normalizeForwardImageSrc(value: unknown, mimeType?: unknown): string {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^data:image\//i.test(raw)) return raw
+  if (raw.startsWith('//')) return `https:${raw}`
+  if (isLikelyBase64ImagePayload(raw)) {
+    const mime = String(mimeType || 'image/png').trim() || 'image/png'
+    return `data:${mime};base64,${raw}`
+  }
+  return raw
+}
+
+function getForwardImagePreviewSrc(item: {
+  msgType: number
+  content: string | null
+  previewSrc?: string
+}): string {
   if (item.msgType !== MessageType.Image) return ''
+  const previewSrc = normalizeForwardImageSrc(item.previewSrc)
+  if (previewSrc) return previewSrc
+
+  const raw = String(item.content || '').trim()
+  if (!raw) return ''
+
   try {
-    const o = JSON.parse(item.content || '{}') as {
+    const o = JSON.parse(raw) as {
       url?: string
       fileUrl?: string
       thumbnailUrl?: string
       thumbUrl?: string
       thumbnail?: string
       thumbBase64?: string
+      dataUrl?: string
+      data_url?: string
+      base64?: string
+      mime?: string
+      mimeType?: string
+      mime_type?: string
+      thumbMimeType?: string
+      thumb_mime_type?: string
     }
-    return String(
-      o.thumbnailUrl ||
-      o.thumbUrl ||
-      o.thumbnail ||
-      o.thumbBase64 ||
-      o.url ||
-      o.fileUrl ||
-      '',
-    ).trim()
+    const url = normalizeForwardImageSrc(
+      o.url || o.fileUrl || o.dataUrl || o.data_url || o.base64 || '',
+      o.mimeType || o.mime_type || o.mime,
+    )
+    return normalizeForwardImageSrc(
+      o.thumbnailUrl || o.thumbUrl || o.thumbnail || o.thumbBase64 || url,
+      o.thumbMimeType || o.thumb_mime_type || o.mimeType || o.mime_type || o.mime,
+    )
   } catch {
-    return ''
+    const [url = '', thumbUrl = ''] = raw.split('||')
+    return normalizeForwardImageSrc(thumbUrl) || normalizeForwardImageSrc(url)
   }
 }
 
