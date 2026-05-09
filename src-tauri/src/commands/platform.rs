@@ -115,6 +115,29 @@ pub fn write_clipboard_image(data_base64: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn write_clipboard_file(path: String) -> Result<(), String> {
+    let file_path = std::path::PathBuf::from(&path);
+    if !file_path.is_file() {
+        return Err(format!("clipboard file not found: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return write_clipboard_file_macos(&file_path);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return write_clipboard_file_windows(&file_path);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("clipboard file write is not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn read_clipboard_files() -> Result<Vec<ClipboardFilePayload>, String> {
     let paths = read_clipboard_file_paths()?;
     read_files_from_paths(paths)
@@ -148,6 +171,53 @@ pub fn stat_local_files(paths: Vec<String>) -> Result<Vec<LocalFileMeta>, String
     }
 
     Ok(files)
+}
+
+#[cfg(target_os = "macos")]
+fn write_clipboard_file_macos(path: &std::path::Path) -> Result<(), String> {
+    let path_text = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        r#"
+set theFile to POSIX file "{}"
+set the clipboard to theFile
+"#,
+        path_text
+    );
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn write_clipboard_file_windows(path: &std::path::Path) -> Result<(), String> {
+    let path_text = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+$files = New-Object System.Collections.Specialized.StringCollection
+[void]$files.Add('{}')
+[System.Windows.Forms.Clipboard]::SetFileDropList($files)
+"#,
+        path_text
+    );
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-Sta", "-Command", &script])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 fn read_files_from_paths(paths: Vec<std::path::PathBuf>) -> Result<Vec<ClipboardFilePayload>, String> {

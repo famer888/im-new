@@ -201,6 +201,7 @@ pub fn run() {
             commands::platform::stat_local_files,
             commands::platform::read_clipboard_text,
             commands::platform::write_clipboard_image,
+            commands::platform::write_clipboard_file,
             commands::platform::start_screenshot,
             commands::platform::prevent_sleep,
             commands::platform::allow_sleep,
