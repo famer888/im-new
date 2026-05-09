@@ -820,6 +820,31 @@ export async function setupTauriListeners() {
           })
         }
       }
+      const contactStore = useContactStore()
+      for (const m of normalized) {
+        const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+        const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
+        if (!convId.startsWith('0_') || String(extra?.source || '') !== 'friend-record') continue
+        const friendId = String(extra?.friendId || convId.split('_')[1] || '')
+        if (!friendId) continue
+        const patch: Record<string, unknown> = {}
+        if (Object.prototype.hasOwnProperty.call(extra, 'bfReadCancel')) {
+          patch.bfReadCancel = Boolean(extra.bfReadCancel)
+        }
+        if (Object.prototype.hasOwnProperty.call(extra, 'msgCancelTime')) {
+          patch.msgCancelTime = Number(extra.msgCancelTime || 30)
+        }
+        if (typeof extra.nickname === 'string' && extra.nickname) patch.nickname = extra.nickname
+        if (typeof extra.avatar === 'string') patch.avatar = extra.avatar || null
+        if (typeof extra.identify === 'string' && extra.identify) patch.identify = extra.identify
+        if (typeof extra.remark === 'string') patch.remark = extra.remark || null
+        if (Object.keys(patch).length > 0) {
+          contactStore.patchContact(friendId, patch as any, {
+            source: 'remote',
+            markDetailLoaded: true,
+          })
+        }
+      }
       messageStore.batchAppendMessages(normalized as Message[])
       if (groupEventMessages.length > 0) {
         groupInviteDebug('after batchAppendMessages', {

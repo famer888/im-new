@@ -260,7 +260,7 @@ pub async fn upsert_incoming_messages(
                 if existed_before {
                     continue;
                 }
-                if msg.sender_id != uid_trim {
+                if should_count_as_unread(msg, &uid_trim) {
                     *unread_delta.entry(msg.conversation_id.clone()).or_insert(0) += 1;
                 }
             }
@@ -371,6 +371,23 @@ fn extract_read_burn_meta(extra: Option<&str>) -> (i32, i64) {
     }
 
     (snapchat_time.max(0) as i32, delete_delay_ms.max(0))
+}
+
+fn normalize_external_timestamp(ts: i64, fallback: i64) -> i64 {
+    if ts <= 0 {
+        return fallback;
+    }
+    if ts < 10_000_000_000 {
+        ts * 1000
+    } else {
+        ts
+    }
+}
+
+fn should_count_as_unread(msg: &models::Message, uid: &str) -> bool {
+    // 对齐旧 im：阅后即焚配置变更等通知消息是 chatType=51，不进入
+    // “未读正文”计数；新项目用 msgType=6/8 承载这类系统提示。
+    msg.sender_id != uid && !matches!(msg.msg_type, 6 | 8)
 }
 
 fn parse_extra_map(extra: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
@@ -1653,6 +1670,7 @@ pub async fn apply_friend_read_receipts(
     receipts: Vec<ReadReceiptSyncPayload>,
 ) -> Result<ReadProcessingResult, String> {
     let login_uid = uid.parse::<i64>().unwrap_or_default();
+    let now = chrono::Utc::now().timestamp_millis();
 
     db.with_connection(&uid, |conn| {
         let mut read_message_ids = Vec::<String>::new();
@@ -1667,7 +1685,8 @@ pub async fn apply_friend_read_receipts(
             }
 
             let conversation_id = format!("0_{}", receipt.send_uid);
-            let boundary_send_time = conn
+            let receipt_read_time = normalize_external_timestamp(receipt.read_time, now);
+            let matched_send_time = conn
                 .query_row(
                     "SELECT send_time
                      FROM messages
@@ -1679,9 +1698,11 @@ pub async fn apply_friend_read_receipts(
                 .optional()
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-            let Some(boundary_send_time) = boundary_send_time else {
-                continue;
-            };
+            // 对方秒读时，20104 已读回执可能早于 20101 发送成功回执到达；
+            // 此时本地消息 id 仍是 custom_msg_id，按服务端 msg_id 查不到。
+            // 老 im 的语义是“该会话中该时间点前我发出的消息已读”，所以用
+            // read_time 兜底，避免阅后即焚消息错过删除计时。
+            let boundary_send_time = matched_send_time.unwrap_or(receipt_read_time);
 
             let mut stmt = conn
                 .prepare_cached(
@@ -1733,7 +1754,7 @@ pub async fn apply_friend_read_receipts(
                     scheduled_deletions.push(ScheduledDeletion {
                         conversation_id: conversation_id.clone(),
                         message_id,
-                        expire_at: receipt.read_time.max(0) + delete_delay_ms,
+                        expire_at: receipt_read_time + delete_delay_ms,
                     });
                 }
             }

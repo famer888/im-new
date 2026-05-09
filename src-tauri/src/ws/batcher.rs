@@ -439,6 +439,23 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::FRIEND_RECORD_PUSH => {
+                match self.decode_friend_record_push(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        info!("FRIEND_RECORD_PUSH decoded system messages count={}", msgs.len());
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("decode FRIEND_RECORD_PUSH failed: {}", e);
+                    }
+                }
+                return;
+            }
             // 20601 用户上下线推送（与 im `PushUserOnOrOffLineMessageResp` 一致）
             cmds::USER_ONLINE_STATUS_PUSH => {
                 match imweb::PushUserOnOrOffLineMessageResp::decode(decoded_payload.as_slice()) {
@@ -986,6 +1003,80 @@ impl MessageBatcher {
             cmds::GROUP_REQ_MSG_PUSH,
             resp.group_req_msg.as_slice(),
         ))
+    }
+
+    fn decode_friend_record_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushFriendRecordMessageResp::decode(payload)
+            .map_err(|e| format!("decode PushFriendRecordMessageResp: {}", e))?;
+        let mut out = Vec::new();
+
+        for item in resp.friend_recordmsg {
+            let Some(detail) = item.contacts_detail.as_ref() else {
+                continue;
+            };
+            let Some(user) = detail.user_info.as_ref() else {
+                continue;
+            };
+            let friend_id = if user.uid > 0 {
+                user.uid
+            } else if item.target_uid > 0 {
+                item.target_uid
+            } else if item.receive_uid > 0 {
+                item.receive_uid
+            } else {
+                item.send_uid
+            };
+            if friend_id <= 0 {
+                continue;
+            }
+
+            let do_type = item.do_type;
+            let content = if do_type == imweb::FriendDoType::ReadCancel as i32 {
+                friend_read_cancel_tip(
+                    detail.msg_cancel_time,
+                    friend_display_name(user),
+                    detail.bf_read_cancel,
+                )
+            } else if do_type == imweb::FriendDoType::AgreeJoinFriend as i32 {
+                "我们已成为好友，打声招呼吧".to_string()
+            } else {
+                continue;
+            };
+
+            let send_time = normalize_timestamp(item.create_time);
+            out.push(DecodedMessage {
+                cmd: cmds::FRIEND_RECORD_PUSH,
+                msg_id: format!(
+                    "friend-record-{}-{}-{}-{}",
+                    do_type, friend_id, item.send_uid, send_time
+                ),
+                conversation_id: format!("0_{}", friend_id),
+                sender_id: item.send_uid.to_string(),
+                msg_type: 8,
+                content,
+                send_time,
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "friend-record",
+                    "doType": do_type,
+                    "friendId": friend_id.to_string(),
+                    "receiveUid": item.receive_uid.to_string(),
+                    "sendUid": item.send_uid.to_string(),
+                    "targetUid": item.target_uid.to_string(),
+                    "bfReadCancel": detail.bf_read_cancel,
+                    "msgCancelTime": detail.msg_cancel_time,
+                    "bfReadReceipt": detail.bf_read_receipt,
+                    "letter": detail.letter.clone(),
+                    "nickname": user.nick_name.clone(),
+                    "avatar": user.icon.clone(),
+                    "identify": user.identify.clone(),
+                    "remark": user.friend_relation.as_ref().map(|r| r.remark_name.clone()).unwrap_or_default(),
+                }),
+            });
+        }
+
+        Ok(out)
     }
 
     fn decode_private_msg_received(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
@@ -1734,6 +1825,41 @@ fn normalize_timestamp(ts: i64) -> i64 {
     } else {
         chrono::Utc::now().timestamp_millis()
     }
+}
+
+fn friend_display_name(user: &imweb::UserBase) -> String {
+    if let Some(relation) = user.friend_relation.as_ref() {
+        let remark = relation.remark_name.trim();
+        if !remark.is_empty() {
+            return remark.to_string();
+        }
+    }
+    let nick = user.nick_name.trim();
+    if !nick.is_empty() {
+        nick.to_string()
+    } else if user.uid > 0 {
+        user.uid.to_string()
+    } else {
+        "对方".to_string()
+    }
+}
+
+fn friend_read_cancel_tip(seconds: i32, name: String, enabled: bool) -> String {
+    if !enabled {
+        return format!("{}关闭了阅后即焚", name);
+    }
+
+    let seconds = seconds.max(0);
+    let time_text = if seconds < 60 {
+        format!("{}秒", seconds)
+    } else if seconds < 60 * 60 {
+        format!("{}分钟", seconds / 60)
+    } else if seconds < 60 * 60 * 24 {
+        format!("{}小时", seconds / (60 * 60))
+    } else {
+        format!("{}天", seconds / (60 * 60 * 24))
+    };
+    format!("{} 设置了消息已读{}后销毁", name, time_text)
 }
 
 fn group_event_content(item: &imweb::GroupReqEventMsgDto, common: &imweb::CommonMsgDto) -> String {
