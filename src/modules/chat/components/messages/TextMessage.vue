@@ -6,7 +6,8 @@ import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
-import { useUIStore, type AddGroupTarget, type MemberInfoProfile } from '@/stores/useUIStore'
+import { useChannelStore } from '@/stores/useChannelStore'
+import { useUIStore, type AddChannelTarget, type AddGroupTarget, type MemberInfoProfile } from '@/stores/useUIStore'
 import { ConversationType } from '@/types'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import { eventBus } from '@/utils/eventBus'
@@ -16,6 +17,7 @@ import {
   queryGroupLink,
   type GroupDetailFromQrCodeResp,
 } from '@/api/imBase'
+import { isChannelLink, searchAliasContent, type ChannelLinkResp } from '@/api/imChannel'
 
 const props = defineProps<{
   message: Message
@@ -24,6 +26,7 @@ const props = defineProps<{
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const groupStore = useGroupStore()
+const channelStore = useChannelStore()
 const uiStore = useUIStore()
 const { t } = useI18n()
 const isSelf = computed(() => props.message.senderId === authStore.uid)
@@ -51,12 +54,16 @@ type AliasTarget =
   | { type: 'member'; context: string; profile: MemberInfoProfile }
   | { type: 'joined-group' }
   | { type: 'add-group'; target: AddGroupTarget }
+  | { type: 'channel'; channel: Record<string, any> }
+  | { type: 'private-channel'; channel: Record<string, any> }
   | { type: 'missing' }
 
 const GROUP_INVITE_HOSTS = new Set(['55chat.com', '97chat.com', 'ocs.com'])
 const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 const openingMentionKeys = new Set<string>()
+const openingLinkKeys = new Set<string>()
 const resolvingMentionKeys = ref(new Set<string>())
+const resolvingLinkKeys = ref(new Set<string>())
 
 function parseConversationRef(conversationId: string): { type: number; targetId: string } {
   const i = conversationId.indexOf('_')
@@ -144,12 +151,13 @@ function detectLinkAtStart(content: string, start: number): { text: string; href
   // 安全结束字符：不得为标点符号或分隔符
   const safeEndChar = `[^${forbiddenChars}\\.,;:?!()\\[\\]{}]`
 
-  const regex = new RegExp(`^(https?://[^${forbiddenChars}]*${safeEndChar})`)
+  const regex = new RegExp(`^((?:https?://|www\\.)[^${forbiddenChars}]*${safeEndChar})`)
   const match = rest.match(regex)
   if (!match) return null
 
   const url = match[1]
-  if (url.length <= 7) return null // At least "http://" + one char
+  if (url.startsWith('http') && url.length <= 7) return null // At least "http://" + one char
+  if (url.startsWith('www.') && url.length <= 5) return null
   return { text: url, href: url }
 }
 
@@ -169,6 +177,13 @@ function normalizeUrl(raw: string): URL | null {
       return null
     }
   }
+}
+
+function completionUrl(raw: string): string {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(text)) return text
+  return `https://${text}`
 }
 
 function getSearchParam(url: URL, name: string): string {
@@ -294,6 +309,79 @@ async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise
   return Boolean(groupStore.getGroup(groupId))
 }
 
+function normalizeChannelId(raw: any): string {
+  return String(raw?.channelId ?? raw?.id ?? '').trim()
+}
+
+function openChannelConversation(raw: any) {
+  const channelId = normalizeChannelId(raw)
+  if (!channelId) return false
+
+  channelStore.patchChannel(channelId, {
+    ...raw,
+    id: channelId,
+    channelId,
+    name: raw?.channelName ?? raw?.name ?? channelId,
+    channelName: raw?.channelName ?? raw?.name ?? channelId,
+    avatar: raw?.icon ?? raw?.avatar ?? null,
+    icon: raw?.icon ?? raw?.avatar ?? null,
+    updatedAt: Date.now(),
+  })
+
+  const conv = chatStore.ensureConversation(ConversationType.Channel, channelId)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
+  return true
+}
+
+function canOpenChannelDirectly(raw: any): boolean {
+  return !Number(raw?.linkType || 0) || Boolean(Number(raw?.memberType || 0))
+}
+
+function parseChannelTarget(raw: any): AddChannelTarget | null {
+  const id = normalizeChannelId(raw)
+  if (!id) return null
+  return {
+    id,
+    channelId: id,
+    name: String(raw?.channelName ?? raw?.name ?? id),
+    channelName: String(raw?.channelName ?? raw?.name ?? id),
+    avatar: String(raw?.avatar ?? raw?.icon ?? ''),
+    icon: String(raw?.icon ?? raw?.avatar ?? ''),
+    logoColor: raw?.logoColor ?? null,
+    memberCount: Number(raw?.memberCount ?? raw?.member_count ?? 0),
+    remark: String(raw?.remark ?? raw?.channelDesc ?? raw?.description ?? ''),
+    link: String(raw?.link ?? ''),
+    linkType: raw?.linkType === undefined || raw?.linkType === null ? null : Number(raw.linkType),
+    memberType: raw?.memberType === undefined || raw?.memberType === null ? null : Number(raw.memberType),
+  }
+}
+
+function openAddChannelDialog(raw: any) {
+  const target = parseChannelTarget(raw)
+  if (!target) {
+    eventBus.emit('show-toast', { message: t('此频道已失效或过期'), type: 'error' })
+    return
+  }
+  uiStore.setAddChannelTarget(target)
+  uiStore.setRightPanel('none')
+  uiStore.openAddChannelDialog()
+}
+
+async function resolveChannelLinkTarget(href: string): Promise<ChannelLinkResp | null> {
+  const link = completionUrl(href)
+  if (!link) return null
+  try {
+    const res = await isChannelLink({ link })
+    if (Number(res?.code ?? 0) === 200 && res?.data) return res
+  } catch (error) {
+    console.warn('[TextMessage] resolve channel link failed:', error)
+  }
+  return null
+}
+
 function aliasTargetCacheKey(label: string, groupId: string): string {
   return `${groupId}:${label.replace(/^@+/, '').trim()}`
 }
@@ -305,11 +393,29 @@ function setMentionResolving(key: string, resolving: boolean) {
   resolvingMentionKeys.value = next
 }
 
+function setLinkResolving(key: string, resolving: boolean) {
+  const next = new Set(resolvingLinkKeys.value)
+  if (resolving) next.add(key)
+  else next.delete(key)
+  resolvingLinkKeys.value = next
+}
+
 async function resolveRemoteAliasTarget(label: string, groupId: string): Promise<AliasTarget> {
   const context = label.replace(/^@+/, '').trim()
   if (!context) return { type: 'missing' }
 
   try {
+    const aliasResp = await searchAliasContent({ fromUid: authStore.uid || 0, content: context })
+    if (Number(aliasResp?.code ?? 0) === 200 && aliasResp?.data) {
+      const searchType = Number(aliasResp.data.searchType)
+      const channelInfo = aliasResp.data.channelInfo
+      if (searchType === 2 && channelInfo) {
+        return canOpenChannelDirectly(channelInfo)
+          ? { type: 'channel', channel: channelInfo as Record<string, any> }
+          : { type: 'private-channel', channel: channelInfo as Record<string, any> }
+      }
+    }
+
     const resp = await groupOrUserDetail({ fromUid: authStore.uid || 0, context })
     const profile = parseMemberProfile(resp)
     if (profile) {
@@ -351,6 +457,12 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
     uiStore.setAddGroupTarget(target.target)
     uiStore.setRightPanel('none')
     uiStore.openAddGroupDialog()
+  } else if (target.type === 'channel') {
+    if (openChannelConversation(target.channel)) {
+      eventBus.emit('show-toast', { message: t('已打开频道'), type: 'success' })
+    }
+  } else if (target.type === 'private-channel') {
+    openAddChannelDialog(target.channel)
   } else {
     aliasTargetCache.delete(key)
     eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
@@ -421,7 +533,6 @@ function findMentionMember(label: string, members: GroupMember[]): GroupMember |
 
 async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
   const groupId = messageGroupId.value
-  if (!groupId) return
 
   const cleanLabel = segment.text.replace(/^@+/, '').trim()
   if (!cleanLabel || cleanLabel === '所有人' || cleanLabel === '全体成员') return
@@ -430,7 +541,7 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
   openingMentionKeys.add(openingKey)
 
   try {
-    const members = groupMembers.value
+    const members = groupId ? groupMembers.value : []
     const member = segment.memberId
       ? members.find((item) => item.userId === segment.memberId)
       : findMentionMember(segment.text, members)
@@ -456,25 +567,53 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
 function isAtResolving(segment: Extract<ContentSegment, { type: 'at' }>): boolean {
   const groupId = messageGroupId.value
-  if (!groupId) return false
   return resolvingMentionKeys.value.has(aliasTargetCacheKey(segment.text, groupId))
+}
+
+function linkResolvingKey(segment: Extract<ContentSegment, { type: 'link' }>): string {
+  return `${props.message.id || props.message.customMsgId || props.message.conversationId}:${segment.href}`
+}
+
+function isLinkResolving(segment: Extract<ContentSegment, { type: 'link' }>): boolean {
+  return resolvingLinkKeys.value.has(linkResolvingKey(segment))
 }
 
 async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegment, { type: 'link' }>) {
   event.preventDefault()
   event.stopPropagation()
 
-  const url = normalizeUrl(segment.href)
-  if (!url || !isGroupInviteLink(url)) {
-    window.open(segment.href, '_blank')
-    eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
-    return
-  }
+  const key = linkResolvingKey(segment)
+  if (openingLinkKeys.has(key)) return
+  openingLinkKeys.add(key)
+
+  const slowTimer = window.setTimeout(() => {
+    setLinkResolving(key, true)
+  }, 250)
 
   try {
-    const groupInfo = await resolveGroupInfoFromLink(segment.href)
+    const normalizedHref = completionUrl(segment.href)
+    const channelLink = await resolveChannelLinkTarget(normalizedHref)
+    if (channelLink?.data) {
+      if (canOpenChannelDirectly(channelLink.data)) {
+        if (openChannelConversation(channelLink.data)) {
+          eventBus.emit('show-toast', { message: t('已打开频道'), type: 'success' })
+        }
+      } else {
+        openAddChannelDialog(channelLink.data)
+      }
+      return
+    }
+
+    const url = normalizeUrl(normalizedHref)
+    if (!url || !isGroupInviteLink(url)) {
+      window.open(normalizedHref || segment.href, '_blank')
+      eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+      return
+    }
+
+    const groupInfo = await resolveGroupInfoFromLink(normalizedHref)
     if (!groupInfo) {
-      window.open(segment.href, '_blank')
+      window.open(normalizedHref, '_blank')
       eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
       return
     }
@@ -496,6 +635,10 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   } catch (error) {
     console.error('[TextMessage] resolve group invite link failed:', error)
     eventBus.emit('show-toast', { message: (error as Error)?.message || '加入群聊失败', type: 'error' })
+  } finally {
+    window.clearTimeout(slowTimer)
+    setLinkResolving(key, false)
+    openingLinkKeys.delete(key)
   }
 }
 </script>
@@ -521,7 +664,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
         />
         <span
           v-else-if="segment.type === 'link'"
-          class="text-link"
+          :class="['text-link', { resolving: isLinkResolving(segment) }]"
           @click.stop="handleLinkClick($event, segment)"
         >
           {{ segment.text }}
@@ -558,7 +701,8 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
     letter-spacing: 0.5px;
     font-size: 14px;
 
-    .at-mention {
+    .at-mention,
+    .text-link {
       color: #3369fe;
       display: inline-block;
       cursor: pointer;
@@ -591,9 +735,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
     }
 
     .text-link {
-      color: #3369fe;
       text-decoration: none;
-      cursor: pointer;
 
       &:hover {
         text-decoration: underline;

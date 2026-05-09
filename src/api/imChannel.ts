@@ -184,6 +184,35 @@ export interface ChannelUpdateMemberResp {
   data?: unknown
 }
 
+export interface ChannelLinkResp {
+  code: number
+  msg?: string
+  data?: ChannelListItem & {
+    link?: string
+    channelId?: number | string
+    channelName?: string
+    memberType?: number
+    linkType?: number
+  } | null
+}
+
+export interface SearchAliasContentResp {
+  code: number
+  msg?: string
+  data?: {
+    searchType?: number | string
+    groupAlias?: unknown
+    userDetail?: unknown
+    channelInfo?: ChannelListItem & {
+      link?: string
+      channelId?: number | string
+      channelName?: string
+      memberType?: number
+      linkType?: number
+    } | null
+  } | null
+}
+
 async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
   const base = getOpenChatBaseUrl()
   const url = `${base}${path}`
@@ -253,4 +282,24 @@ export async function updateChannel(data: {
   remark?: string
 }): Promise<ChannelUpdateMemberResp> {
   return requestChannelJson<ChannelUpdateMemberResp>('/channel/updateChannel', data)
+}
+
+export async function subscribeChannel(data: {
+  channelId: number | string
+  link?: string
+}): Promise<ChannelUpdateMemberResp> {
+  return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelMember/subscribeChannel', data)
+}
+
+export async function isChannelLink(data: {
+  link: string
+}): Promise<ChannelLinkResp> {
+  return requestChannelJson<ChannelLinkResp>('/channel/getChannelByLink', data)
+}
+
+export async function searchAliasContent(data: {
+  fromUid: number | string
+  content: string
+}): Promise<SearchAliasContentResp> {
+  return requestChannelJson<SearchAliasContentResp>('/user/search/content', data)
 }

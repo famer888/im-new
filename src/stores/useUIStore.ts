@@ -33,6 +33,21 @@ export interface AddGroupTarget {
   joinSource?: 'alias' | 'link'
 }
 
+export interface AddChannelTarget {
+  id: string
+  channelId: string
+  name: string
+  channelName: string
+  avatar: string
+  icon: string
+  logoColor?: string | null
+  memberCount: number
+  remark: string
+  link: string
+  linkType: number | null
+  memberType: number | null
+}
+
 export interface MemberInfoProfile {
   userId: string
   nickname: string
@@ -84,6 +99,8 @@ export const useUIStore = defineStore('ui', () => {
   const addContactTarget = ref<AddContactTarget | null>(null)
   const addGroupTarget = ref<AddGroupTarget | null>(null)
   const addGroupDialogVisible = ref(false)
+  const addChannelTarget = ref<AddChannelTarget | null>(null)
+  const addChannelDialogVisible = ref(false)
 
   // Context menu
   const contextMenuVisible = ref(false)
@@ -196,6 +213,18 @@ export const useUIStore = defineStore('ui', () => {
 
   function closeAddGroupDialog() {
     addGroupDialogVisible.value = false
+  }
+
+  function setAddChannelTarget(target: AddChannelTarget | null) {
+    addChannelTarget.value = target
+  }
+
+  function openAddChannelDialog() {
+    addChannelDialogVisible.value = true
+  }
+
+  function closeAddChannelDialog() {
+    addChannelDialogVisible.value = false
   }
 
   function showContextMenu(x: number, y: number, data: Record<string, unknown>) {
@@ -314,6 +343,11 @@ export const useUIStore = defineStore('ui', () => {
     addGroupDialogVisible,
     openAddGroupDialog,
     closeAddGroupDialog,
+    addChannelTarget,
+    setAddChannelTarget,
+    addChannelDialogVisible,
+    openAddChannelDialog,
+    closeAddChannelDialog,
     quoteMessage,
     forwardDraftItems,
     forwardDraftTargetId,
