@@ -682,6 +682,24 @@ function getCaretTextOffset(): number {
   return preRange.toString().length
 }
 
+function getEditorRangeTextOffsets(range: Range): { start: number; end: number } | null {
+  const editor = editorRef.value
+  if (!editor || !editor.contains(range.commonAncestorContainer)) return null
+
+  const startRange = range.cloneRange()
+  startRange.selectNodeContents(editor)
+  startRange.setEnd(range.startContainer, range.startOffset)
+
+  const endRange = range.cloneRange()
+  endRange.selectNodeContents(editor)
+  endRange.setEnd(range.endContainer, range.endOffset)
+
+  return {
+    start: startRange.toString().length,
+    end: endRange.toString().length,
+  }
+}
+
 function setEditorTextAndCaret(text: string, caretOffset: number) {
   const editor = editorRef.value
   if (!editor) return
@@ -703,6 +721,22 @@ function setEditorTextAndCaret(text: string, caretOffset: number) {
   selection?.removeAllRanges()
   selection?.addRange(range)
   savedSelection.value = range.cloneRange()
+}
+
+function insertPlainTextAtSelection(text: string) {
+  if (!text) return
+
+  restoreEditorSelection()
+  const editor = editorRef.value
+  const selection = window.getSelection()
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+  const offsets = range ? getEditorRangeTextOffsets(range) : null
+  const currentText = getEditorText()
+  const start = offsets?.start ?? currentText.length
+  const end = offsets?.end ?? start
+  const nextText = `${currentText.slice(0, start)}${text}${currentText.slice(end)}`
+  setEditorTextAndCaret(nextText, start + text.length)
+  updateAtListFromCaret()
 }
 
 function getActiveAtRange() {
@@ -779,8 +813,7 @@ async function handleEditorMenuSelect(key: string) {
 
     const text = await readClipboardText()
     if (text) {
-      document.execCommand('insertText', false, text)
-      handleInput()
+      insertPlainTextAtSelection(text)
     }
     return
   }
@@ -900,7 +933,7 @@ function handlePaste(e: ClipboardEvent) {
   const text = e.clipboardData?.getData('text/plain')
   if (text) {
     e.preventDefault()
-    document.execCommand('insertText', false, text)
+    insertPlainTextAtSelection(text)
   }
 }
 
@@ -2274,12 +2307,16 @@ onBeforeUnmount(() => {
 .toolbar {
   display: flex;
   align-items: center;
+  height: 36px;
+  box-sizing: border-box;
   padding: 8px 14px 0;
+  flex-shrink: 0;
 
   .toolbar-left {
     display: flex;
     gap: 4px;
     align-items: center;
+    height: 28px;
   }
 }
 
@@ -2340,16 +2377,19 @@ onBeforeUnmount(() => {
 .editor-wrapper {
   padding: 6px 14px;
   position: relative;
+  box-sizing: border-box;
 }
 
 .editor {
   min-height: 90px;
   max-height: 200px;
+  box-sizing: border-box;
   overflow-y: auto;
   font-size: 14px;
   line-height: 20px;
   outline: none;
   word-break: break-all;
+  white-space: pre-wrap;
 
   &:empty::before {
     content: attr(placeholder);
