@@ -128,7 +128,7 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
         }
     }
 
-    if flash {
+    if flash && count > 0 {
         for label in ["main", "login"] {
             if let Some(window) = app.get_webview_window(label) {
                 let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
@@ -137,11 +137,7 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
     } else {
         for label in ["main", "login"] {
             if let Some(window) = app.get_webview_window(label) {
-                let _ = if count > 0 {
-                    window.request_user_attention(Some(tauri::UserAttentionType::Critical))
-                } else {
-                    window.request_user_attention(None)
-                };
+                let _ = window.request_user_attention(None);
             }
         }
 
