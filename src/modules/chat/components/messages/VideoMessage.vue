@@ -467,13 +467,15 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div v-if="showPreview" class="video-preview" @click="showPreview = false">
         <button class="preview-close" type="button" @click.stop="showPreview = false">×</button>
-        <video
-          :src="previewVideoSrc"
-          controls
-          autoplay
-          playsinline
-          @click.stop
-        ></video>
+        <div class="video-preview-shell" @click.stop>
+          <video
+            :src="previewVideoSrc"
+            controls
+            autoplay
+            playsinline
+            @click.stop
+          ></video>
+        </div>
       </div>
     </Teleport>
   </div>
@@ -625,9 +627,22 @@ onBeforeUnmount(() => {
   justify-content: center;
   background: rgba(0, 0, 0, 0.82);
 
-  video {
+  .video-preview-shell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     max-width: calc(100vw - 48px);
     max-height: calc(100vh - 72px);
+    background: rgba(0, 0, 0, 0.38);
+  }
+
+  .video-preview-shell video {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 72px);
+    width: auto;
+    height: auto;
+    object-fit: contain;
     outline: none;
   }
 }
