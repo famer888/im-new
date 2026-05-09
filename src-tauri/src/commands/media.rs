@@ -1,8 +1,8 @@
+use std::sync::{Mutex, OnceLock};
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl,
     WebviewWindowBuilder,
 };
-use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Copy)]
 struct MediaWindowBounds {
@@ -11,7 +11,8 @@ struct MediaWindowBounds {
 }
 
 fn media_window_restore_bounds() -> &'static Mutex<Option<MediaWindowBounds>> {
-    static MEDIA_WINDOW_RESTORE_BOUNDS: OnceLock<Mutex<Option<MediaWindowBounds>>> = OnceLock::new();
+    static MEDIA_WINDOW_RESTORE_BOUNDS: OnceLock<Mutex<Option<MediaWindowBounds>>> =
+        OnceLock::new();
     MEDIA_WINDOW_RESTORE_BOUNDS.get_or_init(|| Mutex::new(None))
 }
 
@@ -44,15 +45,11 @@ pub async fn open_media_window(
         return Ok(());
     }
 
-    let mut builder = WebviewWindowBuilder::new(
-        &app,
-        label,
-        WebviewUrl::App("/#/media".into()),
-    )
-    .title(&next_title)
-    .resizable(true)
-    .decorations(false)
-    .visible(false);
+    let builder = WebviewWindowBuilder::new(&app, label, WebviewUrl::App("/#/media".into()))
+        .title(&next_title)
+        .resizable(true)
+        .decorations(false)
+        .visible(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;
     let _ = window.set_size(Size::Physical(PhysicalSize::new(next_width, next_height)));
@@ -76,9 +73,7 @@ pub async fn media_window_minimize(window: tauri::WebviewWindow) -> Result<(), S
 }
 
 #[tauri::command]
-pub async fn media_window_toggle_maximize(
-    window: tauri::WebviewWindow,
-) -> Result<bool, String> {
+pub async fn media_window_toggle_maximize(window: tauri::WebviewWindow) -> Result<bool, String> {
     let mut restore_bounds = media_window_restore_bounds()
         .lock()
         .map_err(|e| e.to_string())?;
@@ -117,6 +112,15 @@ pub async fn media_window_toggle_maximize(
 }
 
 #[tauri::command]
+pub async fn media_window_toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
+    let next_fullscreen = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window
+        .set_fullscreen(next_fullscreen)
+        .map_err(|e| e.to_string())?;
+    Ok(next_fullscreen)
+}
+
+#[tauri::command]
 pub async fn media_window_close(window: tauri::WebviewWindow) -> Result<(), String> {
     if let Ok(mut restore_bounds) = media_window_restore_bounds().lock() {
         *restore_bounds = None;
@@ -130,4 +134,9 @@ pub async fn media_window_is_maximized() -> Result<bool, String> {
         .lock()
         .map_err(|e| e.to_string())?;
     Ok(restore_bounds.is_some())
+}
+
+#[tauri::command]
+pub async fn media_window_is_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
+    window.is_fullscreen().map_err(|e| e.to_string())
 }

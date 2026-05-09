@@ -217,40 +217,18 @@ function handleVideoVolume(event: Event) {
 }
 
 async function syncVideoFullscreenState() {
-  const currentWindow = currentMediaWindow()
-  if (currentWindow) {
-    try {
-      isVideoFullscreen.value = await currentWindow.isFullscreen()
-      return
-    } catch {
-      // fallback below
-    }
+  try {
+    isVideoFullscreen.value = await invoke<boolean>('media_window_is_fullscreen')
+  } catch {
+    isVideoFullscreen.value = false
   }
-  isVideoFullscreen.value = Boolean(document.fullscreenElement)
 }
 
 async function toggleVideoFullscreen() {
-  const currentWindow = currentMediaWindow()
-  if (currentWindow) {
-    try {
-      const nextFullscreen = !(await currentWindow.isFullscreen())
-      await currentWindow.setFullscreen(nextFullscreen)
-      isVideoFullscreen.value = nextFullscreen
-      return
-    } catch (error) {
-      console.warn('[media-viewer] window fullscreen failed:', error)
-    }
-  }
-
-  const stage = document.querySelector<HTMLElement>('.media-stage')
   try {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen()
-    } else {
-      await stage?.requestFullscreen?.()
-    }
+    isVideoFullscreen.value = await invoke<boolean>('media_window_toggle_fullscreen')
   } catch (error) {
-    console.warn('[media-viewer] request fullscreen failed:', error)
+    console.warn('[media-viewer] window fullscreen failed:', error)
   } finally {
     await syncVideoFullscreenState()
   }
@@ -546,8 +524,6 @@ onMounted(async () => {
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
     applyPayload(nextPayload)
   })
-  document.addEventListener('fullscreenchange', syncVideoFullscreenState)
-
   const currentWindow = currentMediaWindow()
   if (!currentWindow) {
     isMaximized.value = false
@@ -574,7 +550,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   resetVideoState()
-  document.removeEventListener('fullscreenchange', syncVideoFullscreenState)
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
   unlistenWindowEvents = []
@@ -584,7 +559,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="media-viewer" @contextmenu="handleContextMenu">
+  <div
+    class="media-viewer"
+    :class="{ 'is-desktop-fullscreen': isVideoFullscreen }"
+    @contextmenu="handleContextMenu"
+  >
     <div class="media-titlebar">
       <div class="media-drag-layer" @mousedown="startWindowDrag" @dblclick="maximize"></div>
       <span class="media-title">{{ payload?.title || '图片' }}</span>
@@ -616,7 +595,10 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="media-stage" :class="{ 'is-video': isVideo }">
+    <div
+      class="media-stage"
+      :class="{ 'is-video': isVideo, 'is-video-fullscreen': isVideoFullscreen }"
+    >
       <video
         v-if="videoSrc"
         ref="videoRef"
@@ -701,11 +683,14 @@ onUnmounted(() => {
         <button
           class="video-control-btn video-fullscreen-btn"
           type="button"
-          aria-label="Fullscreen"
+          :aria-label="isVideoFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
           @click="toggleVideoFullscreen"
         >
-          <svg viewBox="0 0 18 18" aria-hidden="true">
+          <svg v-if="!isVideoFullscreen" viewBox="0 0 18 18" aria-hidden="true">
             <path d="M10 3h3.6l-4 4L11 8.4l4-4V8h2V1h-7v2ZM7 9.6l-4 4V10H1v7h7v-2H4.4l4-4L7 9.6Z" />
+          </svg>
+          <svg v-else viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M15 4.4 11 8.4 9.6 7 13.6 3H10V1h7v7h-2V4.4ZM3 13.6 7 9.6 8.4 11l-4 4H8v2H1v-7h2v3.6Z" />
           </svg>
         </button>
       </div>
@@ -718,7 +703,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="bottom-actions">
+    <div v-if="!isVideo" class="bottom-actions">
       <button
         v-if="!isVideo"
         class="action-btn"
@@ -783,6 +768,15 @@ onUnmounted(() => {
   color: #fff;
   overflow: hidden;
   border-radius: 5px;
+}
+
+.media-viewer.is-desktop-fullscreen {
+  border-radius: 0;
+  background: #000;
+}
+
+.media-viewer.is-desktop-fullscreen .media-titlebar {
+  display: none;
 }
 
 .media-titlebar {
@@ -897,8 +891,8 @@ onUnmounted(() => {
   }
 }
 
-.media-stage:fullscreen {
-  background: rgba(0, 0, 0, 0.82);
+.media-stage.is-video-fullscreen {
+  background: #000;
 }
 
 .media-image-wrap {
