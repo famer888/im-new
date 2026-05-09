@@ -1733,6 +1733,9 @@ pub async fn apply_friend_read_receipts(
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
             if candidates.is_empty() {
+                if matched_send_time.is_some() {
+                    read_message_ids.push(receipt.msg_id.to_string());
+                }
                 continue;
             }
 
@@ -1884,7 +1887,10 @@ pub async fn delete_message(
         .with_connection(&uid, |conn| {
             let conversation_id = conn
                 .query_row(
-                    "SELECT conversation_id FROM messages WHERE id = ?1 LIMIT 1",
+                    "SELECT conversation_id
+                     FROM messages
+                     WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1
+                     LIMIT 1",
                     rusqlite::params![message_id],
                     |row| row.get::<_, String>(0),
                 )
@@ -1892,7 +1898,9 @@ pub async fn delete_message(
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
             conn.execute(
-                "UPDATE messages SET is_deleted = 1 WHERE id = ?1",
+                "UPDATE messages
+                 SET is_deleted = 1
+                 WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1",
                 rusqlite::params![message_id],
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
