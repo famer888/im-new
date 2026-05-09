@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 prost-build = "0.13"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-deep-link = "=2.4.7"
 tauri-plugin-shell = "=2.3.5"

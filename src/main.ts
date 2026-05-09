@@ -34,6 +34,29 @@ async function resolveInitialLocale(): Promise<SupportedLocale> {
   }
 }
 
+function setupDevtoolsShortcut() {
+  if (!(window as any).__TAURI_INTERNALS__) return
+
+  window.addEventListener('keydown', async (event) => {
+    const key = event.key.toLowerCase()
+    const isMac = /mac/i.test(navigator.platform)
+    const isMacShortcut = isMac && event.metaKey && event.altKey && (key === 'i' || key === 'j')
+    const isWindowsShortcut = !isMac && (key === 'f12' || (event.ctrlKey && event.shiftKey && (key === 'i' || key === 'j')))
+
+    if (!isMacShortcut && !isWindowsShortcut) return
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('toggle_devtools')
+    } catch (error) {
+      console.warn('[devtools] toggle failed:', error)
+    }
+  }, true)
+}
+
 async function bootstrap() {
   const initialLocale = await resolveInitialLocale()
   const i18n = createI18n({
@@ -72,6 +95,7 @@ async function bootstrap() {
   }
 
   app.mount('#app')
+  setupDevtoolsShortcut()
 
   initDomainPool().catch(() => {})
   initDomainPoolFromOss().catch(() => {})  // 先从 OSS 获取备用域名（不依赖 dev 服务器）

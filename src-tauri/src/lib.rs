@@ -177,6 +177,7 @@ pub fn run() {
             commands::window::toggle_side_bar,
             commands::window::show_login_window,
             commands::window::update_tray_unread_count,
+            commands::window::toggle_devtools,
             commands::window::exit_app,
             commands::settings::get_settings,
             commands::settings::update_settings,
