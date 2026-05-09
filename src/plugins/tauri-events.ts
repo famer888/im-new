@@ -50,6 +50,12 @@ function getLogoutClearedHistoryAt(uid: string): number {
   return Number.isFinite(value) ? value : 0
 }
 
+function normalizeReceiptTime(value: unknown): number {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n <= 0) return Date.now()
+  return n < 10_000_000_000 ? n * 1000 : n
+}
+
 interface ReadProcessingResult {
   readMessageIds: string[]
   scheduledDeletions: Array<{
@@ -1052,6 +1058,56 @@ export async function setupTauriListeners() {
 
     const receipts = Array.isArray(event.payload) ? event.payload : []
     if (receipts.length === 0) return
+    const messageStore = useMessageStore()
+    const viewedSelfMessageIds = receipts
+      .filter((item) =>
+        Number(item?.status || 0) === 1
+        && Number(item?.targetId || 0) === Number(uid || 0)
+        && Number(item?.msgId || 0) > 0,
+      )
+      .map((item) => String(item.msgId))
+    if (viewedSelfMessageIds.length > 0) {
+      messageStore.markMessagesRead(viewedSelfMessageIds, 2)
+    }
+    const receiptScheduledKeys = new Set<string>()
+    for (const item of receipts) {
+      if (
+        Number(item?.status || 0) !== 1
+        || Number(item?.targetId || 0) !== Number(uid || 0)
+        || Number(item?.msgId || 0) <= 0
+      ) continue
+      const conversationId = `0_${String(item.sendUid || '')}`
+      const messageId = String(item.msgId)
+      if (!conversationId.includes('_') || !messageId) continue
+      const readTime = normalizeReceiptTime(item.readTime)
+      const messages = messageStore.getMessages(conversationId)
+      const exact = messages.find((m) => String(m.id) === messageId || String(m.customMsgId || '') === messageId)
+      const boundaryTime = exact?.sendTime || readTime
+      const fallbackDelay = Number(item?.snapchatTime || 0) > 0
+        ? Number(item.snapchatTime) * 1000
+        : 0
+      const candidates = exact
+        ? [exact]
+        : messages.filter((m) =>
+            String(m.senderId) === uid
+            && Number(m.deleteSeconds || 0) > 0
+            && Number(m.sendTime || 0) <= boundaryTime,
+          )
+      for (const message of candidates) {
+        const deleteDelay = Number(message.deleteSeconds || fallbackDelay || 0)
+        if (!Number.isFinite(deleteDelay) || deleteDelay <= 0) continue
+        const expireAt = readTime + deleteDelay
+        const ids = new Set([
+          String(message.id || ''),
+          String(message.customMsgId || ''),
+          messageId,
+        ].filter(Boolean))
+        for (const id of ids) {
+          scheduleDeletionStore.addMessageTimer(conversationId, id, expireAt)
+          receiptScheduledKeys.add(`${conversationId}:${id}`)
+        }
+      }
+    }
 
     try {
       const { invoke } = await import('@tauri-apps/api/core')
@@ -1059,14 +1115,16 @@ export async function setupTauriListeners() {
         uid,
         receipts,
       })
-      const messageStore = useMessageStore()
       if (Array.isArray(result?.readMessageIds) && result.readMessageIds.length > 0) {
         messageStore.markMessagesRead(result.readMessageIds, 2)
       }
       for (const item of Array.isArray(result?.scheduledDeletions) ? result.scheduledDeletions : []) {
+        const conversationId = String(item.conversationId || '')
+        const messageId = String(item.messageId || '')
+        if (receiptScheduledKeys.has(`${conversationId}:${messageId}`)) continue
         scheduleDeletionStore.addMessageTimer(
-          String(item.conversationId || ''),
-          String(item.messageId || ''),
+          conversationId,
+          messageId,
           Number(item.expireAt || 0),
         )
       }
