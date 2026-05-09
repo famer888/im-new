@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import searchCloseIcon from '@/assets/images/headNav/search-close-icon.png'
 
@@ -23,10 +24,20 @@ const emit = defineEmits<{
 }>()
 
 const inputRef = ref<HTMLInputElement | null>(null)
+const menuVisible = ref(false)
+const menuX = ref(0)
+const menuY = ref(0)
 let timer: ReturnType<typeof setTimeout> | null = null
 
+const menuItems = computed<MenuItem[]>(() => [
+  { key: 'paste', label: t('粘贴') },
+])
+
 function handleInput(e: Event) {
-  const val = (e.target as HTMLInputElement).value
+  updateValue((e.target as HTMLInputElement).value)
+}
+
+function updateValue(val: string) {
   emit('update:modelValue', val)
 
   if (timer) clearTimeout(timer)
@@ -43,6 +54,48 @@ function focus() {
   inputRef.value?.focus()
 }
 
+function handleContextMenu(e: MouseEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  menuX.value = e.clientX
+  menuY.value = e.clientY
+  menuVisible.value = true
+  inputRef.value?.focus()
+}
+
+async function handleMenuSelect(key: string) {
+  if (key !== 'paste') return
+
+  const text = await readClipboardText()
+  if (!text) return
+
+  const input = inputRef.value
+  if (!input) return
+
+  const start = input.selectionStart ?? input.value.length
+  const end = input.selectionEnd ?? start
+  input.setRangeText(text, start, end, 'end')
+  updateValue(input.value)
+  input.focus()
+}
+
+async function readClipboardText() {
+  if ((window as any).__TAURI_INTERNALS__) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      return String(await invoke('read_clipboard_text') || '')
+    } catch {
+      return ''
+    }
+  }
+
+  try {
+    return await navigator.clipboard.readText()
+  } catch {
+    return ''
+  }
+}
+
 defineExpose({ focus })
 </script>
 
@@ -54,6 +107,7 @@ defineExpose({ focus })
       :value="modelValue"
       :placeholder="effectivePlaceholder"
       @input="handleInput"
+      @contextmenu="handleContextMenu"
     />
     <img
       v-if="modelValue"
@@ -61,6 +115,13 @@ defineExpose({ focus })
       :src="searchCloseIcon"
       alt="clear"
       @click="handleClear"
+    />
+    <ContextMenu
+      v-model:visible="menuVisible"
+      :x="menuX"
+      :y="menuY"
+      :items="menuItems"
+      @select="handleMenuSelect"
     />
   </div>
 </template>
