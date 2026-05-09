@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { invoke } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
 import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
@@ -32,7 +32,12 @@ let imageOverwriteResolver: ((value: boolean) => void) | null = null
 function ensureMediaSrc(src: string): string {
   const raw = String(src || '').trim()
   if (!raw) return ''
-  if (/^(https?|file|blob|data):/i.test(raw)) return raw
+  if (/^(https?|asset|blob|data):/i.test(raw)) return raw
+  if ((window as any).__TAURI_INTERNALS__) {
+    if (/^file:/i.test(raw)) return convertFileSrc(fileUrlToLocalPath(raw))
+    return convertFileSrc(raw)
+  }
+  if (/^file:/i.test(raw)) return raw
   const normalized = raw.replace(/\\/g, '/')
   if (/^[A-Za-z]:\//.test(normalized)) {
     return `file:///${encodeURI(normalized)}`
@@ -70,6 +75,11 @@ function imageExtFromDataUrl(src: string): string {
 }
 
 const imageSrc = computed(() => ensureMediaSrc(payload.value?.src || payload.value?.filePath || ''))
+const videoSrc = computed(() => {
+  if (payload.value?.mediaType !== 'video') return ''
+  return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
+})
+const isVideo = computed(() => payload.value?.mediaType === 'video')
 const canOpenWithDefaultApp = computed(() =>
   Boolean(String(payload.value?.filePath || payload.value?.src || '').trim()),
 )
@@ -82,17 +92,22 @@ const localImagePath = computed(() => {
 })
 const canOpenDirectory = computed(() => Boolean(localImagePath.value))
 const contextMenuItems = computed<MenuItem[]>(() => {
-  const items: MenuItem[] = [
-    { key: 'copy', label: t('复制') },
-    { key: 'save_as', label: t('另存为') },
-  ]
+  const items: MenuItem[] = []
+  if (!isVideo.value) {
+    items.push(
+      { key: 'copy', label: t('复制') },
+      { key: 'save_as', label: t('另存为') },
+    )
+  }
   if (canOpenDirectory.value) {
     items.push({ key: 'open_directory', label: t('打开目录') })
   }
   if (canOpenWithDefaultApp.value) {
     items.push({ key: 'open_default', label: t('使用默认应用打开') })
   }
-  items.push({ key: 'rotate', label: t('向右旋转') })
+  if (!isVideo.value) {
+    items.push({ key: 'rotate', label: t('向右旋转') })
+  }
   return items
 })
 
@@ -110,6 +125,8 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
   menuVisible.value = false
   if (nextPayload?.title) {
     document.title = nextPayload.title
+  } else if (nextPayload?.mediaType === 'video') {
+    document.title = '视频'
   }
 }
 
@@ -324,7 +341,7 @@ async function openWithDefaultApp() {
   const filePath = String(payload.value?.filePath || '').trim()
   const src = String(payload.value?.src || '').trim()
   let target = filePath || fileUrlToLocalPath(src)
-  if (filePath && /\.img$/i.test(filePath)) {
+  if (!isVideo.value && filePath && /\.img$/i.test(filePath)) {
     if (/^data:image\//i.test(src)) {
       try {
         const fixedPath = filePath.replace(/\.img$/i, imageExtFromDataUrl(src))
@@ -466,9 +483,19 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="media-stage">
+    <div class="media-stage" :class="{ 'is-video': isVideo }">
+      <video
+        v-if="videoSrc"
+        class="media-video"
+        :src="videoSrc"
+        :poster="payload?.cover"
+        controls
+        autoplay
+        playsinline
+        @click.stop
+      ></video>
       <div
-        v-if="imageSrc"
+        v-else-if="imageSrc"
         class="media-image-wrap"
         :style="{ transform: `rotate(${rotation}deg)` }"
       >
@@ -478,6 +505,7 @@ onUnmounted(() => {
 
     <div class="bottom-actions">
       <button
+        v-if="!isVideo"
         class="action-btn"
         type="button"
         title="Rotate"
@@ -648,6 +676,10 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+
+  &.is-video {
+    padding: 0;
+  }
 }
 
 .media-image-wrap {
@@ -662,6 +694,16 @@ onUnmounted(() => {
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+.media-video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100vw;
+  max-height: 100vh;
+  background: #000;
+  outline: none;
 }
 
 .bottom-actions {

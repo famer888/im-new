@@ -1,6 +1,6 @@
 export const MEDIA_VIEWER_STORAGE_KEY = 'media_viewer_state'
 
-export type MediaViewerType = 'image'
+export type MediaViewerType = 'image' | 'video'
 
 export interface MediaViewerPayload {
   title: string
@@ -9,6 +9,9 @@ export interface MediaViewerPayload {
   filePath?: string | null
   width?: number
   height?: number
+  duration?: number
+  cover?: string
+  size?: number
   timestamp: number
 }
 
