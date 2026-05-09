@@ -34,6 +34,15 @@ export enum MessageStatus {
   Failed = -1,
 }
 
+export function isHiddenMessageType(msgType: number): boolean {
+  return (
+    msgType === MessageType.RedPacket ||
+    msgType === MessageType.RedPacketResult ||
+    msgType === MessageType.ChatTransfer ||
+    msgType === MessageType.ChatTransferResult
+  )
+}
+
 export interface TextContent {
   text: string
 }

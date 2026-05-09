@@ -5,6 +5,7 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
+import { isHiddenMessageType } from '@/types'
 import MessageItem from './MessageItem.vue'
 import readBurnBackUrl from '@/assets/images/chat/read-burn-back.png'
 
@@ -37,7 +38,10 @@ const floatDateRef = ref<HTMLElement | null>(null)
 
 /** 与旧 im 列表一致：按发送时间升序，再算「自然日」分隔 */
 const sortedMessages = computed(() =>
-  [...props.messages].sort((a, b) => a.sendTime - b.sendTime),
+  props.messages
+    .filter((message) => !isHiddenMessageType(message.msgType))
+    .slice()
+    .sort((a, b) => a.sendTime - b.sendTime),
 )
 
 const entriesWithDate = computed(() =>

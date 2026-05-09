@@ -4,6 +4,7 @@ import { isFileHelperTargetId, useChatStore } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
 import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
+import { isHiddenMessageType } from '@/types'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -434,11 +435,12 @@ export const useMessageStore = defineStore('message', () => {
     if (msgType === 5) return '[名片]'
     if (msgType === 7) return '[文件]'
     if (msgType === 12) return '[骰子]'
-    if ([10, 13, 14, 15].includes(msgType)) return '暂不支持该消息类型'
+    if (isHiddenMessageType(msgType)) return ''
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
 
   function syncConversationSummary(conversationId: string, msg: Message) {
+    if (isHiddenMessageType(msg.msgType)) return
     if (!conversationId || !conversationId.includes('_')) {
       console.warn('[msg] skip syncConversationSummary: invalid conversationId', { conversationId, msgId: msg.id })
       return
@@ -485,7 +487,7 @@ export const useMessageStore = defineStore('message', () => {
 
     // 最后一条消息被阅后即焚/本地删除后，左侧会话预览要回退到仍可见的最后一条。
     const list = messages ?? getMessages(conversationId)
-    const latest = list.length > 0 ? list[list.length - 1] : null
+    const latest = [...list].reverse().find((item) => !isHiddenMessageType(item.msgType)) ?? null
     const digest = latest ? getDigestByMessage(latest.msgType, latest.content) : null
 
     chatStore.addOrUpdateConversation({
