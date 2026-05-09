@@ -94,7 +94,7 @@ defineExpose({ handleKeyboard })
 
 <template>
   <Transition name="slide">
-    <div v-if="visible" class="at-list-dialog" @click.stop>
+    <div v-if="visible && selectableMembers.length > 0" class="at-list-dialog" @click.stop>
       <ul class="at-list">
         <li
           v-for="(member, index) in selectableMembers"

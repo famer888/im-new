@@ -736,7 +736,8 @@ function insertPlainTextAtSelection(text: string) {
   const end = offsets?.end ?? start
   const nextText = `${currentText.slice(0, start)}${text}${currentText.slice(end)}`
   setEditorTextAndCaret(nextText, start + text.length)
-  updateAtListFromCaret()
+  showAtList.value = false
+  atKeyword.value = ''
 }
 
 function getActiveAtRange() {
@@ -2141,6 +2142,7 @@ onBeforeUnmount(() => {
   background: #fff;
   flex-shrink: 0;
   position: relative;
+  isolation: isolate;
 
   &.notice-only {
     min-height: 0;
@@ -2311,6 +2313,9 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   padding: 8px 14px 0;
   flex-shrink: 0;
+  background: #fff;
+  position: relative;
+  z-index: 1;
 
   .toolbar-left {
     display: flex;
@@ -2378,11 +2383,14 @@ onBeforeUnmount(() => {
   padding: 6px 14px;
   position: relative;
   box-sizing: border-box;
+  background: #fff;
+  z-index: 1;
 }
 
 .editor {
+  height: 90px;
   min-height: 90px;
-  max-height: 200px;
+  max-height: 90px;
   box-sizing: border-box;
   overflow-y: auto;
   font-size: 14px;
@@ -2411,6 +2419,9 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: flex-end;
   padding: 0 14px 10px;
+  background: #fff;
+  position: relative;
+  z-index: 1;
 }
 
 .send-right {
