@@ -102,10 +102,40 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
   })
 }
 
+function getMessageIdentity(message: any): { conversationId: string; id: string; customMsgId: string; senderId: string } {
+  return {
+    conversationId: String(message?.conversationId ?? message?.conversation_id ?? ''),
+    id: String(message?.id ?? message?.msgId ?? message?.msg_id ?? ''),
+    customMsgId: String(message?.customMsgId ?? message?.custom_msg_id ?? ''),
+    senderId: String(message?.senderId ?? message?.sender_id ?? ''),
+  }
+}
+
+function isCachedMessage(message: any): boolean {
+  const messageStore = useMessageStore()
+  const { conversationId, id, customMsgId } = getMessageIdentity(message)
+  if (!conversationId.includes('_') || (!id && !customMsgId)) return false
+  return messageStore.getMessages(conversationId).some((item) => (
+    (!!id && String(item.id || '') === id) ||
+    (!!customMsgId && String(item.customMsgId || '') === customMsgId)
+  ))
+}
+
+function getNewIncomingMessages(messages: any[], currentUid: string): any[] {
+  if (!currentUid) return []
+  return messages.filter((message) => {
+    const { conversationId, senderId } = getMessageIdentity(message)
+    if (!conversationId.includes('_') || !senderId || senderId === currentUid) return false
+    if (Boolean(message?.isDeleted ?? message?.is_deleted ?? false)) return false
+    return !isCachedMessage(message)
+  })
+}
+
 let screenshotShortcutBound = false
 let screenshotStarting = false
 let forceLogoutHandling = false
 let trayLogoutHandling = false
+let lastTrayFlashAt = 0
 const tauriListenersGlobal = globalThis as typeof globalThis & {
   __OCS_TAURI_LISTENER_GENERATION__?: number
   __OCS_TAURI_LISTENER_UNLISTENS__?: Array<() => void>
@@ -173,12 +203,32 @@ function setupTrayUnreadSync() {
   )
 }
 
-async function flashTrayForIncomingMessage() {
+async function flashTrayForIncomingMessage(incomingCount = 1) {
   if (!isTauri()) return
 
   try {
+    const now = Date.now()
+    if (now - lastTrayFlashAt < 1200) {
+      console.info('[tray-alert] skip flash by cooldown', {
+        incomingCount,
+        elapsedMs: now - lastTrayFlashAt,
+      })
+      return
+    }
+    lastTrayFlashAt = now
+
     const chatStore = useChatStore()
-    const count = Math.max(0, Math.floor(Number(chatStore.totalUnread || 0)))
+    const totalUnread = Math.floor(Number(chatStore.totalUnread || 0))
+    const count = Math.max(
+      0,
+      totalUnread,
+      Math.floor(Number(incomingCount || 0)),
+    )
+    console.info('[tray-alert] flashTrayForIncomingMessage', {
+      incomingCount,
+      totalUnread,
+      count,
+    })
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('update_tray_unread_count', { count, flash: true })
   } catch (err) {
@@ -851,6 +901,20 @@ export async function setupTauriListeners() {
           })
         }
       }
+      const newIncomingMessages = getNewIncomingMessages(normalized, currentUid)
+      console.info('[tray-alert] incoming batch evaluated', {
+        batchSize: normalized.length,
+        currentUid,
+        newIncomingCount: newIncomingMessages.length,
+        newIncomingMessages: newIncomingMessages.slice(0, 5).map((m: any) => {
+          const identity = getMessageIdentity(m)
+          return {
+            ...identity,
+            msgType: Number(m?.msgType ?? m?.msg_type ?? 0),
+            sendTime: Number(m?.sendTime ?? m?.send_time ?? 0),
+          }
+        }),
+      })
       messageStore.batchAppendMessages(normalized as Message[])
       if (groupEventMessages.length > 0) {
         groupInviteDebug('after batchAppendMessages', {
@@ -870,15 +934,7 @@ export async function setupTauriListeners() {
         })
       }
       const activeConversationId = chatStore.currentConversationId
-      const hasIncomingMessageForTray = Boolean(
-        currentUid
-        && normalized.some((m: any) => {
-          const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
-          const senderId = String(m?.senderId ?? m?.sender_id ?? '')
-          if (!convId.includes('_') || !senderId || senderId === currentUid) return false
-          return !Boolean(m?.isDeleted ?? m?.is_deleted ?? false)
-        }),
-      )
+      const hasIncomingMessageForTray = newIncomingMessages.length > 0
       const hasIncomingForActiveConversation = Boolean(
         currentUid
         && activeConversationId
@@ -891,9 +947,9 @@ export async function setupTauriListeners() {
       if (shouldPlaySound) {
         void playNotificationSound()
       }
-      void showMinimizedMessageReminder(normalized as Message[], currentUid)
+      void showMinimizedMessageReminder(newIncomingMessages as Message[], currentUid)
       if (hasIncomingMessageForTray) {
-        void flashTrayForIncomingMessage()
+        void flashTrayForIncomingMessage(newIncomingMessages.length)
       }
       if (authStore.uid) {
         const incoming = normalized.map((m: any) => ({

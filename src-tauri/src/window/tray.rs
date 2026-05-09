@@ -97,14 +97,20 @@ fn resize_macos_tray_icon<R: tauri::Runtime>(tray: &tauri::tray::TrayIcon<R>) {
 }
 
 pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(), String> {
-    if !flash {
-        let state = app.state::<TrayUnreadState>();
-        state
-            .unread_count
-            .store(count, std::sync::atomic::Ordering::Relaxed);
-    }
-    let generation = if flash {
-        let state = app.state::<TrayUnreadState>();
+    let state = app.state::<TrayUnreadState>();
+    let previous_count = state
+        .unread_count
+        .swap(count, std::sync::atomic::Ordering::Relaxed);
+    let should_alert = flash && count > 0;
+    info!(
+        target: "tray-alert",
+        count,
+        previous_count,
+        flash,
+        should_alert,
+        "update_unread_count"
+    );
+    let generation = if should_alert {
         Some(
             state
                 .blink_generation
@@ -128,15 +134,17 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
         }
     }
 
-    if flash && count > 0 {
+    if should_alert {
         for label in ["main", "login"] {
             if let Some(window) = app.get_webview_window(label) {
-                let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+                info!(target: "tray-alert", label, "request_user_attention informational");
+                let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
             }
         }
     } else {
         for label in ["main", "login"] {
             if let Some(window) = app.get_webview_window(label) {
+                info!(target: "tray-alert", label, "clear_user_attention");
                 let _ = window.request_user_attention(None);
             }
         }
