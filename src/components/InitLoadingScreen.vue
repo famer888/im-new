@@ -23,7 +23,7 @@ const { t } = useI18n()
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="init-screen">
+    <div v-if="visible" class="init-screen" data-tauri-drag-region>
       <button
         type="button"
         class="reset-link"
@@ -88,6 +88,7 @@ const { t } = useI18n()
   position: absolute;
   top: 28px;
   right: 22px;
+  -webkit-app-region: no-drag;
   border: none;
   background: transparent;
   color: #b8b8b8;
@@ -210,6 +211,7 @@ const { t } = useI18n()
 
 .reload-button {
   margin-top: 18px;
+  -webkit-app-region: no-drag;
   min-width: 112px;
   height: 34px;
   padding: 0 18px;
