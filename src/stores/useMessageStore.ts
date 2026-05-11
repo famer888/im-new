@@ -650,8 +650,8 @@ export const useMessageStore = defineStore('message', () => {
     const convType = Number(typeRaw || 0)
     const isFileHelperSend = convType === 0 && isFileHelperTargetId(targetId)
 
-    if (msgType === 12 && !((convType === 0 && !isFileHelperSend) || convType === 1)) {
-      throw new Error('骰子消息暂仅支持单聊和群聊')
+    if ((msgType === 12 || msgType === 18) && !(convType === 0 || convType === 1)) {
+      throw new Error('功能表情暂仅支持单聊和群聊')
     }
 
     if (!isTauri()) {

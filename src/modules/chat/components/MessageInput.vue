@@ -1112,7 +1112,7 @@ function handleEmojiSelect(emoji: string) {
 }
 
 function handleDiceSelect() {
-  if ((!isFriend.value && !isGroup.value) || isFileHelperChat.value || showShutupTip.value) return
+  if ((!isFriend.value && !isGroup.value) || showShutupTip.value) return
   terminalLog('[dice] picker select', {
     conversationId: chatStore.currentConversationId,
     conversationType: chatStore.currentConversation?.type,
@@ -1123,7 +1123,7 @@ function handleDiceSelect() {
 }
 
 function handlePokerSelect() {
-  if ((!isFriend.value && !isGroup.value) || isFileHelperChat.value || showShutupTip.value) return
+  if ((!isFriend.value && !isGroup.value) || showShutupTip.value) return
   terminalLog('[poker] picker select', {
     conversationId: chatStore.currentConversationId,
     conversationType: chatStore.currentConversation?.type,
