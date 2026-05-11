@@ -551,6 +551,10 @@ export async function setupTauriListeners() {
       })
     }
     if (filtered.length === 0) return
+    const immediateVisible = filtered.filter((m: any) => !Boolean(m?.extra?.decryptPending))
+    if (immediateVisible.length > 0) {
+      messageStore.batchAppendMessages(immediateVisible as Message[])
+    }
     if (filtered.some((m: any) => String(m?.conversationId ?? m?.conversation_id ?? '').startsWith('2_'))) {
       console.info('[channel] msg:batch received channel messages', filtered
         .filter((m: any) => String(m?.conversationId ?? m?.conversation_id ?? '').startsWith('2_'))
@@ -569,22 +573,19 @@ export async function setupTauriListeners() {
     //    的消息按 groupId 预热，避免对每条已正常的群消息都发 HTTP 请求。
     if (authStore.uid) {
       const uid = String(authStore.uid)
-      const friendIds = Array.from(
+      const pendingFriendIds = Array.from(
         new Set(
           filtered
+            .filter((m: any) => Boolean(m?.extra?.decryptPending))
             .map((m: any) => String(m?.conversationId ?? m?.conversation_id ?? ''))
             .filter((convId) => convId.startsWith('0_') && convId.includes('_'))
             .map((convId) => convId.split('_')[1] || '')
             .filter((fid) => !!fid && fid !== uid),
         ),
       )
-      for (const fid of friendIds) {
+      for (const fid of pendingFriendIds) {
         try {
-          const forceRefresh = filtered.some((m: any) => {
-            const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
-            return convId === `0_${fid}` && Boolean(m?.extra?.decryptPending)
-          })
-          await ensureFriendRelKey(uid, fid, forceRefresh)
+          await ensureFriendRelKey(uid, fid, true)
         } catch (err) {
           console.warn('[e2ee] ensureFriendRelKey on msg:batch failed', { fid, err: String(err) })
         }
