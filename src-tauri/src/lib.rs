@@ -9,13 +9,9 @@ mod proto;
 mod window;
 mod ws;
 
-use tauri::{
-    menu::{Menu, MenuItem, Submenu},
-    Emitter, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-};
-use tracing::info;
-
-const TOGGLE_DEVTOOLS_MENU_ID: &str = "toggle_devtools";
+use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tracing::{info, warn};
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn toggle_devtools_window(window: WebviewWindow) {
@@ -47,20 +43,6 @@ fn toggle_focused_devtools(app: &tauri::AppHandle) {
     }
 }
 
-fn setup_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
-    let devtools_item = MenuItem::with_id(
-        app,
-        TOGGLE_DEVTOOLS_MENU_ID,
-        "打开开发者工具",
-        true,
-        Some("Ctrl+Shift+I"),
-    )?;
-    let devtools_menu = Submenu::with_items(app, "开发", true, &[&devtools_item])?;
-    let menu = Menu::with_items(app, &[&devtools_menu])?;
-    app.set_menu(menu)?;
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -69,6 +51,17 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    let devtools_shortcut =
+                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyI);
+                    if event.state() == ShortcutState::Pressed && shortcut == &devtools_shortcut {
+                        toggle_focused_devtools(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -109,12 +102,12 @@ pub fn run() {
 
             // Setup tray
             window::tray::setup_tray(app)?;
-            setup_app_menu(app)?;
-            app.on_menu_event(|app, event| {
-                if event.id().as_ref() == TOGGLE_DEVTOOLS_MENU_ID {
-                    toggle_focused_devtools(app);
-                }
-            });
+            if let Err(error) = app.global_shortcut().register(Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::SHIFT),
+                Code::KeyI,
+            )) {
+                warn!("failed to register devtools shortcut: {}", error);
+            }
 
             // Create the login window eagerly so packaged builds land on a stable first screen.
             {
