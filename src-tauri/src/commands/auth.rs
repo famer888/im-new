@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -54,6 +55,14 @@ fn active_login_lock_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
+        .join("active-logins.json"))
+}
+
+fn legacy_active_login_lock_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
         .join("active-login.json"))
 }
 
@@ -93,6 +102,21 @@ fn read_active_login_lock(path: &PathBuf) -> Option<ActiveLoginLock> {
     serde_json::from_str::<ActiveLoginLock>(&data).ok()
 }
 
+fn read_active_login_locks(path: &PathBuf) -> HashMap<String, ActiveLoginLock> {
+    let Some(data) = std::fs::read_to_string(path).ok() else {
+        return HashMap::new();
+    };
+    serde_json::from_str::<HashMap<String, ActiveLoginLock>>(&data).unwrap_or_default()
+}
+
+fn write_active_login_locks(
+    path: &PathBuf,
+    locks: &HashMap<String, ActiveLoginLock>,
+) -> Result<(), String> {
+    let data = serde_json::to_string_pretty(locks).map_err(|e| e.to_string())?;
+    std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
 fn show_single_account_warning(app: &tauri::AppHandle, active: &ActiveLoginLock) {
     let account_text = if active.uid.trim().is_empty() {
         "当前已有账号".to_string()
@@ -103,7 +127,7 @@ fn show_single_account_warning(app: &tauri::AppHandle, active: &ActiveLoginLock)
     };
     app.dialog()
         .message(format!(
-            "同一台电脑只能同时登录一个账号。\n\n{} 正在登录中，请先在已打开的 OCS Chat 中退出当前账号后再登录。",
+            "同一台电脑同一账号只能同时登录一次。\n\n{} 正在登录中，请先在已打开的 OCS Chat 中退出该账号后再登录。",
             account_text
         ))
         .title("登录提醒")
@@ -112,42 +136,87 @@ fn show_single_account_warning(app: &tauri::AppHandle, active: &ActiveLoginLock)
         .show(|_| {});
 }
 
+fn cleanup_legacy_active_login_lock(app: &tauri::AppHandle) {
+    let Ok(path) = legacy_active_login_lock_path(app) else {
+        return;
+    };
+    let Some(active) = read_active_login_lock(&path) else {
+        let _ = std::fs::remove_file(path);
+        return;
+    };
+    if active.pid == std::process::id() || !is_process_running(active.pid) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn acquire_active_login_lock(
     app: &tauri::AppHandle,
     request: &LoginRequest,
 ) -> Result<(), String> {
+    cleanup_legacy_active_login_lock(app);
+
     let path = active_login_lock_path(app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    if let Some(active) = read_active_login_lock(&path) {
-        if active.pid != std::process::id() && is_process_running(active.pid) {
-            show_single_account_warning(app, &active);
-            return Err("同一台电脑只能同时登录一个账号，请先退出已登录账号".to_string());
+    let uid = request.uid.trim().to_string();
+    let mut locks = read_active_login_locks(&path);
+    locks.retain(|_, active| active.pid == std::process::id() || is_process_running(active.pid));
+
+    if !uid.is_empty() {
+        if let Some(active) = locks.get(&uid) {
+            if active.pid != std::process::id() && is_process_running(active.pid) {
+                let requested_nickname = request.nickname.trim();
+                let active_nickname = active.nickname.trim();
+                if !requested_nickname.is_empty()
+                    && !active_nickname.is_empty()
+                    && requested_nickname != active_nickname
+                {
+                    warn!(
+                        "active login lock uid={} nickname mismatch active={} requested={}, treat as stale",
+                        uid, active_nickname, requested_nickname
+                    );
+                    locks.remove(&uid);
+                } else {
+                    show_single_account_warning(app, &active);
+                    return Err(
+                        "同一台电脑同一账号只能同时登录一次，请先退出已登录账号".to_string()
+                    );
+                }
+            }
         }
-        let _ = std::fs::remove_file(&path);
+    }
+
+    if uid.is_empty() {
+        return Ok(());
     }
 
     let lock = ActiveLoginLock {
-        uid: request.uid.trim().to_string(),
+        uid: uid.clone(),
         nickname: request.nickname.trim().to_string(),
         session_id: request.session_id.trim().to_string(),
         pid: std::process::id(),
         created_at: chrono::Utc::now().timestamp_millis(),
     };
-    let data = serde_json::to_string_pretty(&lock).map_err(|e| e.to_string())?;
-    std::fs::write(path, data).map_err(|e| e.to_string())
+    locks.insert(uid, lock);
+    write_active_login_locks(&path, &locks)
 }
 
 #[tauri::command]
 pub async fn ensure_can_login_on_this_machine(app: tauri::AppHandle) -> Result<bool, String> {
+    cleanup_legacy_active_login_lock(&app);
+
     let path = active_login_lock_path(&app)?;
-    if let Some(active) = read_active_login_lock(&path) {
-        if active.pid != std::process::id() && is_process_running(active.pid) {
-            return Ok(false);
+    let mut locks = read_active_login_locks(&path);
+    let before = locks.len();
+    locks.retain(|_, active| active.pid == std::process::id() || is_process_running(active.pid));
+    if locks.len() != before {
+        if locks.is_empty() {
+            let _ = std::fs::remove_file(path);
+        } else {
+            write_active_login_locks(&path, &locks)?;
         }
-        let _ = std::fs::remove_file(path);
     }
 
     Ok(true)
@@ -158,6 +227,23 @@ fn release_active_login_lock(app: &tauri::AppHandle, uid: Option<&str>) {
         return;
     };
     let Some(active) = read_active_login_lock(&path) else {
+        let mut locks = read_active_login_locks(&path);
+        let before = locks.len();
+        locks.retain(|_, active| {
+            let uid_matches = uid
+                .map(str::trim)
+                .filter(|uid| !uid.is_empty())
+                .map(|uid| uid == active.uid)
+                .unwrap_or(true);
+            !(active.pid == std::process::id() && uid_matches)
+        });
+        if locks.len() != before {
+            if locks.is_empty() {
+                let _ = std::fs::remove_file(path);
+            } else {
+                let _ = write_active_login_locks(&path, &locks);
+            }
+        }
         return;
     };
     let uid_matches = uid

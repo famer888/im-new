@@ -9,8 +9,57 @@ mod proto;
 mod window;
 mod ws;
 
-use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    menu::{Menu, MenuItem, Submenu},
+    Emitter, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 use tracing::info;
+
+const TOGGLE_DEVTOOLS_MENU_ID: &str = "toggle_devtools";
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn toggle_devtools_window(window: WebviewWindow) {
+    if window.is_devtools_open() {
+        window.close_devtools();
+    } else {
+        window.open_devtools();
+    }
+}
+
+fn toggle_focused_devtools(app: &tauri::AppHandle) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let window = app
+            .webview_windows()
+            .into_values()
+            .find(|window| window.is_focused().unwrap_or(false))
+            .or_else(|| app.get_webview_window("main"))
+            .or_else(|| app.get_webview_window("login"));
+
+        if let Some(window) = window {
+            toggle_devtools_window(window);
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = app;
+    }
+}
+
+fn setup_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
+    let devtools_item = MenuItem::with_id(
+        app,
+        TOGGLE_DEVTOOLS_MENU_ID,
+        "打开开发者工具",
+        true,
+        Some("Ctrl+Shift+I"),
+    )?;
+    let devtools_menu = Submenu::with_items(app, "开发", true, &[&devtools_item])?;
+    let menu = Menu::with_items(app, &[&devtools_menu])?;
+    app.set_menu(menu)?;
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,6 +109,12 @@ pub fn run() {
 
             // Setup tray
             window::tray::setup_tray(app)?;
+            setup_app_menu(app)?;
+            app.on_menu_event(|app, event| {
+                if event.id().as_ref() == TOGGLE_DEVTOOLS_MENU_ID {
+                    toggle_focused_devtools(app);
+                }
+            });
 
             // Create the login window eagerly so packaged builds land on a stable first screen.
             {

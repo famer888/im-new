@@ -38,6 +38,12 @@ interface LogoutOptions {
   keepHistoryOnLogout?: boolean
 }
 
+interface InitSessionOptions {
+  restoreSession?: boolean
+  autoLogin?: boolean
+  fallbackToCachedAccount?: boolean
+}
+
 const ACCOUNT_LIST_KEY = 'login-account-list'
 const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'
@@ -181,7 +187,13 @@ export const useAuthStore = defineStore('auth', () => {
     return [...accounts.value].reverse().find(a => String(a.sessionId || '').trim()) || null
   }
 
-  async function initSession() {
+  async function initSession(options: InitSessionOptions = {}) {
+    const {
+      restoreSession = true,
+      autoLogin = true,
+      fallbackToCachedAccount = true,
+    } = options
+
     loadAccounts()
     loadWsConnectConfig()
 
@@ -190,17 +202,19 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (isTauri()) {
       try {
-        const stored = await tauriInvoke<SessionInfo | null>('get_session')
-        if (stored) {
-          const result = normalizeTauriSession(stored)
-          if (result.uid) {
-            session.value = result
-            localStorage.setItem(CURRENT_UID_KEY, result.uid)
-            return
+        if (restoreSession) {
+          const stored = await tauriInvoke<SessionInfo | null>('get_session')
+          if (stored) {
+            const result = normalizeTauriSession(stored)
+            if (result.uid) {
+              session.value = result
+              localStorage.setItem(CURRENT_UID_KEY, result.uid)
+              return
+            }
           }
         }
 
-        if (autoLoginEnabled.value && accounts.value.length > 0) {
+        if (autoLogin && autoLoginEnabled.value && accounts.value.length > 0) {
           const account = getPreferredAccount()
           if (account?.sessionId) {
             try {
@@ -231,7 +245,7 @@ export const useAuthStore = defineStore('auth', () => {
         }
 
         // Fallback: make sure uid/session can still be restored from account cache.
-        if (!session.value?.uid && accounts.value.length > 0) {
+        if (fallbackToCachedAccount && !session.value?.uid && accounts.value.length > 0) {
           const account = getPreferredAccount()
           if (account?.id) {
             session.value = {
