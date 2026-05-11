@@ -636,6 +636,24 @@ function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean
   return Boolean(data.isSelf)
 }
 
+function isReadBurnMessage(data: Record<string, unknown>): boolean {
+  const directDeleteSeconds = Number(data.deleteSeconds ?? 0)
+  const directSnapchatTime = Number(data.snapchatTime ?? data.snapchat_time ?? 0)
+  if (directDeleteSeconds > 0 || directSnapchatTime > 0) return true
+
+  try {
+    const extra = typeof data.extra === 'string' ? JSON.parse(data.extra) : data.extra
+    if (extra && typeof extra === 'object') {
+      return Number((extra as Record<string, unknown>).deleteSeconds ?? 0) > 0
+        || Number((extra as Record<string, unknown>).snapchatTime ?? (extra as Record<string, unknown>).snapchat_time ?? 0) > 0
+    }
+  } catch {
+    // 非 JSON extra 不影响普通菜单判断
+  }
+
+  return false
+}
+
 function deleteEveryoneLabelForConversation(): string {
   const conv = chatStore.currentConversation
   if (!conv) return t('为所有人删除')
@@ -1282,16 +1300,17 @@ const contextMenuItems = computed((): MenuItem[] => {
   }
   if (data.type === 'message') {
     const items: MenuItem[] = []
+    const readBurnOnlyDelete = isReadBurnMessage(data)
 
-    if (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data) || messageSupportsVideoCopy(data)) {
+    if (!readBurnOnlyDelete && (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data) || messageSupportsVideoCopy(data))) {
       items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
     }
 
-    if (messageSupportsImageSave(data) || messageSupportsVideoFileActions(data)) {
+    if (!readBurnOnlyDelete && (messageSupportsImageSave(data) || messageSupportsVideoFileActions(data))) {
       items.push({ key: 'save_as', label: t('另存为'), iconSrc: menuSave })
     }
 
-    if (messageSupportsImageOpenDirectory(data) || messageSupportsVideoOpenDirectory(data)) {
+    if (!readBurnOnlyDelete && (messageSupportsImageOpenDirectory(data) || messageSupportsVideoOpenDirectory(data))) {
       items.push({ key: 'open_directory', label: t('打开目录'), iconSrc: menuOpenDir })
     }
 
@@ -1303,18 +1322,21 @@ const contextMenuItems = computed((): MenuItem[] => {
       })
     }
 
-    items.push(
-      { key: 'delete_local', label: t('从本地删除'), iconSrc: menuDelete },
-      { key: 'select', label: t('选中'), iconSrc: menuSelect },
-      { key: 'reply', label: t('回复'), iconSrc: menuReply },
-      { key: 'forward', label: t('转发'), iconSrc: menuForward },
-    )
+    items.push({ key: 'delete_local', label: t('从本地删除'), iconSrc: menuDelete })
 
-    if (canCopyMessageInfo()) {
+    if (!readBurnOnlyDelete) {
+      items.push(
+        { key: 'select', label: t('选中'), iconSrc: menuSelect },
+        { key: 'reply', label: t('回复'), iconSrc: menuReply },
+        { key: 'forward', label: t('转发'), iconSrc: menuForward },
+      )
+    }
+
+    if (!readBurnOnlyDelete && canCopyMessageInfo()) {
       items.push({ key: 'copy_msg_info', label: t('复制消息信息'), iconSrc: menuCopy })
     }
 
-    if (messageSupportsGroupReadCount(data)) {
+    if (!readBurnOnlyDelete && messageSupportsGroupReadCount(data)) {
       items.push({
         key: 'group_read_count',
         label: groupReadCountLabel(data),
@@ -1352,6 +1374,7 @@ async function handleContextMenuSelect(key: string) {
   if (data.type === 'message') {
     const msgId = data.messageId as string
     const convId = chatStore.currentConversationId
+    if (isReadBurnMessage(data) && key !== 'delete_everyone' && key !== 'delete_local') return
     switch (key) {
       case 'copy': {
         if (messageSupportsVideoCopy(data)) {

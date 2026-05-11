@@ -13,7 +13,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from 'vue-i18n'
 import { proto } from '@/api/request'
-import { READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
+import { DEFAULT_READ_BURN_SECONDS, READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
 import choiceIcon from '@/assets/images/setting/choice-icon.png'
 
 const authStore = useAuthStore()
@@ -36,7 +36,7 @@ function readBurnDurationLabel(seconds: number): string {
     case 86400: return `1${t('天')}`
     case 259200: return `3${t('天')}`
     case 604800: return `7${t('天')}`
-    default: return `30${t('秒')}`
+    default: return `5${t('秒')}`
   }
 }
 
@@ -60,7 +60,7 @@ const displayId = computed(() =>
 )
 
 const readBurn = ref(false)
-const msgCancelTime = ref(30)
+const msgCancelTime = ref(DEFAULT_READ_BURN_SECONDS)
 const inBlacklist = ref(false)
 const working = ref(false)
 const showTimeMenu = ref(false)
@@ -107,7 +107,7 @@ watch(
   () => [contact.value?.bfReadCancel, contact.value?.msgCancelTime, contact.value?.bfMyBlack],
   ([nextReadBurn, nextMsgCancelTime, nextInBlacklist]) => {
     readBurn.value = Boolean(nextReadBurn)
-    msgCancelTime.value = Number(nextMsgCancelTime || 30)
+    msgCancelTime.value = Number(nextMsgCancelTime || DEFAULT_READ_BURN_SECONDS)
     inBlacklist.value = Boolean(nextInBlacklist)
   },
   { immediate: true },
@@ -140,12 +140,14 @@ async function toggleReadBurn() {
   const targetConversationId = conv.value?.id
   const next = !readBurn.value
   const previous = readBurn.value
-  const currentSeconds = msgCancelTime.value
+  const previousSeconds = msgCancelTime.value
+  const nextSeconds = next ? DEFAULT_READ_BURN_SECONDS : previousSeconds
   readBurn.value = next
+  msgCancelTime.value = nextSeconds
   if (!next) showTimeMenu.value = false
   contactStore.patchContact(targetContactId, {
     bfReadCancel: next,
-    msgCancelTime: currentSeconds,
+    msgCancelTime: nextSeconds,
   })
   try {
     const res = await updateContacts({
@@ -153,19 +155,20 @@ async function toggleReadBurn() {
       param: {
         contactsId: Number(targetContactId),
         bfReadCancel: next,
-        msgCancelTime: currentSeconds,
+        msgCancelTime: nextSeconds,
       },
     })
     const errCode = Number((res as any)?.commonResult?.errCode || 200)
     if (errCode !== 200) {
       throw new Error((res as any)?.commonResult?.errMsg || (res as any)?.errorDesc || t('操作失败'))
     }
-    appendReadBurnNotice(currentSeconds, next, targetConversationId)
+    appendReadBurnNotice(nextSeconds, next, targetConversationId)
   } catch (error) {
     readBurn.value = previous
+    msgCancelTime.value = previousSeconds
     contactStore.patchContact(targetContactId, {
       bfReadCancel: previous,
-      msgCancelTime: currentSeconds,
+      msgCancelTime: previousSeconds,
     })
     showToast((error as Error)?.message || t('操作失败'), 'error')
   } finally {
