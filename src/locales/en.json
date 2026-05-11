@@ -126,6 +126,8 @@
   "请前往官网手动下载更新": "Please go to the official website to manually download the update.",
   "使用手机版扫描二维码登录": "Use the 97 mobile app to scan the QR code and log in",
   "使用品牌手机版扫描二维码登录": "Use the {brand} mobile app to scan the QR code and log in",
+  "用户已扫码请在手机确认": "QR code scanned. Please confirm on your phone.",
+  "用户已取消扫码": "QR scan canceled.",
   "载入账户设置": "Load account settings",
   "当前版本暂未接入导入能力": "Import is not wired into this version yet",
   "已有该用户私钥": "The private key for this user already exists.",

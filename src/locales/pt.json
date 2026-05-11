@@ -126,6 +126,8 @@
   "请前往官网手动下载更新": "Por favor, visite o site oficial para baixar a atualização manualmente.",
   "使用手机版扫描二维码登录": "Use o app móvel 97 para escanear o QR code e entrar",
   "使用品牌手机版扫描二维码登录": "Use o app móvel {brand} para escanear o QR code e entrar",
+  "用户已扫码请在手机确认": "QR code escaneado. Confirme no telefone.",
+  "用户已取消扫码": "Leitura do QR code cancelada.",
   "载入账户设置": "Digite as configurações da conta",
   "当前版本暂未接入导入能力": "A importação ainda não está disponível nesta versão",
   "已有该用户私钥": "Já foi obtida a chave secreta deste utilizador.",
