@@ -140,6 +140,7 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
         5 => "[名片]".to_string(),
         7 => "[文件]".to_string(),
         12 => "[骰子]".to_string(),
+        18 => "[扑克牌]".to_string(),
         10 | 13 | 14 | 15 => "暂不支持该消息类型".to_string(),
         _ => content
             .unwrap_or_default()
@@ -594,7 +595,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 12) => {
+        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 12) | (1, 18) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -622,7 +623,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) | (0, 3) | (0, 7) | (0, 12) => {
+        (0, 1) | (0, 2) | (0, 3) | (0, 7) | (0, 12) | (0, 18) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,
@@ -1184,6 +1185,11 @@ pub fn decrypt_channel_incoming(
                 12 => {
                     if let Ok(obj) = crate::proto::imweb::SetImageObj::decode(plain.as_slice()) {
                         return Ok(obj.current_image.to_string());
+                    }
+                }
+                18 => {
+                    if let Ok(obj) = crate::proto::imweb::AnimatedGameObj::decode(plain.as_slice()) {
+                        return Ok(obj.current_image);
                     }
                 }
                 _ => {}

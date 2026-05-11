@@ -64,6 +64,7 @@ function getMessageDigest(message: any): string {
   if (msgType === 5) return `[${t('名片')}]`
   if (msgType === 7) return `[${t('文件')}]`
   if (msgType === 12) return `[${t('骰子')}]`
+  if (msgType === 18) return `[${t('扑克牌')}]`
   if ([10, 13, 14, 15].includes(msgType)) return t('暂不支持该消息类型')
   return stripText(content).slice(0, 120) || t('新消息')
 }

@@ -1122,6 +1122,17 @@ function handleDiceSelect() {
   emit('send', '', MessageType.SetImage, withReadBurnExtra())
 }
 
+function handlePokerSelect() {
+  if ((!isFriend.value && !isGroup.value) || isFileHelperChat.value || showShutupTip.value) return
+  terminalLog('[poker] picker select', {
+    conversationId: chatStore.currentConversationId,
+    conversationType: chatStore.currentConversation?.type,
+    targetId: chatStore.currentConversation?.targetId,
+  }, 'warn')
+  showEmoji.value = false
+  emit('send', '', MessageType.AnimatedGame, withReadBurnExtra())
+}
+
 function handleAtSelect(member: { uid: string; name: string }) {
   restoreEditorSelection()
   const atRange = getActiveAtRange()
@@ -2274,6 +2285,8 @@ function getQuoteDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.File) return '[文件]'
   if (msgType === MessageType.Location) return '[位置]'
   if (msgType === MessageType.NameCard) return '[名片]'
+  if (msgType === MessageType.SetImage) return '[骰子]'
+  if (msgType === MessageType.AnimatedGame) return '[扑克牌]'
   if (
     msgType === MessageType.RedPacket ||
     msgType === MessageType.RedPacketResult ||
@@ -2291,6 +2304,8 @@ function getForwardDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.File) return '[文件]'
   if (msgType === MessageType.Location) return '[位置]'
   if (msgType === MessageType.NameCard) return '[名片]'
+  if (msgType === MessageType.SetImage) return '[骰子]'
+  if (msgType === MessageType.AnimatedGame) return '[扑克牌]'
   if (
     msgType === MessageType.RedPacket ||
     msgType === MessageType.RedPacketResult ||
@@ -2434,6 +2449,7 @@ onBeforeUnmount(() => {
             :chat-type="emojiChatType"
             @select="handleEmojiSelect"
             @select-dice="handleDiceSelect"
+            @select-poker="handlePokerSelect"
             @close="showEmoji = false"
           />
         </div>

@@ -5,6 +5,7 @@ import emojIcon from '@/assets/images/chat/emoj-icon.png'
 import ownIcon from '@/assets/images/chat/own-icon.png'
 import arrowIcon from '@/assets/images/chat/jiantou-icon.png'
 import touzi from '@/assets/images/message/touz_6.jpg'
+import poker from '@/assets/images/message/poker.png'
 
 const props = withDefaults(defineProps<{
   definedHidden?: boolean
@@ -17,6 +18,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'select', emoji: string): void
   (e: 'select-dice'): void
+  (e: 'select-poker'): void
   (e: 'close'): void
 }>()
 
@@ -35,6 +37,7 @@ const emojis = Object.entries(emojiObj).map(([key, value]) => ({
 
 const stickers = [
   { key: 'dice', src: touzi, type: 2 },
+  { key: 'poker', src: poker, type: 3 },
 ]
 
 function handleSelect(emoji: string) {
@@ -44,6 +47,8 @@ function handleSelect(emoji: string) {
 function handleStickerSelect(type: number) {
   if (type === 2) {
     emit('select-dice')
+  } else if (type === 3) {
+    emit('select-poker')
   }
 }
 </script>
