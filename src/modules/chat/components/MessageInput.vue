@@ -12,7 +12,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { eventBus } from '@/utils/eventBus'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
-import { getReadBurnTimeText } from '@/utils/readBurn'
+import { DEFAULT_READ_BURN_SECONDS, getReadBurnTimeText } from '@/utils/readBurn'
 import { getUploadToken, getUploadUrl, updateContacts } from '@/api/imBase'
 import { updateMember } from '@/api/imChannel'
 import { proto } from '@/api/request'
@@ -165,7 +165,7 @@ const forwardPreviewQrSrc = computed(() => {
   }
 })
 const readBurnTimeText = computed(() =>
-  getReadBurnTimeText(currentContact.value?.msgCancelTime || 30),
+  getReadBurnTimeText(currentContact.value?.msgCancelTime || DEFAULT_READ_BURN_SECONDS),
 )
 const editorMenuItems = computed<MenuItem[]>(() => [
   { key: 'copy', label: '复制', iconSrc: menuCopy },
@@ -388,7 +388,7 @@ function appendReadBurnNotice(seconds: number, enabled: boolean) {
 function withReadBurnExtra(extra?: Record<string, unknown>) {
   const nextExtra = extra ? { ...extra } : {}
   if (currentContact.value?.bfReadCancel) {
-    const snapchatTime = Number(currentContact.value.msgCancelTime || 30)
+    const snapchatTime = Number(currentContact.value.msgCancelTime || DEFAULT_READ_BURN_SECONDS)
     if (snapchatTime > 0) {
       nextExtra.snapchatTime = snapchatTime
       nextExtra.deleteSeconds = snapchatTime * 1000
@@ -404,7 +404,7 @@ watch(
       scheduleDeletionTime.value = 0
       return
     }
-    scheduleDeletionTime.value = Number(nextMsgCancelTime || 30)
+    scheduleDeletionTime.value = Number(nextMsgCancelTime || DEFAULT_READ_BURN_SECONDS)
   },
   { immediate: true },
 )
@@ -2225,7 +2225,7 @@ async function handleScheduleDeletionConfirm(seconds: number) {
   const contact = currentContact.value
   if (!contact) return
   const previousEnabled = Boolean(contact.bfReadCancel)
-  const previousSeconds = Number(contact.msgCancelTime || 30)
+  const previousSeconds = Number(contact.msgCancelTime || DEFAULT_READ_BURN_SECONDS)
   scheduleDeletionTime.value = seconds
   if (seconds === 0) {
     contactStore.patchContact(contact.id, {

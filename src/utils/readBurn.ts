@@ -1,3 +1,5 @@
+export const DEFAULT_READ_BURN_SECONDS = 5
+
 export const READ_BURN_TIME_OPTIONS = [
   { value: 5, label: '5秒' },
   { value: 10, label: '10秒' },
@@ -12,7 +14,7 @@ export const READ_BURN_TIME_OPTIONS = [
 ]
 
 export function getReadBurnTimeText(seconds?: number | null): string {
-  const value = Number(seconds || 30)
+  const value = Number(seconds || DEFAULT_READ_BURN_SECONDS)
   const item = READ_BURN_TIME_OPTIONS.find((option) => option.value === value)
-  return item?.label || '30秒'
+  return item?.label || '5秒'
 }

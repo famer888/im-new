@@ -12,6 +12,7 @@ import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
 import { showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
 import { eventBus } from '@/utils/eventBus'
+import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -888,7 +889,7 @@ export async function setupTauriListeners() {
           patch.bfReadCancel = Boolean(extra.bfReadCancel)
         }
         if (Object.prototype.hasOwnProperty.call(extra, 'msgCancelTime')) {
-          patch.msgCancelTime = Number(extra.msgCancelTime || 30)
+          patch.msgCancelTime = Number(extra.msgCancelTime || DEFAULT_READ_BURN_SECONDS)
         }
         if (typeof extra.nickname === 'string' && extra.nickname) patch.nickname = extra.nickname
         if (typeof extra.avatar === 'string') patch.avatar = extra.avatar || null

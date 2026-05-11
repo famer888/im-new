@@ -36,7 +36,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import closeIcon from '@/assets/images/common/close-icon.png'
-import { READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
+import { DEFAULT_READ_BURN_SECONDS, READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
 
 const props = defineProps<{ visible: boolean; currentTime?: number }>()
 const emit = defineEmits<{
@@ -45,7 +45,7 @@ const emit = defineEmits<{
 }>()
 
 const options = computed(() => READ_BURN_TIME_OPTIONS)
-const selectedTime = ref(30)
+const selectedTime = ref(DEFAULT_READ_BURN_SECONDS)
 const pickerRef = ref<HTMLDivElement | null>(null)
 const ITEM_HEIGHT = 32
 
@@ -53,7 +53,7 @@ watch(
   () => [props.visible, props.currentTime],
   async ([visible, currentTime]) => {
     if (!visible) return
-    selectedTime.value = Number(currentTime || 30)
+    selectedTime.value = Number(currentTime || DEFAULT_READ_BURN_SECONDS)
     await nextTick()
     scrollToValue(selectedTime.value)
   },

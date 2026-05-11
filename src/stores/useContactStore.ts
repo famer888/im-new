@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getContactsApplyList, getContactsDetail, getContactsList } from '@/api/imBase'
+import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 
 const NEW_FRIEND_REQ_TOTAL_SUFFIX = '-newFriendReqTotal'
 
@@ -243,7 +244,7 @@ export const useContactStore = defineStore('contact', () => {
         patchContact(targetId, {
           bfReadCancel: Boolean(detail.bfReadCancel),
           bfMyBlack: Boolean(detail.bfMyBlack),
-          msgCancelTime: Number(detail.msgCancelTime || 30),
+          msgCancelTime: Number(detail.msgCancelTime || DEFAULT_READ_BURN_SECONDS),
         }, {
           source: 'remote',
           markDetailLoaded: true,
