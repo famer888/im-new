@@ -157,6 +157,8 @@ export const useSearchStore = defineStore('search', () => {
     if (m.msgType === 2) return '[语音]'
     if (m.msgType === 3) return '[视频]'
     if (m.msgType === 7) return '[文件]'
+    if (m.msgType === 12) return '[骰子]'
+    if (m.msgType === 18) return '[扑克牌]'
     return (m.content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
 

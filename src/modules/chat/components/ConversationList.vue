@@ -141,7 +141,11 @@ function formatDigestText(digest: string): string {
   if (raw === '暂不支持该消息类型') return ''
   if (raw.includes('\uFFFD')) return `[${t('名片')}]`
 
-  const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子)\]$/)
+  if (/^(?:ht_(?:[2-9]|10|[AJQK])|JOCK[12])(?:\|\|.+)?$/i.test(raw)) {
+    return `[${t('扑克牌')}]`
+  }
+
+  const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子|扑克牌)\]$/)
   if (bracketMatch) return `[${t(bracketMatch[1])}]`
 
   try {
@@ -172,6 +176,7 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 5) return `[${t('名片')}]`
   if (message.msgType === 7) return `[${t('文件')}]`
   if (message.msgType === 12) return `[${t('骰子')}]`
+  if (message.msgType === 18) return `[${t('扑克牌')}]`
   if (isHiddenMessageType(message.msgType)) return ''
   return raw ? formatDigestText(raw) : ''
 }

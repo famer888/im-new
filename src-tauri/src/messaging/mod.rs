@@ -344,6 +344,18 @@ fn json_i32(value: &serde_json::Value, keys: &[&str]) -> Option<i32> {
     json_i64(value, keys).map(|v| v as i32)
 }
 
+fn json_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+        })
+    })
+}
+
 /// 将骰子功能表情编码为旧 im 使用的 SetImageObj protobuf。
 pub fn encode_set_image_obj(content: &str) -> Vec<u8> {
     let raw = content.trim();
@@ -378,6 +390,31 @@ pub fn encode_set_image_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将扑克牌功能表情编码为旧 im 使用的 AnimatedGameObj protobuf。
+pub fn encode_animated_game_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (game_id, current_image) = if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+        let game_id = json_i32(&value, &["gameId", "game_id"])
+            .filter(|v| *v > 0)
+            .unwrap_or(1);
+        let current_image = json_string(
+            &value,
+            &["currentImage", "current_image", "result", "value"],
+        )
+        .unwrap_or_default();
+        (game_id, current_image)
+    } else {
+        (1, raw.to_string())
+    };
+
+    let obj = imweb::AnimatedGameObj {
+        game_id,
+        current_image,
+        r#ref: None,
+    };
+    obj.encode_to_vec()
+}
+
 pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
@@ -386,8 +423,13 @@ pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
         5 => encode_name_card_obj(content),
         7 => encode_file_obj(content),
         12 => encode_set_image_obj(content),
+        18 => encode_animated_game_obj(content),
         _ => encode_text_obj(content),
     }
+}
+
+fn is_functional_message(msg_type: i32) -> bool {
+    msg_type == 12 || msg_type == 18
 }
 
 pub fn extract_attachment_file_key(content: &str) -> Option<String> {
@@ -440,8 +482,8 @@ pub fn build_send_group_message_req(
     at_uids: Vec<i64>,
     attachment_file_key: Option<&str>,
 ) -> Result<Vec<u8>, CryptoError> {
-    let is_functional_set_image = msg_type == 12;
-    let message_content = if is_functional_set_image {
+    let is_functional = is_functional_message(msg_type);
+    let message_content = if is_functional {
         content_plain.to_vec()
     } else {
         encrypt_with_rel_key(rel_key, content_plain)?
@@ -459,10 +501,10 @@ pub fn build_send_group_message_req(
         send_time,
         msg_id: 0,
         send_member: None,
-        // 骰子是旧 im 的功能表情，按明文 SetImageObj 发；普通群消息固定加密版本 1。
-        version: if is_functional_set_image { 0 } else { 1 },
+        // 骰子/扑克牌是旧 im 的功能表情，按明文 protobuf 发；普通群消息固定加密版本 1。
+        version: if is_functional { 0 } else { 1 },
         content_md5,
-        attachment_key: if is_functional_set_image {
+        attachment_key: if is_functional {
             String::new()
         } else {
             encrypt_attachment_key(rel_key, attachment_file_key)?
@@ -549,7 +591,7 @@ pub fn build_send_private_message_req(
     hasher.update(content_plain);
     let content_md5 = format!("{:x}", hasher.finalize());
 
-    if msg_type == 12 {
+    if is_functional_message(msg_type) {
         let raw_message_content = || imweb::MessageContent {
             content: content_plain.to_vec(),
             attachment_key: String::new(),

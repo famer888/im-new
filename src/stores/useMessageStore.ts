@@ -339,6 +339,21 @@ function getDiceReferenceFromContent(content: string | null | undefined): { resu
   return { result: String(result), refId }
 }
 
+function getPokerReferenceFromContent(content: string | null | undefined): { result: string; refId: string } | null {
+  const raw = String(content ?? '').trim()
+  const [resultText = '', refText = ''] = raw.split('||')
+  const result = resultText.trim()
+  const refId = refText.trim()
+  if (!result || !refId) return null
+  return { result, refId }
+}
+
+function getFunctionalMessageReference(message: Message): { result: string; refId: string } | null {
+  if (message.msgType === 12) return getDiceReferenceFromContent(message.content)
+  if (message.msgType === 18) return getPokerReferenceFromContent(message.content)
+  return null
+}
+
 function sanitizeSendExtra(extra?: Record<string, unknown>) {
   const cleaned: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(extra ?? {})) {
@@ -435,6 +450,7 @@ export const useMessageStore = defineStore('message', () => {
     if (msgType === 5) return '[名片]'
     if (msgType === 7) return '[文件]'
     if (msgType === 12) return '[骰子]'
+    if (msgType === 18) return '[扑克牌]'
     if (isHiddenMessageType(msgType)) return ''
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
@@ -751,7 +767,7 @@ export const useMessageStore = defineStore('message', () => {
     })
 
     // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。
-    if (convType === 1 && targetId && msgType !== 12) {
+    if (convType === 1 && targetId && msgType !== 12 && msgType !== 18) {
       try {
         const stepStartedAt = performance.now()
         await ensureGroupRelKey(uid, targetId)
@@ -782,7 +798,7 @@ export const useMessageStore = defineStore('message', () => {
         updateMessageStatus(optimisticId, -1)
         throw e
       }
-    } else if (convType === 0 && targetId && msgType !== 12) {
+    } else if (convType === 0 && targetId && msgType !== 12 && msgType !== 18) {
       try {
         const stepStartedAt = performance.now()
         await ensureFriendRelKey(uid, targetId)
@@ -817,7 +833,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if ([0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
+      if ([0, 1, 2, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
         const stepStartedAt = performance.now()
         await ensureWsConnected()
         logSendStep('ensureWsConnected OK', {
@@ -898,7 +914,7 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
-      const canRetryWs = [0, 1, 2, 7, 12].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
+      const canRetryWs = [0, 1, 2, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')
@@ -990,14 +1006,14 @@ export const useMessageStore = defineStore('message', () => {
     }
     const currentList = messageMap.value.get(conversationId) ?? []
     const next = [...currentList]
-    const diceRef = message.msgType === 12 ? getDiceReferenceFromContent(message.content) : null
-    if (diceRef) {
-      const refIndex = next.findIndex((m) => m.id === diceRef.refId || m.customMsgId === diceRef.refId)
+    const functionalRef = getFunctionalMessageReference(message)
+    if (functionalRef) {
+      const refIndex = next.findIndex((m) => m.id === functionalRef.refId || m.customMsgId === functionalRef.refId)
       if (refIndex >= 0) {
         const previous = next[refIndex]
         next[refIndex] = {
           ...previous,
-          content: diceRef.result,
+          content: functionalRef.result,
           status: Math.max(Number(previous.status || 0), Number(message.status || 0), 1),
           readStatus: Math.max(Number(previous.readStatus || 0), Number(message.readStatus || 0)),
           sendTime: message.sendTime || previous.sendTime,
@@ -1006,8 +1022,8 @@ export const useMessageStore = defineStore('message', () => {
         messageMap.value.set(conversationId, next)
         diceLog('appendMessage merged dice result ref', {
           conversationId,
-          refId: diceRef.refId,
-          result: diceRef.result,
+          refId: functionalRef.refId,
+          result: functionalRef.result,
           incomingId: message.id,
           previousId: previous.id,
           previousCustomMsgId: previous.customMsgId,
@@ -1048,6 +1064,7 @@ export const useMessageStore = defineStore('message', () => {
       const previous = next[existIndex]
       const incomingDiceResult = getDiceResultFromContent(message.content)
       const previousDiceResult = getDiceResultFromContent(previous.content)
+      const incomingHasContent = String(message.content ?? '').trim().length > 0
       next[existIndex] = {
         ...previous,
         ...message,
@@ -1057,7 +1074,9 @@ export const useMessageStore = defineStore('message', () => {
           && previousDiceResult > 0
         )
           ? previous.content
-          : message.content,
+          : (!incomingHasContent && (previous.msgType === 18 || message.msgType === 18) && previous.content)
+            ? previous.content
+            : message.content,
         extra: message.extra ?? previous.extra,
         quoteMessage: message.quoteMessage ?? previous.quoteMessage,
         snapchatTime: message.snapchatTime ?? previous.snapchatTime,
@@ -1316,10 +1335,10 @@ export const useMessageStore = defineStore('message', () => {
     const duplicate = duplicateIdx >= 0 ? next[duplicateIdx] : null
     const resultRefIdx = next.findIndex((m, i) => {
       if (i === idx) return false
-      if (m.msgType !== 12) return false
-      return getDiceReferenceFromContent(m.content)?.refId === serverId
+      const ref = getFunctionalMessageReference(m)
+      return ref?.refId === serverId
     })
-    const resultRef = resultRefIdx >= 0 ? getDiceReferenceFromContent(next[resultRefIdx].content) : null
+    const resultRef = resultRefIdx >= 0 ? getFunctionalMessageReference(next[resultRefIdx]) : null
     const duplicateContent = duplicate?.content ?? null
     const current = next[idx]
     const duplicateDiceResult = getDiceResultFromContent(duplicateContent)
@@ -1334,6 +1353,14 @@ export const useMessageStore = defineStore('message', () => {
               ? current.content
               : current.content
         )
+      : current.msgType === 18
+        ? (
+            resultRef
+              ? resultRef.result
+              : duplicateContent && duplicateContent.length > 0
+                ? duplicateContent
+                : current.content
+          )
       : (duplicateContent && duplicateContent.length > 0 ? duplicateContent : current.content)
     if (current.msgType === 12 || duplicate?.msgType === 12) {
       diceLog('applySendReceipt merge start', {

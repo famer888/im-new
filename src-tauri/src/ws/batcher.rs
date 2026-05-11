@@ -70,6 +70,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
                 fallback
             }
         },
+        18 => match imweb::AnimatedGameObj::decode(plain) {
+            Ok(obj) => animated_game_obj_to_legacy_content(obj),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
         _ => match imweb::TextObj::decode(plain) {
             Ok(obj) => obj.content,
             Err(_) => String::from_utf8_lossy(plain).to_string(),
@@ -139,6 +143,24 @@ fn set_image_obj_to_legacy_content(obj: imweb::SetImageObj) -> String {
     obj.current_image.to_string()
 }
 
+fn animated_game_obj_to_legacy_content(obj: imweb::AnimatedGameObj) -> String {
+    if let Some(reference) = obj.r#ref {
+        if reference.msg_id > 0 {
+            return format!("{}||{}", obj.current_image, reference.msg_id);
+        }
+    }
+    obj.current_image
+}
+
+fn decode_raw_animated_game_content(raw: &[u8]) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    imweb::AnimatedGameObj::decode(raw)
+        .ok()
+        .map(animated_game_obj_to_legacy_content)
+}
+
 fn decode_raw_set_image_content(raw: &[u8]) -> Option<String> {
     if raw.is_empty() {
         return None;
@@ -165,7 +187,10 @@ fn dice_result_from_content(content: &str) -> Option<i32> {
 fn has_dice_result_message(messages: &[DecodedMessage]) -> bool {
     messages
         .iter()
-        .any(|msg| msg.msg_type == 12 && dice_result_from_content(&msg.content).is_some())
+        .any(|msg| {
+            (msg.msg_type == 12 && dice_result_from_content(&msg.content).is_some())
+                || (msg.msg_type == 18 && !msg.content.trim().is_empty())
+        })
 }
 
 fn decrypt_group_attachment_key(
@@ -794,6 +819,17 @@ impl MessageBatcher {
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
                         )
+                    } else if gm.msg_type == 18
+                        && imweb::AnimatedGameObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw AnimatedGameObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
                     } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
                         warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw UTF-8 parsed group_id={} msg_id={} msg_type={} err={}",
@@ -1235,7 +1271,7 @@ impl MessageBatcher {
             .unwrap_or("")
             .to_string();
 
-        if om.msg_type == 12 {
+        if om.msg_type == 12 || om.msg_type == 18 {
             let content = [
                 om.app_content.as_ref().map(|v| v.content.as_slice()),
                 if om.content.is_empty() { None } else { Some(om.content.as_slice()) },
@@ -1245,12 +1281,19 @@ impl MessageBatcher {
             ]
             .into_iter()
             .flatten()
-            .find_map(decode_raw_set_image_content);
+            .find_map(|raw| {
+                if om.msg_type == 12 {
+                    decode_raw_set_image_content(raw)
+                } else {
+                    decode_raw_animated_game_content(raw)
+                }
+            });
 
             if let Some(content) = content {
                 warn!(
                     target: "dice",
-                    "[dice] PRIVATE_MSG_RECEIVED raw SetImageObj parsed sender_uid={} receive_uid={} msg_id={} content='{}'",
+                    "[functional-message] PRIVATE_MSG_RECEIVED raw msg_type={} parsed sender_uid={} receive_uid={} msg_id={} content='{}'",
+                    om.msg_type,
                     om.send_uid,
                     om.receive_uid,
                     om.msg_id,
@@ -1440,6 +1483,24 @@ impl MessageBatcher {
                             "[加密消息，等待密钥同步]".to_string()
                         }
                     }
+                } else if om.msg_type == 18 {
+                    match imweb::AnimatedGameObj::decode(fallback_cipher) {
+                        Ok(obj) => {
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED decrypt failed but raw AnimatedGameObj parsed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            animated_game_obj_to_legacy_content(obj)
+                        }
+                        Err(_) => {
+                            decrypt_pending = true;
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED animated game decrypt failed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            "[加密消息，等待密钥同步]".to_string()
+                        }
+                    }
                 } else if let Ok(obj) = imweb::TextObj::decode(fallback_cipher) {
                     warn!(
                         "PRIVATE_MSG_RECEIVED decrypt failed but raw TextObj parsed sender_uid={} msg_id={} err={}",
@@ -1574,6 +1635,14 @@ impl MessageBatcher {
                 {
                     warn!(
                         "[channel] decrypt failed but raw SetImageObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                } else if cm.msg_type == 18
+                    && imweb::AnimatedGameObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw AnimatedGameObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
                     (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
