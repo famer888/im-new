@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
@@ -12,6 +12,7 @@ import FileImport from '../components/FileImport.vue'
 import top3Icon from '@/assets/images/system/top3.png'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const settingStore = useSettingStore()
 const { locale } = useI18n()
@@ -48,11 +49,12 @@ onMounted(async () => {
       }
     }
 
+    const autoLoginAllowed = route.query.autoLogin !== '0'
     await authStore.initSession(
       isTauri()
         ? {
-            restoreSession: false,
-            autoLogin: false,
+            restoreSession: autoLoginAllowed,
+            autoLogin: autoLoginAllowed,
             fallbackToCachedAccount: false,
           }
         : undefined,
