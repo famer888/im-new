@@ -60,6 +60,8 @@ fn open_new_window() -> Result<(), String> {
             Command::new("open")
                 .arg("-n")
                 .arg(app_bundle)
+                .arg("--args")
+                .arg("--disable-auto-login")
                 .spawn()
                 .map_err(|e| e.to_string())?;
             return Ok(());
@@ -67,7 +69,10 @@ fn open_new_window() -> Result<(), String> {
     }
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    Command::new(exe).spawn().map_err(|e| e.to_string())?;
+    Command::new(exe)
+        .arg("--disable-auto-login")
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

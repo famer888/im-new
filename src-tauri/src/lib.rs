@@ -63,10 +63,16 @@ pub fn run() {
 
             // Create the login window eagerly so packaged builds land on a stable first screen.
             {
+                let disable_auto_login = std::env::args().any(|arg| arg == "--disable-auto-login");
+                let login_url = if disable_auto_login {
+                    "/#/login?autoLogin=0"
+                } else {
+                    "/#/login"
+                };
                 let mut builder = WebviewWindowBuilder::new(
                     app,
                     "login",
-                    WebviewUrl::App("/#/login".into()),
+                    WebviewUrl::App(login_url.into()),
                 )
                 .title("OCS Chat")
                 .inner_size(300.0, 420.0)
