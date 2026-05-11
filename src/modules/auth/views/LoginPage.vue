@@ -23,6 +23,7 @@ const isRestoring = ref(true)
 const isMac = ref(false)
 const isLoginWindow = ref(!isTauri())
 const extraDomains = ref<string[]>([])
+const qrLoginKey = ref(0)
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -108,6 +109,7 @@ async function handleLoginSuccess(session: {
     }
   } catch (e) {
     console.error('Login failed:', e)
+    qrLoginKey.value += 1
   } finally {
     isLoading.value = false
   }
@@ -148,6 +150,7 @@ function startWindowDrag(e: MouseEvent) {
     />
     <QRCodeLogin
       v-else-if="isLoginWindow && !isRestoring"
+      :key="qrLoginKey"
       :loading="isLoading"
       :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
