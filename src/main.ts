@@ -37,6 +37,10 @@ async function resolveInitialLocale(): Promise<SupportedLocale> {
 function setupDevtoolsShortcut() {
   if (!(window as any).__TAURI_INTERNALS__) return
 
+  window.addEventListener('contextmenu', (event) => {
+    event.preventDefault()
+  }, true)
+
   window.addEventListener('keydown', async (event) => {
     const isDevtoolsShortcut = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'i'
     if (!isDevtoolsShortcut) return
