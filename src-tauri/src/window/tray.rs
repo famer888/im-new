@@ -1,13 +1,12 @@
+use serde::{Deserialize, Serialize};
+use std::process::Command;
 use tauri::{
-    Emitter,
     image::Image,
     include_image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, AppHandle, Manager,
+    App, AppHandle, Emitter, Manager,
 };
-use serde::Serialize;
-use std::process::Command;
 use tracing::{info, warn};
 
 const TRAY_ID: &str = "ocs-main-tray";
@@ -25,6 +24,11 @@ struct TrayLogoutPayload {
     quit: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct ActiveLoginLock {
+    pid: u32,
+}
+
 impl TrayUnreadState {
     fn new() -> Self {
         Self {
@@ -34,12 +38,54 @@ impl TrayUnreadState {
     }
 }
 
+fn active_login_lock_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("active-logins.json"))
+}
+
+fn has_active_login_for_current_process(app: &tauri::AppHandle) -> bool {
+    let Some(path) = active_login_lock_path(app) else {
+        return false;
+    };
+    let Some(data) = std::fs::read_to_string(path).ok() else {
+        return false;
+    };
+    let Ok(locks) =
+        serde_json::from_str::<std::collections::HashMap<String, ActiveLoginLock>>(&data)
+    else {
+        return false;
+    };
+    locks
+        .values()
+        .any(|active| active.pid == std::process::id())
+}
+
+fn show_window(window: tauri::WebviewWindow) {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 fn show_first_available_window(app: &tauri::AppHandle) {
     for label in ["main", "login"] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
+            if window.is_visible().unwrap_or(false) {
+                show_window(window);
+                return;
+            }
+        }
+    }
+
+    let labels = if has_active_login_for_current_process(app) {
+        ["main", "login"]
+    } else {
+        ["login", "main"]
+    };
+    for label in labels {
+        if let Some(window) = app.get_webview_window(label) {
+            show_window(window);
             return;
         }
     }
@@ -170,7 +216,8 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
         for label in ["main", "login"] {
             if let Some(window) = app.get_webview_window(label) {
                 info!(target: "tray-alert", label, "request_user_attention informational");
-                let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+                let _ =
+                    window.request_user_attention(Some(tauri::UserAttentionType::Informational));
             }
         }
     } else {
