@@ -7,7 +7,8 @@ use tauri::{
     App, AppHandle, Manager,
 };
 use serde::Serialize;
-use tracing::info;
+use std::process::Command;
+use tracing::{info, warn};
 
 const TRAY_ID: &str = "ocs-main-tray";
 const TRAY_ICON: Image<'static> = include_image!("./icons/tray.png");
@@ -42,6 +43,32 @@ fn show_first_available_window(app: &tauri::AppHandle) {
             return;
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn current_app_bundle() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors()
+        .find(|path| path.extension().and_then(|value| value.to_str()) == Some("app"))
+        .map(|path| path.to_path_buf())
+}
+
+fn open_new_window() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_bundle) = current_app_bundle() {
+            Command::new("open")
+                .arg("-n")
+                .arg(app_bundle)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Command::new(exe).spawn().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn tray_tooltip(count: u32) -> String {
@@ -198,11 +225,12 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(TrayUnreadState::new());
 
+    let new_window = MenuItem::with_id(app, "new_window", "打开新窗口", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "打开 ocs", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let logout = MenuItem::with_id(app, "logout", "注销", true, None::<&str>)?;
     let quit_logout = MenuItem::with_id(app, "quit_logout", "退出程序并注销", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &settings, &logout, &quit_logout])?;
+    let menu = Menu::with_items(app, &[&new_window, &open, &settings, &logout, &quit_logout])?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(TRAY_ICON)
@@ -210,6 +238,11 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
+            "new_window" => {
+                if let Err(error) = open_new_window() {
+                    warn!("Open new window requested from tray failed: {}", error);
+                }
+            }
             "open" => {
                 show_first_available_window(app);
             }
