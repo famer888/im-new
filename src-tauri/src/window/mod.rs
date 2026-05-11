@@ -208,6 +208,15 @@ impl WindowManager {
 
     /// Switch from main window back to login
     pub fn switch_to_login(&self, app: &AppHandle) -> Result<(), WindowError> {
+        self.switch_to_login_with_auto_login(app, true)
+    }
+
+    /// Switch from main window back to login, optionally disabling cached auto-login.
+    pub fn switch_to_login_with_auto_login(
+        &self,
+        app: &AppHandle,
+        auto_login: bool,
+    ) -> Result<(), WindowError> {
         // Close all chat windows
         let conv_ids: Vec<String> = self.chat_windows.iter().map(|r| r.key().clone()).collect();
         for conv_id in conv_ids {
@@ -223,17 +232,28 @@ impl WindowManager {
                 let _ = login.set_size(tauri::Size::Logical(tauri::LogicalSize::new(300.0, 420.0)));
                 login.set_resizable(false).ok();
                 let _ = login.center();
-                let _ = login.eval(
-                    "window.location.hash = '#/login'; window.location.reload();",
-                );
+                let login_hash = if auto_login {
+                    "#/login"
+                } else {
+                    "#/login?autoLogin=0"
+                };
+                let _ = login.eval(&format!(
+                    "window.location.hash = '{}'; window.location.reload();",
+                    login_hash
+                ));
                 login.show().map_err(|e| WindowError::TauriError(e.to_string()))?;
                 login.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
             None => {
+                let login_url = if auto_login {
+                    "/#/login"
+                } else {
+                    "/#/login?autoLogin=0"
+                };
                 let mut builder = WebviewWindowBuilder::new(
                     app,
                     "login",
-                    WebviewUrl::App("/#/login".into()),
+                    WebviewUrl::App(login_url.into()),
                 )
                 .title("OCS Chat")
                 .inner_size(300.0, 420.0)
