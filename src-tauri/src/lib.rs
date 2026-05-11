@@ -9,39 +9,8 @@ mod proto;
 mod window;
 mod ws;
 
-use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-use tracing::{info, warn};
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn toggle_devtools_window(window: WebviewWindow) {
-    if window.is_devtools_open() {
-        window.close_devtools();
-    } else {
-        window.open_devtools();
-    }
-}
-
-fn toggle_focused_devtools(app: &tauri::AppHandle) {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        let window = app
-            .webview_windows()
-            .into_values()
-            .find(|window| window.is_focused().unwrap_or(false))
-            .or_else(|| app.get_webview_window("main"))
-            .or_else(|| app.get_webview_window("login"));
-
-        if let Some(window) = window {
-            toggle_devtools_window(window);
-        }
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = app;
-    }
-}
+use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tracing::info;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -51,17 +20,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, shortcut, event| {
-                    let devtools_shortcut =
-                        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyI);
-                    if event.state() == ShortcutState::Pressed && shortcut == &devtools_shortcut {
-                        toggle_focused_devtools(app);
-                    }
-                })
-                .build(),
-        )
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -102,12 +60,6 @@ pub fn run() {
 
             // Setup tray
             window::tray::setup_tray(app)?;
-            if let Err(error) = app.global_shortcut().register(Shortcut::new(
-                Some(Modifiers::CONTROL | Modifiers::SHIFT),
-                Code::KeyI,
-            )) {
-                warn!("failed to register devtools shortcut: {}", error);
-            }
 
             // Create the login window eagerly so packaged builds land on a stable first screen.
             {
