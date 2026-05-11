@@ -450,7 +450,8 @@ function messageSupportsImageSave(data: Record<string, unknown>): boolean {
 }
 
 function messageSupportsVideoFileActions(data: Record<string, unknown>): boolean {
-  return chatStore.currentConversation?.type === ConversationType.Friend
+  const conversationType = chatStore.currentConversation?.type
+  return (conversationType === ConversationType.Friend || conversationType === ConversationType.Group)
     && Number(data.msgType) === MessageType.Video
     && Boolean(getVideoFileSource(data).url)
 }
