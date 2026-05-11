@@ -8,6 +8,7 @@ import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss } from '@/utils/domainPool'
+import { WebLoginStatus } from '@/proto/generated'
 
 const props = defineProps<{
   loading?: boolean
@@ -30,6 +31,8 @@ const officialUrl = ref(API_CONFIG.officialUrl)
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
 const isLoading = ref(false)
+const isScanned = ref(false)
+const isScanCancelled = ref(false)
 const hasLoadedFirstQr = ref(false)
 const lastLoginInfo = ref<{ id?: string | number; icon?: string; name?: string; sessionId?: string }>({})
 const lastAvatarLoadError = ref(false)
@@ -58,6 +61,7 @@ watch(() => props.extraDomains, (newDomains) => {
 
 let timerOutTimer: ReturnType<typeof setTimeout> | null = null
 let loginPollingTimer: ReturnType<typeof setTimeout> | null = null
+let cancelRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 const avatarSrc = computed(() => String(lastLoginInfo.value.icon || '').trim())
 const lastAvatarDisplaySrc = computed(() => {
@@ -80,6 +84,11 @@ const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || is
 const showStartupLoading = computed(() => !hasLoadedFirstQr.value && !loginToken.value && !qrCodeUrlError.value)
 const overlayText = computed(() => {
   if (qrCodeUrlError.value) return t('登录二维码获取失败!')
+  return ''
+})
+const scanMaskText = computed(() => {
+  if (isScanCancelled.value) return t('用户已取消扫码')
+  if (isScanned.value) return t('用户已扫码请在手机确认')
   return ''
 })
 
@@ -181,6 +190,8 @@ async function handleGetQrCodeUrl() {
   activeQrBaseUrl.value = baseUrl
   clearTimers()
   isLoading.value = true
+  isScanned.value = false
+  isScanCancelled.value = false
   qrCodeUrlError.value = false
   isOutTime.value = false
 
@@ -234,6 +245,8 @@ function handleReGetQrCodeUrl() {
 
   qrCodeUrlError.value = false
   isOutTime.value = false
+  isScanned.value = false
+  isScanCancelled.value = false
   isLoading.value = true
 
   clearTimers()
@@ -268,7 +281,16 @@ async function handleIsLoginGet() {
         avatar: res.icon || '',
         sessionId: res.sessionId || '',
       })
+    } else if (res?.loginStatus === WebLoginStatus.CANCEL_LOGIN) {
+      isScanned.value = false
+      isScanCancelled.value = true
+      clearTimers()
+      cancelRefreshTimer = setTimeout(() => {
+        handleGetQrCodeUrl()
+      }, 1200)
     } else {
+      isScanCancelled.value = false
+      isScanned.value = res?.loginStatus === WebLoginStatus.SCANNED
       loginPollingTimer = setTimeout(() => {
         if (isOutTime.value || qrCodeUrlError.value) return
         handleIsLoginGet()
@@ -290,6 +312,10 @@ function clearTimers() {
   if (loginPollingTimer) {
     clearTimeout(loginPollingTimer)
     loginPollingTimer = null
+  }
+  if (cancelRefreshTimer) {
+    clearTimeout(cancelRefreshTimer)
+    cancelRefreshTimer = null
   }
 }
 
@@ -334,21 +360,30 @@ onBeforeUnmount(() => {
         <div v-if="lastLoginInfo.name">{{ lastLoginInfo.name }}</div>
       </div>
       <section @click="handleReGetQrCodeUrl">
-        <qrcode-vue
-          v-if="loginToken"
-          class="ecode"
-          :value="qrCodeValue"
-          level="H"
-          :size="160"
-        />
-        <div v-else class="ecode ecode-placeholder" />
-        <p v-if="showOverlay">
-          <img
-            :src="freshIcon"
-            :class="{ load: isLoading }"
+        <div class="qrCodeBox">
+          <qrcode-vue
+            v-if="loginToken"
+            class="ecode"
+            :value="qrCodeValue"
+            level="H"
+            :size="160"
           />
-          <span v-if="overlayText">{{ overlayText }}</span>
-        </p>
+          <div v-else class="ecode ecode-placeholder" />
+          <div
+            v-if="scanMaskText"
+            class="scanMask"
+            :class="{ cancelled: isScanCancelled }"
+          >
+            <span>{{ scanMaskText }}</span>
+          </div>
+          <p v-if="showOverlay">
+            <img
+              :src="freshIcon"
+              :class="{ load: isLoading }"
+            />
+            <span v-if="overlayText">{{ overlayText }}</span>
+          </p>
+        </div>
       </section>
       <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
       <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
@@ -407,6 +442,13 @@ onBeforeUnmount(() => {
     position: relative;
     display: inline-block;
 
+    .qrCodeBox {
+      position: relative;
+      width: 160px;
+      height: 160px;
+      margin: 0 auto;
+    }
+
     .ecode {
       display: block;
       margin: 0 auto;
@@ -421,7 +463,28 @@ onBeforeUnmount(() => {
       border: 1px solid rgba(51, 105, 254, 0.12);
     }
 
-    > p {
+    .scanMask {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background-color: rgba(255, 255, 255, 0.9);
+
+      > span {
+        color: #3369fe;
+        font-size: 14px;
+        line-height: 20px;
+        font-weight: 500;
+      }
+
+      &.cancelled > span {
+        color: #f44e5a;
+      }
+    }
+
+    .qrCodeBox > p {
       top: 0;
       position: absolute;
       width: 100%;
