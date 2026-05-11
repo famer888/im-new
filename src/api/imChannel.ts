@@ -6,11 +6,15 @@
 import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
 import { API_CONFIG, getOpenChatBaseUrl } from './config'
 import { getDeviceConfig } from './request'
+import { getActiveSessionId } from './sessionContext'
 import { ungzip } from 'pako'
 
 const CHANNEL_PACKAGE_CODE = 5520
 
 function getSessionIdFromStorage(): string {
+  const activeSessionId = getActiveSessionId()
+  if (activeSessionId) return activeSessionId
+
   try {
     const currentUid = localStorage.getItem('current-uid') || ''
     const accountListText = localStorage.getItem('login-account-list')

@@ -3,6 +3,7 @@
  */
 import { requestProto, proto, getDeviceConfig } from './request'
 import { API_CONFIG, getBaseUrl } from './config'
+import { getActiveSessionId } from './sessionContext'
 import * as $protobuf from 'protobufjs/minimal'
 import {
   GroupMemberOnLineStatusListReq,
@@ -13,6 +14,9 @@ import { aesDecrypt, aesEncrypt, aesEncryptString } from '@/utils/crypto'
 import { ungzip } from 'pako'
 
 function getSessionIdFromStorage(): string {
+  const activeSessionId = getActiveSessionId()
+  if (activeSessionId) return activeSessionId
+
   try {
     const currentUid = localStorage.getItem('current-uid') || ''
     const accountListText = localStorage.getItem('login-account-list')

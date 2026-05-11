@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getUserInfo } from '@/api/imBase'
 import { setBaseUrl } from '@/api/config'
+import { clearActiveSessionContext, setActiveSessionContext } from '@/api/sessionContext'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -83,6 +84,18 @@ export const useAuthStore = defineStore('auth', () => {
   const accounts = ref<AccountInfo[]>([])
   const autoLoginEnabled = ref(true)
   const wsConnectConfig = ref<WsConnectConfig | null>(null)
+
+  function setSession(next: SessionInfo | null) {
+    session.value = next
+    if (next?.uid && next.sessionId) {
+      setActiveSessionContext({
+        uid: next.uid,
+        sessionId: next.sessionId,
+      })
+    } else if (!next) {
+      clearActiveSessionContext()
+    }
+  }
 
   function normalizeTauriSession(
     tauriSession: SessionInfo | (SessionInfo & { session_id?: string; source_id?: string }) | null | undefined,
@@ -207,7 +220,7 @@ export const useAuthStore = defineStore('auth', () => {
           if (stored) {
             const result = normalizeTauriSession(stored)
             if (result.uid) {
-              session.value = result
+              setSession(result)
               localStorage.setItem(CURRENT_UID_KEY, result.uid)
               return
             }
@@ -234,7 +247,7 @@ export const useAuthStore = defineStore('auth', () => {
                 avatar: account.icon,
               })
               if (result.uid) {
-                session.value = result
+                setSession(result)
                 localStorage.setItem(CURRENT_UID_KEY, result.uid)
               }
             } catch {
@@ -245,16 +258,16 @@ export const useAuthStore = defineStore('auth', () => {
         }
 
         // Fallback: make sure uid/session can still be restored from account cache.
-        if (fallbackToCachedAccount && !session.value?.uid && accounts.value.length > 0) {
+        if (fallbackToCachedAccount && !(session.value as SessionInfo | null)?.uid && accounts.value.length > 0) {
           const account = getPreferredAccount()
           if (account?.id) {
-            session.value = {
+            setSession({
               uid: account.id,
               sessionId: account.sessionId || '',
               nickname: account.name || '',
               avatar: account.icon || '',
               sourceId: account.sourceId,
-            }
+            })
             localStorage.setItem(CURRENT_UID_KEY, account.id)
           }
         }
@@ -268,17 +281,17 @@ export const useAuthStore = defineStore('auth', () => {
         const storedSession = localStorage.getItem('browser-session')
         if (storedSession) {
           try {
-            session.value = JSON.parse(storedSession)
+            setSession(JSON.parse(storedSession))
           } catch { /* corrupted */ }
         } else {
           const account = accounts.value.find(a => a.id === lastUid)
           if (account) {
-            session.value = {
+            setSession({
               uid: account.id,
               sessionId: account.sessionId || '',
               nickname: account.name,
               avatar: account.icon || '',
-            }
+            })
           }
         }
       }
@@ -349,7 +362,7 @@ export const useAuthStore = defineStore('auth', () => {
         avatar: optimisticSession.avatar,
       })
       if (result.uid) {
-        session.value = result
+        setSession(result)
         localStorage.setItem(CURRENT_UID_KEY, result.uid)
         addOrUpdateAccount({
           id: result.uid,
@@ -368,7 +381,7 @@ export const useAuthStore = defineStore('auth', () => {
       nickname: request.nickname || '',
       avatar: request.avatar || '',
     }
-    session.value = browserSession
+    setSession(browserSession)
     localStorage.setItem(CURRENT_UID_KEY, browserSession.uid)
     localStorage.setItem('browser-session', JSON.stringify(browserSession))
     return browserSession
@@ -393,15 +406,15 @@ export const useAuthStore = defineStore('auth', () => {
         nickname: account.name,
         avatar: account.icon,
       })
-      session.value = result
+      setSession(result)
       localStorage.setItem(CURRENT_UID_KEY, result.uid)
     } else {
-      session.value = {
+      setSession({
         uid: account.id,
         sessionId: account.sessionId,
         nickname: account.name,
         avatar: account.icon || '',
-      }
+      })
       localStorage.setItem(CURRENT_UID_KEY, account.id)
     }
   }
@@ -423,7 +436,8 @@ export const useAuthStore = defineStore('auth', () => {
     const accountIndex = accounts.value.findIndex(a => a.id === currentUid)
     const previousAccount = accountIndex >= 0 ? { ...accounts.value[accountIndex] } : null
 
-    session.value = null
+    setSession(null)
+    clearActiveSessionContext(currentUid)
     localStorage.removeItem(CURRENT_UID_KEY)
     localStorage.removeItem('browser-session')
     clearWsConnectConfig()
@@ -441,7 +455,7 @@ export const useAuthStore = defineStore('auth', () => {
           uid: currentUid || null,
         })
       } catch (error) {
-        session.value = previousSession
+        setSession(previousSession)
         if (previousCurrentUid) {
           localStorage.setItem(CURRENT_UID_KEY, previousCurrentUid)
         }
@@ -470,11 +484,12 @@ export const useAuthStore = defineStore('auth', () => {
   function updateProfile(payload: { nickname?: string; avatar?: string }) {
     if (!session.value) return
 
-    session.value = {
+    const updatedSession = {
       ...session.value,
       nickname: payload.nickname ?? session.value.nickname,
       avatar: payload.avatar ?? session.value.avatar,
     }
+    setSession(updatedSession)
 
     const currentUid = session.value.uid
     const account = accounts.value.find(item => item.id === currentUid)

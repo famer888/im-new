@@ -4,6 +4,7 @@
  */
 import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
 import { API_CONFIG, getBaseUrl } from './config'
+import { getActiveSessionId } from './sessionContext'
 import * as proto from '@/proto/generated'
 import { ungzip } from 'pako'
 
@@ -37,6 +38,9 @@ export function getDeviceConfig() {
 }
 
 function getSessionIdFromStorage(): string {
+  const activeSessionId = getActiveSessionId()
+  if (activeSessionId) return activeSessionId
+
   try {
     const currentUid = localStorage.getItem('current-uid') || ''
     const accountListText = localStorage.getItem('login-account-list')
