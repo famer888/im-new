@@ -1434,11 +1434,13 @@ async function handleContextMenuSelect(key: string) {
         break
       }
       case 'delete_everyone':
-        await chatStore.recallMessage(authStore.uid, msgId)
         if (convId) messageStore.deleteMessage(convId, msgId)
+        chatStore.recallMessage(authStore.uid, msgId).catch((error) => {
+          console.warn('[message-menu] remote delete failed:', error)
+        })
         break
       case 'delete_local':
-        if (convId) messageStore.deleteMessage(convId, msgId)
+        if (convId) await messageStore.deleteMessageLocal(convId, msgId)
         break
       case 'select':
         uiStore.enterSelectionMode({
