@@ -416,26 +416,49 @@ export const useAuthStore = defineStore('auth', () => {
       isTauri: isTauri(),
     })
 
+    const previousSession = session.value
+    const previousCurrentUid = localStorage.getItem(CURRENT_UID_KEY)
+    const previousBrowserSession = localStorage.getItem('browser-session')
+    const previousWsConfig = wsConnectConfig.value
+    const accountIndex = accounts.value.findIndex(a => a.id === currentUid)
+    const previousAccount = accountIndex >= 0 ? { ...accounts.value[accountIndex] } : null
+
+    session.value = null
+    localStorage.removeItem(CURRENT_UID_KEY)
+    localStorage.removeItem('browser-session')
+    clearWsConnectConfig()
+    if (accountIndex >= 0) {
+      accounts.value[accountIndex] = {
+        ...accounts.value[accountIndex],
+        sessionId: undefined,
+      }
+      saveAccounts()
+    }
+
     if (isTauri()) {
       try {
         await tauriInvoke('logout', {
           uid: currentUid || null,
         })
       } catch (error) {
+        session.value = previousSession
+        if (previousCurrentUid) {
+          localStorage.setItem(CURRENT_UID_KEY, previousCurrentUid)
+        }
+        if (previousBrowserSession) {
+          localStorage.setItem('browser-session', previousBrowserSession)
+        }
+        if (previousWsConfig) {
+          saveWsConnectConfig(previousWsConfig)
+        }
+        if (previousAccount && accountIndex >= 0) {
+          accounts.value[accountIndex] = previousAccount
+          saveAccounts()
+        }
         console.warn('[auth] logout invoke failed:', error)
       }
     } else if (!keepHistoryOnLogout && currentUid) {
       localStorage.removeItem(`${currentUid}-conversations`)
-    }
-
-    session.value = null
-    localStorage.removeItem(CURRENT_UID_KEY)
-    localStorage.removeItem('browser-session')
-    clearWsConnectConfig()
-    const idx = accounts.value.findIndex(a => a.id === currentUid)
-    if (idx >= 0) {
-      accounts.value[idx].sessionId = undefined
-      saveAccounts()
     }
   }
 

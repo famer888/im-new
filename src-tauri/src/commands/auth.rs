@@ -318,7 +318,7 @@ pub async fn logout(
     }
 
     win_mgr
-        .switch_to_login(&app)
+        .switch_to_login_with_auto_login(&app, false)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
