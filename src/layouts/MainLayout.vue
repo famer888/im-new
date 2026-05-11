@@ -90,7 +90,6 @@ const initText = ref('')
 const firstInitProgressVisible = ref(false)
 const initFriendProgress = ref(0)
 const initChatProgress = ref(0)
-const initResetConfirmVisible = ref(false)
 const resettingInitData = ref(false)
 const initReloadVisible = ref(false)
 let initReloadTimer: number | null = null
@@ -359,11 +358,6 @@ onBeforeUnmount(() => {
   }
   eventBus.off('show-toast')
 })
-
-function openInitResetConfirm() {
-  if (resettingInitData.value) return
-  initResetConfirmVisible.value = true
-}
 
 async function confirmInitReset() {
   if (resettingInitData.value) return
@@ -1627,7 +1621,7 @@ async function handleForward(targetConvId: string) {
       :progress-mode="firstInitProgressVisible"
       :friend-progress="initFriendProgress"
       :chat-progress="initChatProgress"
-      @reset="openInitResetConfirm"
+      @reset="confirmInitReset"
       @reload="reloadInitPage"
     />
 
@@ -1749,12 +1743,6 @@ async function handleForward(targetConvId: string) {
       @select="handleContextMenuSelect"
     />
 
-    <ConfirmDialog
-      v-model:visible="initResetConfirmVisible"
-      variant="im"
-      :content="$t('确认退出，并重置缓存数据？')"
-      @confirm="confirmInitReset"
-    />
     <ConfirmDialog
       v-model:visible="deleteConversationConfirmVisible"
       variant="im"
