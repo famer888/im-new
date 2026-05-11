@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -426,48 +426,6 @@ const showChatWindow = computed(() => {
   if (isFileHelper && uiStore.sidebarTab !== 'transfer') return false
   return true
 })
-
-const fallbackChatConversation = computed(() => {
-  if (uiStore.sidebarTab !== 'chats') return null
-  return chatStore.conversations.find((conv) => {
-    if (conv.isArchived !== uiStore.chatArchiveListShow) return false
-    if (isFileHelperTargetId(conv.targetId)) return false
-    return isConversationInCurrentRelations(conv)
-  }) ?? null
-})
-
-function recoverBlankChatSelection() {
-  if (uiStore.sidebarTab !== 'chats') return
-  if (uiStore.detailView !== 'chat' && uiStore.detailView !== 'none') return
-  if (chatStore.currentConversationId) return
-
-  const conv = fallbackChatConversation.value
-  if (!conv) return
-
-  console.warn('[main-layout] recover blank chat selection', {
-    id: conv.id,
-    type: conv.type,
-    targetId: conv.targetId,
-    detailBefore: uiStore.detailView,
-    archiveList: uiStore.chatArchiveListShow,
-  })
-  chatStore.setCurrentConversation(conv.id)
-  uiStore.setRightPanel('none')
-  uiStore.setDetailView('chat')
-}
-
-watch(
-  [
-    () => uiStore.sidebarTab,
-    () => uiStore.detailView,
-    () => uiStore.chatArchiveListShow,
-    () => chatStore.currentConversationId,
-    () => chatStore.conversations,
-    fallbackChatConversation,
-  ],
-  recoverBlankChatSelection,
-  { deep: true, immediate: true },
-)
 
 const inviteExistingMemberIds = computed(() => {
   const members = groupStore.getMembers(uiStore.inviteFriendGroupId)
