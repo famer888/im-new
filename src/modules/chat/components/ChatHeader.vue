@@ -55,11 +55,11 @@ function handleBatchForward() {
   uiStore.openForwardDialog(firstId)
 }
 
-function handleBatchDeleteLocal() {
+async function handleBatchDeleteLocal() {
   const convId = chatStore.currentConversationId
   if (!convId) return
   for (const id of uiStore.selectedMessageIds) {
-    messageStore.deleteMessage(convId, id)
+    await messageStore.deleteMessageLocal(convId, id)
   }
   uiStore.exitSelectionMode()
 }
@@ -68,8 +68,10 @@ async function handleBatchDeleteForAll() {
   const convId = chatStore.currentConversationId
   if (!convId || !authStore.uid) return
   for (const item of uiStore.selectedMessageItems) {
-    await chatStore.recallMessage(authStore.uid, item.id)
     messageStore.deleteMessage(convId, item.id)
+    chatStore.recallMessage(authStore.uid, item.id).catch((error) => {
+      console.warn('[message-selection] remote delete failed:', error)
+    })
   }
   uiStore.exitSelectionMode()
 }

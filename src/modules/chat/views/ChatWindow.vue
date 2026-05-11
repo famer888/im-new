@@ -131,9 +131,11 @@ async function handleLoadMore() {
   }
 }
 
-async function handleSend(content: string, msgType: number, extra?: Record<string, unknown>) {
+function handleSend(content: string, msgType: number, extra?: Record<string, unknown>) {
   if (!conversationId.value || !authStore.uid) return
-  await messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra)
+  messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra).catch((error) => {
+    console.warn('[chat-window] send message failed:', error)
+  })
 }
 
 function hasDraggedFiles(e: DragEvent) {

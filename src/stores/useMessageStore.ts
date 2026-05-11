@@ -1477,6 +1477,42 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function deleteMessageFromAllCaches(messageId: string) {
+    for (const [convId, list] of messageMap.value.entries()) {
+      const next = list.filter((m) => m.id !== messageId && m.customMsgId !== messageId)
+      if (next.length !== list.length) {
+        messageMap.value.set(convId, next)
+        refreshConversationSummary(convId, next)
+      }
+    }
+  }
+
+  async function deleteMessageLocal(conversationId: string, messageId: string) {
+    deleteMessage(conversationId, messageId)
+    if (!isTauri()) return
+
+    const authStore = useAuthStore()
+    if (!authStore.uid) return
+
+    await tauriInvoke('delete_message', {
+      uid: authStore.uid,
+      messageId,
+    })
+  }
+
+  async function deleteMessageLocalById(messageId: string) {
+    deleteMessageFromAllCaches(messageId)
+    if (!isTauri()) return
+
+    const authStore = useAuthStore()
+    if (!authStore.uid) return
+
+    await tauriInvoke('delete_message', {
+      uid: authStore.uid,
+      messageId,
+    })
+  }
+
   function clearConversationMessages(conversationId: string) {
     messageMap.value.delete(conversationId)
     hasMoreMap.value.delete(conversationId)
@@ -1524,6 +1560,9 @@ export const useMessageStore = defineStore('message', () => {
     applySendReceipt,
     applySendFailed,
     deleteMessage,
+    deleteMessageFromAllCaches,
+    deleteMessageLocal,
+    deleteMessageLocalById,
     clearConversationMessages,
     clearConversationHistory,
     clearAllMessageCaches,

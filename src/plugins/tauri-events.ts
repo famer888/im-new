@@ -1086,11 +1086,12 @@ export async function setupTauriListeners() {
     chatStore.addOrUpdateConversation(event.payload)
   })
 
-  listen<{ messageId: string }>('msg:recall', (event) => {
+  listen<{ messageId: string; conversationId?: string; clear?: number }>('msg:recall', (event) => {
     const messageStore = useMessageStore()
-    messageStore.updateMessage(event.payload.messageId, {
-      content: '[消息已撤回]',
-      status: -2,
+    const messageId = String(event.payload?.messageId || '')
+    if (!messageId || messageId === '-1') return
+    messageStore.deleteMessageLocalById(messageId).catch((error) => {
+      console.warn('[msg:recall] delete local failed:', error)
     })
   })
 

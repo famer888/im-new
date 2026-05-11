@@ -465,6 +465,39 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::PRIVATE_MSG_RECALLED => {
+                match imweb::PushRecallOneToOneMessageResp::decode(decoded_payload.as_slice()) {
+                    Ok(resp) => {
+                        for item in resp.recall_one_to_one_messages {
+                            self.emit_recall_message("friend", item);
+                        }
+                    }
+                    Err(e) => warn!("decode PRIVATE_MSG_RECALLED failed: {}", e),
+                }
+                return;
+            }
+            cmds::GROUP_MSG_RECALLED => {
+                match imweb::PushRecallGroupMessageResp::decode(decoded_payload.as_slice()) {
+                    Ok(resp) => {
+                        for item in resp.recall_group_messages {
+                            self.emit_recall_message("group", item);
+                        }
+                    }
+                    Err(e) => warn!("decode GROUP_MSG_RECALLED failed: {}", e),
+                }
+                return;
+            }
+            cmds::CHANNEL_MSG_RECALLED => {
+                match imweb::PushRecallChannelMessage::decode(decoded_payload.as_slice()) {
+                    Ok(resp) => {
+                        if let Some(item) = resp.latest_recall_channel_message {
+                            self.emit_recall_message("channel", item);
+                        }
+                    }
+                    Err(e) => warn!("decode CHANNEL_MSG_RECALLED failed: {}", e),
+                }
+                return;
+            }
             cmds::FRIEND_REQ_NUM_PUSH => {
                 match imweb::PushFriendReqNumResp::decode(decoded_payload.as_slice()) {
                     Ok(resp) => {
@@ -1817,6 +1850,32 @@ impl MessageBatcher {
             .emit("msg:sent", &evt)
             .map_err(|e| format!("emit msg:sent: {}", e))?;
         Ok(())
+    }
+
+    fn emit_recall_message(&self, conversation_type: &str, recall: imweb::RecallMessage) {
+        let conv_prefix = match conversation_type {
+            "group" => 1,
+            "channel" => 2,
+            _ => 0,
+        };
+        let conversation_id = if recall.msg_target_id > 0 {
+            format!("{}_{}", conv_prefix, recall.msg_target_id)
+        } else {
+            String::new()
+        };
+        let payload = serde_json::json!({
+            "messageId": recall.msg_id.to_string(),
+            "conversationId": conversation_id,
+            "targetId": recall.msg_target_id.to_string(),
+            "type": conversation_type,
+            "clear": recall.clear,
+            "clearTime": recall.clear_time,
+        });
+        let _ = self.app_handle.emit("msg:recall", &payload);
+        info!(
+            "emit msg:recall type={} msg_id={} target_id={} clear={}",
+            conversation_type, recall.msg_id, recall.msg_target_id, recall.clear
+        );
     }
 
     fn emit_error_resp(&self, payload: &[u8]) -> Result<(), String> {

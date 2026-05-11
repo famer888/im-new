@@ -2067,17 +2067,81 @@ pub async fn recall_message(
     uid: String,
     message_id: String,
 ) -> Result<(), String> {
-    db.with_connection(&uid, |conn| {
+    let (db_msg_id, conversation_id) = db.with_connection(&uid, |conn| {
+        let row = conn
+            .query_row(
+                "SELECT id, conversation_id
+                 FROM messages
+                 WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1
+                 LIMIT 1",
+                rusqlite::params![message_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        let Some((db_msg_id, conversation_id)) = row else {
+            return Err(crate::db::DbError::SqliteError(format!(
+                "message not found: {}",
+                message_id
+            )));
+        };
+
         conn.execute(
-            "UPDATE messages SET status = -2, content = '[消息已撤回]' WHERE id = ?1 AND sender_id = ?2",
-            rusqlite::params![message_id, uid],
+            "UPDATE messages
+             SET is_deleted = 1
+             WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1",
+            rusqlite::params![message_id],
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        Ok(())
+        queries::refresh_conversation_summary(conn, &conversation_id)?;
+        Ok((db_msg_id, conversation_id))
     })
     .map_err(|e| e.to_string())?;
 
-    // TODO: send recall command via WebSocket
+    let (conv_type, target_id) = parse_conversation_id(&conversation_id)?;
+    let target_id_i64 = target_id
+        .parse::<i64>()
+        .map_err(|_| format!("invalid target id '{}'", target_id))?;
+    let msg_id_i64 = db_msg_id
+        .parse::<i64>()
+        .or_else(|_| message_id.parse::<i64>())
+        .map_err(|_| format!("invalid message id '{}'", db_msg_id))?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let recall = imweb::RecallMessage {
+        msg_id: msg_id_i64,
+        msg_target_id: target_id_i64,
+        channel_name: String::new(),
+        clear: 0,
+        clear_time: now,
+    };
+
+    match conv_type {
+        1 => {
+            let req = imweb::SendRecallGroupMessageReq {
+                recall_group_message: Some(recall),
+            };
+            ws_mgr
+                .send_packet(ws_cmds::RECALL_GROUP_MSG, now, &req.encode_to_vec())
+                .map_err(|e| e.to_string())?;
+        }
+        2 => {
+            let req = imweb::SendRecallChannelMessage {
+                recall_channel_message: Some(recall),
+            };
+            ws_mgr
+                .send_packet(ws_cmds::RECALL_CHANNEL_MSG, now, &req.encode_to_vec())
+                .map_err(|e| e.to_string())?;
+        }
+        _ => {
+            let req = imweb::SendRecallOneToOneMessageReq {
+                recall_one_to_one_message: Some(recall),
+            };
+            ws_mgr
+                .send_packet(ws_cmds::RECALL_PRIVATE_MSG, now, &req.encode_to_vec())
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     Ok(())
 }
