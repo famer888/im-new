@@ -71,8 +71,8 @@ pub fn send_group_message(
         SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str))
     })?;
 
-    let is_functional_set_image = msg_type == 12;
-    let rel_key = if is_functional_set_image {
+    let is_functional_message = msg_type == 12 || msg_type == 18;
+    let rel_key = if is_functional_message {
         String::new()
     } else {
         crypto
@@ -233,11 +233,11 @@ pub fn send_private_message(
         .map(|(v, k)| (v as i32, k));
 
     let is_file_helper = friend_uid_str == FILE_HELPER_TARGET_ID;
-    let is_functional_set_image = msg_type == 12;
+    let is_functional_message = msg_type == 12 || msg_type == 18;
     if friend_app_key.is_none()
         && friend_web_key.is_none()
         && !is_file_helper
-        && !is_functional_set_image
+        && !is_functional_message
     {
         return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));
     }
