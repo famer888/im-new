@@ -2535,6 +2535,7 @@ onBeforeUnmount(() => {
   background: #fff;
   flex-shrink: 0;
   position: relative;
+  z-index: 20;
   isolation: isolate;
 
   &.notice-only {
@@ -2814,7 +2815,7 @@ onBeforeUnmount(() => {
   position: absolute;
   bottom: 50px;
   left: 10px;
-  z-index: 100;
+  z-index: 30;
 }
 
 .send-area {
