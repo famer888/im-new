@@ -213,6 +213,7 @@
   "温馨提示": "Notice",
   "解散群聊确认": "After disbanding, all members will lose contact with the group and all chat history will be deleted.",
   "解散成功": "Group disbanded",
+  "该群聊已解散": "This group chat has been disbanded",
   "退出群聊": "Leave group",
   "退出群聊确认": "Leave this group and delete its chat history?",
   "退出成功": "Left successfully",

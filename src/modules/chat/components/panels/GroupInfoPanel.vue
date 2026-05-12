@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useChatStore } from '@/stores/useChatStore'
+import { GROUP_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -16,6 +16,7 @@ import GroupQRCode from './GroupQRCode.vue'
 import GroupNoticeDialog from './GroupNoticeDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 import RemoveMemberDialog from '@/modules/groups/components/RemoveMemberDialog.vue'
+import { eventBus } from '@/utils/eventBus'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import searchCloseIcon from '@/assets/images/headNav/search-close-icon.png'
 const chatStore = useChatStore()
@@ -300,6 +301,62 @@ function openClearDialog() {
   ]
 }
 
+async function appendGroupDisbandNotification() {
+  const currentConv = conv.value
+  if (!currentConv || !authStore.uid) return
+
+  const now = Date.now()
+  const groupId = currentConv.targetId
+  const groupName = group.value?.name || groupAliasName.value || groupId
+  const groupAvatar = group.value?.avatar || null
+  const conversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+  const id = `group-disband-${groupId}-${now}`
+  const content = t('该群聊已解散')
+  const extra = {
+    source: 'group-disband-local',
+    groupId,
+    groupName,
+    groupAvatar,
+    groupReqType: 13,
+    groupReqStatus: 0,
+    sendUid: String(authStore.uid),
+    receiveUid: '',
+    unReadNum: 0,
+  }
+  const message = {
+    id,
+    customMsgId: id,
+    conversationId,
+    senderId: String(authStore.uid),
+    msgType: 8,
+    content,
+    sendTime: now,
+    status: 1,
+    readStatus: 0,
+    version: 0,
+    isDeleted: false,
+    extra: JSON.stringify(extra),
+  }
+
+  messageStore.appendMessage(conversationId, message)
+  chatStore.updateGroupNotificationConv(content, now, 0)
+  eventBus.emit('group-invitation:update')
+
+  if (!(window as any).__TAURI_INTERNALS__) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('upsert_incoming_messages', {
+      uid: authStore.uid,
+      messages: [{
+        ...message,
+        extra,
+      }],
+    })
+  } catch (error) {
+    console.warn('[GroupInfoPanel] persist disband notification failed:', error)
+  }
+}
+
 async function handleClearSubmit(index: number) {
   if (index === -1 || !conv.value) {
     clearMsgTypeList.value = []
@@ -328,6 +385,7 @@ function handleDisbandGroup() {
       const resp = await disableGroup({ groupId: conv.value.targetId })
       const code = (resp as any)?.commonResult?.errCode
       if (code === 200) {
+        await appendGroupDisbandNotification()
         showToast(t('解散成功'))
         uiStore.setRightPanel('none')
         chatStore.deleteConversation(authStore.uid!, conv.value.id)
