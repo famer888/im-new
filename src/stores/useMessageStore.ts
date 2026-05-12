@@ -833,7 +833,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if ([0, 1, 2, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
+      if ([0, 1, 2, 3, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
         const stepStartedAt = performance.now()
         await ensureWsConnected()
         logSendStep('ensureWsConnected OK', {
@@ -914,7 +914,7 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
-      const canRetryWs = [0, 1, 2, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
+      const canRetryWs = [0, 1, 2, 3, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')

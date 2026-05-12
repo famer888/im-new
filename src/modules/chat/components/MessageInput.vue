@@ -1762,16 +1762,87 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
     const objectUrl = URL.createObjectURL(file)
     let settled = false
     let timer = 0
+    let waitingForSeek = false
+    let candidateTimes: number[] = []
+    let candidateIndex = 0
 
     const cleanup = () => {
       window.clearTimeout(timer)
       URL.revokeObjectURL(objectUrl)
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      video.removeEventListener('loadeddata', handleMediaReady)
+      video.removeEventListener('canplay', handleMediaReady)
+      video.removeEventListener('seeked', handleSeeked)
+      video.removeEventListener('error', fail)
       video.pause()
       video.removeAttribute('src')
       video.load()
     }
 
-    const finish = () => {
+    const buildCandidateTimes = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0
+      if (duration <= 0.2) return [0]
+
+      const rawTimes = [
+        0.1,
+        0.5,
+        1,
+        2,
+        Math.min(Math.max(duration * 0.25, 0.1), Math.max(0.1, duration - 0.1)),
+        Math.min(Math.max(duration * 0.5, 0.1), Math.max(0.1, duration - 0.1)),
+      ]
+      return [...new Set(
+        rawTimes
+          .filter(time => Number.isFinite(time) && time >= 0 && time < duration)
+          .map(time => Number(time.toFixed(2))),
+      )]
+    }
+
+    const frameLooksBlank = (context: CanvasRenderingContext2D, width: number, height: number): boolean => {
+      const sampleWidth = Math.min(80, width)
+      const sampleHeight = Math.min(80, height)
+      if (sampleWidth <= 0 || sampleHeight <= 0) return false
+
+      const sample = document.createElement('canvas')
+      sample.width = sampleWidth
+      sample.height = sampleHeight
+      const sampleContext = sample.getContext('2d')
+      if (!sampleContext) return false
+      sampleContext.drawImage(canvas, 0, 0, sampleWidth, sampleHeight)
+
+      const data = sampleContext.getImageData(0, 0, sampleWidth, sampleHeight).data
+      let total = 0
+      let brightPixels = 0
+      let min = 255
+      let max = 0
+      for (let i = 0; i < data.length; i += 4) {
+        const luma = (data[i] * 0.2126) + (data[i + 1] * 0.7152) + (data[i + 2] * 0.0722)
+        total += luma
+        if (luma > 28) brightPixels += 1
+        if (luma < min) min = luma
+        if (luma > max) max = luma
+      }
+      const pixels = data.length / 4
+      const average = pixels > 0 ? total / pixels : 255
+      const brightRatio = pixels > 0 ? brightPixels / pixels : 1
+      return average < 18 && brightRatio < 0.03 && (max - min) < 35
+    }
+
+    const seekToNextCandidate = (): boolean => {
+      if (candidateIndex >= candidateTimes.length) return false
+      const nextTime = candidateTimes[candidateIndex]
+      candidateIndex += 1
+      try {
+        waitingForSeek = true
+        video.currentTime = nextTime
+        return true
+      } catch {
+        waitingForSeek = false
+        return seekToNextCandidate()
+      }
+    }
+
+    const captureFrame = () => {
       if (settled) return
       const sourceWidth = video.videoWidth || 0
       const sourceHeight = video.videoHeight || 0
@@ -1789,6 +1860,9 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
         return
       }
       context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      if (frameLooksBlank(context, canvas.width, canvas.height) && seekToNextCandidate()) {
+        return
+      }
       const thumbDataUrl = canvas.toDataURL('image/jpeg', 0.82)
       const duration = Number.isFinite(video.duration) ? Math.max(0, Math.round(video.duration)) : 0
       cleanup()
@@ -1807,25 +1881,30 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
       reject(new Error('视频预览生成失败'))
     }
 
+    const handleMediaReady = () => {
+      if (waitingForSeek) return
+      captureFrame()
+    }
+
+    const handleSeeked = () => {
+      waitingForSeek = false
+      captureFrame()
+    }
+
+    const handleLoadedMetadata = () => {
+      candidateTimes = buildCandidateTimes()
+      if (seekToNextCandidate()) return
+      captureFrame()
+    }
+
     timer = window.setTimeout(fail, 10000)
     video.preload = 'metadata'
     video.muted = true
     video.playsInline = true
-    video.addEventListener('loadedmetadata', () => {
-      const duration = Number.isFinite(video.duration) ? video.duration : 0
-      if (duration > 0.2) {
-        try {
-          video.currentTime = 0.1
-          return
-        } catch {
-          finish()
-          return
-        }
-      }
-      finish()
-    })
-    video.addEventListener('loadeddata', finish)
-    video.addEventListener('seeked', finish)
+    video.addEventListener('loadedmetadata', handleLoadedMetadata)
+    video.addEventListener('loadeddata', handleMediaReady)
+    video.addEventListener('canplay', handleMediaReady)
+    video.addEventListener('seeked', handleSeeked)
     video.addEventListener('error', fail)
     video.src = objectUrl
     video.load()
@@ -2141,6 +2220,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           fileKey: uploaded.fileKey,
         }), MessageType.Video, withReadBurnExtra({
           fileKey: uploaded.fileKey,
+          localThumbDataUrl: metadata.thumbDataUrl,
           ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
         }))
         if (localPreview?.url.startsWith('blob:')) {
