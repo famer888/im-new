@@ -93,26 +93,45 @@ function formatReqMemberName(user: unknown, fallbackId?: unknown): string {
   return name
 }
 
+function normalizeGroupNoticeText(raw: string): string {
+  return raw.replace(/你(?=(?:邀请|申请加入|拒绝加入|同意加入))/g, '')
+}
+
+function translateKnownGroupNotice(raw: string): string {
+  const normalized = normalizeGroupNoticeText(raw)
+  const phraseMap: Record<string, string> = {
+    该群聊已解散: t('该群聊已解散'),
+    拒绝加入: t('拒绝加入'),
+    同意加入: t('同意加入'),
+    申请加入: t('申请加入'),
+    邀请你加入: t('邀请你加入'),
+  }
+  return normalized.replace(/该群聊已解散|拒绝加入|同意加入|申请加入|邀请你加入/g, (matched) => (
+    phraseMap[matched] || matched
+  ))
+}
+
 function formatReqMessage(item: GroupReqItem): string {
-  const raw = (item.msg || '').trim().replace(/\s+/g, ' ')
+  const raw = normalizeGroupNoticeText((item.msg || '').trim().replace(/\s+/g, ' '))
   if (!raw) {
     return item.groupName ? t('群通知条目摘要', { name: item.groupName }) : t('群通知')
   }
-  if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
+  const translated = translateKnownGroupNotice(raw)
+  if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return translated
 
   const shouldPrefix =
     /^(拒绝加入|同意加入|申请加入|邀请你加入|加入)/.test(raw) ||
     (item.groupReqStatus === 2 && raw.includes('拒绝')) ||
     [1, 2, 3, 4, 14, 15].includes(item.groupReqType)
-  if (!shouldPrefix) return raw
+  if (!shouldPrefix) return translated
 
   const user = item.groupReqStatus === 2
     ? item.targetUser || item.fromUser || item.checkUser
     : item.fromUser || item.targetUser || item.checkUser
   const name = getReqUserName(user)
-  if (!name || raw.includes(name)) return raw
+  if (!name || raw.includes(name)) return translated
 
-  return `${name}${raw}`
+  return `${name}${translated}`
 }
 
 function parseExtraObject(extra: unknown): Record<string, any> {
@@ -230,9 +249,27 @@ function syncSidebarPreview(items: GroupReqItem[]) {
       latest.updateTime || latest.createTime,
       0,
     )
+    promoteGroupConversationAboveNotification(latest.groupId)
   } else {
     chatStore.removeGroupNotificationConversation()
   }
+}
+
+function promoteGroupConversationAboveNotification(groupId: string) {
+  const convId = `1_${groupId}`
+  const groupConv = chatStore.conversations.find((conv) => conv.id === convId)
+  const noticeConv = chatStore.conversations.find((conv) => conv.id === notificationConversationId)
+  if (!groupConv || !noticeConv) return
+
+  const noticeTime = Math.max(
+    Number(noticeConv.updatedAt || 0),
+    Number(noticeConv.lastMsgTime || 0),
+  )
+  const nextUpdatedAt = Math.max(Date.now(), noticeTime + 1)
+  chatStore.addOrUpdateConversation({
+    ...groupConv,
+    updatedAt: nextUpdatedAt,
+  })
 }
 
 async function loadList() {
@@ -269,6 +306,7 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
     const res = await apiFn({ groupReqId: item.groupReqId, flag })
     if (Number((res as any)?.commonResult?.errCode) === 200) {
       list.value[index] = { ...list.value[index], groupReqStatus: flag ? 1 : 2 }
+      let shouldPromoteGroup = Boolean(chatStore.conversations.find((conv) => conv.id === `1_${item.groupId}`))
       if (flag) {
         const gid = item.groupId
         if (!groupStore.groups.find((g) => g.id === gid)) {
@@ -291,8 +329,12 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
           lastMsgTime: now,
           updatedAt: now,
         })
+        shouldPromoteGroup = true
       }
       syncSidebarPreview(list.value)
+      if (shouldPromoteGroup) {
+        promoteGroupConversationAboveNotification(item.groupId)
+      }
     } else {
       console.error(t('操作失败'), (res as any)?.commonResult?.errMsg)
     }
