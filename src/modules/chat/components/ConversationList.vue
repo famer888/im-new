@@ -364,6 +364,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           active: conv.id === chatStore.currentConversationId,
           pinned: conv.isPinned && !conv.isArchived,
           'friend-online': showFriendOnlineDot(conv),
+          'has-unread': conv.unreadCount > 0,
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -378,10 +379,6 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
             :size="35"
             :rounded="!!getAvatar(conv)"
           />
-          <span v-if="conv.unreadCount > 0 && !conv.isMuted" class="badge">
-            {{ conv.unreadCount > 99 ? '99+' : conv.unreadCount }}
-          </span>
-          <span v-else-if="conv.unreadCount > 0 && conv.isMuted" class="muted-dot" />
         </div>
 
         <div class="conv-body">
@@ -399,6 +396,11 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
             </span>
           </div>
         </div>
+
+        <span v-if="conv.unreadCount > 0 && !conv.isMuted" class="badge">
+          {{ conv.unreadCount > 99 ? '99+' : conv.unreadCount }}
+        </span>
+        <span v-else-if="conv.unreadCount > 0 && conv.isMuted" class="muted-dot" />
 
         <div class="conv-divider" />
       </div>
@@ -536,26 +538,29 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 
 .badge {
   position: absolute;
-  top: -8px;
-  right: -8px;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 7px;
+  right: 12px;
+  bottom: 11px;
+  z-index: 3;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
   background: #f44e5a;
-  border-radius: 20px;
-  transform: scale(0.86);
+  border-radius: 18px;
   color: #fff;
   font-size: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  line-height: 1;
+  line-height: 18px;
+  white-space: nowrap;
 }
 
 .muted-dot {
   position: absolute;
-  top: 0;
-  right: 0;
+  right: 18px;
+  bottom: 16px;
+  z-index: 3;
   width: 8px;
   height: 8px;
   background: #ccc;
@@ -604,6 +609,11 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   color: #aaaaaa;
   line-height: 20px;
   gap: 2px;
+}
+
+.conv-item.has-unread .conv-row-bottom {
+  padding-right: 30px;
+  box-sizing: border-box;
 }
 
 .at-me {
