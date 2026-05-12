@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
+import { eventBus } from '@/utils/eventBus'
 
 const props = defineProps<{
   message: Message
@@ -17,16 +19,25 @@ const activeThumbSrc = ref('')
 const showPreview = ref(false)
 const previewVideoSrc = ref('')
 const videoOpening = ref(false)
+const videoPreparingForDrag = ref(false)
 const localVideoPath = ref('')
 const thumbElRef = ref<HTMLImageElement | null>(null)
 let downloadToken = 0
 let videoOpenToken = 0
+let pendingVideoLocalFilePromise: Promise<string> | null = null
 let stopDownloadEvents: Array<() => void> = []
 let stopVideoDownloadEvents: Array<() => void> = []
+let nativeDragStartPoint: { x: number; y: number } | null = null
+let nativeDragStarted = false
+let suppressNextClick = false
+const NATIVE_DRAG_THRESHOLD = 4
 
 interface VideoContent {
   url: string
   thumbUrl: string
+  name: string
+  localPath: string
+  mimeType: string
   duration: number
   width: number
   height: number
@@ -70,6 +81,9 @@ function parseLegacyVideo(raw: string): VideoContent {
     width: Number(width || 0) || 0,
     height: Number(height || 0) || 0,
     size: Number(size || 0) || 0,
+    name: '',
+    localPath: '',
+    mimeType: '',
     fileKey: '',
   }
 }
@@ -77,12 +91,20 @@ function parseLegacyVideo(raw: string): VideoContent {
 const videoData = computed<VideoContent>(() => {
   const raw = String(props.message.content || '').trim()
   if (!raw) {
-    return { url: '', thumbUrl: '', duration: 0, width: 0, height: 0, size: 0, fileKey: '' }
+    return { url: '', thumbUrl: '', name: '', localPath: '', mimeType: '', duration: 0, width: 0, height: 0, size: 0, fileKey: '' }
   }
 
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
     const url = normalizeVideoUrl(parsed.url || parsed.fileUrl || parsed.path || '')
+    const localPath = String(
+      parsed.local ||
+      parsed.localPath ||
+      parsed.local_path ||
+      parsed.filePath ||
+      parsed.file_path ||
+      '',
+    ).trim()
     const thumbUrl = normalizeImageSrc(
       parsed.thumbUrl || parsed.thumbnailUrl || parsed.thumbnail || parsed.cover || url,
       parsed.thumbMimeType || parsed.thumb_mime_type || parsed.mimeType || parsed.mime,
@@ -90,6 +112,9 @@ const videoData = computed<VideoContent>(() => {
     return {
       url,
       thumbUrl,
+      name: String(parsed.name || parsed.fileName || parsed.file_name || '').trim(),
+      localPath,
+      mimeType: String(parsed.mimeType || parsed.mime_type || parsed.mime || '').trim(),
       duration: Number(parsed.duration || 0) || 0,
       width: Number(parsed.width || 0) || 0,
       height: Number(parsed.height || 0) || 0,
@@ -123,6 +148,16 @@ const fileKey = computed(() =>
 const attachmentKey = computed(() =>
   String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
 )
+const extraLocalVideoPath = computed(() =>
+  String(
+    extraData.value.local ||
+    extraData.value.localPath ||
+    extraData.value.local_path ||
+    extraData.value.filePath ||
+    extraData.value.file_path ||
+    '',
+  ).trim(),
+)
 const localThumbSrc = computed(() => normalizeImageSrc(
   extraData.value.localThumbDataUrl ||
   extraData.value.local_thumb_data_url ||
@@ -136,6 +171,19 @@ const groupId = computed(() => {
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
+const localVideoSourcePath = computed(() => {
+  if (extraLocalVideoPath.value) return fileUrlToLocalPath(extraLocalVideoPath.value)
+  if (videoData.value.localPath) return fileUrlToLocalPath(videoData.value.localPath)
+  if (isLocalFilePath(videoData.value.url)) return fileUrlToLocalPath(videoData.value.url)
+  return ''
+})
+const dragFileName = computed(() =>
+  ensureVideoFileExtension(
+    pathFileName(localVideoPath.value) ||
+      getVideoFileName(videoData.value.url, videoData.value.name, localVideoSourcePath.value),
+    videoData.value.url || localVideoPath.value || localVideoSourcePath.value,
+  ),
+)
 const isRemoteThumb = computed(() => /^https?:\/\//i.test(videoData.value.thumbUrl))
 const showLoading = computed(() =>
   !activeThumbSrc.value &&
@@ -189,6 +237,62 @@ function safeName(name: string): string {
   return name.replace(/[^\w.-]/g, '_') || 'video-thumb'
 }
 
+function safeFileName(name: string, fallback = 'video.mp4'): string {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\0/g, '')
+    .trim() || fallback
+}
+
+function pathFileName(path: string): string {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  return safeFileName(raw.split(/[\\/]/).pop() || '')
+}
+
+function isLocalFilePath(src: string): boolean {
+  const raw = String(src || '').trim()
+  if (!raw || /^(https?|blob|data|asset|tauri):/i.test(raw)) return false
+  return /^file:/i.test(raw) || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
+}
+
+function fileUrlToLocalPath(src: string): string {
+  const raw = String(src || '').trim()
+  if (!/^file:/i.test(raw)) return raw
+  try {
+    const parsed = new URL(raw)
+    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
+    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return raw.replace(/^file:\/\/?/i, '')
+  }
+}
+
+function decodedUrlFileName(url: string): string {
+  const cleanUrl = String(url || '').split('?')[0].split('#')[0]
+  const rawName = cleanUrl.split(/[\\/]/).pop() || ''
+  try {
+    return decodeURIComponent(rawName)
+  } catch {
+    return rawName
+  }
+}
+
+function getVideoFileName(url: string, explicitName = '', localPath = ''): string {
+  const explicit = safeFileName(explicitName, '')
+  if (explicit) {
+    return ensureVideoFileExtension(explicit, url || localPath)
+  }
+  const localName = pathFileName(localPath)
+  if (localName) return ensureVideoFileExtension(localName, localPath || url)
+  const urlName = safeFileName(decodedUrlFileName(url), '')
+  if (urlName) {
+    return ensureVideoFileExtension(urlName, url)
+  }
+  return `video${videoExt(url)}`
+}
+
 function ensureMediaSrc(src: string): string {
   const raw = String(src || '').trim()
   if (!raw) return ''
@@ -200,8 +304,14 @@ function ensureMediaSrc(src: string): string {
 }
 
 function videoExt(url: string): string {
-  const matched = String(url || '').split('?')[0].match(/\.(mp4|m4v|mov|webm|ogg)$/i)
+  const matched = String(url || '').split('?')[0].match(/\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i)
   return matched?.[0]?.toLowerCase() || '.mp4'
+}
+
+function ensureVideoFileExtension(fileName: string, source = ''): string {
+  const name = safeFileName(fileName, 'video')
+  if (/\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i.test(name)) return name
+  return `${name}${videoExt(source)}`
 }
 
 function fallbackPlainFileKey(key: string): string {
@@ -229,6 +339,16 @@ async function resolveFileKey(): Promise<string> {
     })
   } catch {
     return ''
+  }
+}
+
+async function localFileExists(path: string): Promise<boolean> {
+  if (!path || !(window as any).__TAURI_INTERNALS__) return false
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<boolean>('file_exists', { path })
+  } catch {
+    return false
   }
 }
 
@@ -353,7 +473,7 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
       ])
       const baseDir = await appDataDir()
       const id = `${safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)}-video`
-      const savePath = await join(baseDir, 'video-cache', `${id}${videoExt(url)}`)
+      const savePath = await join(baseDir, 'video-cache', id, getVideoFileName(url, videoData.value.name))
       const doneEvent = `file:done:${id}`
       const errorEvent = `file:error:${id}`
 
@@ -376,6 +496,7 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
         savePath,
         msgId: id,
         logTag: 'video',
+        emitDataUrl: false,
       })
     } catch (error) {
       if (token !== videoOpenToken) return
@@ -385,15 +506,143 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
   })
 }
 
+async function ensureVideoLocalFile(): Promise<string> {
+  if (localVideoPath.value && await localFileExists(localVideoPath.value)) return localVideoPath.value
+
+  const localSource = localVideoSourcePath.value
+  if (localSource && await localFileExists(localSource)) {
+    localVideoPath.value = localSource
+    return localSource
+  }
+
+  const url = videoData.value.url
+  if (!url || /^(blob|data):/i.test(url)) {
+    throw new Error('视频文件还没有本地缓存')
+  }
+
+  const key = await resolveFileKey()
+  const path = await downloadVideoToLocal(url, key)
+  localVideoPath.value = path
+  return path
+}
+
+function prepareVideoLocalFileForDrag() {
+  if (!(window as any).__TAURI_INTERNALS__ || pendingVideoLocalFilePromise) return
+  videoPreparingForDrag.value = true
+  pendingVideoLocalFilePromise = ensureVideoLocalFile()
+    .catch((error) => {
+      console.warn('[video] prepare drag file failed:', error)
+      return ''
+    })
+    .finally(() => {
+      videoPreparingForDrag.value = false
+      pendingVideoLocalFilePromise = null
+    })
+}
+
+function getPreparedNativeDragPath(): string {
+  const path = String(localVideoPath.value || localVideoSourcePath.value || '').trim()
+  if (!path || /^(https?|blob|data):/i.test(path)) return ''
+  return path
+}
+
+function cleanupNativeDragListeners() {
+  window.removeEventListener('mousemove', handleNativeDragMouseMove, true)
+  window.removeEventListener('mouseup', handleNativeDragMouseUp, true)
+}
+
+function showVideoPreparingToast() {
+  eventBus.emit('show-toast', { message: '视频准备中，请稍后再拖拽' })
+}
+
+async function startNativeVideoFileDrag(filePath: string) {
+  if (!(window as any).__TAURI_INTERNALS__ || !filePath) return
+
+  try {
+    await tauriInvoke('start_native_file_drag', { path: filePath })
+  } catch (error) {
+    console.warn('[video] native file drag failed:', error)
+    eventBus.emit('show-toast', { message: '拖拽失败，请稍后重试' })
+  } finally {
+    window.setTimeout(() => {
+      suppressNextClick = false
+    }, 500)
+  }
+}
+
+function handleNativeDragMouseMove(event: MouseEvent) {
+  if (!nativeDragStartPoint || nativeDragStarted) return
+
+  const dx = event.clientX - nativeDragStartPoint.x
+  const dy = event.clientY - nativeDragStartPoint.y
+  if (Math.hypot(dx, dy) < NATIVE_DRAG_THRESHOLD) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  nativeDragStarted = true
+  suppressNextClick = true
+  cleanupNativeDragListeners()
+  nativeDragStartPoint = null
+
+  const filePath = getPreparedNativeDragPath()
+  if (filePath) {
+    void startNativeVideoFileDrag(filePath)
+    return
+  }
+
+  prepareVideoLocalFileForDrag()
+  showVideoPreparingToast()
+}
+
+function handleNativeDragMouseUp() {
+  nativeDragStartPoint = null
+  nativeDragStarted = false
+  cleanupNativeDragListeners()
+}
+
+function handleNativeDragMouseDown(event: MouseEvent) {
+  if (event.button !== 0) return
+
+  if (!(window as any).__TAURI_INTERNALS__) {
+    prepareVideoLocalFileForDrag()
+    return
+  }
+
+  event.preventDefault()
+  nativeDragStartPoint = { x: event.clientX, y: event.clientY }
+  nativeDragStarted = false
+  cleanupNativeDragListeners()
+  window.addEventListener('mousemove', handleNativeDragMouseMove, true)
+  window.addEventListener('mouseup', handleNativeDragMouseUp, true)
+  prepareVideoLocalFileForDrag()
+}
+
+function handleVideoClick(event: MouseEvent) {
+  if (suppressNextClick) {
+    event.preventDefault()
+    event.stopPropagation()
+    suppressNextClick = false
+    return
+  }
+  void handleOpenVideo()
+}
+
 async function handleOpenVideo() {
   if (videoOpening.value) return
   const url = videoData.value.url
-  if (!url) return
+  const localSource = localVideoSourcePath.value
+  if (!url && !localSource && !localVideoPath.value) return
 
   videoOpening.value = true
   try {
-    if (localVideoPath.value) {
+    if (localVideoPath.value && await localFileExists(localVideoPath.value)) {
       await openMediaWindow(localVideoPath.value)
+      return
+    }
+
+    if (localSource && await localFileExists(localSource)) {
+      localVideoPath.value = localSource
+      await openMediaWindow(localSource)
       return
     }
 
@@ -413,15 +662,16 @@ async function handleOpenVideo() {
   }
 }
 
-watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc], () => {
+watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, localVideoSourcePath], () => {
   downloadToken += 1
   videoOpenToken += 1
+  pendingVideoLocalFilePromise = null
   cleanupDownloadEvents()
   cleanupVideoDownloadEvents()
   isLoaded.value = false
   loadError.value = false
   activeThumbSrc.value = ''
-  localVideoPath.value = ''
+  localVideoPath.value = localVideoSourcePath.value
   const hasLocalFallback = useLocalThumbFallback()
   if (!videoData.value.thumbUrl) {
     if (!hasLocalFallback) {
@@ -451,21 +701,31 @@ function handleError() {
 onBeforeUnmount(() => {
   downloadToken += 1
   videoOpenToken += 1
+  pendingVideoLocalFilePromise = null
+  cleanupNativeDragListeners()
   cleanupDownloadEvents()
   cleanupVideoDownloadEvents()
 })
 </script>
 
 <template>
-  <div class="video-message" @click.stop="handleOpenVideo">
+  <div
+    class="video-message"
+    :class="{ preparing: videoPreparingForDrag }"
+    :title="dragFileName"
+    @click.stop="handleVideoClick"
+    @pointerenter="prepareVideoLocalFileForDrag"
+    @mousedown.left="handleNativeDragMouseDown"
+  >
     <div class="video-content" :style="videoBoxStyle">
       <div class="video-frame">
         <img
           v-if="activeThumbSrc && !loadError"
           ref="thumbElRef"
           :src="activeThumbSrc"
+          :data-local-path="localVideoPath || undefined"
           :class="{ loaded: isLoaded }"
-          alt=""
+          :alt="dragFileName"
           @load="handleLoad"
           @error="handleError"
         />
@@ -512,6 +772,12 @@ onBeforeUnmount(() => {
   position: relative;
   max-width: 400px;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-drag: none;
+
+  &.preparing {
+    cursor: progress;
+  }
 
   &:hover {
     opacity: 0.8;
@@ -543,7 +809,8 @@ onBeforeUnmount(() => {
     display: inline-block;
     object-fit: contain;
     opacity: 0;
-    -webkit-user-drag: unset;
+    pointer-events: none;
+    -webkit-user-drag: none;
 
     &.loaded {
       opacity: 1;

@@ -1292,7 +1292,13 @@ function appendLocalVideoPreview(
 
   const previewUrl = URL.createObjectURL(file)
   const optimisticId = createOptimisticImageId()
-  const extra = withReadBurnExtra({ fileKey, uploadPending: true, videoTraceId: trace.id })
+  const localPath = getLocalFilePath(file)
+  const extra = withReadBurnExtra({
+    fileKey,
+    uploadPending: true,
+    videoTraceId: trace.id,
+    ...(localPath ? { local: localPath, localPath } : {}),
+  })
   messageStore.appendMessage(conversationId, {
     id: optimisticId,
     customMsgId: optimisticId,
@@ -1309,6 +1315,7 @@ function appendLocalVideoPreview(
       size: file.size,
       name: file.name,
       fileKey,
+      ...(localPath ? { local: localPath, localPath } : {}),
     }),
     sendTime: Date.now(),
     status: 0,
@@ -1325,6 +1332,7 @@ function appendLocalVideoPreview(
     width: metadata.width,
     height: metadata.height,
     duration: metadata.duration,
+    hasLocalPath: Boolean(localPath),
   })
   return { url: previewUrl, optimisticId }
 }
@@ -2334,6 +2342,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
     } else if (isVideoFile(file)) {
       const trace = createImageTrace()
       const fileKey = createFileKey()
+      const localPath = getLocalFilePath(file)
       let localPreview: LocalVideoPreview | null = null
       try {
         fileTraceLog(trace, '[single-video-send] video branch entered', {
@@ -2345,6 +2354,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           type: file.type,
           suffix: getFileSuffix(file),
           attachType: getUploadAttachType(MessageType.Video),
+          hasLocalPath: Boolean(localPath),
         })
         fileTraceLog(trace, 'handle video file', {
           conversationId: convId.value,
@@ -2402,6 +2412,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         }), MessageType.Video, withReadBurnExtra({
           fileKey: uploaded.fileKey,
           localThumbDataUrl: metadata.thumbDataUrl,
+          ...(localPath ? { local: localPath, localPath } : {}),
           ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
         }))
         if (localPreview?.url.startsWith('blob:')) {

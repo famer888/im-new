@@ -138,6 +138,25 @@ pub fn write_clipboard_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn start_native_file_drag(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    let file_path = std::path::PathBuf::from(&path);
+    if !file_path.is_file() {
+        return Err(format!("drag file not found: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return start_native_file_drag_macos(window, file_path);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        Err("native file drag is only supported on macOS".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn read_clipboard_files() -> Result<Vec<ClipboardFilePayload>, String> {
     let paths = read_clipboard_file_paths()?;
     read_files_from_paths(paths)
@@ -193,6 +212,66 @@ set the clipboard to theFile
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn start_native_file_drag_macos(
+    window: tauri::WebviewWindow,
+    path: std::path::PathBuf,
+) -> Result<(), String> {
+    if objc2::MainThreadMarker::new().is_some() {
+        return run_native_file_drag_macos(&window, &path);
+    }
+
+    let window_for_task = window.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    window
+        .run_on_main_thread(move || {
+            let _ = sender.send(run_native_file_drag_macos(&window_for_task, &path));
+        })
+        .map_err(|e| e.to_string())?;
+
+    receiver.recv().map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn run_native_file_drag_macos(
+    window: &tauri::WebviewWindow,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApp, NSView};
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Err("native file drag must run on the main thread".to_string());
+    };
+
+    let ns_view = window.ns_view().map_err(|e| e.to_string())?;
+    if ns_view.is_null() {
+        return Err("native window view is not available".to_string());
+    }
+
+    let app = NSApp(mtm);
+    let Some(event) = app.currentEvent() else {
+        return Err("native drag event is not available".to_string());
+    };
+
+    let filename = NSString::from_str(path.to_string_lossy().as_ref());
+    let drag_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0));
+    let view = unsafe {
+        (ns_view as *mut NSView)
+            .as_ref()
+            .ok_or_else(|| "native window view is not available".to_string())?
+    };
+
+    #[allow(deprecated)]
+    let accepted = view.dragFile_fromRect_slideBack_event(&filename, drag_rect, false, &event);
+    if accepted {
+        Ok(())
+    } else {
+        Err("native file drag was rejected".to_string())
     }
 }
 
