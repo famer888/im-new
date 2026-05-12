@@ -3,12 +3,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=./lib-tauri-windows-cross.sh
+source "$ROOT_DIR/scripts/lib-tauri-windows-cross.sh"
+
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/windows}"
 BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/ocs-chat-target-windows}"
 TAURI_TARGET="${TAURI_TARGET:-x86_64-pc-windows-msvc}"
 TAURI_CONFIG="${TAURI_CONFIG:-}"
 TAURI_BUNDLES="${TAURI_BUNDLES:-nsis}"
 COPY_WINDOWS_BINARY="${COPY_WINDOWS_BINARY:-1}"
+HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
 
 require_node() {
   local major
@@ -18,22 +22,6 @@ require_node() {
     echo "Try: source ~/.nvm/nvm.sh && nvm use 20.20.1" >&2
     exit 1
   fi
-}
-
-require_windows_host() {
-  local host_os
-  host_os="$(uname -s 2>/dev/null || echo unknown)"
-
-  case "$host_os" in
-    MINGW*|MSYS*|CYGWIN*) ;;
-    *)
-      echo "Windows NSIS installers must be built on Windows." >&2
-      echo "Current host: $host_os" >&2
-      echo "Run this on a Windows machine or Windows CI:" >&2
-      echo "  pnpm release:dist:win:installers" >&2
-      exit 1
-      ;;
-  esac
 }
 
 copy_if_exists() {
@@ -64,13 +52,21 @@ copy_latest_matching() {
 }
 
 require_node
-require_windows_host
+
+tauri_windows_prepend_homebrew_llvm_path "$HOST_OS"
+RUNNER_NAME="$(tauri_windows_runner_for_host "$HOST_OS" "$TAURI_TARGET")"
+if [[ "$RUNNER_NAME" == "cargo-xwin" ]]; then
+  tauri_windows_require_cross_compile_deps "$TAURI_TARGET"
+fi
 
 cd "$ROOT_DIR"
 mkdir -p "$RELEASE_DIST_DIR"
 mkdir -p "$BUILD_TARGET_DIR"
 
 TAURI_ARGS=(build --bundles "$TAURI_BUNDLES")
+if [[ "$RUNNER_NAME" != "cargo" ]]; then
+  TAURI_ARGS+=(--runner "$RUNNER_NAME")
+fi
 if [[ -n "$TAURI_CONFIG" ]]; then
   TAURI_ARGS+=(--config "$TAURI_CONFIG")
 fi
