@@ -201,7 +201,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 .menu-divider { height: 1px; background: #ebeef5; margin: 4px 0; }
 
 .menu-label {
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .context-menu--im {
@@ -348,7 +348,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
   padding: 10px 0;
   cursor: pointer;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 400;
   color: #333;
   white-space: nowrap;
   overflow: hidden;
