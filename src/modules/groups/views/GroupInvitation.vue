@@ -8,6 +8,7 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { eventBus } from '@/utils/eventBus'
+import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 
 interface GroupReqItem {
   groupReqId: number
@@ -93,22 +94,8 @@ function formatReqMemberName(user: unknown, fallbackId?: unknown): string {
   return name
 }
 
-function normalizeGroupNoticeText(raw: string): string {
-  return raw.replace(/你(?=(?:邀请|申请加入|拒绝加入|同意加入))/g, '')
-}
-
 function translateKnownGroupNotice(raw: string): string {
-  const normalized = normalizeGroupNoticeText(raw)
-  const phraseMap: Record<string, string> = {
-    该群聊已解散: t('该群聊已解散'),
-    拒绝加入: t('拒绝加入'),
-    同意加入: t('同意加入'),
-    申请加入: t('申请加入'),
-    邀请你加入: t('邀请你加入'),
-  }
-  return normalized.replace(/该群聊已解散|拒绝加入|同意加入|申请加入|邀请你加入/g, (matched) => (
-    phraseMap[matched] || matched
-  ))
+  return translateGroupNoticeText(raw, t)
 }
 
 function formatReqMessage(item: GroupReqItem): string {

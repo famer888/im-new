@@ -17,7 +17,13 @@ import {
   queryGroupLink,
   type GroupDetailFromQrCodeResp,
 } from '@/api/imBase'
-import { isChannelLink, searchAliasContent, type ChannelLinkResp } from '@/api/imChannel'
+import {
+  getHistoryDomain,
+  isChannelLink,
+  searchAliasContent,
+  type ChannelLinkResp,
+  type HistoryDomainItem,
+} from '@/api/imChannel'
 
 const props = defineProps<{
   message: Message
@@ -58,12 +64,17 @@ type AliasTarget =
   | { type: 'private-channel'; channel: Record<string, any> }
   | { type: 'missing' }
 
-const GROUP_INVITE_HOSTS = new Set(['55chat.com', '97chat.com', 'ocs.com'])
+const GROUP_INVITE_HOSTS = new Set(['45chat.com', '55chat.com', '97chat.com', 'ocs.com'])
+const INVITE_LINK_TYPE_GROUP = 1
+const INVITE_LINK_TYPE_CHANNEL = 2
+const INVITE_LINK_DOMAIN_CACHE_TTL = 24 * 60 * 60 * 1000
 const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 const openingMentionKeys = new Set<string>()
 const openingLinkKeys = new Set<string>()
 const resolvingMentionKeys = ref(new Set<string>())
 const resolvingLinkKeys = ref(new Set<string>())
+let inviteLinkDomainCache: { expiresAt: number; items: HistoryDomainItem[] } | null = null
+let inviteLinkDomainRequest: Promise<HistoryDomainItem[]> | null = null
 
 function parseConversationRef(conversationId: string): { type: number; targetId: string } {
   const i = conversationId.indexOf('_')
@@ -194,15 +205,71 @@ function getSearchParam(url: URL, name: string): string {
   return ''
 }
 
-function isGroupInviteLink(url: URL): boolean {
-  const host = url.hostname.replace(/^www\./, '').toLowerCase()
-  if (getSearchParam(url, 'qrCode') && getSearchParam(url, 'IdCode')) return true
-  return GROUP_INVITE_HOSTS.has(host) && url.search.length > 1
+function normalizeHost(input: string | URL): string {
+  const url = input instanceof URL ? input : normalizeUrl(input)
+  return url?.hostname.replace(/^www\./, '').toLowerCase() || ''
 }
 
-async function getGroupQrUrlFromLink(href: string): Promise<string> {
+function isGroupInviteLink(url: URL): boolean {
+  const host = normalizeHost(url)
+  if (getSearchParam(url, 'qrCode') && getSearchParam(url, 'IdCode')) return true
+  return GROUP_INVITE_HOSTS.has(host)
+}
+
+function getInviteDomainHosts(item: HistoryDomainItem): string[] {
+  return [
+    item.currentDomain,
+    ...(Array.isArray(item.historyDomainList) ? item.historyDomainList : []),
+  ]
+    .map((domain) => normalizeHost(String(domain || '')))
+    .filter(Boolean)
+}
+
+async function loadInviteLinkDomains(): Promise<HistoryDomainItem[]> {
+  if (inviteLinkDomainCache && inviteLinkDomainCache.expiresAt > Date.now()) {
+    return inviteLinkDomainCache.items
+  }
+
+  if (!inviteLinkDomainRequest) {
+    inviteLinkDomainRequest = getHistoryDomain()
+      .then((res) => {
+        const items = Number(res?.code ?? 0) === 200 && Array.isArray(res?.data) ? res.data : []
+        inviteLinkDomainCache = {
+          expiresAt: Date.now() + INVITE_LINK_DOMAIN_CACHE_TTL,
+          items,
+        }
+        return items
+      })
+      .finally(() => {
+        inviteLinkDomainRequest = null
+      })
+  }
+
+  return inviteLinkDomainRequest
+}
+
+async function getInviteLinkType(href: string): Promise<number> {
   const url = normalizeUrl(href)
-  if (!url || !isGroupInviteLink(url)) return ''
+  if (!url) return 0
+
+  const fallbackType = isGroupInviteLink(url) ? INVITE_LINK_TYPE_GROUP : 0
+  try {
+    const host = normalizeHost(url)
+    const items = await loadInviteLinkDomains()
+    const matched = items.find((item) => getInviteDomainHosts(item).includes(host))
+    if (matched?.type !== undefined && matched.type !== null && matched.type !== '') {
+      return Number(matched.type)
+    }
+    return fallbackType
+  } catch (error) {
+    console.warn('[TextMessage] load invite link domains failed:', error)
+    return fallbackType
+  }
+}
+
+async function getGroupQrUrlFromLink(href: string, force = false): Promise<string> {
+  const url = normalizeUrl(href)
+  if (!url || (!force && !isGroupInviteLink(url))) return ''
 
   if (getSearchParam(url, 'qrCode') && getSearchParam(url, 'IdCode')) {
     return url.href
@@ -218,8 +285,8 @@ async function getGroupQrUrlFromLink(href: string): Promise<string> {
   return String(resp.qrUrl || '').trim()
 }
 
-async function resolveGroupInfoFromLink(href: string): Promise<GroupDetailFromQrCodeResp | null> {
-  const qrUrl = await getGroupQrUrlFromLink(href)
+async function resolveGroupInfoFromLink(href: string, force = false): Promise<GroupDetailFromQrCodeResp | null> {
+  const qrUrl = await getGroupQrUrlFromLink(href, force)
   if (!qrUrl) return null
 
   let parsed = normalizeUrl(qrUrl)
@@ -309,6 +376,24 @@ async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise
   return Boolean(groupStore.getGroup(groupId))
 }
 
+function openGroupConversation(target: AddGroupTarget) {
+  groupStore.upsertGroup({
+    id: target.id,
+    name: target.name || target.id,
+    avatar: target.avatar,
+    ownerId: target.ownerId,
+    memberCount: target.memberCount,
+    groupAliasName: target.groupAliasName,
+    updatedAt: Date.now(),
+  })
+
+  const conv = chatStore.ensureConversation(ConversationType.Group, target.id)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
+}
+
 function normalizeChannelId(raw: any): string {
   return String(raw?.channelId ?? raw?.id ?? '').trim()
 }
@@ -380,6 +465,47 @@ async function resolveChannelLinkTarget(href: string): Promise<ChannelLinkResp |
     console.warn('[TextMessage] resolve channel link failed:', error)
   }
   return null
+}
+
+async function openChannelInviteLink(href: string, showInvalidToast: boolean): Promise<boolean> {
+  const channelLink = await resolveChannelLinkTarget(href)
+  if (channelLink?.data) {
+    if (canOpenChannelDirectly(channelLink.data)) {
+      if (openChannelConversation(channelLink.data)) {
+        eventBus.emit('show-toast', { message: t('已打开频道'), type: 'success' })
+      }
+    } else {
+      openAddChannelDialog(channelLink.data)
+    }
+    return true
+  }
+
+  if (showInvalidToast) {
+    eventBus.emit('show-toast', { message: t('此频道已失效或过期'), type: 'error' })
+  }
+  return false
+}
+
+async function openGroupInviteLink(href: string, force = false): Promise<boolean> {
+  const groupInfo = await resolveGroupInfoFromLink(href, force)
+  if (!groupInfo) return false
+
+  const target = parseGroupTarget(groupInfo)
+  if (!target) throw new Error('群聊链接解析失败')
+
+  uiStore.setAddContactTarget(null)
+
+  if (await isAlreadyInGroup(target.id, Boolean(groupInfo.bfMember))) {
+    uiStore.setAddGroupTarget(null)
+    openGroupConversation(target)
+    eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
+    return true
+  }
+
+  uiStore.setAddGroupTarget(target)
+  uiStore.setRightPanel('none')
+  uiStore.openAddGroupDialog()
+  return true
 }
 
 function aliasTargetCacheKey(label: string, groupId: string): string {
@@ -590,51 +716,37 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
     setLinkResolving(key, true)
   }, 250)
 
+  let normalizedHref = ''
+  let inviteLinkType = 0
   try {
-    const normalizedHref = completionUrl(segment.href)
-    const channelLink = await resolveChannelLinkTarget(normalizedHref)
-    if (channelLink?.data) {
-      if (canOpenChannelDirectly(channelLink.data)) {
-        if (openChannelConversation(channelLink.data)) {
-          eventBus.emit('show-toast', { message: t('已打开频道'), type: 'success' })
-        }
-      } else {
-        openAddChannelDialog(channelLink.data)
-      }
-      return
-    }
+    normalizedHref = completionUrl(segment.href)
+    inviteLinkType = await getInviteLinkType(normalizedHref)
 
-    const url = normalizeUrl(normalizedHref)
-    if (!url || !isGroupInviteLink(url)) {
+    if (inviteLinkType === INVITE_LINK_TYPE_GROUP) {
+      if (await openGroupInviteLink(normalizedHref, true)) return
       window.open(normalizedHref || segment.href, '_blank')
       eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
       return
     }
 
-    const groupInfo = await resolveGroupInfoFromLink(normalizedHref)
-    if (!groupInfo) {
-      window.open(normalizedHref, '_blank')
-      eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+    if (inviteLinkType === INVITE_LINK_TYPE_CHANNEL) {
+      await openChannelInviteLink(normalizedHref, true)
       return
     }
 
-    const target = parseGroupTarget(groupInfo)
-    if (!target) throw new Error('群聊链接解析失败')
+    if (await openChannelInviteLink(normalizedHref, false)) return
 
-    uiStore.setAddContactTarget(null)
+    const url = normalizeUrl(normalizedHref)
+    if (url && isGroupInviteLink(url) && await openGroupInviteLink(normalizedHref)) return
 
-    if (await isAlreadyInGroup(target.id, Boolean(groupInfo.bfMember))) {
-      uiStore.setAddGroupTarget(null)
-      eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
-      return
-    }
-
-    uiStore.setAddGroupTarget(target)
-    uiStore.setRightPanel('none')
-    uiStore.openAddGroupDialog()
+    window.open(normalizedHref || segment.href, '_blank')
+    eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
   } catch (error) {
     console.error('[TextMessage] resolve group invite link failed:', error)
-    eventBus.emit('show-toast', { message: (error as Error)?.message || '加入群聊失败', type: 'error' })
+    eventBus.emit('show-toast', { message: (error as Error)?.message || t('加入群聊失败'), type: 'error' })
+    if (inviteLinkType === INVITE_LINK_TYPE_GROUP && normalizedHref) {
+      window.open(normalizedHref, '_blank')
+    }
   } finally {
     window.clearTimeout(slowTimer)
     setLinkResolving(key, false)

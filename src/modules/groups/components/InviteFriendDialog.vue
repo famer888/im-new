@@ -118,6 +118,16 @@ function showToast(msg: string, type: 'success' | 'error' = 'success', duration 
 }
 
 async function copyTextToClipboard(text: string) {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('write_clipboard_text', { text })
+      return
+    } catch (error) {
+      console.warn('[InviteFriendDialog] native clipboard write failed, fallback to web clipboard:', error)
+    }
+  }
+
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)
