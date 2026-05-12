@@ -37,7 +37,7 @@ watch(() => props.visible, (v) => {
 .toast-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: 30000;
   display: flex;
   align-items: center;
   justify-content: center;

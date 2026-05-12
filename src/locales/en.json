@@ -163,6 +163,8 @@
   "同意加入": "approved joining",
   "申请加入": "requested to join",
   "邀请你加入": "invited you to join",
+  "群通知邀请": "invited",
+  "群通知加入群聊": "to join group chat",
   "群通知条目摘要": "{name} — group notification",
   "暂不支持该消息类型": "This message type is not supported yet",
   "稍后更新": "Update later",

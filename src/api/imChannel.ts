@@ -230,6 +230,18 @@ export interface ChannelLinkResp {
   } | null
 }
 
+export interface HistoryDomainItem {
+  type?: number | string
+  currentDomain?: string
+  historyDomainList?: string[]
+}
+
+export interface HistoryDomainResp {
+  code: number
+  msg?: string
+  data?: HistoryDomainItem[]
+}
+
 export interface SearchAliasContentResp {
   code: number
   msg?: string
@@ -343,6 +355,10 @@ export async function isChannelLink(data: {
   link: string
 }): Promise<ChannelLinkResp> {
   return requestChannelJson<ChannelLinkResp>('/channel/getChannelByLink', data)
+}
+
+export async function getHistoryDomain(data: Record<string, unknown> = {}): Promise<HistoryDomainResp> {
+  return requestChannelJson<HistoryDomainResp>('/sys/h5HistoryDomain/list', data)
 }
 
 export async function searchAliasContent(data: {

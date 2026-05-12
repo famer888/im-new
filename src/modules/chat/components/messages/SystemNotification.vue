@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
+import { translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 
 const props = defineProps<{
   message: Message
@@ -10,6 +11,8 @@ const props = defineProps<{
 const { t } = useI18n()
 
 function translateNoticeText(text: string): string {
+  const translatedGroupNotice = translateGroupNoticeText(text, t)
+  if (translatedGroupNotice !== text) return translatedGroupNotice
   const translated = t(text)
   return translated === text ? text : translated
 }

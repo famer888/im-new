@@ -92,6 +92,66 @@ pub fn read_clipboard_text() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn write_clipboard_text(text: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write as _;
+
+        let mut child = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open pbcopy stdin".to_string())?;
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| e.to_string())?;
+        drop(stdin);
+
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("pbcopy failed with status: {}", status));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write as _;
+
+        let mut child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Set-Clipboard -Value ([Console]::In.ReadToEnd())"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open Set-Clipboard stdin".to_string())?;
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| e.to_string())?;
+        drop(stdin);
+
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("Set-Clipboard failed with status: {}", status));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = text;
+        Err("clipboard text write is not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn write_clipboard_image(data_base64: String) -> Result<(), String> {
     let bytes = general_purpose::STANDARD
         .decode(data_base64.as_bytes())

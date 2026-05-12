@@ -16,6 +16,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType, isHiddenMessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
+import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
@@ -164,22 +165,8 @@ function showFriendOnlineDot(conv: Conversation): boolean {
   return Boolean(c.online)
 }
 
-function normalizeGroupNoticeText(raw: string): string {
-  return raw.replace(/你(?=(?:邀请|申请加入|拒绝加入|同意加入))/g, '')
-}
-
 function translateKnownDigest(raw: string): string {
-  const normalized = normalizeGroupNoticeText(raw)
-  const phraseMap: Record<string, string> = {
-    该群聊已解散: t('该群聊已解散'),
-    拒绝加入: t('拒绝加入'),
-    同意加入: t('同意加入'),
-    申请加入: t('申请加入'),
-    邀请你加入: t('邀请你加入'),
-  }
-  return normalized.replace(/该群聊已解散|拒绝加入|同意加入|申请加入|邀请你加入/g, (matched) => (
-    phraseMap[matched] || matched
-  ))
+  return translateGroupNoticeText(raw, t)
 }
 
 function formatDigestText(digest: string): string {
