@@ -43,21 +43,22 @@ const parsedNotice = computed(() => {
 <style lang="scss" scoped>
 .system-notification {
   text-align: center;
-  padding: 10px 30px;
+  padding: 10px 30px !important;
   position: relative;
 
   .text {
-    font-size: 14px;
-    color: rgb(126, 126, 126);
-    line-height: 17px;
-    max-width: 80%;
+    display: inline-block;
+    max-width: 100%;
+    font-size: 12px;
+    color: rgba(91, 91, 91);
+    line-height: normal;
     text-align: center;
     word-break: break-word;
 
     strong {
-      font-size: 14px;
-      font-weight: normal;
-      color: rgb(126, 126, 126);
+      font-size: 12px;
+      font-weight: 600;
+      color: #333;
     }
   }
 }

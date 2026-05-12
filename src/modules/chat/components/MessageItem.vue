@@ -375,7 +375,7 @@ onMounted(() => {
 
 .system-message {
   text-align: center;
-  padding: 4px 0;
+  padding: 0;
 }
 
 .message-bubble-wrapper {

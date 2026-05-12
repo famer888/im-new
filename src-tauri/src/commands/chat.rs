@@ -246,8 +246,12 @@ pub async fn upsert_incoming_messages(
 
             // 未读：INSERT OR REPLACE 前检查是否为新 id；同批重复 id 只计一次
             let mut unread_delta: HashMap<String, i32> = HashMap::new();
+            let mut notification_unread_counts: HashMap<String, i32> = HashMap::new();
             let mut seen_ids_for_unread = HashSet::<String>::new();
             for msg in &rows {
+                if let Some(count) = notification_unread_count(msg) {
+                    notification_unread_counts.insert(msg.conversation_id.clone(), count);
+                }
                 if !seen_ids_for_unread.insert(msg.id.clone()) {
                     continue;
                 }
@@ -303,6 +307,14 @@ pub async fn upsert_incoming_messages(
                     )
                     .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
                 }
+            }
+
+            for (conv_id, count) in notification_unread_counts {
+                conn.execute(
+                    "UPDATE conversations SET unread_count = ?1 WHERE id = ?2",
+                    rusqlite::params![count, conv_id],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
             }
 
             let mut seen_conv = HashSet::<String>::new();
@@ -389,6 +401,31 @@ fn should_count_as_unread(msg: &models::Message, uid: &str) -> bool {
     // 对齐旧 im：阅后即焚配置变更等通知消息是 chatType=51，不进入
     // “未读正文”计数；新项目用 msgType=6/8 承载这类系统提示。
     msg.sender_id != uid && !matches!(msg.msg_type, 6 | 8)
+}
+
+fn notification_unread_count(msg: &models::Message) -> Option<i32> {
+    if msg.conversation_id != "1_invitation" && msg.conversation_id != "0_channelNotice" {
+        return None;
+    }
+
+    let value = serde_json::from_str::<serde_json::Value>(msg.extra.as_deref()?).ok()?;
+    let object = match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(map),
+        serde_json::Value::String(raw) => serde_json::from_str::<serde_json::Value>(&raw).ok()?,
+        _ => return None,
+    };
+
+    let count = object
+        .get("unReadNum")
+        .or_else(|| object.get("unreadCount"))
+        .or_else(|| object.get("unread_count"))
+        .or_else(|| object.get("un_read_num"))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+        })?;
+
+    Some(count.clamp(0, i32::MAX as i64) as i32)
 }
 
 fn parse_extra_map(extra: Option<&str>) -> serde_json::Map<String, serde_json::Value> {

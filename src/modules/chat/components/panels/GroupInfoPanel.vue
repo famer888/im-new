@@ -396,7 +396,7 @@ function handleOnlineTime(member: any) {
             @click="search = ''"
           />
           <input v-model="search" type="text" :placeholder="t('搜索')" />
-          <span :title="t('强制刷新群成员')" @click="refreshMembers">
+          <span @click="refreshMembers">
             <img
               src="@/assets/images/refresh.png"
               alt=""
@@ -916,9 +916,12 @@ function handleOnlineTime(member: any) {
       display: none;
       position: absolute;
       top: 35px;
-      right: -105px;
+      left: -6px;
+      width: max-content;
+      min-width: max-content;
       line-height: 26px;
       padding: 0 8px;
+      box-sizing: border-box;
       background: #3daee9;
       color: #fff;
       border: 1px solid #fff;
@@ -932,7 +935,7 @@ function handleOnlineTime(member: any) {
       &::after {
         position: absolute;
         top: -10px;
-        right: 105px;
+        left: 10px;
         display: block;
         font-size: 0;
         line-height: 0;

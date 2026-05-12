@@ -81,6 +81,7 @@ export const useChatStore = defineStore('chat', () => {
   const conversations = ref<Conversation[]>([])
   const currentConversationId = ref<string | null>(null)
   const loading = ref(false)
+  let _persistUid = ''
 
   function normalizeConversation(raw: any): Conversation {
     return {
@@ -180,6 +181,11 @@ export const useChatStore = defineStore('chat', () => {
     if (idx >= 0) {
       conversations.value[idx] = { ...conversations.value[idx], unreadCount: 0 }
     }
+    if (isTauri() && _persistUid) {
+      tauriInvoke('mark_as_read', { uid: _persistUid, conversationId: id }).catch((error) => {
+        console.warn('[ChatStore] clear group notification unread failed:', error)
+      })
+    }
   }
 
   function removeGroupNotificationConversation() {
@@ -232,6 +238,11 @@ export const useChatStore = defineStore('chat', () => {
     if (idx >= 0) {
       conversations.value[idx] = { ...conversations.value[idx], unreadCount: 0 }
     }
+    if (isTauri() && _persistUid) {
+      tauriInvoke('mark_as_read', { uid: _persistUid, conversationId: id }).catch((error) => {
+        console.warn('[ChatStore] clear channel notification unread failed:', error)
+      })
+    }
   }
 
   function removeChannelNotificationConversation() {
@@ -241,8 +252,6 @@ export const useChatStore = defineStore('chat', () => {
       currentConversationId.value = null
     }
   }
-
-  let _persistUid = ''
 
   function enablePersistence(uid: string) {
     _persistUid = uid
