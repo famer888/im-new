@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import {
   useChatStore,
+  CHANNEL_NOTIFICATION_TARGET_ID,
   FILE_HELPER_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
@@ -80,6 +81,7 @@ const searchPlaceholder = computed(() => {
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   switch (conv.type) {
     case ConversationType.Friend:
+      if (conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) return true
       return Boolean(contactStore.getContact(conv.targetId))
     case ConversationType.Group:
       if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
