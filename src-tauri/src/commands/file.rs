@@ -359,8 +359,10 @@ pub async fn download_file(
     save_path: String,
     msg_id: String,
     log_tag: Option<String>,
+    emit_data_url: Option<bool>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&save_path);
+    let should_emit_data_url = emit_data_url.unwrap_or(true);
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
     if should_log_audio {
         tracing::info!(
@@ -381,6 +383,12 @@ pub async fn download_file(
     tokio::spawn(async move {
         let download_result = async {
             if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                let meta = tokio::fs::metadata(&path)
+                    .await
+                    .map_err(|e| format!("Stat cached file failed: {}", e))?;
+                if !should_emit_data_url {
+                    return Ok::<(u64, Option<String>), String>((meta.len(), None));
+                }
                 let decoded = tokio::fs::read(&path)
                     .await
                     .map_err(|e| format!("Read cached file failed: {}", e))?;
@@ -400,7 +408,7 @@ pub async fn download_file(
                     mime,
                     general_purpose::STANDARD.encode(&decoded)
                 );
-                return Ok::<(u64, String), String>((decoded.len() as u64, data_url));
+                return Ok::<(u64, Option<String>), String>((decoded.len() as u64, Some(data_url)));
             }
 
             if should_log_audio_clone {
@@ -482,25 +490,29 @@ pub async fn download_file(
             let meta = tokio::fs::metadata(&path)
                 .await
                 .map_err(|e| format!("Stat failed: {}", e))?;
-            let decoded = tokio::fs::read(&path)
-                .await
-                .map_err(|e| format!("Read decrypted file failed: {}", e))?;
-            if should_log_audio_clone {
-                tracing::info!(
-                    target: "group-audio",
-                    "download_file decrypt done msg_id={} decoded_bytes={} decoded_head_hex={}",
-                    msg_id_clone,
-                    decoded.len(),
-                    bytes_head_hex(&decoded, 16),
-                );
-            }
-            let mime = sniff_image_mime(&decoded);
-            let data_url = format!(
-                "data:{};base64,{}",
-                mime,
-                general_purpose::STANDARD.encode(decoded)
-            );
-            Ok::<(u64, String), String>((meta.len(), data_url))
+            let data_url = if should_emit_data_url {
+                let decoded = tokio::fs::read(&path)
+                    .await
+                    .map_err(|e| format!("Read decrypted file failed: {}", e))?;
+                if should_log_audio_clone {
+                    tracing::info!(
+                        target: "group-audio",
+                        "download_file decrypt done msg_id={} decoded_bytes={} decoded_head_hex={}",
+                        msg_id_clone,
+                        decoded.len(),
+                        bytes_head_hex(&decoded, 16),
+                    );
+                }
+                let mime = sniff_image_mime(&decoded);
+                Some(format!(
+                    "data:{};base64,{}",
+                    mime,
+                    general_purpose::STANDARD.encode(decoded)
+                ))
+            } else {
+                None
+            };
+            Ok::<(u64, Option<String>), String>((meta.len(), data_url))
         }
         .await;
 
@@ -522,7 +534,7 @@ pub async fn download_file(
                         total_bytes: size,
                         downloaded_bytes: size,
                         status: "done".to_string(),
-                        data_url: Some(data_url),
+                        data_url,
                     },
                 );
             }
@@ -656,6 +668,44 @@ pub async fn reveal_file_in_directory(path: String) -> Result<(), String> {
             .arg(directory)
             .spawn()
             .map_err(|e| format!("open directory failed: {}", e))?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub async fn open_file(path: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+    if !file_path.is_file() {
+        return Err(format!("file not found: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg(&file_path)
+            .status()
+            .map_err(|e| format!("open file failed: {}", e))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("open file failed with status: {}", status));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("open file failed: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Command::new("xdg-open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("open file failed: {}", e))?;
         Ok(())
     }
 }
