@@ -100,7 +100,11 @@ function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
 
   const plain = aesDecrypt(encrypted, aesKey)
   const json = new TextDecoder().decode(plain)
-  return JSON.parse(json)
+  return JSON.parse(quoteLargeIntegerIds(json))
+}
+
+function quoteLargeIntegerIds(json: string): string {
+  return json.replace(/"([A-Za-z0-9_]*(?:id|Id|ID)[A-Za-z0-9_]*)"\s*:\s*(-?\d{16,})/g, '"$1":"$2"')
 }
 
 function getSignHeaders() {
@@ -185,7 +189,33 @@ export interface ChannelUsersResp {
 export interface ChannelUpdateMemberResp {
   code: number
   msg?: string
+  errCode?: number
+  errMsg?: string
   data?: unknown
+}
+
+export interface ChannelEventReqItem {
+  id?: number | string
+  jumpPage?: boolean
+  channelName?: string
+  channelId?: number | string
+  uid?: number | string
+  icon?: string
+  logoColor?: string
+  noticeMsg?: string
+  createTime?: number | string
+  updateTime?: number | string
+  reqStatus?: number
+  reqType?: number
+}
+
+export interface ChannelEventListResp {
+  code: number
+  msg?: string
+  data?: {
+    rowList?: ChannelEventReqItem[]
+    total?: number
+  }
 }
 
 export interface ChannelLinkResp {
@@ -293,6 +323,20 @@ export async function subscribeChannel(data: {
   link?: string
 }): Promise<ChannelUpdateMemberResp> {
   return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelMember/subscribeChannel', data)
+}
+
+export async function getChannelEventList(data: {
+  pageNum: number
+  pageSize: number
+}): Promise<ChannelEventListResp> {
+  return requestChannelJson<ChannelEventListResp>('/channel/channelEventReq/listChannelEventReq', data)
+}
+
+export async function channelCheckJoin(data: {
+  id: number | string
+  flag: boolean
+}): Promise<ChannelUpdateMemberResp> {
+  return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelEventReq/userCheckJoin', data)
 }
 
 export async function isChannelLink(data: {

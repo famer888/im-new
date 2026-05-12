@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
+  CHANNEL_NOTIFICATION_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
   useChatStore,
   isFileHelperTargetId,
@@ -18,6 +19,7 @@ import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
+import channelNotificationIcon from '@/assets/images/logo/channel-notice.webp'
 
 const { t, locale } = useI18n()
 const chatStore = useChatStore()
@@ -33,6 +35,9 @@ function isNotFileHelper(c: Conversation): boolean {
 }
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+    return true
+  }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
     return true
   }
@@ -75,6 +80,9 @@ const displayList = computed(() =>
 )
 
 function getName(conv: Conversation): string {
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+    return t('频道通知')
+  }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
     return t('群通知')
   }
@@ -93,6 +101,9 @@ function getName(conv: Conversation): string {
 }
 
 function getAvatar(conv: Conversation): string | null {
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+    return channelNotificationIcon
+  }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
     return groupNotificationIcon
   }
@@ -229,6 +240,13 @@ function getDigest(conv: Conversation): string {
 }
 
 function handleSelect(conv: Conversation) {
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+    chatStore.setCurrentConversation(conv.id)
+    chatStore.clearChannelNotificationUnread()
+    uiStore.setRightPanel('none')
+    uiStore.setDetailView('channel-notice-list')
+    return
+  }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
     chatStore.setCurrentConversation(conv.id)
     chatStore.clearGroupNotificationUnread()

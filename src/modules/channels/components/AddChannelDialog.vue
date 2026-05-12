@@ -68,7 +68,7 @@ function upsertAndOpenChannel() {
     icon: current.icon || current.avatar || null,
     memberType: current.memberType ?? 1,
     updatedAt: Date.now(),
-  })
+  }, { allowRemoved: true })
 
   const conv = chatStore.ensureConversation(ConversationType.Channel, id)
   chatStore.setCurrentConversation(conv.id)

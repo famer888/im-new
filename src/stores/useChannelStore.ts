@@ -36,6 +36,61 @@ export interface Channel {
 export const useChannelStore = defineStore('channel', () => {
   const channels = ref<Channel[]>([])
   const loading = ref(false)
+  let activeUid = ''
+
+  function removedChannelKey(uid: string): string {
+    return `${uid}-removed-channel-ids`
+  }
+
+  function getRemovedChannelIds(uid = activeUid): Set<string> {
+    if (!uid) return new Set()
+    try {
+      const raw = localStorage.getItem(removedChannelKey(uid))
+      const list = raw ? JSON.parse(raw) : []
+      return new Set(Array.isArray(list) ? list.map((id) => String(id)) : [])
+    } catch {
+      return new Set()
+    }
+  }
+
+  function saveRemovedChannelIds(uid: string, ids: Set<string>) {
+    if (!uid) return
+    try {
+      localStorage.setItem(removedChannelKey(uid), JSON.stringify(Array.from(ids)))
+    } catch { /* storage unavailable */ }
+  }
+
+  function markChannelRemoved(uid: string, channelId: string) {
+    if (!uid || !channelId) return
+    const ids = getRemovedChannelIds(uid)
+    ids.add(channelId)
+    saveRemovedChannelIds(uid, ids)
+  }
+
+  function unmarkChannelRemoved(uid: string, channelId: string) {
+    if (!uid || !channelId) return
+    const ids = getRemovedChannelIds(uid)
+    if (!ids.delete(channelId)) return
+    saveRemovedChannelIds(uid, ids)
+  }
+
+  function isChannelRemoved(channelId: string, uid = activeUid): boolean {
+    if (!channelId) return false
+    return getRemovedChannelIds(uid).has(channelId)
+  }
+
+  function isJoinedChannel(item: any): boolean {
+    if (item?.memberType === undefined || item?.memberType === null || item?.memberType === '') {
+      return true
+    }
+    return Number(item.memberType) >= 0
+  }
+
+  function filterRemovedChannels(list: Channel[], uid = activeUid): Channel[] {
+    const removed = getRemovedChannelIds(uid)
+    if (removed.size === 0) return list
+    return list.filter((item) => !removed.has(String(item.id || item.channelId || '')))
+  }
 
   function toBool(value: unknown, fallback = false): boolean {
     if (value === undefined || value === null || value === '') return fallback
@@ -123,6 +178,7 @@ export const useChannelStore = defineStore('channel', () => {
   }
 
   async function loadChannels(uid: string) {
+    activeUid = uid
     loading.value = true
     try {
       let localChannels: Channel[] = []
@@ -130,7 +186,9 @@ export const useChannelStore = defineStore('channel', () => {
       if (isTauri()) {
         try {
           const localRows = await tauriInvoke<any[]>('get_channels', { uid })
-          localChannels = Array.isArray(localRows) ? localRows.map((item) => normalizeChannel(item)) : []
+          localChannels = Array.isArray(localRows)
+            ? filterRemovedChannels(localRows.map((item) => normalizeChannel(item)), uid)
+            : []
           if (localChannels.length > 0) {
             channels.value = localChannels
           }
@@ -142,7 +200,7 @@ export const useChannelStore = defineStore('channel', () => {
 
       const conversationChannels = await loadChannelsFromConversationCache(uid)
       if (conversationChannels.length > 0) {
-        channels.value = mergeChannelsById(conversationChannels, localChannels)
+        channels.value = filterRemovedChannels(mergeChannelsById(conversationChannels, localChannels), uid)
       }
 
       // 先让用户看到本地/会话里的频道，再用远端列表补齐名称、头像、禁用状态等完整信息。
@@ -169,6 +227,7 @@ export const useChannelStore = defineStore('channel', () => {
     const pageSize = 10
     let hasMore = true
     const seen = new Set<string>()
+    let apiSucceeded = false
 
     while (hasMore) {
       try {
@@ -177,6 +236,7 @@ export const useChannelStore = defineStore('channel', () => {
         if (code !== 200 && code !== 0) {
           throw new Error(resp?.msg || 'channel list request failed')
         }
+        apiSucceeded = true
         const list = resp?.data?.rowList || []
         console.info('[ChannelStore] page loaded', {
           pageNum,
@@ -186,7 +246,7 @@ export const useChannelStore = defineStore('channel', () => {
         })
         for (const item of list) {
           const id = String(item.channelId || (item as ChannelListItem & { id?: string | number }).id || '')
-          if (!id || seen.has(id)) continue
+          if (!id || seen.has(id) || isChannelRemoved(id, uid) || !isJoinedChannel(item)) continue
           seen.add(id)
           allChannels.push(normalizeChannel(item))
         }
@@ -199,6 +259,14 @@ export const useChannelStore = defineStore('channel', () => {
         console.error('[ChannelStore] API loadChannels failed:', e)
         hasMore = false
       }
+    }
+
+    if (apiSucceeded) {
+      const nextChannels = filterRemovedChannels(allChannels, uid)
+      channels.value = nextChannels
+      await saveChannelsToLocal(uid, nextChannels)
+      console.info('[ChannelStore] loaded from channel API', { count: nextChannels.length })
+      return
     }
 
     const mergedChannels = mergeChannelsById(
@@ -216,14 +284,14 @@ export const useChannelStore = defineStore('channel', () => {
 
     // 如果远端频道列表没返回数据，至少保住会话里已经出现过的频道，不让通讯录区域完全空白。
     const fallbackChannels = seed?.conversationChannels || (await loadChannelsFromConversationCache(uid))
-    channels.value = fallbackChannels
+    channels.value = filterRemovedChannels(fallbackChannels, uid)
     console.warn(
       '[ChannelStore] channel api empty, fallback from conversations',
     )
   }
 
   async function saveChannelsToLocal(uid: string, list: Channel[]) {
-    if (!isTauri() || list.length === 0) return
+    if (!isTauri()) return
 
     try {
       await tauriInvoke('save_channels', {
@@ -246,9 +314,16 @@ export const useChannelStore = defineStore('channel', () => {
     return channels.value.find((c) => c.id === id)
   }
 
-  function patchChannel(channelId: string | number, patch: Record<string, unknown>) {
+  function patchChannel(
+    channelId: string | number,
+    patch: Record<string, unknown>,
+    options: { allowRemoved?: boolean; uid?: string } = {},
+  ) {
     const id = String(channelId || '').trim()
     if (!id) return
+    if (options.uid) activeUid = options.uid
+    if (isChannelRemoved(id) && !options.allowRemoved) return
+    if (options.allowRemoved) unmarkChannelRemoved(activeUid, id)
     const index = channels.value.findIndex((item) => item.id === id)
     if (index >= 0) {
       channels.value[index] = normalizeChannel({
@@ -266,6 +341,21 @@ export const useChannelStore = defineStore('channel', () => {
     }
   }
 
+  async function removeChannel(uid: string, channelId: string | number) {
+    const id = String(channelId || '').trim()
+    if (!id) return
+    activeUid = uid || activeUid
+    markChannelRemoved(activeUid, id)
+    channels.value = channels.value.filter((item) => String(item.id || item.channelId || '') !== id)
+
+    if (!isTauri() || !uid) return
+    try {
+      await tauriInvoke('delete_channel', { uid, channelId: id })
+    } catch (e) {
+      console.error('[ChannelStore] delete_channel failed:', e)
+    }
+  }
+
   async function refreshChannelDetail(channelId: string | number): Promise<Channel | null> {
     const id = String(channelId || '').trim()
     if (!id) return null
@@ -277,6 +367,10 @@ export const useChannelStore = defineStore('channel', () => {
         throw new Error(resp?.msg || 'channel detail request failed')
       }
       if (!resp.data) return getChannel(id) || null
+      if (Number(resp.data.memberType ?? 0) < 0) {
+        await removeChannel(activeUid, id)
+        return null
+      }
 
       const next = normalizeChannel({
         ...getChannel(id),
@@ -303,6 +397,7 @@ export const useChannelStore = defineStore('channel', () => {
     loadChannels,
     getChannel,
     patchChannel,
+    removeChannel,
     refreshChannelDetail,
   }
 })
