@@ -123,6 +123,13 @@ const fileKey = computed(() =>
 const attachmentKey = computed(() =>
   String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
 )
+const localThumbSrc = computed(() => normalizeImageSrc(
+  extraData.value.localThumbDataUrl ||
+  extraData.value.local_thumb_data_url ||
+  extraData.value.localThumbUrl ||
+  extraData.value.local_thumb_url ||
+  '',
+))
 const groupId = computed(() => {
   const extraGroupId = String(extraData.value.groupId || '').trim()
   if (extraGroupId) return extraGroupId
@@ -130,7 +137,12 @@ const groupId = computed(() => {
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
 const isRemoteThumb = computed(() => /^https?:\/\//i.test(videoData.value.thumbUrl))
-const showLoading = computed(() => !activeThumbSrc.value && !loadError.value && Boolean(videoData.value.thumbUrl))
+const showLoading = computed(() =>
+  !activeThumbSrc.value &&
+  !localThumbSrc.value &&
+  !loadError.value &&
+  Boolean(videoData.value.thumbUrl),
+)
 const videoBoxStyle = computed(() => {
   const width = videoData.value.width
   const height = videoData.value.height
@@ -161,6 +173,16 @@ function markLoadedIfImageAlreadyComplete() {
       }
     })
   })
+}
+
+function useLocalThumbFallback(): boolean {
+  const fallback = localThumbSrc.value
+  if (!fallback) return false
+  loadError.value = false
+  isLoaded.value = false
+  activeThumbSrc.value = fallback
+  markLoadedIfImageAlreadyComplete()
+  return true
 }
 
 function safeName(name: string): string {
@@ -214,13 +236,14 @@ async function downloadAndDecryptThumb() {
   const url = videoData.value.thumbUrl
   const key = await resolveFileKey()
   if (!url || !key) {
-    activeThumbSrc.value = url
+    activeThumbSrc.value = url || localThumbSrc.value
     markLoadedIfImageAlreadyComplete()
     return
   }
 
   const token = ++downloadToken
   cleanupDownloadEvents()
+  useLocalThumbFallback()
 
   try {
     const [{ invoke }, { appDataDir, join }, { listen }] = await Promise.all([
@@ -239,8 +262,10 @@ async function downloadAndDecryptThumb() {
       cleanupDownloadEvents()
       const src = event.payload.dataUrl || event.payload.data_url || ''
       if (!src) {
-        loadError.value = true
-        isLoaded.value = true
+        if (!useLocalThumbFallback()) {
+          loadError.value = true
+          isLoaded.value = true
+        }
         return
       }
       loadError.value = false
@@ -251,8 +276,10 @@ async function downloadAndDecryptThumb() {
     const unlistenError = await listen(errorEvent, () => {
       if (token !== downloadToken) return
       cleanupDownloadEvents()
-      loadError.value = true
-      isLoaded.value = true
+      if (!useLocalThumbFallback()) {
+        loadError.value = true
+        isLoaded.value = true
+      }
     })
     stopDownloadEvents = [unlistenDone, unlistenError]
 
@@ -265,8 +292,10 @@ async function downloadAndDecryptThumb() {
   } catch {
     if (token !== downloadToken) return
     cleanupDownloadEvents()
-    loadError.value = true
-    isLoaded.value = true
+    if (!useLocalThumbFallback()) {
+      loadError.value = true
+      isLoaded.value = true
+    }
   }
 }
 
@@ -384,7 +413,7 @@ async function handleOpenVideo() {
   }
 }
 
-watch([() => videoData.value.thumbUrl, fileKey, attachmentKey], () => {
+watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc], () => {
   downloadToken += 1
   videoOpenToken += 1
   cleanupDownloadEvents()
@@ -393,9 +422,12 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey], () => {
   loadError.value = false
   activeThumbSrc.value = ''
   localVideoPath.value = ''
+  const hasLocalFallback = useLocalThumbFallback()
   if (!videoData.value.thumbUrl) {
-    loadError.value = true
-    isLoaded.value = true
+    if (!hasLocalFallback) {
+      loadError.value = true
+      isLoaded.value = true
+    }
     return
   }
   if ((fileKey.value || attachmentKey.value) && isRemoteThumb.value) {
@@ -411,6 +443,7 @@ function handleLoad() {
 }
 
 function handleError() {
+  if (activeThumbSrc.value !== localThumbSrc.value && useLocalThumbFallback()) return
   loadError.value = true
   isLoaded.value = true
 }
