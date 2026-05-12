@@ -17,6 +17,7 @@ import GroupNoticeDialog from './GroupNoticeDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 import RemoveMemberDialog from '@/modules/groups/components/RemoveMemberDialog.vue'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
+import searchCloseIcon from '@/assets/images/headNav/search-close-icon.png'
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
@@ -371,24 +372,24 @@ function handleOnlineTime(member: any) {
 
     <template v-else>
       <div class="member-directory">
-        <div class="member-directory-head">
-          <button
-            class="member-refresh"
-            type="button"
-            :title="t('强制刷新群成员')"
-            @click="refreshMembers"
-          >
+        <div class="member-directory-search">
+          <img :src="searchIcon" alt="" />
+          <img
+            v-show="search"
+            :src="searchCloseIcon"
+            alt=""
+            @click="search = ''"
+          />
+          <input v-model="search" type="text" :placeholder="t('搜索')" />
+          <span :title="t('强制刷新群成员')" @click="refreshMembers">
             <img
               src="@/assets/images/refresh.png"
               alt=""
               :class="{ spinning: refreshingMembers }"
             />
-          </button>
-          <label class="member-directory-search">
-            <img :src="searchIcon" alt="" />
-            <input v-model="search" type="text" :placeholder="t('搜索')" />
-          </label>
-          <button class="member-cancel" type="button" @click="showAllMembers = false; search = ''">{{ t('取消') }}</button>
+            <span>{{ t('群成员列表强制刷新') }}</span>
+          </span>
+          <div class="member-cancel" @click="showAllMembers = false; search = ''">{{ t('取消') }}</div>
         </div>
 
         <ul class="member-list directory-list">
@@ -504,6 +505,7 @@ function handleOnlineTime(member: any) {
     .alias-name {
       font-size: 14px;
       color: #178aff;
+      font-weight: 600;
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
@@ -546,6 +548,7 @@ function handleOnlineTime(member: any) {
       margin: 0;
       font-size: 14px;
       color: #000;
+      font-weight: 600;
     }
 
     .arrow {
@@ -586,6 +589,7 @@ function handleOnlineTime(member: any) {
     > span {
       font-size: 14px;
       color: #333;
+      font-weight: 600;
     }
 
     &.action-btn {
@@ -593,6 +597,7 @@ function handleOnlineTime(member: any) {
       justify-content: center;
       cursor: pointer;
       font-size: 14px;
+      font-weight: 600;
 
       &.danger {
         color: #f44e5a;
@@ -635,6 +640,7 @@ function handleOnlineTime(member: any) {
       .member-title {
         font-size: 14px;
         color: #178aff;
+        font-weight: 600;
       }
 
       .icon-arrow {
@@ -670,7 +676,8 @@ function handleOnlineTime(member: any) {
   }
 
   .invite-friend {
-    position: sticky;
+    position: absolute;
+    left: 0;
     bottom: 0;
     width: 100%;
     height: 40px;
@@ -682,12 +689,8 @@ function handleOnlineTime(member: any) {
     background: #fff;
     cursor: pointer;
     font-size: 14px;
-    border-top: 1px solid #f5f5f5;
-    margin-top: 10px;
+    font-weight: 900;
 
-    &:hover {
-      background: #f5f5f5;
-    }
   }
 }
 
@@ -702,77 +705,118 @@ function handleOnlineTime(member: any) {
   flex-direction: column;
   height: 100%;
   background: #fff;
-}
-
-.member-directory-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 42px;
-  padding: 6px 8px;
+  padding-top: 10px;
   box-sizing: border-box;
-  flex-shrink: 0;
-}
-
-.member-refresh,
-.member-cancel {
-  border: none;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.member-refresh {
-  width: 24px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  img {
-    width: 20px;
-    height: 20px;
-    display: block;
-
-    &.spinning {
-      animation: member-refresh-spin 0.8s linear infinite;
-    }
-  }
-}
-
-.member-cancel {
-  font-size: 13px;
-  color: #333;
-  line-height: 28px;
 }
 
 .member-directory-search {
-  flex: 1;
-  min-width: 0;
-  height: 28px;
-  display: flex;
-  align-items: center;
+  height: 30px;
+  position: relative;
   background: #f4f6f9;
   border-radius: 4px;
-  padding: 0 8px;
-  box-sizing: border-box;
+  margin: 0 30px 10px 30px;
+  flex-shrink: 0;
 
-  img {
-    width: 14px;
-    height: 14px;
-    margin-right: 5px;
-    opacity: 0.55;
+  .member-cancel {
+    position: absolute;
+    right: -28px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 12px;
+    cursor: pointer;
   }
 
-  input {
-    flex: 1;
-    min-width: 0;
+  > img {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+
+    &:nth-child(1) {
+      left: 5px;
+      width: 15px;
+    }
+
+    &:nth-child(2) {
+      right: 10px;
+      cursor: pointer;
+    }
+  }
+
+  > input {
+    padding: 0 12px 0 24px;
+    box-sizing: border-box;
+    border-radius: 4px;
+    width: 100%;
+    height: 100%;
     border: none;
     outline: none;
-    background: transparent;
-    font-size: 13px;
-    color: #333;
+    background: none;
+    color: rgb(106, 106, 106);
+
+    &::placeholder {
+      color: rgb(106, 106, 106);
+      opacity: 1;
+    }
+  }
+
+  > span {
+    position: absolute;
+    height: 20px;
+    width: 20px;
+    top: 5px;
+    left: -25px;
+    cursor: pointer;
+
+    &:hover {
+      > img {
+        opacity: 0.8;
+      }
+
+      > span {
+        display: block;
+      }
+    }
+
+    > img {
+      display: block;
+      width: 100%;
+      height: 100%;
+
+      &.spinning {
+        animation: member-refresh-spin 1s linear infinite;
+      }
+    }
+
+    > span {
+      display: none;
+      position: absolute;
+      top: 35px;
+      right: -105px;
+      line-height: 26px;
+      padding: 0 8px;
+      background: #3daee9;
+      color: #fff;
+      border: 1px solid #fff;
+      border-radius: 5px;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: normal;
+      z-index: 9;
+
+      &::before,
+      &::after {
+        position: absolute;
+        top: -10px;
+        right: 105px;
+        display: block;
+        font-size: 0;
+        line-height: 0;
+        border-color: transparent transparent #3daee9;
+        border-style: solid;
+        border-width: 5px;
+        content: "";
+      }
+    }
   }
 }
 
@@ -792,12 +836,9 @@ function handleOnlineTime(member: any) {
   background: #fff;
   cursor: pointer;
   font-size: 14px;
-  border-top: 1px solid #f5f5f5;
+  font-weight: 600;
   flex-shrink: 0;
 
-  &:hover {
-    background: #f5f5f5;
-  }
 }
 
 @keyframes member-refresh-spin {
