@@ -107,6 +107,27 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
+function terminalDebugLog(
+  scope: string,
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'warn',
+) {
+  const payload = data || {}
+  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
+  log(`[group-member-refresh-debug][${scope}] ${message}`, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[group-member-refresh-debug][${scope}] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
 function pathBaseName(filePath: string): string {
   const segments = filePath.split(/[\\/]/).filter(Boolean)
   return segments[segments.length - 1] || filePath
@@ -427,6 +448,38 @@ const inviteExistingMemberIds = computed(() => {
   const members = groupStore.getMembers(uiStore.inviteFriendGroupId)
   return new Set(members.map(m => m.userId))
 })
+
+function handleGlobalInviteInvited(payload?: { message?: string; type?: 'success' | 'error' }) {
+  if (payload?.message) {
+    showToast(payload.message, payload.type || 'success')
+  }
+
+  const groupId = uiStore.inviteFriendGroupId
+  terminalDebugLog('main-layout', 'global invite invited', {
+    groupId,
+    payload,
+    authUid: authStore.uid,
+    memberMapCountBefore: groupId ? groupStore.getMembers(groupId).length : null,
+    groupMemberCountBefore: groupId ? groupStore.getGroup(groupId)?.memberCount ?? null : null,
+  })
+  if (authStore.uid && groupId) {
+    groupStore.loadMembers(authStore.uid, groupId, { forceRemote: true }).then((members) => {
+      terminalDebugLog('main-layout', 'global invite remote refresh resolved', {
+        groupId,
+        returnedCount: members.length,
+        memberMapCountAfter: groupStore.getMembers(groupId).length,
+        groupMemberCountAfter: groupStore.getGroup(groupId)?.memberCount ?? null,
+        returnedMemberIds: members.map((member) => member.userId).slice(0, 10),
+      })
+    }).catch((error) => {
+      terminalDebugLog('main-layout', 'global invite remote refresh failed', {
+        groupId,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'error')
+      console.error('[MainLayout] refresh members after invite failed:', error)
+    })
+  }
+}
 
 function messageSupportsCopy(msgType: unknown): boolean {
   const t = Number(msgType)
@@ -1992,6 +2045,7 @@ async function handleForward(targetConvId: string) {
       :group-id="uiStore.inviteFriendGroupId"
       :existing-member-ids="inviteExistingMemberIds"
       @close="uiStore.closeInviteFriend()"
+      @invited="handleGlobalInviteInvited"
     />
     <GroupQRCode
       :visible="uiStore.groupQRCodeVisible"
