@@ -200,9 +200,14 @@ function diceLog(message: string, data?: Record<string, unknown>) {
 }
 
 const GROUP_IMAGE_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+const SINGLE_VIDEO_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
 function isGroupImageMessage(conversationId: string, msgType: number): boolean {
   return String(conversationId || '').startsWith('1_') && Number(msgType) === 1
+}
+
+function isSingleVideoMessage(conversationId: string, msgType: number): boolean {
+  return String(conversationId || '').startsWith('0_') && Number(msgType) === 3
 }
 
 function shortLogText(value: unknown, max = 120): string {
@@ -234,6 +239,34 @@ function imageContentSummary(content: string | null | undefined) {
     height: parsed?.height ?? null,
     size: parsed?.size ?? null,
     name: parsed?.name ?? null,
+  }
+}
+
+function videoContentSummary(content: string | null | undefined) {
+  const raw = String(content ?? '')
+  let parsed: Record<string, unknown> | null = null
+  try {
+    const value = JSON.parse(raw)
+    parsed = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  } catch {
+    parsed = null
+  }
+  const url = String(parsed?.url ?? parsed?.fileUrl ?? parsed?.path ?? '')
+  const thumbUrl = String(parsed?.thumbUrl ?? parsed?.thumbnailUrl ?? parsed?.thumbnail ?? parsed?.cover ?? '')
+  return {
+    contentLen: raw.length,
+    contentHead: shortLogText(raw),
+    isJson: Boolean(parsed),
+    urlLen: url.length,
+    urlHead: shortLogText(url),
+    thumbUrlLen: thumbUrl.length,
+    thumbUrlHead: shortLogText(thumbUrl),
+    width: parsed?.width ?? null,
+    height: parsed?.height ?? null,
+    duration: parsed?.duration ?? null,
+    size: parsed?.size ?? parsed?.fileSize ?? null,
+    name: parsed?.name ?? null,
+    fileKeyLen: String(parsed?.fileKey ?? parsed?.file_key ?? '').length,
   }
 }
 
@@ -278,6 +311,24 @@ function groupImageLog(
     payload: {
       level,
       message: `[group-image] ${message}`,
+      data: payload,
+    },
+  }).catch(() => {})
+}
+
+function singleVideoLog(
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  const payload = { debugRunId: SINGLE_VIDEO_DEBUG_RUN_ID, ...(data || {}) }
+  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  log(`[single-video-send][store] ${message}`, payload)
+  if (!isTauri()) return
+  tauriInvoke('image_send_log', {
+    payload: {
+      level,
+      message: `[single-video-send][store] ${message}`,
       data: payload,
     },
   }).catch(() => {})
@@ -689,6 +740,20 @@ export const useMessageStore = defineStore('message', () => {
         contentLen: (content || '').length,
       })
     }
+    const isSingleVideo = isSingleVideoMessage(conversationId, msgType)
+    if (isSingleVideo) {
+      singleVideoLog('sendMessage entry', {
+        uid,
+        conversationId,
+        convType,
+        targetId,
+        content: videoContentSummary(content),
+        extraKeys: Object.keys(extra ?? {}),
+        hasClientMsgId: typeof extra?.__clientMsgId === 'string',
+        hasFileKey: Boolean(extra?.fileKey),
+        hasLocalThumbDataUrl: Boolean(extra?.localThumbDataUrl),
+      })
+    }
 
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
     // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
@@ -714,6 +779,14 @@ export const useMessageStore = defineStore('message', () => {
     }
     appendMessage(conversationId, optimistic)
     syncConversationSummary(conversationId, optimistic)
+    if (isSingleVideo) {
+      singleVideoLog('optimistic appended', {
+        optimisticId,
+        listSizeAfterAppend: getMessages(conversationId).length,
+        extraJsonLen: String(extraJson || '').length,
+        content: videoContentSummary(content),
+      })
+    }
     if (isGroupImageMessage(conversationId, msgType)) {
       groupImageLog('sendMessage optimistic appended', {
         uid,
@@ -801,16 +874,34 @@ export const useMessageStore = defineStore('message', () => {
     } else if (convType === 0 && targetId && msgType !== 12 && msgType !== 18) {
       try {
         const stepStartedAt = performance.now()
+        if (isSingleVideo) {
+          singleVideoLog('ensureFriendRelKey start', { targetId, optimisticId })
+        }
         await ensureFriendRelKey(uid, targetId)
         logSendStep('ensureFriendRelKey OK', {
           targetId,
           stepMs: Math.round(performance.now() - stepStartedAt),
         })
+        if (isSingleVideo) {
+          singleVideoLog('ensureFriendRelKey OK', {
+            targetId,
+            optimisticId,
+            stepMs: Math.round(performance.now() - stepStartedAt),
+          })
+        }
       } catch (e) {
         logSendStep('ensureFriendRelKey failed', {
           targetId,
           message: (e as Error)?.message || String(e),
         }, 'error')
+        if (isSingleVideo) {
+          singleVideoLog('ensureFriendRelKey failed', {
+            targetId,
+            optimisticId,
+            message: (e as Error)?.message || String(e),
+            stack: (e as Error)?.stack || '',
+          }, 'error')
+        }
         updateMessageStatus(optimisticId, -1)
         throw e
       }
@@ -835,13 +926,29 @@ export const useMessageStore = defineStore('message', () => {
     try {
       if ([0, 1, 2, 3, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
         const stepStartedAt = performance.now()
+        if (isSingleVideo) {
+          singleVideoLog('ensureWsConnected start', { optimisticId })
+        }
         await ensureWsConnected()
         logSendStep('ensureWsConnected OK', {
           stepMs: Math.round(performance.now() - stepStartedAt),
         })
+        if (isSingleVideo) {
+          singleVideoLog('ensureWsConnected OK', {
+            optimisticId,
+            stepMs: Math.round(performance.now() - stepStartedAt),
+          })
+        }
       }
       const rustStartedAt = performance.now()
       logSendStep('invoking Rust send_message')
+      if (isSingleVideo) {
+        singleVideoLog('invoke Rust send_message', {
+          optimisticId,
+          content: videoContentSummary(content),
+          extraKeys: Object.keys(sendExtra ?? {}),
+        })
+      }
       if (isGroupImageMessage(conversationId, msgType)) {
         groupImageLog('invoke Rust send_message', {
           uid,
@@ -874,6 +981,17 @@ export const useMessageStore = defineStore('message', () => {
         resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
         resultStatus: Number(result?.status ?? 0),
       })
+      if (isSingleVideo) {
+        singleVideoLog('Rust send_message result', {
+          optimisticId,
+          stepMs: Math.round(performance.now() - rustStartedAt),
+          resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
+          resultCustomMsgId: String(result?.customMsgId || result?.custom_msg_id || ''),
+          resultStatus: Number(result?.status ?? 0),
+          resultReadStatus: Number(result?.readStatus ?? result?.read_status ?? 0),
+          resultContent: videoContentSummary(String(result?.content ?? '')),
+        })
+      }
       if (isGroupImageMessage(conversationId, msgType)) {
         groupImageLog('Rust send_message result', {
           optimisticId,
@@ -911,13 +1029,32 @@ export const useMessageStore = defineStore('message', () => {
       }
       appendMessage(conversationId, normalized)
       syncConversationSummary(conversationId, normalized)
+      if (isSingleVideo) {
+        singleVideoLog('normalized appended', {
+          optimisticId,
+          normalizedId: normalized.id,
+          normalizedCustomMsgId: normalized.customMsgId,
+          status: normalized.status,
+          listSizeAfterAppend: getMessages(conversationId).length,
+        })
+      }
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
+      if (isSingleVideo) {
+        singleVideoLog('sendMessage catch', {
+          optimisticId,
+          error: errText,
+          stack: (e as Error)?.stack || '',
+        }, 'error')
+      }
       const canRetryWs = [0, 1, 2, 3, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')
+          if (isSingleVideo) {
+            singleVideoLog('retry after Not connected start', { optimisticId }, 'warn')
+          }
           await ensureWsConnected()
           const retry = await tauriInvoke<any>('send_message', {
             uid,
@@ -949,8 +1086,22 @@ export const useMessageStore = defineStore('message', () => {
           }
           appendMessage(conversationId, normalized)
           syncConversationSummary(conversationId, normalized)
+          if (isSingleVideo) {
+            singleVideoLog('retry send_message result appended', {
+              optimisticId,
+              normalizedId: normalized.id,
+              status: normalized.status,
+            })
+          }
           return normalized
         } catch (retryErr) {
+          if (isSingleVideo) {
+            singleVideoLog('retry after Not connected failed', {
+              optimisticId,
+              error: String((retryErr as any)?.message || retryErr || ''),
+              stack: (retryErr as Error)?.stack || '',
+            }, 'error')
+          }
           if (isGroupImageMessage(conversationId, msgType)) {
             groupImageLog('send_message retry failed', {
               optimisticId,
