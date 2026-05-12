@@ -51,6 +51,7 @@ const invitePromptTitle = ref('')
 const invitePromptContent = ref('')
 const invitePromptMembers = ref<string[]>([])
 const invitePromptSubmitting = ref(false)
+const pendingInviteIds = ref(new Set<string>())
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
@@ -78,6 +79,23 @@ function closeInvitePrompt() {
   invitePromptMembers.value = []
   invitePromptContent.value = ''
   invitePromptTitle.value = ''
+}
+
+function normalizeInviteIds(ids?: Array<number | string> | string[]) {
+  return (ids || []).map((id) => String(id)).filter(Boolean)
+}
+
+function mergePendingInviteIds(ids?: Array<number | string> | string[]) {
+  const normalized = normalizeInviteIds(ids)
+  if (!normalized.length) return
+  pendingInviteIds.value = new Set([
+    ...Array.from(pendingInviteIds.value),
+    ...normalized,
+  ])
+}
+
+function replacePendingInviteIds(ids: string[]) {
+  pendingInviteIds.value = new Set(normalizeInviteIds(ids))
 }
 
 function handleConfirm() {
@@ -109,7 +127,9 @@ function openRemoveMember() {
   removeMemberVisible.value = true
 }
 
-async function handleInvited(payload?: { message?: string; type?: 'success' | 'error' }) {
+async function handleInvited(payload?: { message?: string; type?: 'success' | 'error'; needCheckUids?: string[] }) {
+  mergePendingInviteIds(payload?.needCheckUids)
+
   if (payload?.message) {
     if ((payload.type ?? 'success') === 'success') {
       showInvitePrompt(payload.message)
@@ -158,6 +178,10 @@ async function handleInvitePromptConfirm() {
     })
     const code = getResponseCode(res)
     if (code === 200) {
+      const needCheckUids = Array.isArray((res as any)?.needCheckUids)
+        ? ((res as any).needCheckUids as Array<number | string>)
+        : []
+      mergePendingInviteIds(needCheckUids)
       invitePromptSubmitting.value = false
       closeInvitePrompt()
       showToast(t('邀请成功'))
@@ -562,9 +586,11 @@ function handleOnlineTime(member: any) {
       :existing-member-ids="existingMemberIds"
       :qrcode-url="inviteShortLink"
       :confirm-before-invite="bfJoinCheck"
+      :pending-audit-ids="pendingInviteIds"
       @close="inviteVisible = false"
       @invited="handleInvited"
       @confirm-invite="handleInviteConfirmRequest"
+      @pending-audit-loaded="replacePendingInviteIds"
     />
     <GroupNoticeDialog
       :visible="noticeVisible"
