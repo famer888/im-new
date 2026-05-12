@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
@@ -18,6 +19,7 @@ const localFilePath = ref('')
 const showPreview = ref(false)
 const imageElRef = ref<HTMLImageElement | null>(null)
 let downloadToken = 0
+let materializeToken = 0
 let stopDownloadEvents: Array<() => void> = []
 
 type ImageDisplayCacheEntry = {
@@ -78,15 +80,21 @@ function isRemoteImageSrc(src: string): boolean {
 const imageData = computed((): {
   url: string
   thumbnailUrl: string
+  name: string
+  localPath: string
   width: number
   height: number
   size: number
 } => {
   const raw = (props.message.content ?? '').trim()
-  if (!raw) return { url: '', thumbnailUrl: '', width: 0, height: 0, size: 0 }
+  if (!raw) return { url: '', thumbnailUrl: '', name: '', localPath: '', width: 0, height: 0, size: 0 }
 
   try {
     const parsed = JSON.parse(raw)
+    const localPath = String(
+      parsed.localPath || parsed.local_path || parsed.filePath || parsed.file_path || parsed.local || '',
+    ).trim()
+    const name = String(parsed.name || parsed.fileName || parsed.file_name || '').trim()
     const url = normalizeImageSrc(
       parsed.url || parsed.fileUrl || parsed.path || parsed.dataUrl || parsed.data_url || parsed.base64 || '',
       parsed.mimeType || parsed.mime_type || parsed.mime,
@@ -98,6 +106,8 @@ const imageData = computed((): {
     return {
       url,
       thumbnailUrl,
+      name,
+      localPath,
       width: Number(parsed.width || 0),
       height: Number(parsed.height || 0),
       size: Number(parsed.size || parsed.fileSize || 0),
@@ -109,6 +119,8 @@ const imageData = computed((): {
     return {
       url: normalizedUrl,
       thumbnailUrl: normalizedThumbUrl || normalizedUrl,
+      name: '',
+      localPath: '',
       width: 0,
       height: 0,
       size: Number(size || 0),
@@ -116,7 +128,44 @@ const imageData = computed((): {
   }
 })
 
-const thumbnailUrl = computed(() => imageData.value.thumbnailUrl || imageData.value.url || '')
+function isLocalFilePath(src: string): boolean {
+  const raw = String(src || '').trim()
+  if (!raw || /^(https?|blob|data|asset|tauri):/i.test(raw)) return false
+  return /^file:/i.test(raw) || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
+}
+
+function fileUrlToLocalPath(src: string): string {
+  const raw = String(src || '').trim()
+  if (!/^file:/i.test(raw)) return raw
+  try {
+    const parsed = new URL(raw)
+    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
+    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return raw.replace(/^file:\/\/?/i, '')
+  }
+}
+
+function toDisplayImageSrc(src: string): string {
+  const raw = String(src || '').trim()
+  if (!raw) return ''
+  if ((window as any).__TAURI_INTERNALS__ && isLocalFilePath(raw)) {
+    return convertFileSrc(fileUrlToLocalPath(raw))
+  }
+  return raw
+}
+
+const localSourcePath = computed(() => {
+  const explicitPath = imageData.value.localPath
+  if (explicitPath) return fileUrlToLocalPath(explicitPath)
+  const url = imageData.value.url
+  if (isLocalFilePath(url)) return fileUrlToLocalPath(url)
+  const thumbnail = imageData.value.thumbnailUrl
+  if (isLocalFilePath(thumbnail)) return fileUrlToLocalPath(thumbnail)
+  return ''
+})
+const thumbnailUrl = computed(() => toDisplayImageSrc(imageData.value.thumbnailUrl || imageData.value.url || ''))
 const downloadUrl = computed(() => {
   const original = imageData.value.url
   const thumbnail = thumbnailUrl.value
@@ -126,6 +175,9 @@ const downloadUrl = computed(() => {
 })
 const isVideo = computed(() => props.message.msgType === 3)
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
+const dragFileName = computed(() =>
+  pathFileName(localFilePath.value) || getImageFileName(downloadUrl.value || imageData.value.url, imageData.value.name),
+)
 const showImageLoading = computed(() => !activeSrc.value || (!isLoaded.value && !loadError.value))
 const showImageOverlay = computed(() => !loadError.value && showImageLoading.value)
 const canOpenPreview = computed(() => Boolean(previewSrc.value) && isLoaded.value && !loadError.value && !showImageOverlay.value)
@@ -175,13 +227,15 @@ const groupId = computed(() => {
 const imageCacheKey = computed(() => [
   props.message.id || '',
   props.message.customMsgId || '',
+  imageData.value.name || '',
+  localSourcePath.value || '',
   downloadUrl.value || imageData.value.url || '',
   thumbnailUrl.value || '',
   fileKey.value || '',
   attachmentKey.value || '',
 ].join('|'))
 
-watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey], () => {
+watch([thumbnailUrl, downloadUrl, localSourcePath, fileKey, attachmentKey], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
@@ -203,7 +257,11 @@ watch([thumbnailUrl, downloadUrl, fileKey, attachmentKey], () => {
     downloadAndDecryptImage()
     return
   }
+  if (localSourcePath.value) {
+    localFilePath.value = localSourcePath.value
+  }
   activeSrc.value = thumbnailUrl.value
+  materializeDataImageForDrag()
   markLoadedIfImageAlreadyComplete()
 }, { immediate: true })
 
@@ -286,15 +344,48 @@ function cleanupDownloadEvents() {
   stopDownloadEvents = []
 }
 
-function imageExt(url: string): string {
-  const matched = url.split('?')[0].match(/\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i)
-  if (!matched?.[0]) return '.png'
-  const ext = matched[0].toLowerCase()
-  return ext === '.jpeg' ? '.jpg' : ext
+function getFileSuffix(chatType: number, fileUrl: string): string {
+  let suffix = fileUrl.slice(fileUrl.lastIndexOf('.'))
+  if ([1, 2, 3, 9].includes(chatType) && (suffix.length < 2 || suffix.length > 7)) {
+    if (chatType === 1) suffix = '.png'
+    else if (chatType === 2) suffix = '.mp4'
+    else if (chatType === 3) suffix = '.png'
+    else if (chatType === 9) suffix = '.gif'
+  } else {
+    suffix = ''
+  }
+  return suffix
+}
+
+function getImageFileName(fileUrl: string, explicitName = ''): string {
+  if (explicitName.trim()) return pathFileName(explicitName.trim()) || safeFileName(explicitName.trim())
+  const cleanFileUrl = String(fileUrl || '').split('||')[0].trim()
+  if (/^data:image\//i.test(cleanFileUrl)) return 'image.png'
+  const suffix = getFileSuffix(1, cleanFileUrl)
+  const fileName = cleanFileUrl.slice(cleanFileUrl.lastIndexOf('/') + 1) + suffix
+  return safeFileName(fileName || `image${suffix || '.png'}`)
 }
 
 function safeName(name: string): string {
   return name.replace(/[^\w.-]/g, '_') || 'image'
+}
+
+function safeFileName(name: string): string {
+  return name.replace(/[\\/]/g, '_').replace(/\0/g, '') || 'image.png'
+}
+
+function pathFileName(path: string): string {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  return safeFileName(raw.split(/[\\/]/).pop() || '')
+}
+
+async function getImageSavePath(join: (...paths: string[]) => Promise<string>, baseDir: string, msgId: string, fileName: string) {
+  const uid = safeName(String(authStore.uid || '0'))
+  if (groupId.value) {
+    return join(baseDir, 'Local Storage', uid, `group-${safeName(groupId.value)}`, msgId, fileName)
+  }
+  return join(baseDir, 'image-cache', msgId, fileName)
 }
 
 async function resolveFileKey(): Promise<string> {
@@ -336,7 +427,7 @@ async function downloadAndDecryptImage() {
     ])
     const baseDir = await appDataDir()
     const id = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
-    const savePath = await join(baseDir, 'image-cache', `${id}${imageExt(url)}`)
+    const savePath = await getImageSavePath(join, baseDir, id, getImageFileName(url, imageData.value.name))
     localFilePath.value = savePath
     const doneEvent = `file:done:${id}`
     const errorEvent = `file:error:${id}`
@@ -344,7 +435,7 @@ async function downloadAndDecryptImage() {
     const unlistenDone = await listen<{ dataUrl?: string; data_url?: string }>(doneEvent, (event) => {
       if (token !== downloadToken) return
       cleanupDownloadEvents()
-      const src = event.payload.dataUrl || event.payload.data_url || ''
+      const src = toDisplayImageSrc(savePath) || event.payload.dataUrl || event.payload.data_url || ''
       if (!src) {
         loadError.value = true
         isLoaded.value = true
@@ -381,8 +472,45 @@ async function downloadAndDecryptImage() {
   }
 }
 
+async function materializeDataImageForDrag() {
+  const src = String(activeSrc.value || '').trim()
+  if (!(window as any).__TAURI_INTERNALS__ || localFilePath.value || !/^data:image\//i.test(src)) return
+
+  const token = ++materializeToken
+  try {
+    const [{ invoke }, { appDataDir, join }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/path'),
+    ])
+    const baseDir = await appDataDir()
+    const id = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
+    const savePath = await getImageSavePath(join, baseDir, id, getImageFileName(imageData.value.url, imageData.value.name))
+    await invoke('save_base64_image', {
+      filePath: savePath,
+      base64Data: src,
+    })
+    if (token !== materializeToken || localFilePath.value) return
+    localFilePath.value = savePath
+    activeSrc.value = toDisplayImageSrc(savePath)
+    setCachedImage(imageCacheKey.value, {
+      src: activeSrc.value,
+      localFilePath: savePath,
+    })
+  } catch (error) {
+    console.warn('[image] materialize data image for drag failed:', error)
+  }
+}
+
+function handleImageDragStart(event: DragEvent) {
+  if (!localFilePath.value) return
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+}
+
 onBeforeUnmount(() => {
   downloadToken += 1
+  materializeToken += 1
   cleanupDownloadEvents()
 })
 </script>
@@ -400,8 +528,11 @@ onBeforeUnmount(() => {
         ref="imageElRef"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"
-        alt=""
+        draggable="true"
+        :alt="dragFileName"
+        :title="dragFileName"
         :class="{ loaded: isLoaded }"
+        @dragstart="handleImageDragStart"
         @load="handleLoad"
         @error="handleError"
       />
@@ -484,6 +615,8 @@ onBeforeUnmount(() => {
       object-fit: contain;
       border-radius: 10px;
       opacity: 0;
+      user-select: none;
+      -webkit-user-drag: element;
 
       &.loaded {
         opacity: 1;
