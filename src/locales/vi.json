@@ -264,6 +264,7 @@
   "共#1#人": "Tổng cộng #1# người",
   "加入群聊失败": "Không thể tham gia trò chuyện nhóm",
   "已提交申请入群": "Đơn đăng ký đã được gửi để tham gia nhóm",
+  "入群审核中，您无法重复操作": "Yêu cầu tham gia nhóm đang được xét duyệt. Bạn không thể thao tác lặp lại.",
   "加入群聊": "Tham gia trò chuyện nhóm",
   "加入中...": "Đang tham gia...",
   "聊天": "trò chuyện",

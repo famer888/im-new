@@ -6,6 +6,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { groupJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
+import Toast from '@/components/Toast.vue'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
 import closeIcon from '@/assets/images/common/close-icon.png'
 
@@ -28,8 +29,9 @@ const { t } = useI18n()
 
 const joining = ref(false)
 const joinedApplied = ref(false)
-const tipText = ref('')
-const tipType = ref<'success' | 'error'>('success')
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 
 const target = computed(() => uiStore.addGroupTarget)
 const isDialog = computed(() => props.mode === 'dialog')
@@ -39,10 +41,9 @@ const joinedGroup = computed(() => {
 })
 const displayName = computed(() => joinedGroup.value?.name || target.value?.name || target.value?.id || '')
 const memberCount = computed(() => joinedGroup.value?.memberCount || target.value?.memberCount || 0)
-const joinDisabled = computed(() => !target.value || joining.value || joinedApplied.value)
+const joinDisabled = computed(() => !target.value || joining.value)
 const buttonText = computed(() => {
   if (joinedGroup.value) return t('发送消息')
-  if (joinedApplied.value) return t('已提交申请入群')
   if (joining.value) return t('加入中...')
   return t('加入群聊')
 })
@@ -50,8 +51,9 @@ const buttonText = computed(() => {
 watch(target, () => {
   joining.value = false
   joinedApplied.value = false
-  tipText.value = ''
-  tipType.value = 'success'
+  toastVisible.value = false
+  toastMessage.value = ''
+  toastType.value = 'success'
 })
 
 function openGroupChat() {
@@ -65,9 +67,10 @@ function openGroupChat() {
   closeDialog()
 }
 
-function showTip(message: string, type: 'success' | 'error') {
-  tipText.value = message
-  tipType.value = type
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
 }
 
 function closeDialog() {
@@ -77,15 +80,20 @@ function closeDialog() {
 
 async function handleJoinGroup() {
   const current = target.value
-  if (!current || joinDisabled.value) return
+  if (!current || joining.value) return
 
   if (joinedGroup.value) {
     openGroupChat()
     return
   }
 
+  if (joinedApplied.value) {
+    showToast(t('入群审核中，您无法重复操作'), 'error')
+    return
+  }
+
   joining.value = true
-  tipText.value = ''
+  toastVisible.value = false
 
   try {
     const resp = await groupJoin({
@@ -97,13 +105,13 @@ async function handleJoinGroup() {
     const common = (resp as any).commonResult || {}
     const errCode = Number(common.errCode ?? 0)
     if (errCode !== 200 && errCode !== 0) {
-      showTip(common.errMsg || (resp as any).errorDesc || t('加入群聊失败'), 'error')
+      showToast(common.errMsg || (resp as any).errorDesc || t('加入群聊失败'), 'error')
       return
     }
 
     if (current.bfJoinCheck) {
       joinedApplied.value = true
-      showTip(t('已提交申请入群'), 'success')
+      showToast(t('已提交申请入群'), 'success')
       return
     }
 
@@ -115,11 +123,11 @@ async function handleJoinGroup() {
       groupAliasName: current.groupAliasName,
       ownerId: current.ownerId,
     })
-    showTip(t('加入群聊成功'), 'success')
+    showToast(t('加入群聊成功'), 'success')
     openGroupChat()
   } catch (error) {
     console.error('[AddGroupPreview] join failed:', error)
-    showTip(t('加入群聊失败'), 'error')
+    showToast(t('加入群聊失败'), 'error')
   } finally {
     joining.value = false
   }
@@ -150,13 +158,19 @@ async function handleJoinGroup() {
         <button type="button" class="primary-btn" :disabled="joinDisabled" @click="handleJoinGroup">
           {{ buttonText }}
         </button>
-        <div v-if="tipText" class="join-tip" :class="`tip-${tipType}`">{{ tipText }}</div>
       </div>
 
       <div v-else class="empty-state">
         <img :src="emptyBrandImg" alt="" class="empty-brand-icon" />
       </div>
     </div>
+
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      @update:visible="toastVisible = $event"
+    />
   </div>
 </template>
 
@@ -230,22 +244,6 @@ async function handleJoinGroup() {
   }
 }
 
-.join-tip {
-  max-width: 360px;
-  margin-top: 12px;
-  font-size: 13px;
-  line-height: 20px;
-  text-align: center;
-}
-
-.tip-success {
-  color: #52c41a;
-}
-
-.tip-error {
-  color: #f56c6c;
-}
-
 .empty-state {
   flex: 1;
   display: flex;
@@ -316,12 +314,6 @@ async function handleJoinGroup() {
     }
   }
 
-  .join-tip {
-    max-width: 360px;
-    margin-top: 10px;
-    font-size: 12px;
-    line-height: 18px;
-  }
 }
 
 .dialog-close {
