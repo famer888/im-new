@@ -35,6 +35,22 @@ const messageStore = useMessageStore()
 const searchStore = useSearchStore()
 const { t, locale } = useI18n()
 
+function headerMemberRefreshDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
+  const payload = data || {}
+  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
+  log(`[group-member-refresh-debug][chat-header] ${message}`, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[group-member-refresh-debug][chat-header] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
@@ -148,6 +164,37 @@ const title = computed(() => {
       return ''
   }
 })
+
+const groupHeaderDebugState = computed(() => {
+  void locale.value
+  const current = conversation.value
+  if (!current || current.type !== ConversationType.Group) return null
+  const group = groupStore.getGroup(current.targetId)
+  const memberMapCount = groupStore.getMembers(current.targetId).length
+  const groupMemberCount = group?.memberCount ?? null
+  const renderedCount = group?.memberCount || memberMapCount
+  return {
+    groupId: current.targetId,
+    groupName: group?.name ?? '',
+    groupMemberCount,
+    memberMapCount,
+    renderedCount,
+    renderedTitle: title.value,
+  }
+})
+
+watch(
+  groupHeaderDebugState,
+  (next, prev) => {
+    if (!next) return
+    if (prev && JSON.stringify(prev) === JSON.stringify(next)) return
+    headerMemberRefreshDebug('group header count state', {
+      previous: prev,
+      next,
+    })
+  },
+  { immediate: true },
+)
 
 const avatar = computed(() => {
   if (!conversation.value) return ''

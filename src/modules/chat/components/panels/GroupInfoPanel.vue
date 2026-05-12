@@ -54,6 +54,22 @@ const invitePromptMembers = ref<string[]>([])
 const invitePromptSubmitting = ref(false)
 const pendingInviteIds = ref(new Set<string>())
 
+function inviteMemberRefreshDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
+  const payload = data || {}
+  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
+  log(`[group-member-refresh-debug][group-info-panel] ${message}`, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[group-member-refresh-debug][group-info-panel] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
   toastType.value = type
@@ -130,6 +146,14 @@ function openRemoveMember() {
 
 async function handleInvited(payload?: { message?: string; type?: 'success' | 'error'; needCheckUids?: string[] }) {
   mergePendingInviteIds(payload?.needCheckUids)
+  const groupId = conv.value?.targetId || ''
+  inviteMemberRefreshDebug('handleInvited received', {
+    groupId,
+    payload,
+    authUid: authStore.uid,
+    memberMapCountBefore: groupId ? groupStore.getMembers(groupId).length : null,
+    groupMemberCountBefore: groupId ? groupStore.getGroup(groupId)?.memberCount ?? null : null,
+  })
 
   if (payload?.message) {
     if ((payload.type ?? 'success') === 'success') {
@@ -141,7 +165,19 @@ async function handleInvited(payload?: { message?: string; type?: 'success' | 'e
 
   // 邀请结果先反馈给用户，成员列表刷新放后台，避免弹窗被接口阻塞。
   if (conv.value?.targetId && authStore.uid) {
-    groupStore.loadMembers(authStore.uid, conv.value.targetId).catch((error) => {
+    groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true }).then((members) => {
+      inviteMemberRefreshDebug('handleInvited remote refresh resolved', {
+        groupId: conv.value?.targetId,
+        returnedCount: members.length,
+        memberMapCountAfter: conv.value?.targetId ? groupStore.getMembers(conv.value.targetId).length : null,
+        groupMemberCountAfter: conv.value?.targetId ? groupStore.getGroup(conv.value.targetId)?.memberCount ?? null : null,
+        returnedMemberIds: members.map((member) => member.userId).slice(0, 10),
+      })
+    }).catch((error) => {
+      inviteMemberRefreshDebug('handleInvited remote refresh failed', {
+        groupId: conv.value?.targetId,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'error')
       console.error('[GroupInfoPanel] refresh members after invite failed:', error)
     })
   }
@@ -157,7 +193,7 @@ function getResponseErrorMessage(res: any, fallback: string) {
 
 function handleInviteConfirmRequest(payload: { members: string[]; message: string }) {
   showInvitePrompt(payload.message, {
-    title: t('邀请好友'),
+    title: t('邀请成功'),
     members: payload.members,
   })
 }
@@ -187,7 +223,7 @@ async function handleInvitePromptConfirm() {
       closeInvitePrompt()
       showToast(t('邀请成功'))
       if (authStore.uid) {
-        groupStore.loadMembers(authStore.uid, conv.value.targetId).catch((error) => {
+        groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true }).catch((error) => {
           console.error('[GroupInfoPanel] refresh members after invite failed:', error)
         })
       }
@@ -205,7 +241,7 @@ async function handleInvitePromptConfirm() {
 async function handleRemoved() {
   // 移除成功后刷新成员列表
   if (conv.value?.targetId && authStore.uid) {
-    await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+    await groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true })
   }
 }
 
@@ -213,7 +249,7 @@ async function refreshMembers() {
   if (!conv.value?.targetId || !authStore.uid || refreshingMembers.value) return
   refreshingMembers.value = true
   try {
-    await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+    await groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true })
   } catch (e) {
     console.error('[GroupInfoPanel] refresh members failed:', e)
     showToast(t('操作失败'), 'error')
