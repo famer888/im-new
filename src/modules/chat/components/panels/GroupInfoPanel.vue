@@ -509,6 +509,8 @@ function handleOnlineTime(member: any) {
   flex-direction: column;
   position: relative;
   height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .invite-prompt-mask {
@@ -608,6 +610,7 @@ function handleOnlineTime(member: any) {
   border-bottom: 10px solid #f5f5f5;
   cursor: pointer;
   height: 65px;
+  flex-shrink: 0;
 
   > h3 {
     font-size: 14px;
@@ -655,6 +658,7 @@ function handleOnlineTime(member: any) {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 
   .notice-head {
     display: flex;
@@ -677,6 +681,8 @@ function handleOnlineTime(member: any) {
   .notice-preview {
     margin: 0;
     font-size: 13px;
+    line-height: 20px;
+    min-height: 20px;
     color: #999;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -696,6 +702,7 @@ function handleOnlineTime(member: any) {
   margin: 0;
   border-top: 10px solid #f5f5f5;
   list-style: none;
+  flex-shrink: 0;
 
   > li {
     display: flex;
@@ -730,6 +737,7 @@ function handleOnlineTime(member: any) {
   margin: 0;
   list-style: none;
   border-top: 10px solid #f5f5f5;
+  flex-shrink: 0;
 
   > li {
     padding: 8px 10px;
@@ -743,6 +751,7 @@ function handleOnlineTime(member: any) {
 .member-section {
   padding-top: 10px;
   border-top: 10px solid #f5f5f5;
+  flex-shrink: 0;
 
   .member-head {
     display: flex;
@@ -794,20 +803,17 @@ function handleOnlineTime(member: any) {
   }
 
   .invite-friend {
-    position: absolute;
-    left: 0;
-    bottom: 0;
     width: 100%;
     height: 40px;
     color: #178aff;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 9;
     background: #fff;
     cursor: pointer;
     font-size: 14px;
     font-weight: 900;
+    flex-shrink: 0;
 
   }
 }
@@ -822,6 +828,7 @@ function handleOnlineTime(member: any) {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   background: #fff;
   padding-top: 10px;
   box-sizing: border-box;
@@ -940,8 +947,8 @@ function handleOnlineTime(member: any) {
 
 .directory-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding-bottom: 46px;
 }
 
 .directory-invite {
