@@ -46,7 +46,7 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
-import { ensureFriendRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 
 import { API_CONFIG } from '@/api/config'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
@@ -448,6 +448,94 @@ function messageSupportsVideoFileActions(data: Record<string, unknown>): boolean
   return (conversationType === ConversationType.Friend || conversationType === ConversationType.Group)
     && Number(data.msgType) === MessageType.Video
     && Boolean(getVideoFileSource(data).url)
+}
+
+const OFFICE_COMPATIBLE_FILE_EXTENSIONS = new Set([
+  'doc',
+  'docx',
+  'dot',
+  'dotx',
+  'rtf',
+  'odt',
+  'wps',
+  'ppt',
+  'pptx',
+  'pps',
+  'ppsx',
+  'pot',
+  'potx',
+  'odp',
+  'dps',
+  'xls',
+  'xlsx',
+  'xlt',
+  'xltx',
+  'csv',
+  'ods',
+  'et',
+])
+
+function normalizeFileUrl(value: unknown): string {
+  const raw = String(value || '').trim()
+  if (raw.startsWith('//')) return `https:${raw}`
+  return raw
+}
+
+function sanitizeFileName(fileName: string): string {
+  return String(fileName || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim()
+    .replace(/^\.+$/, '_') || 'file'
+}
+
+function getFileExtensionFromName(fileName: string): string {
+  const name = String(fileName || '').trim().split('?')[0]
+  const dot = name.lastIndexOf('.')
+  if (dot < 0 || dot >= name.length - 1) return ''
+  return name.slice(dot + 1).toLowerCase()
+}
+
+function parseFileMessageContent(data: Record<string, unknown>): Record<string, unknown> {
+  const raw = String(data.content || '').trim()
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    const parts = raw.split('||')
+    return {
+      fileUrl: parts[0] || '',
+      name: parts[1] || '',
+      size: Number(parts[2] || 0) || 0,
+      mimeType: parts[3] || '',
+    }
+  }
+}
+
+function getFileMessageSource(data: Record<string, unknown>) {
+  const content = parseFileMessageContent(data)
+  const extra = parseMessageExtra(data)
+  const url = normalizeFileUrl(content.url || content.fileUrl || content.path || '')
+  const urlName = url.split('?')[0].split('/').pop() || ''
+  const name = sanitizeFileName(String(content.name || content.fileName || urlName || 'file'))
+  const ext = String(content.ext || getFileExtensionFromName(name) || getFileExtensionFromName(urlName)).replace(/^\./, '').toLowerCase()
+  const fileKey = String(
+    content.fileKey ||
+    content.file_key ||
+    extra.fileKey ||
+    extra.file_key ||
+    '',
+  ).trim()
+  const attachmentKey = String(extra.attachmentKey || extra.attachment_key || '').trim()
+
+  return { url, name, ext, fileKey, attachmentKey, extra }
+}
+
+function messageSupportsFileActions(data: Record<string, unknown>): boolean {
+  if (!(window as any).__TAURI_INTERNALS__) return false
+  if (Number(data.msgType) !== MessageType.File) return false
+  const source = getFileMessageSource(data)
+  return Boolean(source.url) && OFFICE_COMPATIBLE_FILE_EXTENSIONS.has(source.ext)
 }
 
 function parseMessageExtra(data: Record<string, unknown>): Record<string, unknown> {
@@ -976,6 +1064,180 @@ async function openVideoDirectory(data: Record<string, unknown>) {
   await invoke('reveal_file_in_directory', { path: filePath })
 }
 
+function fallbackPlainFileKey(key: string): string {
+  const raw = key.trim()
+  if (!raw) return ''
+  if (raw.length <= 32 || !/^[0-9a-f]+$/i.test(raw)) return raw
+  return ''
+}
+
+function getMessageGroupId(data: Record<string, unknown>): string {
+  const extra = parseMessageExtra(data)
+  const extraGroupId = String(extra.groupId || '').trim()
+  if (extraGroupId) return extraGroupId
+  const conversationId = String(data.conversationId || chatStore.currentConversationId || '')
+  return conversationId.startsWith('1_') ? conversationId.split('_')[1] || '' : ''
+}
+
+async function resolveFileMessageKey(data: Record<string, unknown>): Promise<string> {
+  const source = getFileMessageSource(data)
+  if (source.fileKey) return source.fileKey
+  const plainAttachmentKey = fallbackPlainFileKey(source.attachmentKey)
+  if (plainAttachmentKey) return plainAttachmentKey
+
+  const groupId = getMessageGroupId(data)
+  if (!source.attachmentKey || !groupId) return ''
+
+  try {
+    if (authStore.uid) {
+      await ensureGroupRelKey(String(authStore.uid), groupId)
+    }
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<string>('decrypt_group_incoming', {
+      groupId,
+      ciphertextHex: source.attachmentKey,
+      msgType: 0,
+    })
+  } catch {
+    return ''
+  }
+}
+
+async function waitForOfficeFileDownload(url: string, fileKey: string, savePath: string, msgId: string) {
+  const [{ invoke }, { listen }] = await Promise.all([
+    import('@tauri-apps/api/core'),
+    import('@tauri-apps/api/event'),
+  ])
+
+  await new Promise<void>(async (resolve, reject) => {
+    let settled = false
+    let unlistenDone: (() => void) | null = null
+    let unlistenError: (() => void) | null = null
+    const cleanup = () => {
+      unlistenDone?.()
+      unlistenError?.()
+      unlistenDone = null
+      unlistenError = null
+    }
+
+    try {
+      unlistenDone = await listen(`file:done:${msgId}`, () => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve()
+      })
+      unlistenError = await listen<{ error?: string }>(`file:error:${msgId}`, (event) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(new Error(event.payload?.error || '文件下载失败'))
+      })
+      await invoke('download_file', {
+        url,
+        fileKey,
+        savePath,
+        msgId,
+        logTag: 'file',
+        emitDataUrl: false,
+      })
+    } catch (error) {
+      if (!settled) {
+        settled = true
+        cleanup()
+        reject(error)
+      }
+    }
+  })
+}
+
+function ensureFileSaveExtension(filePath: string, extension: string): string {
+  if (!extension) return filePath
+  const ext = extension.startsWith('.') ? extension : `.${extension}`
+  return filePath.toLowerCase().endsWith(ext.toLowerCase()) ? filePath : `${filePath}${ext}`
+}
+
+function suggestedFileSaveName(data: Record<string, unknown>): string {
+  const source = getFileMessageSource(data)
+  const name = sanitizeFileName(source.name || String(data.messageId || 'file'))
+  if (!source.ext || name.toLowerCase().endsWith(`.${source.ext}`)) return name
+  return `${name}.${source.ext}`
+}
+
+async function resolveOfficeFileCachePath(data: Record<string, unknown>): Promise<string> {
+  const source = getFileMessageSource(data)
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const baseDir = await appDataDir()
+  const messageId = imageCacheSafeName(String(data.messageId || data.msgId || 'file'))
+  return join(baseDir, 'file-cache', messageId, suggestedFileSaveName(data) || source.name)
+}
+
+async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise<string> {
+  const source = getFileMessageSource(data)
+  const url = source.url
+  if (!url || isBlobOrDataUrl(url)) throw new Error('文件地址不可用')
+
+  if (!isRemoteUrl(url)) {
+    const localPath = fileUrlToLocalPath(url)
+    if (await tauriFileExists(localPath)) return localPath
+    throw new Error('本地文件不存在')
+  }
+
+  const savePath = await resolveOfficeFileCachePath(data)
+  if (await tauriFileExists(savePath)) return savePath
+
+  const key = await resolveFileMessageKey(data)
+  if (!key) throw new Error('文件密钥缺失，无法下载')
+  await waitForOfficeFileDownload(url, key, savePath, `file-menu-${Date.now()}`)
+  return savePath
+}
+
+async function saveOfficeFileAs(data: Record<string, unknown>) {
+  if (!(window as any).__TAURI_INTERNALS__) return
+  const source = getFileMessageSource(data)
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const suggestedName = suggestedFileSaveName(data)
+  const extension = source.ext
+  const defaultFileName = isMacOS()
+    ? addSaveExtensionGuard(suggestedName, extension)
+    : ensureFileSaveExtension(suggestedName, extension)
+  let defaultPath = defaultFileName
+  if (isMacOS()) {
+    try {
+      const { downloadDir, join } = await import('@tauri-apps/api/path')
+      defaultPath = await join(await downloadDir(), defaultFileName)
+    } catch {
+      defaultPath = defaultFileName
+    }
+  }
+  const selectedPath = await save({
+    defaultPath,
+    ...(!isMacOS() && extension
+      ? { filters: [{ name: 'Office', extensions: [extension] }] }
+      : {}),
+  })
+  if (!selectedPath) return
+
+  const finalPath = ensureFileSaveExtension(stripSaveExtensionGuard(selectedPath), extension)
+  if (await tauriFileExists(finalPath)) {
+    const confirmed = await promptImageOverwrite(finalPath)
+    if (!confirmed) return
+  }
+  const localPath = await ensureOfficeFileLocalFile(data)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('copy_file_overwrite', {
+    sourcePath: localPath,
+    targetPath: finalPath,
+  })
+  showToast(t('保存成功'))
+}
+
+async function openOfficeFileDirectory(data: Record<string, unknown>) {
+  const filePath = await ensureOfficeFileLocalFile(data)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('reveal_file_in_directory', { path: filePath })
+}
+
 async function copyVideoToClipboard(data: Record<string, unknown>) {
   const filePath = await ensureVideoLocalFile(data)
   const { invoke } = await import('@tauri-apps/api/core')
@@ -1300,11 +1562,11 @@ const contextMenuItems = computed((): MenuItem[] => {
       items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
     }
 
-    if (!readBurnOnlyDelete && (messageSupportsImageSave(data) || messageSupportsVideoFileActions(data))) {
+    if (!readBurnOnlyDelete && (messageSupportsImageSave(data) || messageSupportsVideoFileActions(data) || messageSupportsFileActions(data))) {
       items.push({ key: 'save_as', label: t('另存为'), iconSrc: menuSave })
     }
 
-    if (!readBurnOnlyDelete && (messageSupportsImageOpenDirectory(data) || messageSupportsVideoOpenDirectory(data))) {
+    if (!readBurnOnlyDelete && (messageSupportsImageOpenDirectory(data) || messageSupportsVideoOpenDirectory(data) || messageSupportsFileActions(data))) {
       items.push({ key: 'open_directory', label: t('打开目录'), iconSrc: menuOpenDir })
     }
 
@@ -1388,6 +1650,15 @@ async function handleContextMenuSelect(key: string) {
         break
       }
       case 'save_as': {
+        if (messageSupportsFileActions(data)) {
+          try {
+            await saveOfficeFileAs(data)
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            showToast(t('保存失败详情', { detail }), 'error')
+          }
+          break
+        }
         if (messageSupportsVideoFileActions(data)) {
           try {
             await saveVideoAs(data)
@@ -1409,6 +1680,15 @@ async function handleContextMenuSelect(key: string) {
         break
       }
       case 'open_directory': {
+        if (messageSupportsFileActions(data)) {
+          try {
+            await openOfficeFileDirectory(data)
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            showToast(t('打开目录失败详情', { detail }), 'error')
+          }
+          break
+        }
         if (messageSupportsVideoOpenDirectory(data)) {
           try {
             await openVideoDirectory(data)
