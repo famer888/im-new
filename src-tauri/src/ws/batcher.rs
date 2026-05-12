@@ -636,13 +636,12 @@ impl MessageBatcher {
                 }
                 return;
             }
-            // 20401/20402 是“群通知/入群申请”入口；当前先按老 im 直接进群的体验处理，
-            // 不再 emit 到前端生成单独的“群通知”会话。
+            // 20401/20402 是“群通知/入群申请”入口；对齐老 im，落到群通知伪会话。
             cmds::GROUP_REQ_NUM_PUSH => {
                 match self.decode_group_req_num_push(&decoded_payload) {
                     Ok(mut msgs) => {
                         info!(
-                            "[group-invite-debug][rust] GROUP_REQ_NUM_PUSH converted system messages count={}",
+                            "[group-invite-debug][rust] GROUP_REQ_NUM_PUSH converted group notification count={}",
                             msgs.len()
                         );
                         self.buffer.append(&mut msgs);
@@ -662,7 +661,7 @@ impl MessageBatcher {
                 match self.decode_group_req_msg_push(&decoded_payload) {
                     Ok(mut msgs) => {
                         info!(
-                            "[group-invite-debug][rust] GROUP_REQ_MSG_PUSH converted system messages count={}",
+                            "[group-invite-debug][rust] GROUP_REQ_MSG_PUSH converted group notification count={}",
                             msgs.len()
                         );
                         self.buffer.append(&mut msgs);
@@ -2112,6 +2111,24 @@ fn group_member_to_json(member: &imweb::GroupMemberBase) -> serde_json::Value {
     })
 }
 
+fn user_base_to_json(user: &imweb::UserBase) -> serde_json::Value {
+    let remark = user
+        .friend_relation
+        .as_ref()
+        .map(|relation| relation.remark_name.clone())
+        .unwrap_or_default();
+    serde_json::json!({
+        "uid": user.uid.to_string(),
+        "userId": user.uid.to_string(),
+        "nickName": user.nick_name.clone(),
+        "nickname": user.nick_name.clone(),
+        "remarkName": remark,
+        "icon": user.icon.clone(),
+        "avatar": user.icon.clone(),
+        "identify": user.identify.clone(),
+    })
+}
+
 fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto]) -> Vec<DecodedMessage> {
     let mut out = Vec::new();
     for item in items {
@@ -2162,13 +2179,13 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
         let member_count = if group_member.is_some() { 1 } else { 0 };
 
         info!(
-            "[group-invite-debug][rust] emit GROUP_REQ as group notice conv=1_{} msg_id={} content={}",
-            item.group_id, msg_id, content
+            "[group-invite-debug][rust] emit GROUP_REQ as group notification msg_id={} group_id={} content={}",
+            msg_id, item.group_id, content
         );
         out.push(DecodedMessage {
             cmd,
             msg_id,
-            conversation_id: format!("1_{}", item.group_id),
+            conversation_id: "1_invitation".to_string(),
             sender_id: item.send_uid.to_string(),
             msg_type: 8,
             content,
@@ -2189,6 +2206,9 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
                 "sendUid": item.send_uid.to_string(),
                 "receiveUid": item.receive_uid.to_string(),
                 "checkUserType": item.check_user_type,
+                "targetUser": item.target_user.as_ref().map(user_base_to_json),
+                "checkUser": item.check_user.as_ref().map(user_base_to_json),
+                "fromUser": item.from_user.as_ref().map(user_base_to_json),
                 "handleType": item.handle_type,
                 "unReadNum": item.un_read_num,
             }),

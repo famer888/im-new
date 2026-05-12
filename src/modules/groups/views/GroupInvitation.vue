@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { onBeforeUnmount, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { eventBus } from '@/utils/eventBus'
 
 interface GroupReqItem {
   groupReqId: number
-  groupId: number
+  groupId: string
   groupName: string
   pic: string
   msg: string
   groupReqType: number
   groupReqStatus: number
-  groupHostUid: number
+  groupHostUid: string
+  sendUid: string
+  receiveUid: string
+  targetUser?: Record<string, any> | null
+  checkUser?: Record<string, any> | null
+  fromUser?: Record<string, any> | null
   createTime: number
   updateTime: number
 }
@@ -45,17 +51,100 @@ function formatTime(ts: number): string {
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+function getReqUserId(user: unknown): string {
+  const raw = user && typeof user === 'object' ? user as Record<string, any> : null
+  return String(raw?.uid ?? raw?.userId ?? '').trim()
+}
+
+function getReqUserName(user: unknown, fallbackId?: unknown): string {
+  const raw = user && typeof user === 'object' ? user as Record<string, any> : null
+  const relation = raw?.friendRelation && typeof raw.friendRelation === 'object'
+    ? raw.friendRelation as Record<string, any>
+    : null
+  const names = [
+    raw?.remarkName,
+    relation?.remarkName,
+    raw?.nickName,
+    raw?.nickname,
+    raw?.nick_name,
+    raw?.name,
+    raw?.identify,
+    raw?.uid,
+    raw?.userId,
+    fallbackId,
+  ]
+  return names.map((v) => String(v ?? '').trim()).find(Boolean) || ''
+}
+
+function isSelfUser(user: unknown, fallbackId?: unknown): boolean {
+  const uid = String(authStore.uid || '')
+  if (!uid) return false
+  const userId = getReqUserId(user) || String(fallbackId ?? '').trim()
+  return userId === uid
+}
+
+function formatReqMemberName(user: unknown, fallbackId?: unknown): string {
+  const name = getReqUserName(user, fallbackId)
+  if (!name) return ''
+  return `${name}（${t('群员')}）`
+}
+
+function formatReqMessage(item: GroupReqItem): string {
+  const raw = (item.msg || '').trim().replace(/\s+/g, ' ')
+  if (!raw) {
+    return item.groupName ? t('群通知条目摘要', { name: item.groupName }) : t('群通知')
+  }
+  if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
+
+  const shouldPrefix =
+    /^(拒绝加入|同意加入|申请加入|邀请你加入|加入)/.test(raw) ||
+    (item.groupReqStatus === 2 && raw.includes('拒绝')) ||
+    [1, 2, 3, 4, 14, 15].includes(item.groupReqType)
+  if (!shouldPrefix) return raw
+
+  const user = item.groupReqStatus === 2
+    ? item.targetUser || item.fromUser || item.checkUser
+    : item.fromUser || item.targetUser || item.checkUser
+  const name = getReqUserName(user)
+  if (!name || raw.includes(name)) return raw
+
+  const role = getReqUserId(user) === item.groupHostUid ? t('群主') : t('群员')
+  return `${name}（${role}） ${raw}`
+}
+
+function formatAcceptedGroupDigest(item: GroupReqItem): string {
+  const fromName = isSelfUser(item.fromUser, item.sendUid)
+    ? t('你')
+    : getReqUserName(item.fromUser, item.sendUid)
+  const targetName = isSelfUser(item.targetUser, item.receiveUid)
+    ? t('你')
+    : formatReqMemberName(item.targetUser, item.receiveUid)
+
+  if (fromName && targetName) {
+    if (targetName === t('你')) {
+      return `${fromName}${t('邀请')}${targetName}${t('加入群聊')}`
+    }
+    return `${fromName}${t('邀请')}${targetName} ${t('加入群聊')}`
+  }
+  return formatReqMessage(item)
+}
+
 function parseGroupReqItems(raw: any[]): GroupReqItem[] {
   return raw
     .map((item: any) => ({
       groupReqId: Number(item.groupReqId),
-      groupId: Number(item.groupId),
+      groupId: String(item.groupId ?? ''),
       groupName: item.groupName || '',
       pic: item.pic || '',
       msg: item.msg || '',
       groupReqType: item.groupReqType || 0,
       groupReqStatus: item.groupReqStatus || 0,
-      groupHostUid: Number(item.groupHostUid),
+      groupHostUid: String(item.groupHostUid ?? ''),
+      sendUid: String(item.sendUid ?? ''),
+      receiveUid: String(item.receiveUid ?? ''),
+      targetUser: item.targetUser || null,
+      checkUser: item.checkUser || null,
+      fromUser: item.fromUser || null,
       createTime: Number(item.createTime),
       updateTime: Number(item.updateTime),
     }))
@@ -64,15 +153,11 @@ function parseGroupReqItems(raw: any[]): GroupReqItem[] {
 
 function syncSidebarPreview(items: GroupReqItem[]) {
   const latest = items[0]
-  const pendingCount = items.filter((i) => !i.groupReqStatus).length
   if (latest) {
     chatStore.updateGroupNotificationConv(
-      latest.msg
-        || (latest.groupName
-          ? t('群通知条目摘要', { name: latest.groupName })
-          : t('群通知')),
+      formatReqMessage(latest),
       latest.updateTime || latest.createTime,
-      pendingCount,
+      0,
     )
   } else {
     chatStore.removeGroupNotificationConversation()
@@ -94,7 +179,7 @@ async function loadList() {
 async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
   const isAuditor =
     [2, 15].includes(item.groupReqType) ||
-    item.groupHostUid === Number(authStore.uid)
+    item.groupHostUid === String(authStore.uid || '')
 
   const apiFn = isAuditor ? groupCheckJoin : groupUserCheckJoin
 
@@ -103,7 +188,7 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
     if (Number((res as any)?.commonResult?.errCode) === 200) {
       list.value[index] = { ...list.value[index], groupReqStatus: flag ? 1 : 2 }
       if (flag) {
-        const gid = String(item.groupId)
+        const gid = item.groupId
         if (!groupStore.groups.find((g) => g.id === gid)) {
           groupStore.groups.push({
             id: gid,
@@ -116,7 +201,14 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
             updatedAt: Date.now(),
           })
         }
-        chatStore.ensureConversation(1, gid)
+        const conv = chatStore.ensureConversation(1, gid)
+        const now = Date.now()
+        chatStore.addOrUpdateConversation({
+          ...conv,
+          lastMsgDigest: formatAcceptedGroupDigest(item),
+          lastMsgTime: now,
+          updatedAt: now,
+        })
       }
       syncSidebarPreview(list.value)
     } else {
@@ -130,6 +222,11 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
 onMounted(() => {
   chatStore.clearGroupNotificationUnread()
   loadList()
+  eventBus.on('group-invitation:update', loadList)
+})
+
+onBeforeUnmount(() => {
+  eventBus.off('group-invitation:update', loadList)
 })
 </script>
 
@@ -151,7 +248,7 @@ onMounted(() => {
             <h2>{{ item.groupName }}</h2>
             <span class="time"> · {{ formatTime(item.updateTime) }}</span>
           </div>
-          <p class="line-notify">{{ item.msg }}</p>
+          <p class="line-notify">{{ formatReqMessage(item) }}</p>
         </div>
         <div
           v-if="[1, 2, 15].includes(item.groupReqType)"

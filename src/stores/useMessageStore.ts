@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { isFileHelperTargetId, useChatStore } from './useChatStore'
+import { GROUP_NOTIFICATION_TARGET_ID, isFileHelperTargetId, useChatStore } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
 import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
@@ -506,6 +506,57 @@ export const useMessageStore = defineStore('message', () => {
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
 
+  function getGroupReqUserName(user: unknown, fallbackId?: unknown): string {
+    const raw = user && typeof user === 'object' ? user as Record<string, unknown> : null
+    const relation = raw?.friendRelation && typeof raw.friendRelation === 'object'
+      ? raw.friendRelation as Record<string, unknown>
+      : null
+    const names = [
+      raw?.remarkName,
+      relation?.remarkName,
+      raw?.nickName,
+      raw?.nickname,
+      raw?.nick_name,
+      raw?.name,
+      raw?.identify,
+      raw?.uid,
+      raw?.userId,
+      fallbackId,
+    ]
+    return names.map((v) => String(v ?? '').trim()).find(Boolean) || ''
+  }
+
+  function getGroupReqUserId(user: unknown): string {
+    const raw = user && typeof user === 'object' ? user as Record<string, unknown> : null
+    return String(raw?.uid ?? raw?.userId ?? '').trim()
+  }
+
+  function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
+    const raw = content.trim().replace(/\s+/g, ' ')
+    if (!extra) return raw
+    if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
+
+    const type = Number(extra.groupReqType ?? 0)
+    const status = Number(extra.groupReqStatus ?? 0)
+    const shouldPrefix =
+      /^(拒绝加入|同意加入|申请加入|邀请你加入|加入)/.test(raw) ||
+      (status === 2 && raw.includes('拒绝')) ||
+      [1, 2, 3, 4, 14, 15].includes(type)
+    if (!shouldPrefix) return raw
+
+    const user =
+      status === 2
+        ? extra.targetUser || extra.fromUser || extra.checkUser
+        : extra.fromUser || extra.targetUser || extra.checkUser
+    const fallbackId = status === 2 ? extra.receiveUid : extra.sendUid
+    const name = getGroupReqUserName(user, fallbackId)
+    if (!name || raw.includes(name)) return raw
+
+    const userId = getGroupReqUserId(user)
+    const role = userId && userId === String(extra.groupHostUid ?? '') ? '群主' : '群员'
+    return `${name}（${role}） ${raw}`.slice(0, 200)
+  }
+
   function syncConversationSummary(conversationId: string, msg: Message) {
     if (isHiddenMessageType(msg.msgType)) return
     if (!conversationId || !conversationId.includes('_')) {
@@ -514,6 +565,17 @@ export const useMessageStore = defineStore('message', () => {
     }
     const digest = getDigestByMessage(msg.msgType, msg.content)
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
+    if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
+      const extra = parseExtraObject(msg.extra)
+      const groupDigest = formatGroupNotificationDigest(digest, extra)
+      const unreadCount = Number(extra?.unReadNum ?? existing?.unreadCount ?? 0)
+      chatStore.updateGroupNotificationConv(
+        groupDigest || existing?.lastMsgDigest || '',
+        msg.sendTime || Date.now(),
+        unreadCount,
+      )
+      return
+    }
     if (conversationId.startsWith('1_') && msg.msgType === 8) {
       groupInviteDebug('syncConversationSummary for group notice', {
         conversationId,
