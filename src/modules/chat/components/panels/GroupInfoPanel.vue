@@ -139,7 +139,7 @@ onMounted(async () => {
 })
 
 function copyText(text: string) {
-  navigator.clipboard.writeText(text).then(() => {
+  navigator.clipboard.writeText(text.endsWith(' ') ? text : `${text} `).then(() => {
     showToast(t('复制成功'))
   }).catch(() => {})
 }
