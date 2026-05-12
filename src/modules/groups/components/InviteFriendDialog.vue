@@ -18,7 +18,7 @@
         <li
           v-for="friend in filteredFriends"
           :key="friend.id"
-          :class="['friend-item', { disable: isPendingAuditFriend(friend) }]"
+          :class="['friend-item', { disable: isPendingAuditFriend(friend) || isInviting }]"
           @click="selectFriend(friend)"
         >
           <div class="left">
@@ -36,8 +36,8 @@
         </li>
       </ul>
 
-      <div class="primaryBtn" @click="handleInvite">
-        {{ $t('完成') }}
+      <div :class="['primaryBtn', { disabled: isInviting }]" @click="handleInvite">
+        {{ isInviting ? $t('邀请中...') : $t('完成') }}
       </div>
     </div>
 
@@ -59,7 +59,7 @@ import SearchInput from '@/components/SearchInput.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import AppCheckbox from '@/components/AppCheckbox.vue'
 import Toast from '@/components/Toast.vue'
-import { checkUidList, groupQrCode } from '@/api/imBase'
+import { checkUidList, groupMember, groupQrCode } from '@/api/imBase'
 
 const { t: $t } = useI18n()
 const contactStore = useContactStore()
@@ -83,6 +83,7 @@ const emit = defineEmits<{
 const searchKey = ref('')
 const selectedIds = reactive(new Set<string>())
 const pendingAuditIds = ref(new Set<string>())
+const isInviting = ref(false)
 const isCopyingInviteLink = ref(false)
 
 const toastVisible = ref(false)
@@ -99,6 +100,21 @@ function showToast(msg: string, type: 'success' | 'error' = 'success', duration 
   toastType.value = type
   toastDuration.value = duration
   toastVisible.value = true
+}
+
+function groupInviteDebug(message: string, data?: Record<string, unknown>) {
+  const payload = data || {}
+  console.warn(`[group-invite-debug][invite-dialog] ${message}`, payload)
+  if (!isTauri()) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level: 'warn',
+        message: `[group-invite-debug][invite-dialog] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
 }
 
 async function copyTextToClipboard(text: string) {
@@ -173,6 +189,7 @@ watch(
   async (visible) => {
     searchKey.value = ''
     selectedIds.clear()
+    isInviting.value = false
     isCopyingInviteLink.value = false
     if (visible) {
       pendingAuditIds.value = new Set(normalizeIds(props.pendingAuditIds))
@@ -200,6 +217,7 @@ const filteredFriends = computed(() => {
 })
 
 function selectFriend(friend: Contact) {
+  if (isInviting.value) return
   if (isPendingAuditFriend(friend)) return
   if (selectedIds.has(friend.id)) {
     selectedIds.delete(friend.id)
@@ -225,7 +243,16 @@ function getNeedCheckMessage(ids: Array<number | string>) {
   return $t('开启了入群需审核，对方同意后才会进入群聊')
 }
 
-function handleInvite() {
+function getResponseCode(res: any) {
+  return Number(res?.commonResult?.errCode ?? res?.errCode ?? res?.code ?? 200)
+}
+
+function getResponseErrorMessage(res: any, fallback: string) {
+  return res?.commonResult?.errMsg || res?.errorDesc || res?.errMsg || res?.msg || fallback
+}
+
+async function handleInvite() {
+  if (isInviting.value) return
   if (selectedIds.size === 0) {
     showToast($t('请选择邀请的好友'), 'error')
     return
@@ -238,12 +265,65 @@ function handleInvite() {
     return
   }
 
-  emit('confirm-invite', {
+  await submitInvite(members)
+}
+
+async function submitInvite(members: string[]) {
+  isInviting.value = true
+  groupInviteDebug('groupMember invite request', {
+    groupId: props.groupId,
     members,
-    message: getNeedCheckMessage(members),
   })
-  selectedIds.clear()
-  emit('close')
+  try {
+    const res = await groupMember({
+      op: 0,
+      groupId: props.groupId,
+      members,
+    })
+    const code = getResponseCode(res)
+    const needCheckUids = Array.isArray((res as any)?.needCheckUids)
+      ? ((res as any).needCheckUids as Array<number | string>)
+      : []
+    const normalizedNeedCheckUids = needCheckUids.map((id) => String(id)).filter(Boolean)
+    groupInviteDebug('groupMember invite response', {
+      groupId: props.groupId,
+      members,
+      code,
+      needCheckUids: normalizedNeedCheckUids,
+      errMsg: (res as any)?.commonResult?.errMsg,
+      errorDesc: (res as any)?.errorDesc,
+    })
+
+    if (code === 200) {
+      if (normalizedNeedCheckUids.length > 0) {
+        pendingAuditIds.value = new Set([
+          ...Array.from(pendingAuditIds.value),
+          ...normalizedNeedCheckUids,
+        ])
+      }
+
+      emit('invited', {
+        message: normalizedNeedCheckUids.length > 0 ? getNeedCheckMessage(normalizedNeedCheckUids) : $t('邀请成功'),
+        type: 'success',
+        needCheckUids: normalizedNeedCheckUids,
+      })
+      selectedIds.clear()
+      emit('close')
+      return
+    }
+
+    showToast(getResponseErrorMessage(res, $t('邀请失败')), 'error')
+  } catch (error) {
+    console.error('Invite failed:', error)
+    groupInviteDebug('groupMember invite failed', {
+      groupId: props.groupId,
+      members,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    showToast($t('邀请失败'), 'error')
+  } finally {
+    isInviting.value = false
+  }
 }
 
 async function copyGroupInviteLink() {
