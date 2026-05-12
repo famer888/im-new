@@ -150,6 +150,14 @@ function formatAcceptedGroupDigest(item: GroupReqItem): string {
   return formatReqMessage(item)
 }
 
+function formatRejectedGroupDigest(item: GroupReqItem): string {
+  const targetName = formatReqMemberName(item.targetUser, item.receiveUid)
+    || getReqUserName(item.fromUser, item.sendUid)
+    || t('你')
+  const groupName = item.groupName || t('群聊')
+  return `${targetName}${t('拒绝加入')} ${groupName}`.trim()
+}
+
 function parseGroupReqItems(raw: any[]): GroupReqItem[] {
   return raw
     .map((item: any) => ({
@@ -223,23 +231,35 @@ function mergeGroupReqItems(apiItems: GroupReqItem[], localItems: GroupReqItem[]
     }
   }
 
-  return Array.from(merged.values()).sort(
+  return sortGroupReqItems(Array.from(merged.values()))
+}
+
+function sortGroupReqItems(items: GroupReqItem[]): GroupReqItem[] {
+  return [...items].sort(
     (a, b) => (b.updateTime || b.createTime || 0) - (a.updateTime || a.createTime || 0),
   )
 }
 
-function syncSidebarPreview(items: GroupReqItem[]) {
+function syncSidebarPreview(items: GroupReqItem[], timeOverride?: number) {
   const latest = items[0]
   if (latest) {
     chatStore.updateGroupNotificationConv(
       formatReqMessage(latest),
-      latest.updateTime || latest.createTime,
+      timeOverride || latest.updateTime || latest.createTime,
       0,
     )
-    promoteGroupConversationAboveNotification(latest.groupId)
   } else {
     chatStore.removeGroupNotificationConversation()
   }
+}
+
+function promoteGroupNotificationConversation(item: GroupReqItem, time = Date.now()) {
+  const newestNonPinnedTime = chatStore.conversations.reduce((latest, conv) => {
+    if (conv.isPinned) return latest
+    return Math.max(latest, Number(conv.updatedAt || 0), Number(conv.lastMsgTime || 0))
+  }, 0)
+  const nextTime = Math.max(time, newestNonPinnedTime + 1)
+  chatStore.updateGroupNotificationConv(formatReqMessage(item), nextTime, 0)
 }
 
 function promoteGroupConversationAboveNotification(groupId: string) {
@@ -292,7 +312,18 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
   try {
     const res = await apiFn({ groupReqId: item.groupReqId, flag })
     if (Number((res as any)?.commonResult?.errCode) === 200) {
-      list.value[index] = { ...list.value[index], groupReqStatus: flag ? 1 : 2 }
+      const now = Date.now()
+      const handledItem = {
+        ...list.value[index],
+        groupReqStatus: flag ? 1 : 2,
+        msg: flag ? list.value[index].msg : formatRejectedGroupDigest(list.value[index]),
+        updateTime: now,
+      }
+      list.value = sortGroupReqItems([
+        ...list.value.slice(0, index),
+        handledItem,
+        ...list.value.slice(index + 1),
+      ])
       let shouldPromoteGroup = Boolean(chatStore.conversations.find((conv) => conv.id === `1_${item.groupId}`))
       if (flag) {
         const gid = item.groupId
@@ -309,7 +340,6 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
           })
         }
         const conv = chatStore.ensureConversation(1, gid)
-        const now = Date.now()
         chatStore.addOrUpdateConversation({
           ...conv,
           lastMsgDigest: formatAcceptedGroupDigest(item),
@@ -318,9 +348,11 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
         })
         shouldPromoteGroup = true
       }
-      syncSidebarPreview(list.value)
-      if (shouldPromoteGroup) {
+      syncSidebarPreview(list.value, now)
+      if (flag && shouldPromoteGroup) {
         promoteGroupConversationAboveNotification(item.groupId)
+      } else if (!flag) {
+        promoteGroupNotificationConversation(handledItem, now)
       }
     } else {
       console.error(t('操作失败'), (res as any)?.commonResult?.errMsg)

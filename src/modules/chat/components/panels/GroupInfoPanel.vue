@@ -145,7 +145,8 @@ function openRemoveMember() {
 }
 
 async function handleInvited(payload?: { message?: string; type?: 'success' | 'error'; needCheckUids?: string[] }) {
-  mergePendingInviteIds(payload?.needCheckUids)
+  const needCheckUids = normalizeInviteIds(payload?.needCheckUids)
+  mergePendingInviteIds(needCheckUids)
   const groupId = conv.value?.targetId || ''
   inviteMemberRefreshDebug('handleInvited received', {
     groupId,
@@ -156,10 +157,10 @@ async function handleInvited(payload?: { message?: string; type?: 'success' | 'e
   })
 
   if (payload?.message) {
-    if ((payload.type ?? 'success') === 'success') {
+    if ((payload.type ?? 'success') === 'success' && needCheckUids.length > 0) {
       showInvitePrompt(payload.message)
     } else {
-      showToast(payload.message, payload.type)
+      showToast(payload.message, payload.type || 'success')
     }
   }
 
