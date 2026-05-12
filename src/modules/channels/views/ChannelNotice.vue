@@ -3,8 +3,10 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import dayjs from 'dayjs'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useChannelStore } from '@/stores/useChannelStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { CHANNEL_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
+import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import {
   channelCheckJoin,
@@ -30,8 +32,10 @@ interface ChannelNoticeItem {
 }
 
 const { t } = useI18n()
+const authStore = useAuthStore()
 const channelStore = useChannelStore()
 const chatStore = useChatStore()
+const messageStore = useMessageStore()
 const uiStore = useUIStore()
 
 const list = ref<ChannelNoticeItem[]>([])
@@ -83,6 +87,94 @@ function parseNoticeItem(item: ChannelEventReqItem): ChannelNoticeItem {
   }
 }
 
+function parseExtra(extra: string | null): Record<string, any> {
+  if (!extra) return {}
+  try {
+    const parsed = JSON.parse(extra)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function isLocalRemoveNotice(message: Message): boolean {
+  const extra = parseExtra(message.extra)
+  const source = String(extra.source || '')
+  return source === 'channel-remove'
+    || (source === 'channel-notice' && Number(extra.subscriberOperateType ?? -1) === 2)
+}
+
+function parseLocalNoticeMessage(message: Message): ChannelNoticeItem | null {
+  if (!isLocalRemoveNotice(message)) return null
+  const extra = parseExtra(message.extra)
+  const channelId = String(extra.channelId || '')
+  const content = String(message.content || '').trim()
+  if (!channelId && !content) return null
+  const cachedChannel = channelId ? channelStore.getChannel(channelId) : null
+  const removedChannel = channelId ? channelStore.getRemovedChannelMeta(channelId) : null
+  const parsedName = content.match(/^(.+?)(?:已被移出频道|被移出频道)/)?.[1]
+  const usableParsedName = parsedName && !['您', '你'].includes(parsedName.trim()) ? parsedName.trim() : ''
+  const displayName = String(
+    extra.channelName
+    || cachedChannel?.channelName
+    || cachedChannel?.name
+    || removedChannel?.channelName
+    || removedChannel?.name
+    || usableParsedName
+    || t('频道通知'),
+  ).trim()
+  return {
+    id: `local-${message.id}`,
+    jumpPage: false,
+    channelName: displayName,
+    channelId,
+    uid: '',
+    icon: String(extra.icon || cachedChannel?.icon || cachedChannel?.avatar || removedChannel?.icon || removedChannel?.avatar || ''),
+    logoColor: String(extra.logoColor || cachedChannel?.logoColor || removedChannel?.logoColor || '') || '#ff6b35',
+    content,
+    sendTime: Number(message.sendTime || Date.now()),
+    reqStatus: -1,
+    reqType: 0,
+  }
+}
+
+async function getLocalNoticeItems(): Promise<ChannelNoticeItem[]> {
+  const uid = String(authStore.uid || '')
+  const conversationId = `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
+  if (uid) {
+    await messageStore.loadMessages(uid, conversationId, true).catch((error) => {
+      console.warn('[ChannelNotice] load local notice messages failed:', error)
+    })
+  }
+  const items = messageStore
+    .getMessages(conversationId)
+    .map(parseLocalNoticeMessage)
+    .filter((item): item is ChannelNoticeItem => Boolean(item))
+    .sort((a, b) => (b.sendTime || 0) - (a.sendTime || 0))
+
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    const key = `remove-${item.channelId || item.channelName}-${item.content}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function mergeNoticeItems(remoteItems: ChannelNoticeItem[], localItems: ChannelNoticeItem[]) {
+  const seen = new Set<string>()
+  return [...remoteItems, ...localItems]
+    .filter((item) => {
+      const key = item.reqStatus < 0
+        ? `local-${item.channelId || item.channelName}-${item.content}`
+        : (item.id || `${item.channelId}-${item.content}-${item.sendTime}`)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .sort((a, b) => (b.sendTime || 0) - (a.sendTime || 0))
+}
+
 function syncSidebarPreview(items: ChannelNoticeItem[]) {
   const latest = items[0]
   if (latest) {
@@ -101,16 +193,19 @@ async function loadList(isLoadMore = false) {
       pageSize,
     })
     const rows = res?.data?.rowList || []
-    const next = rows.map(parseNoticeItem)
+    const remoteItems = rows.map(parseNoticeItem)
+    const localItems = isLoadMore ? [] : await getLocalNoticeItems()
+    const next = isLoadMore ? remoteItems : mergeNoticeItems(remoteItems, localItems)
 
     list.value = isLoadMore ? [...list.value, ...next] : next
-    hasMore.value = next.length >= pageSize
+    hasMore.value = remoteItems.length >= pageSize
     if (!isLoadMore) syncSidebarPreview(list.value)
   } catch (error) {
     console.error('[ChannelNotice] loadList failed:', error)
     if (!isLoadMore) {
-      list.value = []
-      syncSidebarPreview([])
+      const localItems = await getLocalNoticeItems()
+      list.value = localItems
+      syncSidebarPreview(localItems)
     }
     hasMore.value = false
   } finally {

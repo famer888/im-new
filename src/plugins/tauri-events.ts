@@ -912,6 +912,12 @@ export async function setupTauriListeners() {
           if (channelId) {
             const channelConvId = `2_${channelId}`
             const wasCurrentChannel = chatStore.currentConversationId === channelConvId
+            const cachedChannel = channelStore.getChannel(channelId)
+            if (m.extra && typeof m.extra === 'object' && cachedChannel) {
+              m.extra.channelName = m.extra.channelName || cachedChannel.channelName || cachedChannel.name || ''
+              m.extra.icon = m.extra.icon || cachedChannel.icon || cachedChannel.avatar || ''
+              m.extra.logoColor = m.extra.logoColor || cachedChannel.logoColor || ''
+            }
             await channelStore.removeChannel(currentUid, channelId)
             await chatStore.deleteConversation(currentUid, channelConvId).catch((err: unknown) => {
               console.warn('[channel] delete removed channel conversation failed:', { channelId, err })
