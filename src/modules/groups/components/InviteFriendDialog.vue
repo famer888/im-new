@@ -18,7 +18,7 @@
         <li
           v-for="friend in filteredFriends"
           :key="friend.id"
-          :class="['friend-item', { disable: pendingAuditIds.has(friend.id) || isInviting }]"
+          :class="['friend-item', { disable: isPendingAuditFriend(friend) || isInviting }]"
           @click="selectFriend(friend)"
         >
           <div class="left">
@@ -30,9 +30,9 @@
               class="member-avatar"
             />
             <span class="name">{{ displayName(friend) }}</span>
-            <div v-if="pendingAuditIds.has(friend.id)" class="pending-tag">{{ $t('进群审核中') }}</div>
+            <div v-if="isPendingAuditFriend(friend)" class="pending-tag">{{ $t('进群审核中') }}</div>
           </div>
-          <AppCheckbox :modelValue="selectedIds.has(friend.id)" :disabled="pendingAuditIds.has(friend.id)" />
+          <AppCheckbox :modelValue="selectedIds.has(friend.id)" :disabled="isPendingAuditFriend(friend)" />
         </li>
       </ul>
 
@@ -70,12 +70,14 @@ const props = defineProps<{
   existingMemberIds: Set<string>
   qrcodeUrl?: string
   confirmBeforeInvite?: boolean
+  pendingAuditIds?: Set<string> | string[]
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'invited', payload?: { message?: string; type?: 'success' | 'error' }): void
+  (e: 'invited', payload?: { message?: string; type?: 'success' | 'error'; needCheckUids?: string[] }): void
   (e: 'confirm-invite', payload: { members: string[]; message: string }): void
+  (e: 'pending-audit-loaded', ids: string[]): void
 }>()
 
 const searchKey = ref('')
@@ -142,11 +144,28 @@ function displayName(friend: Contact) {
   return friend.remark || friend.nickname || friend.id
 }
 
+function normalizeIds(ids?: Set<string> | string[] | Array<number | string>) {
+  if (!ids) return []
+  const list = ids instanceof Set ? Array.from(ids) : ids
+  return list.map((id) => String(id)).filter(Boolean)
+}
+
+const blockedPendingAuditIds = computed(() => new Set([
+  ...Array.from(pendingAuditIds.value),
+  ...normalizeIds(props.pendingAuditIds),
+]))
+
+function isPendingAuditFriend(friend: Contact) {
+  return blockedPendingAuditIds.value.has(String(friend.id))
+}
+
 async function loadPendingAuditIds() {
   try {
     const res = await checkUidList({ groupId: props.groupId })
     if (Number(res?.code) === 200) {
-      pendingAuditIds.value = new Set((res.data?.checkList || []).map((id) => String(id)))
+      const ids = normalizeIds(res.data?.checkList || [])
+      pendingAuditIds.value = new Set(ids)
+      emit('pending-audit-loaded', ids)
       return
     }
   } catch (error) {
@@ -163,6 +182,7 @@ watch(
     isInviting.value = false
     isCopyingInviteLink.value = false
     if (visible) {
+      pendingAuditIds.value = new Set(normalizeIds(props.pendingAuditIds))
       await loadPendingAuditIds()
     } else {
       pendingAuditIds.value = new Set()
@@ -188,7 +208,7 @@ const filteredFriends = computed(() => {
 
 function selectFriend(friend: Contact) {
   if (isInviting.value) return
-  if (pendingAuditIds.value.has(friend.id)) return
+  if (isPendingAuditFriend(friend)) return
   if (selectedIds.has(friend.id)) {
     selectedIds.delete(friend.id)
   } else {
@@ -225,7 +245,12 @@ async function handleInvite() {
     return
   }
 
-  const members = Array.from(selectedIds)
+  const members = Array.from(selectedIds).filter((id) => !blockedPendingAuditIds.value.has(String(id)))
+  if (members.length === 0) {
+    selectedIds.clear()
+    showToast($t('请选择邀请的好友'), 'error')
+    return
+  }
 
   if (props.confirmBeforeInvite) {
     emit('confirm-invite', {
@@ -280,6 +305,7 @@ async function submitInvite(members: string[]) {
       emit('invited', {
         message: needCheckUids.length > 0 ? getNeedCheckMessage(needCheckUids) : $t('邀请成功'),
         type: 'success',
+        needCheckUids: needCheckUids.map((id) => String(id)),
       })
       selectedIds.clear()
       emit('close')
@@ -458,8 +484,8 @@ async function copyGroupInviteLink() {
   margin-left: 8px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #f5f5f5;
-  color: #999;
+  background: #178AFF;
+  color: #fff;
   font-size: 12px;
   flex-shrink: 0;
 }
