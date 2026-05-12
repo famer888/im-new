@@ -46,6 +46,8 @@ const confirmVisible = ref(false)
 const confirmTitle = ref('')
 const confirmContent = ref('')
 const confirmAction = ref<(() => void) | null>(null)
+const invitePromptVisible = ref(false)
+const invitePromptContent = ref('')
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
@@ -58,6 +60,15 @@ function showConfirm(title: string, content: string, action: () => void) {
   confirmContent.value = content
   confirmAction.value = action
   confirmVisible.value = true
+}
+
+function showInvitePrompt(content: string) {
+  invitePromptContent.value = content
+  invitePromptVisible.value = true
+}
+
+function closeInvitePrompt() {
+  invitePromptVisible.value = false
 }
 
 function handleConfirm() {
@@ -90,15 +101,19 @@ function openRemoveMember() {
 }
 
 async function handleInvited(payload?: { message?: string; type?: 'success' | 'error' }) {
-  try {
-    // 邀请成功后刷新成员列表
-    if (conv.value?.targetId && authStore.uid) {
-      await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+  if (payload?.message) {
+    if ((payload.type ?? 'success') === 'success') {
+      showInvitePrompt(payload.message)
+    } else {
+      showToast(payload.message, payload.type)
     }
-  } finally {
-    if (payload?.message) {
-      showToast(payload.message, payload.type ?? 'success')
-    }
+  }
+
+  // 邀请结果先反馈给用户，成员列表刷新放后台，避免弹窗被接口阻塞。
+  if (conv.value?.targetId && authStore.uid) {
+    groupStore.loadMembers(authStore.uid, conv.value.targetId).catch((error) => {
+      console.error('[GroupInfoPanel] refresh members after invite failed:', error)
+    })
   }
 }
 
@@ -432,6 +447,22 @@ function handleOnlineTime(member: any) {
       @confirm="handleConfirm"
     />
 
+    <Teleport to="body">
+      <Transition name="invite-prompt-fade">
+        <div v-if="invitePromptVisible" class="invite-prompt-mask" @click.self="closeInvitePrompt">
+          <div class="invite-prompt-dialog">
+            <button class="invite-prompt-close" type="button" :aria-label="t('关闭')" @click="closeInvitePrompt">×</button>
+            <h3>{{ t('邀请成功') }}</h3>
+            <p>{{ invitePromptContent }}</p>
+            <div class="invite-prompt-actions">
+              <button class="invite-prompt-cancel" type="button" @click="closeInvitePrompt">{{ t('取消') }}</button>
+              <button class="invite-prompt-confirm" type="button" @click="closeInvitePrompt">{{ t('确定') }}</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
     <Toast
       :visible="toastVisible"
       :message="toastMessage"
@@ -477,6 +508,92 @@ function handleOnlineTime(member: any) {
   flex-direction: column;
   position: relative;
   height: 100%;
+}
+
+.invite-prompt-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.invite-prompt-dialog {
+  position: relative;
+  width: 300px;
+  padding: 20px 16px 10px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #fff;
+
+  > h3 {
+    margin: 0 24px 8px;
+    color: #000;
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  > p {
+    margin: 0;
+    color: #999;
+    font-size: 14px;
+    line-height: 20px;
+    text-align: center;
+    word-break: break-word;
+  }
+}
+
+.invite-prompt-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 18px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.invite-prompt-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+
+  > button {
+    flex: 1;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    line-height: 32px;
+    cursor: pointer;
+  }
+}
+
+.invite-prompt-cancel {
+  background: #9197ad;
+}
+
+.invite-prompt-confirm {
+  background: #178aff;
+}
+
+.invite-prompt-fade-enter-active,
+.invite-prompt-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.invite-prompt-fade-enter-from,
+.invite-prompt-fade-leave-to {
+  opacity: 0;
 }
 
 /* 群别名 + 二维码 — 同 im group-alias-qrcode.vue */
