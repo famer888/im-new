@@ -3,7 +3,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import EmojiPicker from './send/EmojiPicker.vue'
+import fileDocIcon from '@/assets/images/message/file-doc.png'
+import fileImageIcon from '@/assets/images/message/file-image.png'
 import fileVideoIcon from '@/assets/images/message/file-video.png'
+import fileMp3Icon from '@/assets/images/message/file-mp3.png'
+import filePdfIcon from '@/assets/images/message/file-pdf.png'
+import filePptIcon from '@/assets/images/message/file-ppt.png'
+import fileXlsIcon from '@/assets/images/message/file-xls.png'
+import fileZipIcon from '@/assets/images/message/file-zip.png'
+import fileUnknownIcon from '@/assets/images/message/file-unknow.png'
 
 const { t: $t } = useI18n()
 
@@ -27,6 +35,7 @@ interface PreviewItem {
   isImage: boolean
   isVideo: boolean
   previewUrl: string
+  fileIcon: string
   isError: boolean
   previewFailed: boolean
 }
@@ -60,6 +69,19 @@ function isVideoFile(file: File): boolean {
   return file.type.startsWith('video/') || VIDEO_FILE_EXTENSIONS.has(getFileSuffix(file))
 }
 
+function getFileIcon(file: File): string {
+  const suffix = getFileSuffix(file)
+  if (suffix.includes('doc')) return fileDocIcon
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(suffix)) return fileImageIcon
+  if (['mp4', 'mov', 'wmv', 'm4v', 'avi', 'flv', 'webm', 'ogg'].includes(suffix)) return fileVideoIcon
+  if (suffix.includes('mp3')) return fileMp3Icon
+  if (suffix.includes('pdf')) return filePdfIcon
+  if (suffix.includes('ppt')) return filePptIcon
+  if (suffix.includes('xls')) return fileXlsIcon
+  if (suffix.includes('zip') || ['rar', '7z'].includes(suffix)) return fileZipIcon
+  return fileUnknownIcon
+}
+
 function formatFileSize(size: number): string {
   const kb = size / 1024
   if (kb < 1024) return `${kb.toFixed(2)} kb`
@@ -78,6 +100,7 @@ function createPreview(file: File): PreviewItem {
     isImage,
     isVideo,
     previewUrl,
+    fileIcon: getFileIcon(file),
     isError: Math.ceil(file.size / 1024 / 1024) > maxSizeMb,
     previewFailed: false,
   }
@@ -296,11 +319,16 @@ onBeforeUnmount(() => {
                   />
                   <img
                     v-else-if="item.isVideo"
-                    class="video-file-icon"
-                    :src="fileVideoIcon"
+                    class="type-file-icon"
+                    :src="item.fileIcon"
                     alt=""
                   />
-                  <div v-else class="file-fallback">📎</div>
+                  <img
+                    v-else
+                    class="type-file-icon"
+                    :src="item.fileIcon"
+                    alt=""
+                  />
                 </picture>
                 <span class="close-btn" @click="handleRemove(index)">
                   <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -428,22 +456,11 @@ onBeforeUnmount(() => {
           object-fit: contain;
         }
 
-        .video-file-icon {
+        .type-file-icon {
           width: 52px;
           height: 52px;
           margin: 4px auto 0;
           object-fit: contain;
-        }
-
-        .file-fallback {
-          width: 100%;
-          height: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 28px;
-          color: #555;
-          background: #fff;
         }
       }
 
@@ -560,6 +577,13 @@ onBeforeUnmount(() => {
             width: 100%;
             height: 100%;
             object-fit: cover;
+
+            &.type-file-icon {
+              width: 52px;
+              height: 52px;
+              margin: 6px auto 0;
+              object-fit: contain;
+            }
           }
         }
       }
