@@ -1042,7 +1042,7 @@ async function handlePaste(e: ClipboardEvent) {
   }
 
   // 纯文本粘贴，防止带格式
-  const text = e.clipboardData?.getData('text/plain')
+  const text = e.clipboardData?.getData('text/plain') || await readClipboardText()
   if (text) {
     insertPlainTextAtSelection(text)
   }
