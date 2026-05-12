@@ -11,6 +11,7 @@ type Events = {
   'editor:drop-file-paths': string[]
   'chat:switch': string
   'group-invitation:update': void
+  'channel-notice:update': void
   'notification:click': { conversationId: string }
   'show-toast': { message: string; type?: 'success' | 'error' }
 }

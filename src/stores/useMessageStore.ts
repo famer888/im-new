@@ -1,6 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
-import { GROUP_NOTIFICATION_TARGET_ID, isFileHelperTargetId, useChatStore } from './useChatStore'
+import {
+  CHANNEL_NOTIFICATION_TARGET_ID,
+  GROUP_NOTIFICATION_TARGET_ID,
+  isFileHelperTargetId,
+  useChatStore,
+} from './useChatStore'
 import { useAuthStore } from './useAuthStore'
 import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
@@ -571,6 +576,16 @@ export const useMessageStore = defineStore('message', () => {
       const unreadCount = Number(extra?.unReadNum ?? existing?.unreadCount ?? 0)
       chatStore.updateGroupNotificationConv(
         groupDigest || existing?.lastMsgDigest || '',
+        msg.sendTime || Date.now(),
+        unreadCount,
+      )
+      return
+    }
+    if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) {
+      const extra = parseExtraObject(msg.extra)
+      const unreadCount = Number(extra?.unReadNum ?? existing?.unreadCount ?? 0)
+      chatStore.updateChannelNotificationConv(
+        digest || existing?.lastMsgDigest || '',
         msg.sendTime || Date.now(),
         unreadCount,
       )

@@ -88,6 +88,9 @@ pub async fn save_channels(
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
         {
+            tx.execute("DELETE FROM channels", [])
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
             let mut stmt = tx
                 .prepare_cached(
                     "INSERT OR REPLACE INTO channels
@@ -116,6 +119,23 @@ pub async fn save_channels(
 
         tx.commit()
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_channel(
+    db: State<'_, DbManager>,
+    uid: String,
+    channel_id: String,
+) -> Result<(), String> {
+    db.with_connection(&uid, |conn| {
+        conn.execute(
+            "DELETE FROM channels WHERE id = ?1",
+            rusqlite::params![channel_id],
+        )
+        .map(|_| ())
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))
     })
     .map_err(|e| e.to_string())
 }

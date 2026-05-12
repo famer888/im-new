@@ -1,6 +1,11 @@
 import { useNetworkStore, type WsStatus } from '@/stores/useNetworkStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
-import { useChatStore, type Conversation } from '@/stores/useChatStore'
+import {
+  CHANNEL_NOTIFICATION_TARGET_ID,
+  GROUP_NOTIFICATION_TARGET_ID,
+  useChatStore,
+  type Conversation,
+} from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -438,6 +443,18 @@ export async function setupTauriListeners() {
 
     const chatStore = useChatStore()
     chatStore.setCurrentConversation(conversationId)
+    const uiStore = useUIStore()
+    if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
+      chatStore.clearGroupNotificationUnread()
+      uiStore.setRightPanel('none')
+      uiStore.setDetailView('group-invitation')
+    } else if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) {
+      chatStore.clearChannelNotificationUnread()
+      uiStore.setRightPanel('none')
+      uiStore.setDetailView('channel-notice-list')
+    } else {
+      uiStore.setDetailView('chat')
+    }
     if (router.currentRoute.value.path !== '/home') {
       await router.replace('/home').catch(() => {})
     }
@@ -817,6 +834,7 @@ export async function setupTauriListeners() {
 
       const chatStore = useChatStore()
       const groupStore = useGroupStore()
+      const channelStore = useChannelStore()
       const groupEventMessages = normalized.filter((m: any) => {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
         const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
@@ -825,6 +843,9 @@ export async function setupTauriListeners() {
       })
       const hasGroupNotificationMessages = normalized.some((m: any) =>
         String(m?.conversationId ?? m?.conversation_id ?? '') === '1_invitation',
+      )
+      const hasChannelNoticeMessages = normalized.some((m: any) =>
+        String(m?.conversationId ?? m?.conversation_id ?? '') === '0_channelNotice',
       )
       if (groupEventMessages.length > 0) {
         groupInviteDebug('msg:batch received group event messages', {
@@ -881,6 +902,46 @@ export async function setupTauriListeners() {
           })
         }
       }
+      for (const m of normalized) {
+        const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+        const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
+        const source = String(extra?.source || '')
+        const subscriberOperateType = Number(extra?.subscriberOperateType ?? -1)
+        if (source === 'channel-remove' || (source === 'channel-notice' && subscriberOperateType === 2)) {
+          const channelId = String(extra?.channelId || '')
+          if (channelId) {
+            const channelConvId = `2_${channelId}`
+            const wasCurrentChannel = chatStore.currentConversationId === channelConvId
+            await channelStore.removeChannel(currentUid, channelId)
+            await chatStore.deleteConversation(currentUid, channelConvId).catch((err: unknown) => {
+              console.warn('[channel] delete removed channel conversation failed:', { channelId, err })
+            })
+            if (wasCurrentChannel) {
+              chatStore.setCurrentConversation(null)
+              const uiStore = useUIStore()
+              uiStore.setRightPanel('none')
+              uiStore.setDetailView('none')
+            }
+          }
+          continue
+        }
+        if (!convId.startsWith('2_') || String(extra?.source || '') !== 'channel-event') continue
+
+        const channelId = String(extra?.channelId || convId.split('_')[1] || '')
+        if (!channelId) continue
+        const channelName = String(extra?.channelName || channelStore.getChannel(channelId)?.channelName || channelId)
+        channelStore.patchChannel(channelId, {
+          id: channelId,
+          channelId,
+          name: channelName,
+          channelName,
+          avatar: String(extra?.icon || '') || channelStore.getChannel(channelId)?.avatar || null,
+          icon: String(extra?.icon || '') || channelStore.getChannel(channelId)?.icon || null,
+          logoColor: String(extra?.logoColor || '') || channelStore.getChannel(channelId)?.logoColor || null,
+          memberType: Number(extra?.memberType ?? channelStore.getChannel(channelId)?.memberType ?? 9),
+          updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
+        }, { allowRemoved: true, uid: currentUid })
+      }
       const contactStore = useContactStore()
       for (const m of normalized) {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
@@ -923,6 +984,9 @@ export async function setupTauriListeners() {
       messageStore.batchAppendMessages(normalized as Message[])
       if (hasGroupNotificationMessages) {
         eventBus.emit('group-invitation:update')
+      }
+      if (hasChannelNoticeMessages) {
+        eventBus.emit('channel-notice:update')
       }
       if (groupEventMessages.length > 0) {
         groupInviteDebug('after batchAppendMessages', {

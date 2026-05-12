@@ -161,6 +161,7 @@ pub fn run() {
             commands::channels::get_channels,
             commands::channels::get_channel_info,
             commands::channels::save_channels,
+            commands::channels::delete_channel,
             commands::file::upload_file,
             commands::file::upload_oss_object,
             commands::file::image_send_log,

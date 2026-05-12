@@ -610,6 +610,23 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::CHANNEL_EVENT_PUSH => {
+                match self.decode_channel_event_push(&decoded_payload) {
+                    Ok(mut msgs) => {
+                        info!("[channel] CHANNEL_EVENT_PUSH decoded notice count={}", msgs.len());
+                        self.buffer.append(&mut msgs);
+                        if self.buffer.len() >= MAX_BATCH_SIZE
+                            || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
+                        {
+                            self.flush().await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[channel] decode CHANNEL_EVENT_PUSH failed: {}", e);
+                    }
+                }
+                return;
+            }
             // 20701 群事件：邀请入群、成员加入/退出、群信息变更等。
             // 老 im 会把其中的 groupReqEventMsgDto 写成群内系统提示，例如
             // “你邀请 185... 加入群聊”。这里转成 msgType=8 的系统消息走同一条 msg:batch 链路。
@@ -1723,6 +1740,136 @@ impl MessageBatcher {
                 "fileKey": file_key,
             }),
         }])
+    }
+
+    fn decode_channel_event_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
+        let resp = imweb::PushChannelEventMessage::decode(payload)
+            .map_err(|e| format!("decode PushChannelEventMessage: {}", e))?;
+        let Some(event) = resp.latest_channel_event_message else {
+            info!("[channel] CHANNEL_EVENT_PUSH empty latest_channel_event_message");
+            return Ok(Vec::new());
+        };
+
+        let channel_info = event.channel_info.as_ref();
+        let subscriber_info = event.subscriber_info.as_ref();
+        let timestamp = normalize_timestamp(event.msg_time);
+        let base_msg_id = if event.msg_id > 0 {
+            event.msg_id.to_string()
+        } else {
+            format!("channel-event-{}-{}", event.channel_id, timestamp)
+        };
+        let mut out = Vec::new();
+
+        if let Some(notice) = event.channel_notice_msg.as_ref() {
+            if notice.is_notice {
+                let content = notice.notice_msg.trim();
+                let content = if content.is_empty() {
+                    event.msg.trim()
+                } else {
+                    content
+                };
+                if !content.is_empty() {
+                    info!(
+                        "[channel] emit CHANNEL_EVENT_PUSH as channel notice msg_id={} channel_id={} content={}",
+                        base_msg_id, event.channel_id, content
+                    );
+                    out.push(DecodedMessage {
+                        cmd: cmds::CHANNEL_EVENT_PUSH,
+                        msg_id: base_msg_id.clone(),
+                        conversation_id: "0_channelNotice".to_string(),
+                        sender_id: event.channel_id.to_string(),
+                        msg_type: 8,
+                        content: content.to_string(),
+                        send_time: timestamp,
+                        status: 1,
+                        read_status: 0,
+                        extra: serde_json::json!({
+                            "source": "channel-notice",
+                            "channelId": event.channel_id.to_string(),
+                            "channelName": channel_info
+                                .map(|item| item.channel_name.clone())
+                                .unwrap_or_default(),
+                            "icon": channel_info.map(|item| item.icon.clone()).unwrap_or_default(),
+                            "eventType": event.event_type,
+                            "channelOperateType": channel_info.map(|item| item.operate_type).unwrap_or_default(),
+                            "subscriberOperateType": subscriber_info.map(|item| item.operate_type).unwrap_or_default(),
+                            "reqStatus": subscriber_info.map(|item| item.req_status).unwrap_or_default(),
+                            "unReadNum": notice.un_read_num,
+                        }),
+                    });
+                }
+            }
+        }
+
+        let is_subscriber_join = event.event_type == 2
+            && subscriber_info
+                .map(|item| item.operate_type == 0)
+                .unwrap_or(false);
+        let is_subscriber_remove = event.event_type == 2
+            && subscriber_info
+                .map(|item| item.operate_type == 2)
+                .unwrap_or(false);
+        if is_subscriber_join && event.channel_id > 0 {
+            let content = event.msg.trim();
+            let content = if content.is_empty() {
+                "您已加入频道"
+            } else {
+                content
+            };
+            out.push(DecodedMessage {
+                cmd: cmds::CHANNEL_EVENT_PUSH,
+                msg_id: format!("{}-channel-join", base_msg_id),
+                conversation_id: format!("2_{}", event.channel_id),
+                sender_id: event.channel_id.to_string(),
+                msg_type: 8,
+                content: content.to_string(),
+                send_time: timestamp,
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "channel-event",
+                    "channelId": event.channel_id.to_string(),
+                    "channelName": channel_info
+                        .map(|item| item.channel_name.clone())
+                        .unwrap_or_default(),
+                    "icon": channel_info.map(|item| item.icon.clone()).unwrap_or_default(),
+                    "eventType": event.event_type,
+                    "subscriberOperateType": subscriber_info.map(|item| item.operate_type).unwrap_or_default(),
+                    "memberType": subscriber_info.map(|item| item.role).unwrap_or(9),
+                }),
+            });
+        }
+        if is_subscriber_remove && event.channel_id > 0 && out.is_empty() {
+            let content = event.msg.trim();
+            let content = if content.is_empty() {
+                "您已被移出频道"
+            } else {
+                content
+            };
+            out.push(DecodedMessage {
+                cmd: cmds::CHANNEL_EVENT_PUSH,
+                msg_id: format!("{}-channel-remove", base_msg_id),
+                conversation_id: "0_channelNotice".to_string(),
+                sender_id: event.channel_id.to_string(),
+                msg_type: 8,
+                content: content.to_string(),
+                send_time: timestamp,
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "channel-remove",
+                    "channelId": event.channel_id.to_string(),
+                    "channelName": channel_info
+                        .map(|item| item.channel_name.clone())
+                        .unwrap_or_default(),
+                    "icon": channel_info.map(|item| item.icon.clone()).unwrap_or_default(),
+                    "eventType": event.event_type,
+                    "subscriberOperateType": subscriber_info.map(|item| item.operate_type).unwrap_or_default(),
+                }),
+            });
+        }
+
+        Ok(out)
     }
 
     fn handle_key_pair_change(&self, payload: &[u8]) -> Result<(), String> {

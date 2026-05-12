@@ -21,6 +21,8 @@ export function isFileHelperTargetId(targetId: string | number | null | undefine
 
 /** 群通知伪会话 id（与 im id:"invitation" type:"group" 一致） */
 export const GROUP_NOTIFICATION_TARGET_ID = 'invitation'
+/** 频道通知伪会话 id（与 im id:"channelNotice" type:"friend" 一致） */
+export const CHANNEL_NOTIFICATION_TARGET_ID = 'channelNotice'
 
 function getConversationCacheKey(uid: string): string {
   return `${uid}-conversations`
@@ -182,6 +184,58 @@ export const useChatStore = defineStore('chat', () => {
 
   function removeGroupNotificationConversation() {
     const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    conversations.value = conversations.value.filter((c) => c.id !== id)
+    if (currentConversationId.value === id) {
+      currentConversationId.value = null
+    }
+  }
+
+  function updateChannelNotificationConv(digest: string, time: number, pendingCount: number) {
+    const id = `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
+    const idx = conversations.value.findIndex((c) => c.id === id)
+    if (idx >= 0) {
+      const conv = conversations.value[idx]
+      conversations.value[idx] = {
+        ...conv,
+        lastMsgDigest: digest,
+        lastMsgTime: time,
+        unreadCount: pendingCount,
+        updatedAt: time || conv.updatedAt,
+      }
+      sortConversations()
+      return
+    }
+
+    conversations.value.push({
+      id,
+      type: 0,
+      targetId: CHANNEL_NOTIFICATION_TARGET_ID,
+      lastMsgId: null,
+      lastMsgTime: time,
+      lastMsgDigest: digest,
+      unreadCount: pendingCount,
+      isPinned: false,
+      isMuted: false,
+      isArchived: false,
+      draft: null,
+      senderName: null,
+      atMe: false,
+      scheduleDeletion: 0,
+      updatedAt: time || Date.now(),
+    })
+    sortConversations()
+  }
+
+  function clearChannelNotificationUnread() {
+    const id = `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
+    const idx = conversations.value.findIndex((c) => c.id === id)
+    if (idx >= 0) {
+      conversations.value[idx] = { ...conversations.value[idx], unreadCount: 0 }
+    }
+  }
+
+  function removeChannelNotificationConversation() {
+    const id = `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
     conversations.value = conversations.value.filter((c) => c.id !== id)
     if (currentConversationId.value === id) {
       currentConversationId.value = null
@@ -425,5 +479,8 @@ export const useChatStore = defineStore('chat', () => {
     updateGroupNotificationConv,
     clearGroupNotificationUnread,
     removeGroupNotificationConversation,
+    updateChannelNotificationConv,
+    clearChannelNotificationUnread,
+    removeChannelNotificationConversation,
   }
 })
