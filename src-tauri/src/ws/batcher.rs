@@ -2329,13 +2329,14 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
             "[group-invite-debug][rust] emit GROUP_REQ as group notification msg_id={} group_id={} content={}",
             msg_id, item.group_id, content
         );
+        let group_member_json = group_member.into_iter().collect::<Vec<_>>();
         out.push(DecodedMessage {
             cmd,
-            msg_id,
+            msg_id: msg_id.clone(),
             conversation_id: "1_invitation".to_string(),
             sender_id: item.send_uid.to_string(),
             msg_type: 8,
-            content,
+            content: content.clone(),
             send_time: normalize_timestamp(item.update_time),
             status: 1,
             read_status: 0,
@@ -2346,7 +2347,7 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
                 "groupAvatar": item.pic,
                 "groupMuted": item.group_shutup,
                 "memberCount": member_count,
-                "members": group_member.into_iter().collect::<Vec<_>>(),
+                "members": group_member_json,
                 "groupReqId": item.group_req_id,
                 "groupReqType": item.group_req_type,
                 "groupReqStatus": item.group_req_status,
@@ -2360,8 +2361,47 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
                 "unReadNum": item.un_read_num,
             }),
         });
+
+        if should_emit_group_req_chat_notice(item) {
+            let group_member = item.group_member.as_ref().map(group_member_to_json);
+            let group_member_json = group_member.into_iter().collect::<Vec<_>>();
+            out.push(DecodedMessage {
+                cmd,
+                msg_id: format!("group-req-chat-{}", msg_id),
+                conversation_id: format!("1_{}", item.group_id),
+                sender_id: item.send_uid.to_string(),
+                msg_type: 8,
+                content,
+                send_time: normalize_timestamp(item.update_time),
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "group-event-req-chat",
+                    "groupId": item.group_id.to_string(),
+                    "groupName": item.group_name,
+                    "groupAvatar": item.pic,
+                    "groupMuted": item.group_shutup,
+                    "memberCount": member_count,
+                    "members": group_member_json,
+                    "groupReqId": item.group_req_id,
+                    "groupReqType": item.group_req_type,
+                    "groupReqStatus": item.group_req_status,
+                    "sendUid": item.send_uid.to_string(),
+                    "receiveUid": item.receive_uid.to_string(),
+                    "checkUserType": item.check_user_type,
+                    "targetUser": item.target_user.as_ref().map(user_base_to_json),
+                    "checkUser": item.check_user.as_ref().map(user_base_to_json),
+                    "fromUser": item.from_user.as_ref().map(user_base_to_json),
+                    "handleType": item.handle_type,
+                }),
+            });
+        }
     }
     out
+}
+
+fn should_emit_group_req_chat_notice(item: &imweb::GroupReqMsgDto) -> bool {
+    item.group_id > 0 && matches!(item.group_req_type, 1 | 2 | 3 | 4 | 14 | 15)
 }
 
 fn group_req_notice_content(item: &imweb::GroupReqMsgDto) -> String {
