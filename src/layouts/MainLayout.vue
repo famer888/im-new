@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
 import {
   useChatStore,
+  GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
   type Conversation,
 } from '@/stores/useChatStore'
@@ -81,6 +82,8 @@ const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
+const ACTIVE_GROUP_MEMBER_SYNC_INTERVAL_MS = 5000
+const ACTIVE_GROUP_MEMBER_SYNC_MIN_GAP_MS = 2500
 const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
@@ -95,6 +98,9 @@ const initChatProgress = ref(0)
 const resettingInitData = ref(false)
 const initReloadVisible = ref(false)
 let initReloadTimer: number | null = null
+let activeGroupMemberSyncTimer: number | null = null
+let activeGroupMemberSyncInFlight = false
+let lastActiveGroupMemberSyncAt = 0
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
 
 function setInitText(text: string) {
@@ -238,6 +244,8 @@ function pruneUnknownConversations() {
 
 onMounted(async () => {
   startInitReloadTimer()
+  window.addEventListener('focus', handleWindowFocusRefreshGroupMembers)
+  document.addEventListener('visibilitychange', handleVisibilityRefreshGroupMembers)
 
   try {
     setInitText(t('加载中'))
@@ -375,6 +383,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearInitReloadTimer()
+  clearActiveGroupMemberSyncTimer()
+  window.removeEventListener('focus', handleWindowFocusRefreshGroupMembers)
+  document.removeEventListener('visibilitychange', handleVisibilityRefreshGroupMembers)
   if (imageOverwriteResolver) {
     imageOverwriteResolver(false)
     imageOverwriteResolver = null
@@ -435,6 +446,13 @@ async function confirmInitReset() {
 }
 
 const currentTargetId = computed(() => chatStore.currentConversation?.targetId ?? '')
+const activeGroupMemberSyncGroupId = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!authStore.uid || uiStore.detailView !== 'chat' || !conv) return ''
+  if (conv.type !== ConversationType.Group) return ''
+  if (!conv.targetId || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return ''
+  return conv.targetId
+})
 
 /** 传输助手会话仅在侧栏「传输」选中时显示聊天窗，防止通讯录/消息下误显 */
 const showChatWindow = computed(() => {
@@ -448,6 +466,86 @@ const inviteExistingMemberIds = computed(() => {
   const members = groupStore.getMembers(uiStore.inviteFriendGroupId)
   return new Set(members.map(m => m.userId))
 })
+
+function clearActiveGroupMemberSyncTimer() {
+  if (activeGroupMemberSyncTimer === null) return
+  window.clearInterval(activeGroupMemberSyncTimer)
+  activeGroupMemberSyncTimer = null
+}
+
+function canRefreshActiveGroupMembers(force = false) {
+  if (document.hidden) return false
+  if (activeGroupMemberSyncInFlight) return false
+  if (force) return true
+  return Date.now() - lastActiveGroupMemberSyncAt >= ACTIVE_GROUP_MEMBER_SYNC_MIN_GAP_MS
+}
+
+async function refreshActiveGroupMembers(reason: string, force = false) {
+  const uid = String(authStore.uid || '').trim()
+  const groupId = activeGroupMemberSyncGroupId.value
+  if (!uid || !groupId || !canRefreshActiveGroupMembers(force)) return
+
+  activeGroupMemberSyncInFlight = true
+  lastActiveGroupMemberSyncAt = Date.now()
+  terminalDebugLog('main-layout', 'active group member sync start', {
+    reason,
+    groupId,
+    memberMapCountBefore: groupStore.getMembers(groupId).length,
+    groupMemberCountBefore: groupStore.getGroup(groupId)?.memberCount ?? null,
+  }, 'info')
+
+  try {
+    const members = await groupStore.loadMembers(uid, groupId, { forceRemote: true })
+    terminalDebugLog('main-layout', 'active group member sync resolved', {
+      reason,
+      groupId,
+      returnedCount: members.length,
+      memberMapCountAfter: groupStore.getMembers(groupId).length,
+      groupMemberCountAfter: groupStore.getGroup(groupId)?.memberCount ?? null,
+      returnedMemberIds: members.map((member) => member.userId).slice(0, 10),
+    }, 'info')
+  } catch (error) {
+    terminalDebugLog('main-layout', 'active group member sync failed', {
+      reason,
+      groupId,
+      error: error instanceof Error ? error.message : String(error),
+    }, 'error')
+  } finally {
+    activeGroupMemberSyncInFlight = false
+  }
+}
+
+function startActiveGroupMemberSyncTimer() {
+  clearActiveGroupMemberSyncTimer()
+  if (!activeGroupMemberSyncGroupId.value) return
+  activeGroupMemberSyncTimer = window.setInterval(() => {
+    void refreshActiveGroupMembers('interval')
+  }, ACTIVE_GROUP_MEMBER_SYNC_INTERVAL_MS)
+}
+
+function handleWindowFocusRefreshGroupMembers() {
+  void refreshActiveGroupMembers('window-focus', true)
+}
+
+function handleVisibilityRefreshGroupMembers() {
+  if (!document.hidden) {
+    void refreshActiveGroupMembers('visibility-visible', true)
+  }
+}
+
+watch(
+  activeGroupMemberSyncGroupId,
+  (groupId, previousGroupId) => {
+    clearActiveGroupMemberSyncTimer()
+    if (!groupId) return
+    if (groupId !== previousGroupId) {
+      lastActiveGroupMemberSyncAt = 0
+    }
+    startActiveGroupMemberSyncTimer()
+    void refreshActiveGroupMembers('active-group-change', true)
+  },
+  { immediate: true },
+)
 
 function handleGlobalInviteInvited(payload?: { message?: string; type?: 'success' | 'error' }) {
   if (payload?.message) {
