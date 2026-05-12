@@ -86,7 +86,7 @@ function isSelfUser(user: unknown, fallbackId?: unknown): boolean {
 function formatReqMemberName(user: unknown, fallbackId?: unknown): string {
   const name = getReqUserName(user, fallbackId)
   if (!name) return ''
-  return `${name}（${t('群员')}）`
+  return name
 }
 
 function formatReqMessage(item: GroupReqItem): string {
@@ -108,8 +108,7 @@ function formatReqMessage(item: GroupReqItem): string {
   const name = getReqUserName(user)
   if (!name || raw.includes(name)) return raw
 
-  const role = getReqUserId(user) === item.groupHostUid ? t('群主') : t('群员')
-  return `${name}（${role}） ${raw}`
+  return `${name}${raw}`
 }
 
 function formatAcceptedGroupDigest(item: GroupReqItem): string {

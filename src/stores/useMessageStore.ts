@@ -531,11 +531,6 @@ export const useMessageStore = defineStore('message', () => {
     return names.map((v) => String(v ?? '').trim()).find(Boolean) || ''
   }
 
-  function getGroupReqUserId(user: unknown): string {
-    const raw = user && typeof user === 'object' ? user as Record<string, unknown> : null
-    return String(raw?.uid ?? raw?.userId ?? '').trim()
-  }
-
   function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
     const raw = content.trim().replace(/\s+/g, ' ')
     if (!extra) return raw
@@ -557,9 +552,7 @@ export const useMessageStore = defineStore('message', () => {
     const name = getGroupReqUserName(user, fallbackId)
     if (!name || raw.includes(name)) return raw
 
-    const userId = getGroupReqUserId(user)
-    const role = userId && userId === String(extra.groupHostUid ?? '') ? '群主' : '群员'
-    return `${name}（${role}） ${raw}`.slice(0, 200)
+    return `${name}${raw}`.slice(0, 200)
   }
 
   function syncConversationSummary(conversationId: string, msg: Message) {

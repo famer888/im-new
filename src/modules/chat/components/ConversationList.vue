@@ -193,6 +193,63 @@ function formatDigestText(digest: string): string {
   return raw
 }
 
+function parseMessageExtra(rawExtra: unknown): Record<string, unknown> | null {
+  if (!rawExtra) return null
+  if (typeof rawExtra === 'string') {
+    try {
+      const parsed = JSON.parse(rawExtra)
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    } catch {
+      return null
+    }
+  }
+  return typeof rawExtra === 'object' ? rawExtra as Record<string, unknown> : null
+}
+
+function getGroupReqUserName(user: unknown, fallbackId?: unknown): string {
+  const raw = user && typeof user === 'object' ? user as Record<string, unknown> : null
+  const relation = raw?.friendRelation && typeof raw.friendRelation === 'object'
+    ? raw.friendRelation as Record<string, unknown>
+    : null
+  const names = [
+    raw?.remarkName,
+    relation?.remarkName,
+    raw?.nickName,
+    raw?.nickname,
+    raw?.nick_name,
+    raw?.name,
+    raw?.identify,
+    raw?.uid,
+    raw?.userId,
+    fallbackId,
+  ]
+  return names.map((v) => String(v ?? '').trim()).find(Boolean) || ''
+}
+
+function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
+  const raw = content.trim().replace(/\s+/g, ' ')
+  if (!extra) return raw
+  if (/^\S*(?:群主|群员|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
+
+  const type = Number(extra.groupReqType ?? 0)
+  const status = Number(extra.groupReqStatus ?? 0)
+  const shouldPrefix =
+    /^(拒绝加入|同意加入|申请加入|邀请你加入|加入)/.test(raw) ||
+    (status === 2 && raw.includes('拒绝')) ||
+    [1, 2, 3, 4, 14, 15].includes(type)
+  if (!shouldPrefix) return raw
+
+  const user =
+    status === 2
+      ? extra.targetUser || extra.fromUser || extra.checkUser
+      : extra.fromUser || extra.targetUser || extra.checkUser
+  const fallbackId = status === 2 ? extra.receiveUid : extra.sendUid
+  const name = getGroupReqUserName(user, fallbackId)
+  if (!name || raw.includes(name)) return raw
+
+  return `${name}${raw}`.slice(0, 200)
+}
+
 function shouldShowDraft(conv: Conversation): boolean {
   return Boolean(conv.draft) && conv.id !== chatStore.currentConversationId
 }
@@ -225,7 +282,11 @@ function getLoadedLatestDigest(conv: Conversation): string {
   )
 
   if (!isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
-  return getMessageDigest(latest)
+  const digest = getMessageDigest(latest)
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return formatGroupNotificationDigest(digest, parseMessageExtra(latest.extra))
+  }
+  return digest
 }
 
 function getDigest(conv: Conversation): string {
