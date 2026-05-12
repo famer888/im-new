@@ -84,7 +84,8 @@ pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
     let is_audio_log = payload.message.starts_with("[audio-message]")
         || payload.message.starts_with("[group-audio]");
     let is_group_audio_log = payload.message.starts_with("[group-audio]");
-    let is_file_log = payload.message.starts_with("[file-send]");
+    let is_file_log =
+        payload.message.starts_with("[file-send]") || payload.message.starts_with("[file-open]");
     if payload.message.contains("[single-video-send]") {
         println!(
             "[single-video-send][terminal][{}] {} data={}",
@@ -364,6 +365,7 @@ pub async fn download_file(
     let path = PathBuf::from(&save_path);
     let should_emit_data_url = emit_data_url.unwrap_or(true);
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
+    let should_log_file_open = log_tag.as_deref() == Some("file-open");
     if should_log_audio {
         tracing::info!(
             target: "group-audio",
@@ -375,10 +377,21 @@ pub async fn download_file(
             file_key.len(),
         );
     }
+    if should_log_file_open {
+        tracing::warn!(
+            target: "file-open",
+            msg_id = %msg_id,
+            url_head = %url.chars().take(160).collect::<String>(),
+            save_path = %save_path,
+            file_key_len = file_key.len(),
+            "download_file request"
+        );
+    }
 
     let app_clone = app.clone();
     let msg_id_clone = msg_id.clone();
     let should_log_audio_clone = should_log_audio;
+    let should_log_file_open_clone = should_log_file_open;
 
     tokio::spawn(async move {
         let download_result = async {
@@ -402,6 +415,15 @@ pub async fn download_file(
                         bytes_head_hex(&decoded, 16),
                     );
                 }
+                if should_log_file_open_clone {
+                    tracing::warn!(
+                        target: "file-open",
+                        msg_id = %msg_id_clone,
+                        path = %path.to_string_lossy(),
+                        bytes = meta.len(),
+                        "download_file cache hit"
+                    );
+                }
                 let mime = sniff_image_mime(&decoded);
                 let data_url = format!(
                     "data:{};base64,{}",
@@ -419,6 +441,14 @@ pub async fn download_file(
                     url.chars().take(120).collect::<String>(),
                 );
             }
+            if should_log_file_open_clone {
+                tracing::warn!(
+                    target: "file-open",
+                    msg_id = %msg_id_clone,
+                    url_head = %url.chars().take(160).collect::<String>(),
+                    "download_file http start"
+                );
+            }
             let response = reqwest::get(&url)
                 .await
                 .map_err(|e| format!("Download failed: {}", e))?;
@@ -430,6 +460,15 @@ pub async fn download_file(
                     msg_id_clone,
                     status.as_u16(),
                     status.is_success(),
+                );
+            }
+            if should_log_file_open_clone {
+                tracing::warn!(
+                    target: "file-open",
+                    msg_id = %msg_id_clone,
+                    status = status.as_u16(),
+                    ok = status.is_success(),
+                    "download_file http response"
                 );
             }
             if !status.is_success() {
@@ -468,6 +507,25 @@ pub async fn download_file(
                 .await
                 .map_err(|e| format!("Write encrypted file failed: {}", e))?;
 
+            if file_key.trim().is_empty() {
+                tokio::fs::rename(&enc_path, &path)
+                    .await
+                    .map_err(|e| format!("Move downloaded file failed: {}", e))?;
+                let meta = tokio::fs::metadata(&path)
+                    .await
+                    .map_err(|e| format!("Stat downloaded file failed: {}", e))?;
+                if should_log_file_open_clone {
+                    tracing::warn!(
+                        target: "file-open",
+                        msg_id = %msg_id_clone,
+                        path = %path.to_string_lossy(),
+                        bytes = meta.len(),
+                        "download_file saved without decrypt"
+                    );
+                }
+                return Ok::<(u64, Option<String>), String>((meta.len(), None));
+            }
+
             if should_log_audio_clone {
                 tracing::info!(
                     target: "group-audio",
@@ -490,6 +548,15 @@ pub async fn download_file(
             let meta = tokio::fs::metadata(&path)
                 .await
                 .map_err(|e| format!("Stat failed: {}", e))?;
+            if should_log_file_open_clone && !should_emit_data_url {
+                tracing::warn!(
+                    target: "file-open",
+                    msg_id = %msg_id_clone,
+                    path = %path.to_string_lossy(),
+                    bytes = meta.len(),
+                    "download_file decrypt done"
+                );
+            }
             let data_url = if should_emit_data_url {
                 let decoded = tokio::fs::read(&path)
                     .await
@@ -501,6 +568,16 @@ pub async fn download_file(
                         msg_id_clone,
                         decoded.len(),
                         bytes_head_hex(&decoded, 16),
+                    );
+                }
+                if should_log_file_open_clone {
+                    tracing::warn!(
+                        target: "file-open",
+                        msg_id = %msg_id_clone,
+                        path = %path.to_string_lossy(),
+                        bytes = decoded.len(),
+                        head_hex = %bytes_head_hex(&decoded, 16),
+                        "download_file decrypt done"
                     );
                 }
                 let mime = sniff_image_mime(&decoded);
@@ -526,6 +603,15 @@ pub async fn download_file(
                         size,
                     );
                 }
+                if should_log_file_open_clone {
+                    tracing::warn!(
+                        target: "file-open",
+                        msg_id = %msg_id_clone,
+                        size = size,
+                        has_data_url = data_url.is_some(),
+                        "download_file emit done"
+                    );
+                }
                 let _ = app_clone.emit(
                     &format!("file:done:{}", msg_id_clone),
                     DownloadProgress {
@@ -545,6 +631,14 @@ pub async fn download_file(
                         "download_file emit error msg_id={} error={}",
                         msg_id_clone,
                         e,
+                    );
+                }
+                if should_log_file_open_clone {
+                    tracing::error!(
+                        target: "file-open",
+                        msg_id = %msg_id_clone,
+                        error = %e,
+                        "download_file emit error"
                     );
                 }
                 let _ = app_clone.emit(
@@ -708,4 +802,178 @@ pub async fn open_file(path: String) -> Result<(), String> {
             .map_err(|e| format!("open file failed: {}", e))?;
         Ok(())
     }
+}
+
+#[tauri::command]
+pub async fn open_in_browser(target: String) -> Result<(), String> {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return Err("browser target is empty".to_string());
+    }
+
+    tracing::warn!(
+        target: "file-open",
+        open_target = %trimmed,
+        target_kind = classify_browser_open_target(trimmed),
+        "open_in_browser start"
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        match Command::new("open")
+            .arg("-a")
+            .arg("Google Chrome")
+            .arg(trimmed)
+            .status()
+        {
+            Ok(status) => {
+                tracing::warn!(
+                    target: "file-open",
+                    command = "open -a Google Chrome",
+                    open_target = %trimmed,
+                    success = status.success(),
+                    code = ?status.code(),
+                    "open_in_browser command result"
+                );
+                if status.success() {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "file-open",
+                    command = "open -a Google Chrome",
+                    open_target = %trimmed,
+                    error = %error,
+                    "open_in_browser command spawn failed"
+                );
+            }
+        }
+
+        let status = Command::new("open")
+            .arg(trimmed)
+            .status()
+            .map_err(|e| format!("open browser failed: {}", e))?;
+        tracing::warn!(
+            target: "file-open",
+            command = "open",
+            open_target = %trimmed,
+            success = status.success(),
+            code = ?status.code(),
+            "open_in_browser fallback command result"
+        );
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("open browser failed with status: {}", status));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("cmd")
+            .args(["/C", "start", "", "chrome"])
+            .arg(trimmed)
+            .status()
+        {
+            Ok(status) => {
+                tracing::warn!(
+                    target: "file-open",
+                    command = "cmd /C start chrome",
+                    open_target = %trimmed,
+                    success = status.success(),
+                    code = ?status.code(),
+                    "open_in_browser command result"
+                );
+                if status.success() {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "file-open",
+                    command = "cmd /C start chrome",
+                    open_target = %trimmed,
+                    error = %error,
+                    "open_in_browser command spawn failed"
+                );
+            }
+        }
+
+        let child = Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| format!("open browser failed: {}", e))?;
+        tracing::warn!(
+            target: "file-open",
+            command = "cmd /C start",
+            open_target = %trimmed,
+            pid = child.id(),
+            "open_in_browser fallback spawned"
+        );
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        match Command::new("google-chrome").arg(trimmed).status() {
+            Ok(status) => {
+                tracing::warn!(
+                    target: "file-open",
+                    command = "google-chrome",
+                    open_target = %trimmed,
+                    success = status.success(),
+                    code = ?status.code(),
+                    "open_in_browser command result"
+                );
+                if status.success() {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "file-open",
+                    command = "google-chrome",
+                    open_target = %trimmed,
+                    error = %error,
+                    "open_in_browser command spawn failed"
+                );
+            }
+        }
+
+        let child = Command::new("xdg-open")
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| format!("open browser failed: {}", e))?;
+        tracing::warn!(
+            target: "file-open",
+            command = "xdg-open",
+            open_target = %trimmed,
+            pid = child.id(),
+            "open_in_browser fallback spawned"
+        );
+        Ok(())
+    }
+}
+
+fn classify_browser_open_target(target: &str) -> &'static str {
+    let lower = target.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return "remote-url";
+    }
+    if lower.starts_with("file:") {
+        return "file-url";
+    }
+    if target.starts_with('/') || looks_like_windows_path(target) {
+        return "local-path";
+    }
+    "unknown"
+}
+
+fn looks_like_windows_path(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
