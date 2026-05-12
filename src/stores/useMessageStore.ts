@@ -758,8 +758,8 @@ export const useMessageStore = defineStore('message', () => {
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
     // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
     // 用它覆盖占位（会按 customMsgId 精准替换，避免重复）。
-    const clientFlag = clientMsgId ? Number(clientMsgId) || Date.now() : Date.now()
-    const optimisticId = String(clientFlag)
+    const optimisticId = clientMsgId || String(Date.now())
+    const optimisticSendTime = Date.now()
     const optimistic: Message = {
       id: optimisticId,
       customMsgId: optimisticId,
@@ -767,7 +767,7 @@ export const useMessageStore = defineStore('message', () => {
       senderId: uid,
       msgType,
       content,
-      sendTime: clientFlag,
+      sendTime: optimisticSendTime,
       status: 0, // sending
       readStatus: 0,
       version: 0,
@@ -794,7 +794,7 @@ export const useMessageStore = defineStore('message', () => {
         convType,
         targetId,
         optimisticId,
-        sendTime: clientFlag,
+        sendTime: optimisticSendTime,
         listSizeAfterAppend: getMessages(conversationId).length,
         content: imageContentSummary(content),
         extraKeys: Object.keys(sendExtra ?? {}),
@@ -809,7 +809,7 @@ export const useMessageStore = defineStore('message', () => {
         optimisticId,
         content,
         extraJson,
-        sendTime: clientFlag,
+        sendTime: optimisticSendTime,
       })
     }
 
