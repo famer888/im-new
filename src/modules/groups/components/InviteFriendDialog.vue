@@ -36,7 +36,9 @@
         </li>
       </ul>
 
-      <div :class="['primaryBtn', { disabled: isInviting }]" @click="handleInvite">{{ $t('完成') }}</div>
+      <div :class="['primaryBtn', { disabled: isInviting }]" @click="handleInvite">
+        {{ isInviting ? $t('邀请中...') : $t('完成') }}
+      </div>
     </div>
 
     <Toast
@@ -67,11 +69,13 @@ const props = defineProps<{
   groupId: string
   existingMemberIds: Set<string>
   qrcodeUrl?: string
+  confirmBeforeInvite?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'invited', payload?: { message?: string; type?: 'success' | 'error' }): void
+  (e: 'confirm-invite', payload: { members: string[]; message: string }): void
 }>()
 
 const searchKey = ref('')
@@ -206,6 +210,14 @@ function getNeedCheckMessage(ids: Array<number | string>) {
   return $t('开启了入群需审核，对方同意后才会进入群聊')
 }
 
+function getResponseCode(res: any) {
+  return Number(res?.commonResult?.errCode ?? res?.errCode ?? res?.code ?? 200)
+}
+
+function getResponseErrorMessage(res: any, fallback: string) {
+  return res?.commonResult?.errMsg || res?.errorDesc || res?.errMsg || res?.msg || fallback
+}
+
 async function handleInvite() {
   if (isInviting.value) return
   if (selectedIds.size === 0) {
@@ -213,8 +225,23 @@ async function handleInvite() {
     return
   }
 
-  isInviting.value = true
   const members = Array.from(selectedIds)
+
+  if (props.confirmBeforeInvite) {
+    emit('confirm-invite', {
+      members,
+      message: getNeedCheckMessage(members),
+    })
+    selectedIds.clear()
+    emit('close')
+    return
+  }
+
+  await submitInvite(members)
+}
+
+async function submitInvite(members: string[]) {
+  isInviting.value = true
   groupInviteDebug('groupMember invite request', {
     groupId: props.groupId,
     members,
@@ -225,13 +252,15 @@ async function handleInvite() {
       groupId: props.groupId,
       members,
     })
-    const code = Number((res as any)?.commonResult?.errCode || 0)
+    const code = getResponseCode(res)
     groupInviteDebug('groupMember invite response', {
       groupId: props.groupId,
       members,
       code,
       errMsg: (res as any)?.commonResult?.errMsg,
       errorDesc: (res as any)?.errorDesc,
+      topCode: (res as any)?.code,
+      topErrCode: (res as any)?.errCode,
       needCheckUids: Array.isArray((res as any)?.needCheckUids)
         ? (res as any).needCheckUids.map((id: number | string) => String(id))
         : [],
@@ -257,7 +286,7 @@ async function handleInvite() {
       return
     }
 
-    showToast((res as any)?.commonResult?.errMsg || (res as any)?.errorDesc || $t('邀请失败'), 'error')
+    showToast(getResponseErrorMessage(res, $t('邀请失败')), 'error')
   } catch (error) {
     console.error('Invite failed:', error)
     groupInviteDebug('groupMember invite failed', {
