@@ -47,7 +47,10 @@ const confirmTitle = ref('')
 const confirmContent = ref('')
 const confirmAction = ref<(() => void) | null>(null)
 const invitePromptVisible = ref(false)
+const invitePromptTitle = ref('')
 const invitePromptContent = ref('')
+const invitePromptMembers = ref<string[]>([])
+const invitePromptSubmitting = ref(false)
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
@@ -62,13 +65,19 @@ function showConfirm(title: string, content: string, action: () => void) {
   confirmVisible.value = true
 }
 
-function showInvitePrompt(content: string) {
+function showInvitePrompt(content: string, options?: { title?: string; members?: string[] }) {
+  invitePromptTitle.value = options?.title || t('邀请成功')
   invitePromptContent.value = content
+  invitePromptMembers.value = options?.members || []
   invitePromptVisible.value = true
 }
 
 function closeInvitePrompt() {
+  if (invitePromptSubmitting.value) return
   invitePromptVisible.value = false
+  invitePromptMembers.value = []
+  invitePromptContent.value = ''
+  invitePromptTitle.value = ''
 }
 
 function handleConfirm() {
@@ -114,6 +123,57 @@ async function handleInvited(payload?: { message?: string; type?: 'success' | 'e
     groupStore.loadMembers(authStore.uid, conv.value.targetId).catch((error) => {
       console.error('[GroupInfoPanel] refresh members after invite failed:', error)
     })
+  }
+}
+
+function getResponseCode(res: any) {
+  return Number(res?.commonResult?.errCode ?? res?.errCode ?? res?.code ?? 200)
+}
+
+function getResponseErrorMessage(res: any, fallback: string) {
+  return res?.commonResult?.errMsg || res?.errorDesc || res?.errMsg || res?.msg || fallback
+}
+
+function handleInviteConfirmRequest(payload: { members: string[]; message: string }) {
+  showInvitePrompt(payload.message, {
+    title: t('邀请好友'),
+    members: payload.members,
+  })
+}
+
+async function handleInvitePromptConfirm() {
+  if (!invitePromptMembers.value.length) {
+    closeInvitePrompt()
+    return
+  }
+  if (!conv.value?.targetId || invitePromptSubmitting.value) return
+
+  const members = [...invitePromptMembers.value]
+  invitePromptSubmitting.value = true
+  try {
+    const res = await groupMember({
+      op: 0,
+      groupId: conv.value.targetId,
+      members,
+    })
+    const code = getResponseCode(res)
+    if (code === 200) {
+      invitePromptSubmitting.value = false
+      closeInvitePrompt()
+      showToast(t('邀请成功'))
+      if (authStore.uid) {
+        groupStore.loadMembers(authStore.uid, conv.value.targetId).catch((error) => {
+          console.error('[GroupInfoPanel] refresh members after invite failed:', error)
+        })
+      }
+      return
+    }
+    showToast(getResponseErrorMessage(res, t('邀请失败')), 'error')
+  } catch (error) {
+    console.error('[GroupInfoPanel] confirmed invite failed:', error)
+    showToast(t('邀请失败'), 'error')
+  } finally {
+    invitePromptSubmitting.value = false
   }
 }
 
@@ -299,88 +359,92 @@ function handleOnlineTime(member: any) {
 <template>
   <div class="group-info-panel" v-if="conv">
     <template v-if="!showAllMembers">
-      <!-- 群别名 + 二维码 (同 im group-alias-qrcode.vue) -->
-      <div class="group-alias-qrcode" @click="openQrCode">
-        <h3>{{ t('群别名') }}</h3>
-        <div class="alias-right">
-          <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
-            @{{ groupAliasName }}
-          </span>
-          <img class="code-icon" src="@/assets/images/chat/code.png" @click.stop="openQrCode" />
-          <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
-        </div>
-      </div>
-
-      <!-- 群简介 (同 im group-notice/index.vue) -->
-      <div class="group-notice-section" @click="openGroupNotice">
-        <div class="notice-head">
-          <h3>{{ t('群简介') }}</h3>
-          <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
-        </div>
-        <p class="notice-preview" v-if="noticePreview">{{ noticePreview }}</p>
-        <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
-      </div>
-
-      <!-- 配置列表 (同 im config-list.vue) -->
-      <ul class="config-list">
-        <li>
-          <span>{{ t('置顶聊天') }}</span>
-          <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
-        </li>
-        <li>
-          <span>{{ t('消息免打扰') }}</span>
-          <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
-        </li>
-        <li v-if="isOwner">
-          <span>{{ t('进群需审核') }}</span>
-          <AppSwitch :model-value="bfJoinCheck" @update:model-value="toggleJoinCheck" />
-        </li>
-        <li class="action-btn danger" @click="openClearDialog">
-          {{ t('清空聊天记录') }}
-        </li>
-        <li v-if="isOwner" class="action-btn danger" @click="handleDisbandGroup">
-          {{ t('解散群聊') }}
-        </li>
-        <li v-else class="action-btn danger" @click="handleExitGroup">
-          {{ t('删除并退出') }}
-        </li>
-      </ul>
-
-      <!-- 管理员 (同 im index.vue 管理员 label) -->
-      <ul v-if="memberType !== 2" class="manager-label">
-        <li>{{ t('管理员') }}</li>
-      </ul>
-
-      <!-- 群成员 (同 im member-list.vue) -->
-      <div class="member-section">
-        <div class="member-head">
-          <div class="member-info" @click="showAllMembers = true">
-            <span class="member-title">{{ t('群成员列表标题', { count: totalCount }) }}</span>
-            <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
+      <div class="group-info-scroll">
+        <!-- 群别名 + 二维码 (同 im group-alias-qrcode.vue) -->
+        <div class="group-alias-qrcode" @click="openQrCode">
+          <h3>{{ t('群别名') }}</h3>
+          <div class="alias-right">
+            <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
+              @{{ groupAliasName }}
+            </span>
+            <img class="code-icon" src="@/assets/images/chat/code.png" @click.stop="openQrCode" />
+            <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
           </div>
-          <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
         </div>
 
-        <ul class="member-list">
-          <li v-for="member in previewMembers" :key="member.userId" class="member-item">
-            <TextAvatar
-              :name="member.nickname || member.userId"
-              :src="member.avatar"
-              :size="30"
-              rounded
-              style="cursor: pointer;"
-              @click="uiStore.openMemberInfo(member.userId, conv?.targetId)"
-            />
-            <div class="member-detail" style="cursor: pointer;" @click="uiStore.openMemberInfo(member.userId, conv?.targetId)">
-              <h2>{{ member.nickname || member.userId }}</h2>
-              <p>{{ handleOnlineTime(member) }}</p>
-            </div>
-            <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
-            <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
+        <!-- 群简介 (同 im group-notice/index.vue) -->
+        <div class="group-notice-section" @click="openGroupNotice">
+          <div class="notice-head">
+            <h3>{{ t('群简介') }}</h3>
+            <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
+          </div>
+          <p class="notice-preview" v-if="noticePreview">{{ noticePreview }}</p>
+          <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
+        </div>
+
+        <!-- 配置列表 (同 im config-list.vue) -->
+        <ul class="config-list">
+          <li>
+            <span>{{ t('置顶聊天') }}</span>
+            <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
+          </li>
+          <li>
+            <span>{{ t('消息免打扰') }}</span>
+            <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
+          </li>
+          <li v-if="isOwner">
+            <span>{{ t('进群需审核') }}</span>
+            <AppSwitch :model-value="bfJoinCheck" @update:model-value="toggleJoinCheck" />
+          </li>
+          <li class="action-btn danger" @click="openClearDialog">
+            {{ t('清空聊天记录') }}
+          </li>
+          <li v-if="isOwner" class="action-btn danger" @click="handleDisbandGroup">
+            {{ t('解散群聊') }}
+          </li>
+          <li v-else class="action-btn danger" @click="handleExitGroup">
+            {{ t('删除并退出') }}
           </li>
         </ul>
 
-        <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
+        <!-- 管理员 (同 im index.vue 管理员 label) -->
+        <ul v-if="memberType !== 2" class="manager-label">
+          <li>{{ t('管理员') }}</li>
+        </ul>
+
+        <!-- 群成员 (同 im member-list.vue) -->
+        <div class="member-section">
+          <div class="member-head">
+            <div class="member-info" @click="showAllMembers = true">
+              <span class="member-title">{{ t('群成员列表标题', { count: totalCount }) }}</span>
+              <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
+            </div>
+            <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
+          </div>
+
+          <ul class="member-list">
+            <li v-for="member in previewMembers" :key="member.userId" class="member-item">
+              <TextAvatar
+                :name="member.nickname || member.userId"
+                :src="member.avatar"
+                :size="30"
+                rounded
+                style="cursor: pointer;"
+                @click="uiStore.openMemberInfo(member.userId, conv?.targetId)"
+              />
+              <div class="member-detail" style="cursor: pointer;" @click="uiStore.openMemberInfo(member.userId, conv?.targetId)">
+                <h2>{{ member.nickname || member.userId }}</h2>
+                <p>{{ handleOnlineTime(member) }}</p>
+              </div>
+              <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
+              <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
+      <div class="group-info-footer">
         <div class="invite-friend" @click="openInvite">{{ t('邀请好友') }}</div>
       </div>
     </template>
@@ -452,11 +516,25 @@ function handleOnlineTime(member: any) {
         <div v-if="invitePromptVisible" class="invite-prompt-mask" @click.self="closeInvitePrompt">
           <div class="invite-prompt-dialog">
             <button class="invite-prompt-close" type="button" :aria-label="t('关闭')" @click="closeInvitePrompt">×</button>
-            <h3>{{ t('邀请成功') }}</h3>
+            <h3>{{ invitePromptTitle }}</h3>
             <p>{{ invitePromptContent }}</p>
             <div class="invite-prompt-actions">
-              <button class="invite-prompt-cancel" type="button" @click="closeInvitePrompt">{{ t('取消') }}</button>
-              <button class="invite-prompt-confirm" type="button" @click="closeInvitePrompt">{{ t('确定') }}</button>
+              <button
+                class="invite-prompt-cancel"
+                type="button"
+                :disabled="invitePromptSubmitting"
+                @click="closeInvitePrompt"
+              >
+                {{ t('取消') }}
+              </button>
+              <button
+                :class="['invite-prompt-confirm', { disabled: invitePromptSubmitting }]"
+                type="button"
+                :disabled="invitePromptSubmitting"
+                @click="handleInvitePromptConfirm"
+              >
+                {{ invitePromptSubmitting ? t('邀请中...') : t('确定') }}
+              </button>
             </div>
           </div>
         </div>
@@ -483,8 +561,10 @@ function handleOnlineTime(member: any) {
       :group-id="conv.targetId"
       :existing-member-ids="existingMemberIds"
       :qrcode-url="inviteShortLink"
+      :confirm-before-invite="bfJoinCheck"
       @close="inviteVisible = false"
       @invited="handleInvited"
+      @confirm-invite="handleInviteConfirmRequest"
     />
     <GroupNoticeDialog
       :visible="noticeVisible"
@@ -509,8 +589,34 @@ function handleOnlineTime(member: any) {
   flex-direction: column;
   position: relative;
   height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
+.group-info-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+.group-info-footer {
+  flex-shrink: 0;
+  background: #fff;
+
+  .invite-friend {
+    width: 100%;
+    height: 42px;
+    color: #178aff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 900;
+  }
 }
 
 .invite-prompt-mask {
@@ -583,10 +689,21 @@ function handleOnlineTime(member: any) {
 
 .invite-prompt-cancel {
   background: #9197ad;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
 }
 
 .invite-prompt-confirm {
   background: #178aff;
+
+  &.disabled,
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
 }
 
 .invite-prompt-fade-enter-active,
@@ -801,21 +918,6 @@ function handleOnlineTime(member: any) {
       flex-shrink: 0;
     }
   }
-
-  .invite-friend {
-    width: 100%;
-    height: 40px;
-    color: #178aff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #fff;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 900;
-    flex-shrink: 0;
-
-  }
 }
 
 .member-list {
@@ -844,7 +946,7 @@ function handleOnlineTime(member: any) {
 
   .member-cancel {
     position: absolute;
-    right: -28px;
+    right: -25px;
     top: 50%;
     transform: translateY(-50%);
     font-size: 12px;
