@@ -65,26 +65,124 @@ function showTip(message: string, type: 'success' | 'error' = 'success') {
   eventBus.emit('show-toast', { message, type })
 }
 
+function textValue(value: unknown): string {
+  return value === undefined || value === null ? '' : String(value).trim()
+}
+
+function isRawChannelIdName(name: string, channelId: string): boolean {
+  return Boolean(channelId && name === channelId)
+}
+
+function pickNoticeChannelName(channelId: string, candidates: unknown[], fallback = ''): string {
+  for (const candidate of candidates) {
+    const name = textValue(candidate)
+    if (!name || isRawChannelIdName(name, channelId)) continue
+    return name
+  }
+  return fallback
+}
+
+function cachedNoticeChannel(channelId: string) {
+  return {
+    cachedChannel: channelId ? channelStore.getChannel(channelId) : null,
+    removedChannel: channelId ? channelStore.getRemovedChannelMeta(channelId) : null,
+  }
+}
+
 function parseNoticeItem(item: ChannelEventReqItem): ChannelNoticeItem {
   const raw = item as ChannelEventReqItem & {
     channelInfo?: Record<string, unknown> | null
   }
   const channelInfo = raw.channelInfo && typeof raw.channelInfo === 'object' ? raw.channelInfo : {}
-  const channelId = String(item.channelId ?? channelInfo.channelId ?? channelInfo.id ?? '')
-  const channelName = String(item.channelName || channelInfo.channelName || channelInfo.name || channelId || '')
+  const channelId = textValue(item.channelId ?? channelInfo.channelId ?? channelInfo.id)
+  const { cachedChannel, removedChannel } = cachedNoticeChannel(channelId)
+  const channelName = pickNoticeChannelName(channelId, [
+    item.channelName,
+    channelInfo.channelName,
+    channelInfo.name,
+    cachedChannel?.channelName,
+    cachedChannel?.name,
+    removedChannel?.channelName,
+    removedChannel?.name,
+  ], t('频道通知'))
   return {
     id: String(item.id ?? ''),
     jumpPage: Boolean(item.jumpPage),
     channelName,
     channelId,
     uid: String(item.uid ?? ''),
-    icon: item.icon || String(channelInfo.icon || channelInfo.avatar || ''),
-    logoColor: item.logoColor || String(channelInfo.logoColor || '') || '#ff6b35',
+    icon: textValue(item.icon || channelInfo.icon || channelInfo.avatar || cachedChannel?.icon || cachedChannel?.avatar || removedChannel?.icon || removedChannel?.avatar),
+    logoColor: textValue(item.logoColor || channelInfo.logoColor || cachedChannel?.logoColor || removedChannel?.logoColor) || '#ff6b35',
     content: item.noticeMsg || '',
     sendTime: Number(item.createTime || item.updateTime || Date.now()),
     reqStatus: item.reqStatus === undefined || item.reqStatus === null ? -1 : Number(item.reqStatus),
     reqType: Number(item.reqType || 0),
   }
+}
+
+function shouldHydrateChannelName(item: ChannelNoticeItem): boolean {
+  const name = textValue(item.channelName)
+  return Boolean(
+    item.channelId
+    && (!name || isRawChannelIdName(name, item.channelId) || name === t('频道通知')),
+  )
+}
+
+async function hydrateNoticeChannelNames(items: ChannelNoticeItem[]): Promise<ChannelNoticeItem[]> {
+  const channelIds = Array.from(new Set(
+    items
+      .filter(shouldHydrateChannelName)
+      .map((item) => item.channelId)
+      .filter(Boolean),
+  ))
+  if (channelIds.length === 0) return items
+
+  const entries = await Promise.all(channelIds.map(async (channelId) => {
+    const { cachedChannel, removedChannel } = cachedNoticeChannel(channelId)
+    const cachedName = pickNoticeChannelName(channelId, [
+      cachedChannel?.channelName,
+      cachedChannel?.name,
+      removedChannel?.channelName,
+      removedChannel?.name,
+    ])
+    if (cachedName) {
+      return [channelId, {
+        channelName: cachedName,
+        icon: textValue(cachedChannel?.icon || cachedChannel?.avatar || removedChannel?.icon || removedChannel?.avatar),
+        logoColor: textValue(cachedChannel?.logoColor || removedChannel?.logoColor),
+      }] as const
+    }
+
+    try {
+      const res = await getChannelDetail({ channelId })
+      const detail = res?.data as Record<string, unknown> | undefined
+      const channelName = pickNoticeChannelName(channelId, [
+        detail?.channelName,
+        detail?.name,
+      ])
+      if (!channelName) return [channelId, null] as const
+      return [channelId, {
+        channelName,
+        icon: textValue(detail?.icon || detail?.avatar),
+        logoColor: textValue(detail?.logoColor),
+      }] as const
+    } catch (error) {
+      console.warn('[ChannelNotice] hydrate channel name failed:', { channelId, error })
+      return [channelId, null] as const
+    }
+  }))
+
+  const patchMap = new Map(entries)
+  return items.map((item) => {
+    const patch = patchMap.get(item.channelId)
+    if (!patch?.channelName) return item
+    return {
+      ...item,
+      channelName: patch.channelName,
+      icon: patch.icon || item.icon,
+      logoColor: patch.logoColor || item.logoColor,
+    }
+  })
 }
 
 function parseExtra(extra: string | null): Record<string, any> {
@@ -114,23 +212,22 @@ function parseLocalNoticeMessage(message: Message): ChannelNoticeItem | null {
   const removedChannel = channelId ? channelStore.getRemovedChannelMeta(channelId) : null
   const parsedName = content.match(/^(.+?)(?:已被移出频道|被移出频道)/)?.[1]
   const usableParsedName = parsedName && !['您', '你'].includes(parsedName.trim()) ? parsedName.trim() : ''
-  const displayName = String(
-    extra.channelName
-    || cachedChannel?.channelName
-    || cachedChannel?.name
-    || removedChannel?.channelName
-    || removedChannel?.name
-    || usableParsedName
-    || t('频道通知'),
-  ).trim()
+  const displayName = pickNoticeChannelName(channelId, [
+    extra.channelName,
+    cachedChannel?.channelName,
+    cachedChannel?.name,
+    removedChannel?.channelName,
+    removedChannel?.name,
+    usableParsedName,
+  ], t('频道通知'))
   return {
     id: `local-${message.id}`,
     jumpPage: false,
     channelName: displayName,
     channelId,
     uid: '',
-    icon: String(extra.icon || cachedChannel?.icon || cachedChannel?.avatar || removedChannel?.icon || removedChannel?.avatar || ''),
-    logoColor: String(extra.logoColor || cachedChannel?.logoColor || removedChannel?.logoColor || '') || '#ff6b35',
+    icon: textValue(extra.icon || cachedChannel?.icon || cachedChannel?.avatar || removedChannel?.icon || removedChannel?.avatar),
+    logoColor: textValue(extra.logoColor || cachedChannel?.logoColor || removedChannel?.logoColor) || '#ff6b35',
     content,
     sendTime: Number(message.sendTime || Date.now()),
     reqStatus: -1,
@@ -196,8 +293,9 @@ async function loadList(isLoadMore = false) {
     const remoteItems = rows.map(parseNoticeItem)
     const localItems = isLoadMore ? [] : await getLocalNoticeItems()
     const next = isLoadMore ? remoteItems : mergeNoticeItems(remoteItems, localItems)
+    const hydratedNext = await hydrateNoticeChannelNames(next)
 
-    list.value = isLoadMore ? [...list.value, ...next] : next
+    list.value = isLoadMore ? [...list.value, ...hydratedNext] : hydratedNext
     hasMore.value = remoteItems.length >= pageSize
     if (!isLoadMore) syncSidebarPreview(list.value)
   } catch (error) {
