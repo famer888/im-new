@@ -368,6 +368,18 @@ interface LocalFileMetaPayload {
   size: number
 }
 
+type LocalPathFile = File & {
+  path?: string
+  local?: string
+  localPath?: string
+  __localPath?: string
+}
+
+function getLocalFilePath(file: File): string {
+  const localFile = file as LocalPathFile
+  return String(localFile.local || localFile.localPath || localFile.__localPath || localFile.path || '').trim()
+}
+
 function formatReadBurnNotice(seconds: number, enabled: boolean) {
   const name = t('你')
   if (!enabled) return `${name}${t('关闭了阅后即焚')}`
@@ -988,6 +1000,10 @@ function createLocalPathFile(meta: LocalFileMetaPayload): File {
     name: meta.name || 'local-file',
     size: Number(meta.size || 0),
     type: meta.mime || 'application/octet-stream',
+    path: meta.path,
+    local: meta.path,
+    localPath: meta.path,
+    __localPath: meta.path,
     lastModified: Date.now(),
     webkitRelativePath: '',
     arrayBuffer: async () => (await loadFile()).arrayBuffer(),
@@ -1169,7 +1185,27 @@ function handleLinkConfirm(data: { linkText: string; linkValue: string; selectTe
   if (editorRef.value) content.value = editorRef.value.innerHTML
 }
 
-function handleFileSelect() {
+async function handleFileSelect() {
+  if ((window as any).__TAURI_INTERNALS__) {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({
+        multiple: true,
+        directory: false,
+      })
+      const paths = Array.isArray(selected)
+        ? selected.map(String)
+        : selected
+          ? [String(selected)]
+          : []
+      if (paths.length > 0) {
+        await openDroppedFilePaths(paths)
+        return
+      }
+    } catch (error) {
+      console.warn('[message-input] native file select failed:', error)
+    }
+  }
   toolbarFileInputRef.value?.click()
 }
 
@@ -1305,7 +1341,13 @@ function appendLocalFilePreview(
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
   const optimisticId = createOptimisticImageId()
-  const extra = withReadBurnExtra({ fileKey, uploadPending: true, fileTraceId: trace.id })
+  const localPath = getLocalFilePath(file)
+  const extra = withReadBurnExtra({
+    fileKey,
+    uploadPending: true,
+    fileTraceId: trace.id,
+    ...(localPath ? { local: localPath, localPath } : {}),
+  })
   messageStore.appendMessage(conversationId, {
     id: optimisticId,
     customMsgId: optimisticId,
@@ -1319,6 +1361,7 @@ function appendLocalFilePreview(
       mimeType: contentType,
       fileKey,
       uploadPending: true,
+      ...(localPath ? { local: localPath, localPath } : {}),
     }),
     sendTime: Date.now(),
     status: 0,
@@ -1334,6 +1377,7 @@ function appendLocalFilePreview(
     type: file.type,
     suffix,
     contentType,
+    hasLocalPath: Boolean(localPath),
   })
   return { optimisticId }
 }
@@ -2387,6 +2431,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
     } else {
       const trace = createImageTrace()
       const fileKey = createFileKey()
+      const localPath = getLocalFilePath(file)
       const localPreview = appendLocalFilePreview(file, fileKey, trace)
       try {
         fileTraceLog(trace, 'prepare upload after confirm', {
@@ -2420,6 +2465,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         }), MessageType.File, withReadBurnExtra({
           fileKey: uploaded.fileKey,
           ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
+          ...(localPath ? { local: localPath, localPath } : {}),
         }))
       } catch (error) {
         console.error('[message-input] file upload failed:', error)

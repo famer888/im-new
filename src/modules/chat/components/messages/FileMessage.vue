@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
+import { useMessageStore } from '@/stores/useMessageStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
@@ -21,6 +22,7 @@ const props = defineProps<{
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
+const messageStore = useMessageStore()
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isFileHelperChat = computed(
   () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
@@ -94,9 +96,12 @@ const fileExt = computed(() => {
   const ext = String(fileData.value.ext || fileName.value.split('.').pop() || '').toLowerCase()
   return ext.replace(/^\./, '')
 })
-const fileUrl = computed(() =>
-  normalizeUrl(fileData.value.url || fileData.value.fileUrl || fileData.value.path || ''),
-)
+const browserOpenTarget = computed(() => {
+  return pickBrowserOpenTarget()?.target ?? ''
+})
+const remoteOpenTarget = computed(() => {
+  return pickRemoteOpenTarget()?.target ?? ''
+})
 const fileKey = computed(() =>
   String(
     fileData.value.fileKey ||
@@ -116,14 +121,87 @@ const groupId = computed(() => {
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
 
-function normalizeUrl(value: unknown): string {
+type BrowserOpenCandidate = {
+  label: string
+  value: unknown
+}
+
+function browserOpenCandidates(): BrowserOpenCandidate[] {
+  return [...localBrowserOpenCandidates(), ...remoteBrowserOpenCandidates()]
+}
+
+function localBrowserOpenCandidates(): BrowserOpenCandidate[] {
+  return [
+    { label: 'content.local', value: fileData.value.local },
+    { label: 'content.localPath', value: fileData.value.localPath },
+    { label: 'content.local_path', value: fileData.value.local_path },
+    { label: 'content.filePath', value: fileData.value.filePath },
+    { label: 'content.file_path', value: fileData.value.file_path },
+    { label: 'content.path', value: fileData.value.path },
+    { label: 'extra.local', value: extraData.value.local },
+    { label: 'extra.localPath', value: extraData.value.localPath },
+    { label: 'extra.local_path', value: extraData.value.local_path },
+    { label: 'extra.filePath', value: extraData.value.filePath },
+    { label: 'extra.file_path', value: extraData.value.file_path },
+  ]
+}
+
+function remoteBrowserOpenCandidates(): BrowserOpenCandidate[] {
+  return [
+    { label: 'content.url', value: fileData.value.url },
+    { label: 'content.fileUrl', value: fileData.value.fileUrl },
+  ]
+}
+
+function pickBrowserOpenTarget(): { label: string; target: string } | null {
+  for (const candidate of localBrowserOpenCandidates()) {
+    const target = normalizeLocalBrowserTarget(candidate.value)
+    if (target) return { label: candidate.label, target }
+  }
+  return null
+}
+
+function pickRemoteOpenTarget(): { label: string; target: string } | null {
+  for (const candidate of remoteBrowserOpenCandidates()) {
+    const target = normalizeBrowserTarget(candidate.value)
+    if (/^https?:\/\//i.test(target)) return { label: candidate.label, target }
+  }
+  return null
+}
+
+function normalizeLocalBrowserTarget(value: unknown): string {
+  const target = normalizeBrowserTarget(value)
+  if (!target) return ''
+  if (/^https?:\/\//i.test(target)) return ''
+  return target
+}
+
+function normalizeBrowserTarget(value: unknown): string {
   const raw = String(value || '').trim()
+  if (!raw) return ''
   if (raw.startsWith('//')) return `https:${raw}`
-  return raw
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (/^file:/i.test(raw)) return fileUrlToLocalPath(raw)
+  if (raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)) return raw
+  return ''
+}
+
+function fileUrlToLocalPath(src: string): string {
+  try {
+    const parsed = new URL(String(src || '').trim())
+    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
+    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return String(src || '').trim().replace(/^file:\/\/?/i, '')
+  }
 }
 
 function safeName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_').replace(/^\.+$/, '_') || 'file'
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/^\.+$/, '_')
+    .trim() || 'file'
 }
 
 function fallbackPlainFileKey(key: string): string {
@@ -131,11 +209,6 @@ function fallbackPlainFileKey(key: string): string {
   if (!raw) return ''
   if (raw.length <= 32 || !/^[0-9a-f]+$/i.test(raw)) return raw
   return ''
-}
-
-function cleanupDownloadEvents() {
-  stopDownloadEvents.forEach((unlisten) => unlisten())
-  stopDownloadEvents = []
 }
 
 async function resolveFileKey(): Promise<string> {
@@ -168,6 +241,50 @@ async function localFileExists(path: string): Promise<boolean> {
   }
 }
 
+function cleanupDownloadEvents() {
+  stopDownloadEvents.forEach(stop => stop())
+  stopDownloadEvents = []
+}
+
+function conversationCacheFolder(): string {
+  const convId = String(props.message.conversationId || chatStore.currentConversationId || '')
+  const [, typedId = ''] = convId.split('_')
+  if (convId.startsWith('1_')) return `group-${safeName(typedId)}`
+  if (convId.startsWith('2_')) return `channel-${safeName(typedId)}`
+
+  const peerId = typedId ||
+    (props.message.senderId && props.message.senderId !== authStore.uid ? props.message.senderId : '') ||
+    chatStore.currentConversation?.targetId ||
+    'unknown'
+  return `user-${safeName(String(peerId))}`
+}
+
+function remoteCacheFileName(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const last = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '')
+    return safeName(last || fileName.value)
+  } catch {
+    const last = String(url || '').split(/[/?#]/).filter(Boolean).pop() || ''
+    return safeName(last || fileName.value)
+  }
+}
+
+async function getDownloadSavePath(url: string): Promise<string> {
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const baseDir = await appDataDir()
+  const uid = safeName(String(authStore.uid || 'unknown'))
+  const msgId = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
+  return join(
+    baseDir,
+    'Local Storage',
+    uid,
+    conversationCacheFolder(),
+    msgId,
+    remoteCacheFileName(url),
+  )
+}
+
 function waitForDownloadFile(url: string, key: string, savePath: string, msgId: string): Promise<void> {
   return new Promise(async (resolve, reject) => {
     let settled = false
@@ -197,7 +314,7 @@ function waitForDownloadFile(url: string, key: string, savePath: string, msgId: 
         fileKey: key,
         savePath,
         msgId,
-        logTag: 'file',
+        logTag: 'file-open',
         emitDataUrl: false,
       })
     } catch (error) {
@@ -210,23 +327,154 @@ function waitForDownloadFile(url: string, key: string, savePath: string, msgId: 
   })
 }
 
-async function openLocalFile(path: string) {
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('open_file', { path })
+function cacheLocalPathOnMessage(localPath: string) {
+  const messageId = props.message.id || props.message.customMsgId || ''
+  if (!messageId) return
+
+  const nextContent = {
+    ...(fileData.value || {}),
+    local: localPath,
+    localPath,
+  }
+  const nextExtra = {
+    ...(extraData.value || {}),
+    local: localPath,
+    localPath,
+  }
+
+  messageStore.updateMessage(messageId, {
+    content: JSON.stringify(nextContent),
+    extra: JSON.stringify(nextExtra),
+  })
 }
 
-async function handleDownload() {
+function stringifyForLog(value: unknown): string {
+  if (value === undefined) return ''
+  if (value === null) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function shortValue(value: unknown, maxLength = 260): string {
+  const text = stringifyForLog(value)
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}...`
+}
+
+function describeBrowserTarget(target: string) {
+  if (/^https?:\/\//i.test(target)) {
+    try {
+      const url = new URL(target)
+      return {
+        kind: 'remote-url',
+        protocol: url.protocol,
+        host: url.host,
+        pathname: url.pathname,
+      }
+    } catch {
+      return { kind: 'remote-url' }
+    }
+  }
+  if (target.startsWith('/') || /^[A-Za-z]:[\\/]/.test(target)) {
+    return { kind: 'local-path' }
+  }
+  return { kind: 'unknown' }
+}
+
+function browserOpenCandidateLog(selectedLabel?: string) {
+  return browserOpenCandidates()
+    .map(candidate => {
+      const raw = stringifyForLog(candidate.value).trim()
+      if (!raw) return null
+      const normalized = normalizeBrowserTarget(candidate.value)
+      return {
+        label: candidate.label,
+        raw: shortValue(raw),
+        normalized: shortValue(normalized),
+        targetInfo: normalized ? describeBrowserTarget(normalized) : null,
+        selected: candidate.label === selectedLabel,
+      }
+    })
+    .filter(Boolean)
+}
+
+function logFileOpen(
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  data: Record<string, unknown>,
+) {
+  const payload = {
+    messageId: props.message.id,
+    customMsgId: props.message.customMsgId,
+    senderId: props.message.senderId,
+    fileName: fileName.value,
+    fileExt: fileExt.value,
+    ...data,
+  }
+  const consoleMethod = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  consoleMethod(`[file-open] ${message}`, payload)
+
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) =>
+      invoke('image_send_log', {
+        payload: {
+          level,
+          message: `[file-open] ${message}`,
+          data: payload,
+        },
+      }),
+    )
+    .catch(() => undefined)
+}
+
+async function handleOpenInBrowser() {
   if (isOpening.value) return
   if (!(window as any).__TAURI_INTERNALS__) return
 
+  const targetMatch = pickBrowserOpenTarget()
+  const remoteMatch = pickRemoteOpenTarget()
+  logFileOpen('warn', 'click', {
+    localSelected: targetMatch
+      ? {
+          label: targetMatch.label,
+          target: targetMatch.target,
+          targetInfo: describeBrowserTarget(targetMatch.target),
+        }
+      : null,
+    remoteSelected: remoteMatch
+      ? {
+          label: remoteMatch.label,
+          target: remoteMatch.target,
+          targetInfo: describeBrowserTarget(remoteMatch.target),
+        }
+      : null,
+    candidates: browserOpenCandidateLog(targetMatch?.label),
+    contentKeys: Object.keys(fileData.value || {}),
+    extraKeys: Object.keys(extraData.value || {}),
+    contentHead: shortValue(props.message.content, 360),
+    extraHead: shortValue(props.message.extra, 360),
+  })
+
   if (DANGEROUS_EXTENSIONS.has(fileExt.value)) {
+    logFileOpen('warn', 'blocked dangerous extension', {
+      extension: fileExt.value,
+    })
     eventBus.emit('show-toast', { message: '高危文件不支持直接打开', type: 'error' })
     return
   }
 
-  const url = fileUrl.value
-  if (!url) {
-    eventBus.emit('show-toast', { message: '文件还未上传完成', type: 'error' })
+  let target = targetMatch?.target || browserOpenTarget.value
+  const remoteTarget = remoteMatch?.target || remoteOpenTarget.value
+  if (!target && !remoteTarget) {
+    logFileOpen('warn', 'no open target', {
+      candidates: browserOpenCandidateLog(),
+    })
+    eventBus.emit('show-toast', { message: '文件链接为空', type: 'error' })
     return
   }
 
@@ -235,20 +483,55 @@ async function handleDownload() {
   cleanupDownloadEvents()
 
   try {
-    const { appDataDir, join } = await import('@tauri-apps/api/path')
-    const baseDir = await appDataDir()
-    const id = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
-    const savePath = await join(baseDir, 'file-cache', id, safeName(fileName.value))
+    const { invoke } = await import('@tauri-apps/api/core')
+    if (!target || !(await localFileExists(target))) {
+      if (!remoteTarget) {
+        logFileOpen('warn', 'local missing and no remote fallback', {
+          target,
+          source: targetMatch?.label || null,
+        })
+        eventBus.emit('show-toast', { message: '文件未下载到本地', type: 'error' })
+        return
+      }
 
-    if (!(await localFileExists(savePath))) {
+      const savePath = target || await getDownloadSavePath(remoteTarget)
       const key = await resolveFileKey()
-      if (!key) throw new Error('文件密钥缺失，无法打开')
-      await waitForDownloadFile(url, key, savePath, `file-open-${id}-${Date.now()}`)
+      logFileOpen('warn', 'download for browser local open', {
+        remoteTarget,
+        savePath,
+        source: remoteMatch?.label || null,
+        hasFileKey: Boolean(key),
+        fileKeyLen: key.length,
+      })
+      await waitForDownloadFile(
+        remoteTarget,
+        key,
+        savePath,
+        `file-open-${safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)}-${Date.now()}`,
+      )
+      if (token !== openToken) return
+      target = savePath
+      cacheLocalPathOnMessage(savePath)
     }
 
-    if (token !== openToken) return
-    await openLocalFile(savePath)
+    logFileOpen('warn', 'invoke open_in_browser', {
+      target,
+      targetInfo: describeBrowserTarget(target),
+      source: targetMatch?.label || null,
+    })
+    await invoke('open_in_browser', { target })
+    logFileOpen('info', 'open_in_browser success', {
+      target,
+      targetInfo: describeBrowserTarget(target),
+      source: targetMatch?.label || null,
+    })
   } catch (error) {
+    logFileOpen('error', 'open_in_browser failed', {
+      target,
+      targetInfo: describeBrowserTarget(target),
+      source: targetMatch?.label || null,
+      error: (error as Error)?.message || String(error),
+    })
     eventBus.emit('show-toast', {
       message: (error as Error)?.message || '文件打开失败',
       type: 'error',
@@ -267,7 +550,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['file-message', { self: displayAsSelf }]" @click="handleDownload">
+  <div :class="['file-message', { self: displayAsSelf }]" @click="handleOpenInBrowser">
     <div class="file-bubble">
       <div class="file-info">
         <h2 class="file-name">{{ fileData.name || fileData.fileName || '文件' }}</h2>

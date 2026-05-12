@@ -173,6 +173,7 @@ pub fn run() {
             commands::file::file_exists,
             commands::file::reveal_file_in_directory,
             commands::file::open_file,
+            commands::file::open_in_browser,
             commands::media::open_media_window,
             commands::media::media_window_minimize,
             commands::media::media_window_toggle_maximize,
