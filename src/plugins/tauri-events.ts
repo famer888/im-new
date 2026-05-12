@@ -62,6 +62,145 @@ function normalizeReceiptTime(value: unknown): number {
   return n < 10_000_000_000 ? n * 1000 : n
 }
 
+type GroupEventMemberPatch = {
+  groupId: string
+  userId: string
+  nickname: string | null
+  avatar: string | null
+  role: number
+}
+
+function getGroupEventUserId(raw: any): string {
+  return String(raw?.userId ?? raw?.uid ?? raw?.id ?? raw?.user?.uid ?? '').trim()
+}
+
+function getGroupEventUserName(raw: any): string | null {
+  return String(
+    raw?.nickname
+      ?? raw?.nickName
+      ?? raw?.remarkName
+      ?? raw?.name
+      ?? raw?.user?.nickName
+      ?? '',
+  ).trim() || null
+}
+
+function getGroupEventUserAvatar(raw: any): string | null {
+  return String(raw?.avatar ?? raw?.icon ?? raw?.user?.icon ?? '').trim() || null
+}
+
+function normalizeGroupEventMember(
+  raw: any,
+  groupId: string,
+  existingRole?: number,
+): GroupEventMemberPatch | null {
+  const userId = getGroupEventUserId(raw)
+  if (!userId) return null
+  return {
+    groupId,
+    userId,
+    nickname: getGroupEventUserName(raw),
+    avatar: getGroupEventUserAvatar(raw),
+    role: Number(raw?.role ?? raw?.type ?? existingRole ?? 2),
+  }
+}
+
+function collectGroupEventMemberPatches(
+  groupStore: ReturnType<typeof useGroupStore>,
+  groupId: string,
+  extra: any,
+) {
+  const existingMembers = groupStore.getMembers(groupId)
+  const existingRoleMap = new Map(existingMembers.map((member) => [member.userId, member.role]))
+  const patchMap = new Map<string, GroupEventMemberPatch>()
+
+  const addPatch = (raw: any) => {
+    const userId = getGroupEventUserId(raw)
+    const member = normalizeGroupEventMember(raw, groupId, userId ? existingRoleMap.get(userId) : undefined)
+    if (member) patchMap.set(member.userId, member)
+  }
+  const addUidPatch = (uid: unknown) => {
+    const userId = String(uid ?? '').trim()
+    if (!userId || userId === '0') return
+    addPatch({ userId, role: existingRoleMap.get(userId) ?? 2 })
+  }
+  const removeMode = shouldRemoveGroupEventMembers(extra)
+  const reqType = Number(extra?.groupReqType ?? 0)
+
+  if (Array.isArray(extra?.members)) {
+    for (const item of extra.members) addPatch(item)
+  }
+
+  if (removeMode) {
+    addPatch(extra?.targetUser)
+    if (reqType === 6) {
+      addUidPatch(extra?.receiveUid)
+    } else if (reqType === 7) {
+      addPatch(extra?.fromUser)
+      addUidPatch(extra?.fromUid ?? extra?.sendUid ?? extra?.receiveUid)
+    }
+  } else {
+    addPatch(extra?.fromUser)
+    addPatch(extra?.targetUser)
+    addPatch(extra?.checkUser)
+    addUidPatch(extra?.fromUid ?? extra?.sendUid)
+  }
+
+  return Array.from(patchMap.values())
+}
+
+function shouldRemoveGroupEventMembers(extra: any): boolean {
+  const reqType = Number(extra?.groupReqType ?? 0)
+  return reqType === 6 || reqType === 7 || reqType === 18
+}
+
+function isGroupEventSource(source: string): boolean {
+  return (
+    source === 'group-event'
+    || source === 'group-update-event'
+    || source === 'group-event-req'
+    || source === 'group-event-req-chat'
+  )
+}
+
+function applyGroupEventMemberPatch(groupStore: ReturnType<typeof useGroupStore>, groupId: string, extra: any) {
+  const patches = collectGroupEventMemberPatches(groupStore, groupId, extra)
+  if (!patches.length) return
+
+  const existingMembers = groupStore.getMembers(groupId)
+  const existingMap = new Map(existingMembers.map((member) => [member.userId, member]))
+  const beforeCount = existingMembers.length
+
+  if (shouldRemoveGroupEventMembers(extra)) {
+    for (const patch of patches) existingMap.delete(patch.userId)
+  } else {
+    for (const patch of patches) {
+      const previous = existingMap.get(patch.userId)
+      existingMap.set(patch.userId, {
+        ...previous,
+        ...patch,
+        nickname: patch.nickname || previous?.nickname || patch.userId,
+        avatar: patch.avatar || previous?.avatar || null,
+        role: patch.role || previous?.role || 2,
+      })
+    }
+  }
+
+  const mergedMembers = Array.from(existingMap.values())
+  groupInviteDebug('merge group event members before append message', {
+    groupId,
+    source: String(extra?.source || ''),
+    groupReqType: Number(extra?.groupReqType ?? 0),
+    handleType: Number(extra?.handleType ?? 0),
+    beforeCount,
+    patchCount: patches.length,
+    afterCount: mergedMembers.length,
+    patchMemberIds: patches.map((member) => member.userId),
+    removeMode: shouldRemoveGroupEventMembers(extra),
+  })
+  groupStore.setGroupMembers(groupId, mergedMembers)
+}
+
 interface ReadProcessingResult {
   readMessageIds: string[]
   scheduledDeletions: Array<{
@@ -839,7 +978,7 @@ export async function setupTauriListeners() {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
         const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
         const source = String(extra?.source || '')
-        return convId.startsWith('1_') && source.includes('group-event')
+        return convId.startsWith('1_') && isGroupEventSource(source)
       })
       const hasGroupNotificationMessages = normalized.some((m: any) =>
         String(m?.conversationId ?? m?.conversation_id ?? '') === '1_invitation',
@@ -866,41 +1005,37 @@ export async function setupTauriListeners() {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
         const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
         const source = String(extra?.source || '')
-        if (!convId.startsWith('1_') || !source.includes('group-event')) continue
+        if (!convId.startsWith('1_') || !isGroupEventSource(source)) continue
 
         const groupId = String(extra?.groupId || convId.split('_')[1] || '')
         if (!groupId) continue
 
+        const existingGroup = groupStore.getGroup(groupId)
+        const cachedMemberCount = Number(existingGroup?.memberCount || 0)
+        const cachedMemberMapCount = groupStore.getMembers(groupId).length
+        const eventMemberCount = Number(extra?.memberCount || 0)
+        const nextMemberCount = Math.max(cachedMemberCount, cachedMemberMapCount, eventMemberCount)
         groupInviteDebug('upsert group before append message', {
           conversationId: convId,
           groupId,
           groupName: String(extra?.groupName || ''),
-          existedBefore: Boolean(groupStore.getGroup(groupId)),
-          memberCount: Number(extra?.memberCount || 0),
+          existedBefore: Boolean(existingGroup),
+          eventMemberCount,
+          cachedMemberCount,
+          cachedMemberMapCount,
+          nextMemberCount,
         })
         groupStore.upsertGroup({
           id: groupId,
           groupId,
-          name: String(extra?.groupName || groupStore.getGroup(groupId)?.name || groupId),
+          name: String(extra?.groupName || existingGroup?.name || groupId),
           avatar: extra?.groupAvatar || null,
-          memberCount: Number(extra?.memberCount || groupStore.getGroup(groupId)?.memberCount || 0),
+          memberCount: nextMemberCount,
           isMuted: Boolean(extra?.groupMuted || false),
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         })
 
-        if (Array.isArray(extra?.members) && extra.members.length > 0) {
-          groupStore.setGroupMembers(groupId, extra.members.map((item: any) => ({
-            groupId,
-            userId: String(item?.userId || ''),
-            nickname: item?.nickname || null,
-            avatar: item?.avatar || null,
-            role: Number(item?.role || 0),
-          })).filter((item: any) => item.userId))
-          groupInviteDebug('set group members before append message', {
-            groupId,
-            count: extra.members.length,
-          })
-        }
+        applyGroupEventMemberPatch(groupStore, groupId, extra)
       }
       for (const m of normalized) {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')

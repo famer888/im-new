@@ -5,6 +5,10 @@ import { getGroupContactList, getGroupMemberList, groupMemberOnLineStatusList } 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const memberLoadRequestMap = new Map<string, Promise<GroupMember[]>>()
 
+interface LoadMembersOptions {
+  forceRemote?: boolean
+}
+
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
@@ -12,6 +16,26 @@ function isTauri(): boolean {
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<T>(cmd, args)
+}
+
+function formatDebugError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function groupMemberRefreshDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
+  const payload = data || {}
+  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
+  log(`[group-member-refresh-debug][group-store] ${message}`, payload)
+  if (!isTauri()) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[group-member-refresh-debug][group-store] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
 }
 
 export interface Group {
@@ -43,6 +67,16 @@ export const useGroupStore = defineStore('group', () => {
   const loading = ref(false)
 
   function setGroupMembers(groupId: string, members: GroupMember[]) {
+    const previousMembers = memberMap.value.get(groupId) ?? []
+    const previousGroup = getGroup(groupId)
+    groupMemberRefreshDebug('setGroupMembers before', {
+      groupId,
+      previousMemberMapCount: previousMembers.length,
+      nextMemberCount: members.length,
+      previousGroupMemberCount: previousGroup?.memberCount ?? null,
+      nextMemberIds: members.map((member) => member.userId).slice(0, 10),
+    })
+
     const next = new Map(memberMap.value)
     next.set(groupId, members)
     memberMap.value = next
@@ -54,6 +88,13 @@ export const useGroupStore = defineStore('group', () => {
         memberCount: members.length,
       })
     }
+
+    groupMemberRefreshDebug('setGroupMembers after', {
+      groupId,
+      memberMapCount: memberMap.value.get(groupId)?.length ?? 0,
+      groupMemberCount: getGroup(groupId)?.memberCount ?? null,
+      changed: previousMembers.length !== members.length || previousGroup?.memberCount !== getGroup(groupId)?.memberCount,
+    })
   }
 
   function normalizeGroup(item: any): Group {
@@ -119,37 +160,75 @@ export const useGroupStore = defineStore('group', () => {
     }
   }
 
-  async function loadMembers(uid: string, groupId: string) {
-    const existingRequest = memberLoadRequestMap.get(groupId)
+  async function loadMembers(uid: string, groupId: string, options: LoadMembersOptions = {}) {
+    const requestKey = `${groupId}:${options.forceRemote ? 'remote' : 'default'}`
+    const existingRequest = memberLoadRequestMap.get(requestKey)
+    groupMemberRefreshDebug('loadMembers called', {
+      uid,
+      groupId,
+      forceRemote: Boolean(options.forceRemote),
+      requestKey,
+      hasExistingRequest: Boolean(existingRequest),
+      currentMemberMapCount: memberMap.value.get(groupId)?.length ?? 0,
+      currentGroupMemberCount: getGroup(groupId)?.memberCount ?? null,
+    })
     if (existingRequest) return existingRequest
 
     const request = (async () => {
       let members: GroupMember[] | null = null
 
-      if (isTauri()) {
+      if (isTauri() && !options.forceRemote) {
         try {
           const localMembers = await tauriInvoke<any[]>('get_group_members', { uid, groupId })
+          groupMemberRefreshDebug('local members loaded', {
+            groupId,
+            localCount: Array.isArray(localMembers) ? localMembers.length : -1,
+          })
           if (Array.isArray(localMembers) && localMembers.length > 0) {
             members = localMembers.map((item: any) => normalizeMember(item, groupId))
           }
         } catch (e) {
+          groupMemberRefreshDebug('local loadMembers failed', {
+            groupId,
+            error: formatDebugError(e),
+          }, 'error')
           console.error('[GroupStore] local loadMembers failed:', e)
         }
       }
 
       if (!members) {
+        groupMemberRefreshDebug('remote members loading', {
+          groupId,
+          reason: options.forceRemote ? 'forceRemote' : 'noLocalMembers',
+        })
         members = await loadMembersViaApi(groupId)
       }
 
+      groupMemberRefreshDebug('members loaded before online merge', {
+        groupId,
+        count: members.length,
+        memberIds: members.map((member) => member.userId).slice(0, 10),
+      })
       members = mergeMembersWithExistingStatuses(groupId, members)
       members = await loadMemberOnlineStatuses(groupId, members)
+      groupMemberRefreshDebug('members loaded after online merge', {
+        groupId,
+        count: members.length,
+        memberIds: members.map((member) => member.userId).slice(0, 10),
+      })
       setGroupMembers(groupId, members)
       return members
     })().finally(() => {
-      memberLoadRequestMap.delete(groupId)
+      groupMemberRefreshDebug('loadMembers finished', {
+        groupId,
+        requestKey,
+        memberMapCount: memberMap.value.get(groupId)?.length ?? 0,
+        groupMemberCount: getGroup(groupId)?.memberCount ?? null,
+      })
+      memberLoadRequestMap.delete(requestKey)
     })
 
-    memberLoadRequestMap.set(groupId, request)
+    memberLoadRequestMap.set(requestKey, request)
     return request
   }
 
@@ -161,6 +240,11 @@ export const useGroupStore = defineStore('group', () => {
 
     while (hasMore) {
       try {
+        groupMemberRefreshDebug('remote page request', {
+          groupId,
+          pageNum,
+          pageSize,
+        })
         const resp = await getGroupMemberList({
           // 保持字符串 ID，避免大整数群 ID 被 Number 截断后查不到成员
           groupId,
@@ -169,6 +253,14 @@ export const useGroupStore = defineStore('group', () => {
           time: 0,
         })
         const list = resp.members || []
+        groupMemberRefreshDebug('remote page response', {
+          groupId,
+          pageNum,
+          pageCount: list.length,
+          totalLoaded: allMembers.length + list.length,
+          errCode: (resp as any)?.commonResult?.errCode ?? null,
+          errMsg: (resp as any)?.commonResult?.errMsg ?? '',
+        })
         for (const item of list as any[]) {
           allMembers.push(normalizeMember(item, groupId))
         }
@@ -176,11 +268,21 @@ export const useGroupStore = defineStore('group', () => {
         hasMore = list.length >= pageSize
         pageNum++
       } catch (e) {
+        groupMemberRefreshDebug('remote page failed', {
+          groupId,
+          pageNum,
+          error: formatDebugError(e),
+        }, 'error')
         console.error('[GroupStore] API loadMembers page failed:', e)
         hasMore = false
       }
     }
 
+    groupMemberRefreshDebug('remote members complete', {
+      groupId,
+      total: allMembers.length,
+      memberIds: allMembers.map((member) => member.userId).slice(0, 10),
+    })
     return sortMembersForDisplay(allMembers)
   }
 
