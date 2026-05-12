@@ -8,7 +8,7 @@
           <img class="close" src="@/assets/images/common/close-icon.png" @click="$emit('close')" />
         </div>
         <SearchInput v-model="searchKey" :placeholder="$t('搜索')" class="search" />
-        <div class="form-link" @click="copyGroupInviteLink">
+        <div :class="['form-link', { disabled: isCopyingInviteLink }]" @click="copyGroupInviteLink">
           <img src="@/assets/images/system/link.png" />
           <span class="title">{{ $t('通过邀请链接加入群组') }}</span>
         </div>
@@ -18,7 +18,7 @@
         <li
           v-for="friend in filteredFriends"
           :key="friend.id"
-          :class="['friend-item', { disable: pendingAuditIds.has(friend.id) }]"
+          :class="['friend-item', { disable: pendingAuditIds.has(friend.id) || isInviting }]"
           @click="selectFriend(friend)"
         >
           <div class="left">
@@ -36,7 +36,7 @@
         </li>
       </ul>
 
-      <div class="primaryBtn" @click="handleInvite">{{ $t('完成') }}</div>
+      <div :class="['primaryBtn', { disabled: isInviting }]" @click="handleInvite">{{ $t('完成') }}</div>
     </div>
 
     <Toast
@@ -76,11 +76,32 @@ const emit = defineEmits<{
 const searchKey = ref('')
 const selectedIds = reactive(new Set<string>())
 const pendingAuditIds = ref(new Set<string>())
+const isInviting = ref(false)
+const isCopyingInviteLink = ref(false)
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const toastDuration = ref(2000)
+
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+}
+
+function groupInviteDebug(message: string, data?: Record<string, unknown>) {
+  const payload = data || {}
+  console.warn(`[group-invite-debug][invite-dialog] ${message}`, payload)
+  if (!isTauri()) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level: 'warn',
+        message: `[group-invite-debug][invite-dialog] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
 
 function showToast(msg: string, type: 'success' | 'error' = 'success', duration = 2000) {
   toastMessage.value = msg
@@ -111,6 +132,8 @@ watch(
   async (visible) => {
     searchKey.value = ''
     selectedIds.clear()
+    isInviting.value = false
+    isCopyingInviteLink.value = false
     if (visible) {
       await loadPendingAuditIds()
     } else {
@@ -136,6 +159,7 @@ const filteredFriends = computed(() => {
 })
 
 function selectFriend(friend: Contact) {
+  if (isInviting.value) return
   if (pendingAuditIds.value.has(friend.id)) return
   if (selectedIds.has(friend.id)) {
     selectedIds.delete(friend.id)
@@ -159,18 +183,35 @@ function getNeedCheckMessage(ids: Array<number | string>) {
 }
 
 async function handleInvite() {
+  if (isInviting.value) return
   if (selectedIds.size === 0) {
     showToast($t('请选择邀请的好友'), 'error')
     return
   }
 
+  isInviting.value = true
+  const members = Array.from(selectedIds)
+  groupInviteDebug('groupMember invite request', {
+    groupId: props.groupId,
+    members,
+  })
   try {
     const res = await groupMember({
       op: 0,
       groupId: props.groupId,
-      members: Array.from(selectedIds),
+      members,
     })
     const code = Number((res as any)?.commonResult?.errCode || 0)
+    groupInviteDebug('groupMember invite response', {
+      groupId: props.groupId,
+      members,
+      code,
+      errMsg: (res as any)?.commonResult?.errMsg,
+      errorDesc: (res as any)?.errorDesc,
+      needCheckUids: Array.isArray((res as any)?.needCheckUids)
+        ? (res as any).needCheckUids.map((id: number | string) => String(id))
+        : [],
+    })
     if (code === 200) {
       const needCheckUids = Array.isArray((res as any)?.needCheckUids)
         ? ((res as any).needCheckUids as Array<number | string>)
@@ -195,11 +236,20 @@ async function handleInvite() {
     showToast((res as any)?.commonResult?.errMsg || (res as any)?.errorDesc || $t('邀请失败'), 'error')
   } catch (error) {
     console.error('Invite failed:', error)
+    groupInviteDebug('groupMember invite failed', {
+      groupId: props.groupId,
+      members,
+      error: error instanceof Error ? error.message : String(error),
+    })
     showToast($t('邀请失败'), 'error')
+  } finally {
+    isInviting.value = false
   }
 }
 
 async function copyGroupInviteLink() {
+  if (isCopyingInviteLink.value) return
+  isCopyingInviteLink.value = true
   try {
     const res = await groupQrCode({ groupId: props.groupId, force: false })
     const inviteLink = res.shortLink || res.qrUrl || ''
@@ -212,6 +262,8 @@ async function copyGroupInviteLink() {
   } catch (error) {
     console.error('[InviteFriendDialog] copy invite link failed:', error)
     showToast($t('获取邀请链接失败'), 'error')
+  } finally {
+    isCopyingInviteLink.value = false
   }
 }
 </script>
@@ -292,6 +344,12 @@ async function copyGroupInviteLink() {
     font-size: 14px;
     color: #178AFF;
   }
+
+  &.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
 }
 
 .friend-list {
@@ -367,6 +425,12 @@ async function copyGroupInviteLink() {
 
   &:hover {
     opacity: 0.9;
+  }
+
+  &.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    pointer-events: none;
   }
 }
 </style>
