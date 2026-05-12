@@ -42,6 +42,57 @@ export const useChannelStore = defineStore('channel', () => {
     return `${uid}-removed-channel-ids`
   }
 
+  function removedChannelMetaKey(uid: string): string {
+    return `${uid}-removed-channel-meta`
+  }
+
+  function getRemovedChannelMetaMap(uid = activeUid): Record<string, Partial<Channel>> {
+    if (!uid) return {}
+    try {
+      const raw = localStorage.getItem(removedChannelMetaKey(uid))
+      const parsed = raw ? JSON.parse(raw) : {}
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function saveRemovedChannelMetaMap(uid: string, meta: Record<string, Partial<Channel>>) {
+    if (!uid) return
+    try {
+      localStorage.setItem(removedChannelMetaKey(uid), JSON.stringify(meta))
+    } catch { /* storage unavailable */ }
+  }
+
+  function getRemovedChannelMeta(channelId: string | number, uid = activeUid): Partial<Channel> | null {
+    const id = String(channelId || '').trim()
+    if (!id) return null
+    return getRemovedChannelMetaMap(uid)[id] || null
+  }
+
+  function rememberRemovedChannelMeta(uid: string, channelId: string, channel?: Partial<Channel> | null) {
+    if (!uid || !channelId || !channel) return
+    const meta = getRemovedChannelMetaMap(uid)
+    meta[channelId] = {
+      id: channelId,
+      channelId,
+      name: channel.name ?? channel.channelName ?? null,
+      channelName: channel.channelName ?? channel.name ?? null,
+      avatar: channel.avatar ?? channel.icon ?? null,
+      icon: channel.icon ?? channel.avatar ?? null,
+      logoColor: channel.logoColor ?? null,
+    }
+    saveRemovedChannelMetaMap(uid, meta)
+  }
+
+  function forgetRemovedChannelMeta(uid: string, channelId: string) {
+    if (!uid || !channelId) return
+    const meta = getRemovedChannelMetaMap(uid)
+    if (!meta[channelId]) return
+    delete meta[channelId]
+    saveRemovedChannelMetaMap(uid, meta)
+  }
+
   function getRemovedChannelIds(uid = activeUid): Set<string> {
     if (!uid) return new Set()
     try {
@@ -72,6 +123,7 @@ export const useChannelStore = defineStore('channel', () => {
     const ids = getRemovedChannelIds(uid)
     if (!ids.delete(channelId)) return
     saveRemovedChannelIds(uid, ids)
+    forgetRemovedChannelMeta(uid, channelId)
   }
 
   function isChannelRemoved(channelId: string, uid = activeUid): boolean {
@@ -345,6 +397,7 @@ export const useChannelStore = defineStore('channel', () => {
     const id = String(channelId || '').trim()
     if (!id) return
     activeUid = uid || activeUid
+    rememberRemovedChannelMeta(activeUid, id, getChannel(id))
     markChannelRemoved(activeUid, id)
     channels.value = channels.value.filter((item) => String(item.id || item.channelId || '') !== id)
 
@@ -396,6 +449,7 @@ export const useChannelStore = defineStore('channel', () => {
     loading,
     loadChannels,
     getChannel,
+    getRemovedChannelMeta,
     patchChannel,
     removeChannel,
     refreshChannelDetail,
