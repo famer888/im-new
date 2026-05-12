@@ -823,6 +823,9 @@ export async function setupTauriListeners() {
         const source = String(extra?.source || '')
         return convId.startsWith('1_') && source.includes('group-event')
       })
+      const hasGroupNotificationMessages = normalized.some((m: any) =>
+        String(m?.conversationId ?? m?.conversation_id ?? '') === '1_invitation',
+      )
       if (groupEventMessages.length > 0) {
         groupInviteDebug('msg:batch received group event messages', {
           count: groupEventMessages.length,
@@ -918,6 +921,9 @@ export async function setupTauriListeners() {
         }),
       })
       messageStore.batchAppendMessages(normalized as Message[])
+      if (hasGroupNotificationMessages) {
+        eventBus.emit('group-invitation:update')
+      }
       if (groupEventMessages.length > 0) {
         groupInviteDebug('after batchAppendMessages', {
           conversationCountAfter: chatStore.conversations.length,

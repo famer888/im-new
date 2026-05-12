@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, isFileHelperTargetId, type Conversation } from '@/stores/useChatStore'
+import {
+  GROUP_NOTIFICATION_TARGET_ID,
+  useChatStore,
+  isFileHelperTargetId,
+  type Conversation,
+} from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -12,6 +17,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
+import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 
 const { t, locale } = useI18n()
 const chatStore = useChatStore()
@@ -27,6 +33,9 @@ function isNotFileHelper(c: Conversation): boolean {
 }
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return true
+  }
   switch (conv.type) {
     case ConversationType.Friend:
       return Boolean(contactStore.getContact(conv.targetId))
@@ -66,6 +75,9 @@ const displayList = computed(() =>
 )
 
 function getName(conv: Conversation): string {
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return t('群通知')
+  }
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conv.targetId)
@@ -81,6 +93,9 @@ function getName(conv: Conversation): string {
 }
 
 function getAvatar(conv: Conversation): string | null {
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return groupNotificationIcon
+  }
   switch (conv.type) {
     case ConversationType.Friend:
       return contactStore.getContact(conv.targetId)?.avatar ?? null
@@ -105,6 +120,9 @@ function getAvatarColor(conv: Conversation): string | undefined {
 }
 
 function getAvatarType(conv: Conversation): 'friend' | 'group' | 'channel' {
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return 'group'
+  }
   switch (conv.type) {
     case ConversationType.Group:
       return 'group'
@@ -211,6 +229,13 @@ function getDigest(conv: Conversation): string {
 }
 
 function handleSelect(conv: Conversation) {
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    chatStore.setCurrentConversation(conv.id)
+    chatStore.clearGroupNotificationUnread()
+    uiStore.setRightPanel('none')
+    uiStore.setDetailView('group-invitation')
+    return
+  }
   if (conv.type === ConversationType.Friend && !isFileHelperTargetId(conv.targetId)) {
     void contactStore.ensureContactDetailLoaded(conv.targetId)
   }

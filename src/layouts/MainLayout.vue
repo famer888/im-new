@@ -23,6 +23,7 @@ import FriendExamine from '@/modules/contacts/components/FriendExamine.vue'
 import AddContactPreview from '@/modules/contacts/components/AddContactPreview.vue'
 import AddGroupPreview from '@/modules/contacts/components/AddGroupPreview.vue'
 import GroupDetail from '@/modules/groups/views/GroupDetail.vue'
+import GroupInvitation from '@/modules/groups/views/GroupInvitation.vue'
 import ChannelDetail from '@/modules/channels/views/ChannelDetail.vue'
 import RightPanel from '@/modules/chat/components/panels/RightPanel.vue'
 
@@ -1925,6 +1926,9 @@ async function handleForward(targetConvId: string) {
         </template>
         <template v-else-if="uiStore.detailView === 'friend-examine'">
           <FriendExamine />
+        </template>
+        <template v-else-if="uiStore.detailView === 'group-invitation'">
+          <GroupInvitation />
         </template>
         <template v-else-if="uiStore.detailView === 'add-contact'">
           <AddContactPreview />

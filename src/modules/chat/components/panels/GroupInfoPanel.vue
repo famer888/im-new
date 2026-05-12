@@ -164,7 +164,7 @@ async function toggleJoinCheck() {
   try {
     await groupUpdate({
       op: 6,
-      groupParam: { groupId: Number(conv.value.targetId), joinCheck: bfJoinCheck.value },
+      groupParam: { groupId: conv.value.targetId, joinCheck: bfJoinCheck.value },
     })
   } catch (e) {
     bfJoinCheck.value = !bfJoinCheck.value

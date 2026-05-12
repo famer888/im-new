@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import {
   useChatStore,
   FILE_HELPER_TARGET_ID,
+  GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
   type Conversation,
 } from '@/stores/useChatStore'
@@ -81,6 +82,7 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
     case ConversationType.Friend:
       return Boolean(contactStore.getContact(conv.targetId))
     case ConversationType.Group:
+      if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
       return Boolean(groupStore.getGroup(conv.targetId))
     case ConversationType.Channel:
       return Boolean(channelStore.getChannel(conv.targetId))
