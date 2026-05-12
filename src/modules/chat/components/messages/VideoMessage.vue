@@ -18,6 +18,12 @@ const loadError = ref(false)
 const activeThumbSrc = ref('')
 const showPreview = ref(false)
 const previewVideoSrc = ref('')
+const previewVideoElRef = ref<HTMLVideoElement | null>(null)
+const previewVideoPlaying = ref(false)
+const previewVideoCurrentTime = ref(0)
+const previewVideoDuration = ref(0)
+const previewVideoVolume = ref(1)
+const previewVideoMuted = ref(false)
 const videoOpening = ref(false)
 const videoPreparingForDrag = ref(false)
 const localVideoPath = ref('')
@@ -421,7 +427,98 @@ async function downloadAndDecryptThumb() {
 
 function openInlinePreview(src: string) {
   previewVideoSrc.value = ensureMediaSrc(src)
+  resetInlinePreviewState()
   showPreview.value = true
+  nextTick(() => {
+    const video = previewVideoElRef.value
+    if (!video) return
+    video.volume = previewVideoVolume.value
+    video.muted = previewVideoMuted.value
+    void video.play().catch((error) => {
+      console.warn('[video] inline preview play failed:', error)
+    })
+  })
+}
+
+function closeInlinePreview() {
+  const video = previewVideoElRef.value
+  if (video) video.pause()
+  showPreview.value = false
+  previewVideoSrc.value = ''
+  resetInlinePreviewState()
+}
+
+function resetInlinePreviewState() {
+  previewVideoPlaying.value = false
+  previewVideoCurrentTime.value = 0
+  previewVideoDuration.value = 0
+  previewVideoVolume.value = 1
+  previewVideoMuted.value = false
+}
+
+function syncInlinePreviewState() {
+  const video = previewVideoElRef.value
+  if (!video) return
+  previewVideoCurrentTime.value = video.currentTime || 0
+  previewVideoDuration.value = Number.isFinite(video.duration) ? video.duration : 0
+  previewVideoVolume.value = video.volume
+  previewVideoMuted.value = video.muted
+  previewVideoPlaying.value = !video.paused && !video.ended
+}
+
+function formatPreviewVideoTime(value: number): string {
+  const seconds = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
+}
+
+async function toggleInlinePreviewPlayback() {
+  const video = previewVideoElRef.value
+  if (!video) return
+  if (video.paused || video.ended) {
+    try {
+      await video.play()
+    } catch (error) {
+      console.warn('[video] inline preview play failed:', error)
+    }
+  } else {
+    video.pause()
+  }
+  syncInlinePreviewState()
+}
+
+function handleInlinePreviewSeek(event: Event) {
+  const video = previewVideoElRef.value
+  if (!video || !previewVideoDuration.value) return
+  const next = Number((event.target as HTMLInputElement).value)
+  video.currentTime = (Math.min(100, Math.max(0, next)) / 100) * previewVideoDuration.value
+  syncInlinePreviewState()
+}
+
+function toggleInlinePreviewMuted() {
+  const video = previewVideoElRef.value
+  if (!video) return
+  video.muted = !video.muted
+  syncInlinePreviewState()
+}
+
+function handleInlinePreviewVolume(event: Event) {
+  const video = previewVideoElRef.value
+  if (!video) return
+  const nextVolume = Math.min(1, Math.max(0, Number((event.target as HTMLInputElement).value) / 100))
+  video.volume = nextVolume
+  video.muted = nextVolume === 0
+  syncInlinePreviewState()
+}
+
+function requestInlinePreviewFullscreen() {
+  const video = previewVideoElRef.value
+  if (!video) return
+  const requestFullscreen = video.requestFullscreen || (video as any).webkitEnterFullscreen
+  if (typeof requestFullscreen === 'function') {
+    requestFullscreen.call(video)
+  }
 }
 
 async function openMediaWindow(pathOrUrl: string) {
@@ -702,6 +799,7 @@ onBeforeUnmount(() => {
   downloadToken += 1
   videoOpenToken += 1
   pendingVideoLocalFilePromise = null
+  closeInlinePreview()
   cleanupNativeDragListeners()
   cleanupDownloadEvents()
   cleanupVideoDownloadEvents()
@@ -751,16 +849,95 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div v-if="showPreview" class="video-preview" @click="showPreview = false">
-        <button class="preview-close" type="button" @click.stop="showPreview = false">×</button>
+      <div v-if="showPreview" class="video-preview" @click="closeInlinePreview">
+        <button class="preview-close" type="button" @click.stop="closeInlinePreview">×</button>
         <div class="video-preview-shell" @click.stop>
           <video
+            ref="previewVideoElRef"
             :src="previewVideoSrc"
-            controls
             autoplay
             playsinline
-            @click.stop
+            preload="metadata"
+            @click.stop="toggleInlinePreviewPlayback"
+            @loadedmetadata="syncInlinePreviewState"
+            @durationchange="syncInlinePreviewState"
+            @timeupdate="syncInlinePreviewState"
+            @play="syncInlinePreviewState"
+            @pause="syncInlinePreviewState"
+            @ended="syncInlinePreviewState"
+            @volumechange="syncInlinePreviewState"
           ></video>
+          <button
+            v-if="!previewVideoPlaying"
+            class="preview-overlaid-play"
+            type="button"
+            aria-label="Play"
+            @click.stop="toggleInlinePreviewPlayback"
+          >
+            <span></span>
+          </button>
+          <div class="preview-video-controls" @click.stop>
+            <button
+              class="preview-control-btn preview-play-btn"
+              type="button"
+              :aria-label="previewVideoPlaying ? 'Pause' : 'Play'"
+              @click="toggleInlinePreviewPlayback"
+            >
+              <span v-if="previewVideoPlaying" class="pause-glyph">
+                <i></i>
+                <i></i>
+              </span>
+              <span v-else class="play-glyph"></span>
+            </button>
+            <input
+              class="preview-range preview-progress"
+              type="range"
+              min="0"
+              max="100"
+              step="0.1"
+              :value="previewVideoDuration ? Math.min(100, Math.max(0, (previewVideoCurrentTime / previewVideoDuration) * 100)) : 0"
+              :style="{ '--fill': `${previewVideoDuration ? Math.min(100, Math.max(0, (previewVideoCurrentTime / previewVideoDuration) * 100)) : 0}%` }"
+              aria-label="Progress"
+              @input="handleInlinePreviewSeek"
+            />
+            <span class="preview-video-time">
+              {{ formatPreviewVideoTime(previewVideoCurrentTime) }} / {{ formatPreviewVideoTime(previewVideoDuration) }}
+            </span>
+            <button
+              class="preview-control-btn preview-volume-btn"
+              type="button"
+              :aria-label="previewVideoMuted ? 'Unmute' : 'Mute'"
+              @click="toggleInlinePreviewMuted"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+                <path v-if="!previewVideoMuted && previewVideoVolume > 0" d="M16 8.5c1.2 1.2 1.2 5.8 0 7" />
+                <path v-if="!previewVideoMuted && previewVideoVolume > 0.45" d="M18.5 6c2.4 2.4 2.4 9.6 0 12" />
+                <path v-if="previewVideoMuted || previewVideoVolume === 0" d="M17 9l5 5m0-5-5 5" />
+              </svg>
+            </button>
+            <input
+              class="preview-range preview-volume"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="previewVideoMuted ? 0 : Math.round(previewVideoVolume * 100)"
+              :style="{ '--fill': `${previewVideoMuted ? 0 : Math.round(previewVideoVolume * 100)}%` }"
+              aria-label="Volume"
+              @input="handleInlinePreviewVolume"
+            />
+            <button
+              class="preview-control-btn preview-fullscreen-btn"
+              type="button"
+              aria-label="Fullscreen"
+              @click="requestInlinePreviewFullscreen"
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <path d="M10 3h3.6l-4 4L11 8.4l4-4V8h2V1h-7v2ZM7 9.6l-4 4V10H1v7h7v-2H4.4l4-4L7 9.6Z" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </Teleport>
@@ -921,23 +1098,169 @@ onBeforeUnmount(() => {
   background: rgba(0, 0, 0, 0.82);
 
   .video-preview-shell {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     max-width: calc(100vw - 48px);
     max-height: calc(100vh - 72px);
     background: rgba(0, 0, 0, 0.38);
+    padding-bottom: 64px;
+    box-sizing: border-box;
   }
 
   .video-preview-shell video {
     display: block;
     max-width: 100%;
-    max-height: calc(100vh - 72px);
+    max-height: calc(100vh - 136px);
     width: auto;
     height: auto;
     object-fit: contain;
     outline: none;
   }
+}
+
+.preview-overlaid-play {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 32px);
+  z-index: 3;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(123, 130, 255, 0.86);
+  color: #fff;
+  cursor: pointer;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.24);
+
+  &:hover {
+    background: rgba(123, 130, 255, 0.96);
+  }
+
+  span {
+    width: 0;
+    height: 0;
+    margin-left: 4px;
+    border-style: solid;
+    border-width: 13px 0 13px 20px;
+    border-color: transparent transparent transparent #fff;
+  }
+}
+
+.preview-video-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(600px, calc(100vw - 96px));
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: rgba(16, 16, 20, 0.95);
+  box-sizing: border-box;
+  transform: translateX(-50%);
+}
+
+.preview-control-btn {
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+
+  &:hover {
+    background: #7b82ff;
+  }
+
+  svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+}
+
+.preview-fullscreen-btn svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.play-glyph {
+  width: 0;
+  height: 0;
+  margin-left: 2px;
+  border-style: solid;
+  border-width: 8px 0 8px 12px;
+  border-color: transparent transparent transparent #fff;
+}
+
+.pause-glyph {
+  display: inline-flex;
+  gap: 4px;
+
+  i {
+    display: block;
+    width: 4px;
+    height: 16px;
+    background: #fff;
+    border-radius: 1px;
+  }
+}
+
+.preview-range {
+  height: 4px;
+  appearance: none;
+  border-radius: 999px;
+  background: linear-gradient(to right, #7b82ff var(--fill, 0%), rgba(255, 255, 255, 0.3) var(--fill, 0%));
+  outline: none;
+  cursor: pointer;
+
+  &::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 0;
+    background: #fff;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+  }
+}
+
+.preview-progress {
+  flex: 1 1 auto;
+  min-width: 80px;
+}
+
+.preview-volume {
+  flex: 0 0 90px;
+}
+
+.preview-video-time {
+  min-width: 76px;
+  color: #fff;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .preview-close {
