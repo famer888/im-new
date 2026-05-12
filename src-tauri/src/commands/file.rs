@@ -85,6 +85,14 @@ pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
         || payload.message.starts_with("[group-audio]");
     let is_group_audio_log = payload.message.starts_with("[group-audio]");
     let is_file_log = payload.message.starts_with("[file-send]");
+    if payload.message.contains("[single-video-send]") {
+        println!(
+            "[single-video-send][terminal][{}] {} data={}",
+            payload.level.as_deref().unwrap_or("info"),
+            payload.message,
+            data
+        );
+    }
     match (
         is_audio_log,
         is_group_audio_log,

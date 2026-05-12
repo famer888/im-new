@@ -133,8 +133,26 @@ async function handleLoadMore() {
 
 function handleSend(content: string, msgType: number, extra?: Record<string, unknown>) {
   if (!conversationId.value || !authStore.uid) return
+  if (msgType === 3 && conversationId.value.startsWith('0_')) {
+    console.info('[single-video-send][chat-window] handleSend', {
+      uid: authStore.uid,
+      conversationId: conversationId.value,
+      contentLen: content.length,
+      extraKeys: Object.keys(extra || {}),
+      hasClientMsgId: typeof extra?.__clientMsgId === 'string',
+      hasFileKey: Boolean(extra?.fileKey),
+      hasLocalThumbDataUrl: Boolean(extra?.localThumbDataUrl),
+    })
+  }
   messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra).catch((error) => {
     console.warn('[chat-window] send message failed:', error)
+    if (msgType === 3 && conversationId.value.startsWith('0_')) {
+      console.error('[single-video-send][chat-window] send failed', {
+        conversationId: conversationId.value,
+        message: (error as Error)?.message || String(error),
+        stack: (error as Error)?.stack || '',
+      })
+    }
   })
 }
 

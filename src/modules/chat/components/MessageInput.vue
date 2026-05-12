@@ -1407,8 +1407,8 @@ function getUploadContentType(file: File, suffix: string): string {
 
 function getUploadAttachType(msgType: MessageType): number {
   if (msgType === MessageType.Image) return 0
-  if (msgType === MessageType.Audio) return 2
-  if (msgType === MessageType.Video) return 1
+  if (msgType === MessageType.Audio) return 1
+  if (msgType === MessageType.Video) return 2
   if (msgType === MessageType.DynamicImage) return 4
   return 3
 }
@@ -1755,23 +1755,37 @@ async function uploadFileLikeIm(
   }
 }
 
-function getVideoMetadata(file: File): Promise<VideoMetadata> {
+function getVideoMetadata(file: File, trace?: ImageSendTrace): Promise<VideoMetadata> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video')
     const canvas = document.createElement('canvas')
     const objectUrl = URL.createObjectURL(file)
     let settled = false
     let timer = 0
+    let seekTimer = 0
     let waitingForSeek = false
     let candidateTimes: number[] = []
     let candidateIndex = 0
+    const log = (
+      message: string,
+      data?: Record<string, unknown>,
+      level: 'info' | 'warn' | 'error' = 'info',
+    ) => {
+      if (trace) {
+        fileTraceLog(trace, `[single-video-send] metadata ${message}`, data, level)
+      } else {
+        terminalLog(`[single-video-send] metadata ${message}`, data, level)
+      }
+    }
 
     const cleanup = () => {
       window.clearTimeout(timer)
+      window.clearTimeout(seekTimer)
       URL.revokeObjectURL(objectUrl)
       video.removeEventListener('loadedmetadata', handleLoadedMetadata)
       video.removeEventListener('loadeddata', handleMediaReady)
       video.removeEventListener('canplay', handleMediaReady)
+      video.removeEventListener('timeupdate', handleTimeUpdate)
       video.removeEventListener('seeked', handleSeeked)
       video.removeEventListener('error', fail)
       video.pause()
@@ -1829,14 +1843,34 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
     }
 
     const seekToNextCandidate = (): boolean => {
+      window.clearTimeout(seekTimer)
       if (candidateIndex >= candidateTimes.length) return false
       const nextTime = candidateTimes[candidateIndex]
       candidateIndex += 1
       try {
         waitingForSeek = true
         video.currentTime = nextTime
+        log('seek candidate', {
+          nextTime,
+          candidateIndex,
+          candidateCount: candidateTimes.length,
+          readyState: video.readyState,
+        })
+        seekTimer = window.setTimeout(() => {
+          if (settled || !waitingForSeek) return
+          log('seek timeout fallback capture', {
+            currentTime: video.currentTime,
+            readyState: video.readyState,
+          }, 'warn')
+          waitingForSeek = false
+          captureFrame()
+        }, 1200)
         return true
       } catch {
+        log('seek candidate failed', {
+          nextTime,
+          candidateIndex,
+        }, 'warn')
         waitingForSeek = false
         return seekToNextCandidate()
       }
@@ -1846,9 +1880,18 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
       if (settled) return
       const sourceWidth = video.videoWidth || 0
       const sourceHeight = video.videoHeight || 0
-      if (!sourceWidth || !sourceHeight) return
+      if (!sourceWidth || !sourceHeight) {
+        log('capture skipped missing dimensions', {
+          readyState: video.readyState,
+          currentTime: video.currentTime,
+          videoWidth: sourceWidth,
+          videoHeight: sourceHeight,
+        }, 'warn')
+        return
+      }
 
       settled = true
+      window.clearTimeout(seekTimer)
       const maxThumbEdge = 720
       const scale = Math.min(1, maxThumbEdge / Math.max(sourceWidth, sourceHeight))
       canvas.width = Math.max(1, Math.round(sourceWidth * scale))
@@ -1861,10 +1904,22 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
       }
       context.drawImage(video, 0, 0, canvas.width, canvas.height)
       if (frameLooksBlank(context, canvas.width, canvas.height) && seekToNextCandidate()) {
+        settled = false
+        log('blank frame skipped', {
+          currentTime: video.currentTime,
+          nextCandidateIndex: candidateIndex,
+        }, 'warn')
         return
       }
       const thumbDataUrl = canvas.toDataURL('image/jpeg', 0.82)
       const duration = Number.isFinite(video.duration) ? Math.max(0, Math.round(video.duration)) : 0
+      log('capture success', {
+        width: sourceWidth,
+        height: sourceHeight,
+        duration,
+        currentTime: video.currentTime,
+        thumbDataUrlLen: thumbDataUrl.length,
+      })
       cleanup()
       resolve({
         thumbDataUrl,
@@ -1877,22 +1932,51 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
     const fail = () => {
       if (settled) return
       settled = true
+      log('failed', {
+        readyState: video.readyState,
+        currentTime: video.currentTime,
+        videoWidth: video.videoWidth || 0,
+        videoHeight: video.videoHeight || 0,
+      }, 'error')
       cleanup()
       reject(new Error('视频预览生成失败'))
     }
 
     const handleMediaReady = () => {
-      if (waitingForSeek) return
+      if (waitingForSeek && video.readyState < 2) return
+      if (waitingForSeek) {
+        window.clearTimeout(seekTimer)
+        seekTimer = window.setTimeout(() => {
+          if (settled || !waitingForSeek) return
+          waitingForSeek = false
+          captureFrame()
+        }, 80)
+        return
+      }
       captureFrame()
     }
 
     const handleSeeked = () => {
+      window.clearTimeout(seekTimer)
+      waitingForSeek = false
+      captureFrame()
+    }
+
+    const handleTimeUpdate = () => {
+      if (!waitingForSeek || video.readyState < 2) return
+      window.clearTimeout(seekTimer)
       waitingForSeek = false
       captureFrame()
     }
 
     const handleLoadedMetadata = () => {
       candidateTimes = buildCandidateTimes()
+      log('loadedmetadata', {
+        duration: Number.isFinite(video.duration) ? video.duration : 0,
+        videoWidth: video.videoWidth || 0,
+        videoHeight: video.videoHeight || 0,
+        candidateTimes,
+      })
       if (seekToNextCandidate()) return
       captureFrame()
     }
@@ -1904,6 +1988,7 @@ function getVideoMetadata(file: File): Promise<VideoMetadata> {
     video.addEventListener('loadedmetadata', handleLoadedMetadata)
     video.addEventListener('loadeddata', handleMediaReady)
     video.addEventListener('canplay', handleMediaReady)
+    video.addEventListener('timeupdate', handleTimeUpdate)
     video.addEventListener('seeked', handleSeeked)
     video.addEventListener('error', fail)
     video.src = objectUrl
@@ -2099,9 +2184,32 @@ async function prepareGroupImagePayload(file: File): Promise<{
 async function handleFileSend(payload: { text: string; files: File[] } | File[]) {
   const files = Array.isArray(payload) ? payload : payload.files
   const text = Array.isArray(payload) ? '' : (payload.text || '').trim()
+  terminalLog('[single-video-send] handleFileSend entry', {
+    conversationId: convId.value,
+    conversationType: chatStore.currentConversation?.type,
+    targetId: chatStore.currentConversation?.targetId,
+    isFriend: isFriend.value,
+    isGroup: isGroup.value,
+    isFileHelper: isFileHelperChat.value,
+    fileCount: files.length,
+    files: files.map(file => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      suffix: getFileSuffix(file),
+      isVideo: isVideoFile(file),
+    })),
+    textLen: text.length,
+  })
 
   for (const file of files) {
     if (file.size > getFileSizeLimitBytes(file)) {
+      terminalLog('[single-video-send] skip oversized file', {
+        name: file.name,
+        size: file.size,
+        limitBytes: getFileSizeLimitBytes(file),
+        isVideo: isVideoFile(file),
+      }, 'warn')
       continue
     }
     if (file.type.startsWith('image/')) {
@@ -2184,6 +2292,16 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
       const fileKey = createFileKey()
       let localPreview: LocalVideoPreview | null = null
       try {
+        fileTraceLog(trace, '[single-video-send] video branch entered', {
+          conversationId: convId.value,
+          conversationType: chatStore.currentConversation?.type,
+          targetId: chatStore.currentConversation?.targetId,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          suffix: getFileSuffix(file),
+          attachType: getUploadAttachType(MessageType.Video),
+        })
         fileTraceLog(trace, 'handle video file', {
           conversationId: convId.value,
           isGroup: isGroup.value,
@@ -2193,8 +2311,19 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           size: file.size,
           type: file.type,
         })
-        const metadata = await getVideoMetadata(file)
+        const metadata = await getVideoMetadata(file, trace)
+        fileTraceLog(trace, '[single-video-send] video metadata ready', {
+          width: metadata.width,
+          height: metadata.height,
+          duration: metadata.duration,
+          thumbDataUrlLen: metadata.thumbDataUrl.length,
+          thumbDataUrlHead: metadata.thumbDataUrl.slice(0, 48),
+        })
         localPreview = appendLocalVideoPreview(file, fileKey, metadata, trace)
+        fileTraceLog(trace, '[single-video-send] local preview result', {
+          optimisticId: localPreview?.optimisticId || '',
+          hasLocalPreview: Boolean(localPreview),
+        })
         const uploaded = await uploadVideoLikeIm(file, metadata, { fileKey, trace })
         fileTraceLog(trace, 'emit uploaded video message', {
           conversationId: convId.value,
@@ -2206,6 +2335,14 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             try { return new URL(uploaded.thumbUrl).host } catch { return uploaded.thumbUrl.slice(0, 60) }
           })(),
           fileKeyHead: safeHead(uploaded.fileKey),
+          fileKeyLen: uploaded.fileKey.length,
+        })
+        fileTraceLog(trace, '[single-video-send] emit video send to parent', {
+          conversationId: convId.value,
+          optimisticId: localPreview?.optimisticId || '',
+          msgType: MessageType.Video,
+          hasUrl: Boolean(uploaded.url),
+          hasThumbUrl: Boolean(uploaded.thumbUrl),
           fileKeyLen: uploaded.fileKey.length,
         })
         emit('send', JSON.stringify({
@@ -2228,6 +2365,11 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         }
       } catch (error) {
         console.error('[message-input] video upload failed:', error)
+        fileTraceLog(trace, '[single-video-send] video branch failed', {
+          message: (error as Error)?.message || String(error),
+          stack: (error as Error)?.stack || '',
+          optimisticId: localPreview?.optimisticId || '',
+        }, 'error')
         if (localPreview?.optimisticId) {
           messageStore.updateMessageStatus(localPreview.optimisticId, -1)
         }

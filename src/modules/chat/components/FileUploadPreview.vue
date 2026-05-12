@@ -175,6 +175,18 @@ async function handlePreviewError(item: PreviewItem) {
 function handleConfirm() {
   if (list.value.length === 0) return
   if (list.value.some((item) => item.isError)) return
+  console.info('[single-video-send][dialog] confirm click', {
+    fileCount: list.value.length,
+    files: list.value.map((item) => ({
+      name: item.name,
+      size: item.file.size,
+      type: item.file.type,
+      isVideo: item.isVideo,
+      isImage: item.isImage,
+      isError: item.isError,
+    })),
+    textLen: text.value.trim().length,
+  })
   showEmoji.value = false
   emit('confirm', {
     text: text.value.trim(),
