@@ -16,6 +16,7 @@ import GroupQRCode from './GroupQRCode.vue'
 import GroupNoticeDialog from './GroupNoticeDialog.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 import RemoveMemberDialog from '@/modules/groups/components/RemoveMemberDialog.vue'
+import searchIcon from '@/assets/images/headNav/search-icon.png'
 const chatStore = useChatStore()
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
@@ -38,6 +39,7 @@ const noticePreview = computed(() => notice.value.trim())
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
+const refreshingMembers = ref(false)
 
 const confirmVisible = ref(false)
 const confirmTitle = ref('')
@@ -71,7 +73,7 @@ const noticeVisible = ref(false)
 const removeMemberVisible = ref(false)
 
 const existingMemberIds = computed(() => {
-  return new Set(members.value.map(m => m.userId))
+  return new Set(allMembers.value.map(m => m.userId))
 })
 
 function openQrCode() {
@@ -106,10 +108,29 @@ async function handleRemoved() {
   }
 }
 
-const members = computed(() => {
+async function refreshMembers() {
+  if (!conv.value?.targetId || !authStore.uid || refreshingMembers.value) return
+  refreshingMembers.value = true
+  try {
+    await groupStore.loadMembers(authStore.uid, conv.value.targetId)
+  } catch (e) {
+    console.error('[GroupInfoPanel] refresh members failed:', e)
+    showToast(t('操作失败'), 'error')
+  } finally {
+    refreshingMembers.value = false
+  }
+}
+
+const allMembers = computed(() => {
   if (!conv.value) return []
-  const all = groupStore.getMembers(conv.value.targetId)
-  if (!search.value.trim()) return showAllMembers.value ? all : all.slice(0, 20)
+  return groupStore.getMembers(conv.value.targetId)
+})
+
+const previewMembers = computed(() => allMembers.value.slice(0, 20))
+
+const members = computed(() => {
+  const all = allMembers.value
+  if (!search.value.trim()) return all
   const kw = search.value.toLowerCase()
   return all.filter((m) => m.nickname?.toLowerCase().includes(kw) || m.userId.includes(kw))
 })
@@ -261,95 +282,137 @@ function handleOnlineTime(member: any) {
 
 <template>
   <div class="group-info-panel" v-if="conv">
-    <!-- 群别名 + 二维码 (同 im group-alias-qrcode.vue) -->
-    <div class="group-alias-qrcode" @click="openQrCode">
-      <h3>{{ t('群别名') }}</h3>
-      <div class="alias-right">
-        <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
-          @{{ groupAliasName }}
-        </span>
-        <img class="code-icon" src="@/assets/images/chat/code.png" @click.stop="openQrCode" />
-        <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
-      </div>
-    </div>
-
-    <!-- 群简介 (同 im group-notice/index.vue) -->
-    <div class="group-notice-section" @click="openGroupNotice">
-      <div class="notice-head">
-        <h3>{{ t('群简介') }}</h3>
-        <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
-      </div>
-      <p class="notice-preview" v-if="noticePreview">{{ noticePreview }}</p>
-      <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
-    </div>
-
-    <!-- 配置列表 (同 im config-list.vue) -->
-    <ul class="config-list">
-      <li>
-        <span>{{ t('置顶聊天') }}</span>
-        <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
-      </li>
-      <li>
-        <span>{{ t('消息免打扰') }}</span>
-        <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
-      </li>
-      <li v-if="isOwner">
-        <span>{{ t('进群需审核') }}</span>
-        <AppSwitch :model-value="bfJoinCheck" @update:model-value="toggleJoinCheck" />
-      </li>
-      <li class="action-btn danger" @click="openClearDialog">
-        {{ t('清空聊天记录') }}
-      </li>
-      <li v-if="isOwner" class="action-btn danger" @click="handleDisbandGroup">
-        {{ t('解散群聊') }}
-      </li>
-      <li v-else class="action-btn danger" @click="handleExitGroup">
-        {{ t('删除并退出') }}
-      </li>
-    </ul>
-
-    <!-- 管理员 (同 im index.vue 管理员 label) -->
-    <ul v-if="memberType !== 2" class="manager-label">
-      <li>{{ t('管理员') }}</li>
-    </ul>
-
-    <!-- 群成员 (同 im member-list.vue) -->
-    <div class="member-section">
-      <div class="member-head">
-        <div class="member-info" @click="showAllMembers = !showAllMembers">
-          <span class="member-title">{{ t('群成员列表标题', { count: totalCount }) }}</span>
-          <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
+    <template v-if="!showAllMembers">
+      <!-- 群别名 + 二维码 (同 im group-alias-qrcode.vue) -->
+      <div class="group-alias-qrcode" @click="openQrCode">
+        <h3>{{ t('群别名') }}</h3>
+        <div class="alias-right">
+          <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
+            @{{ groupAliasName }}
+          </span>
+          <img class="code-icon" src="@/assets/images/chat/code.png" @click.stop="openQrCode" />
+          <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
         </div>
-        <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
       </div>
 
-      <div v-if="showAllMembers" class="member-search">
-        <input v-model="search" :placeholder="t('搜索')" />
-        <span class="cancel-btn" @click="showAllMembers = false; search = ''">{{ t('取消') }}</span>
+      <!-- 群简介 (同 im group-notice/index.vue) -->
+      <div class="group-notice-section" @click="openGroupNotice">
+        <div class="notice-head">
+          <h3>{{ t('群简介') }}</h3>
+          <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
+        </div>
+        <p class="notice-preview" v-if="noticePreview">{{ noticePreview }}</p>
+        <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
       </div>
 
-      <ul class="member-list">
-        <li v-for="member in members" :key="member.userId" class="member-item">
-          <TextAvatar
-            :name="member.nickname || member.userId"
-            :src="member.avatar"
-            :size="30"
-            rounded
-            style="cursor: pointer;"
-            @click="uiStore.openMemberInfo(member.userId, conv?.targetId)"
-          />
-          <div class="member-detail" style="cursor: pointer;" @click="uiStore.openMemberInfo(member.userId, conv?.targetId)">
-            <h2>{{ member.nickname || member.userId }}</h2>
-            <p>{{ handleOnlineTime(member) }}</p>
-          </div>
-          <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
-          <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
+      <!-- 配置列表 (同 im config-list.vue) -->
+      <ul class="config-list">
+        <li>
+          <span>{{ t('置顶聊天') }}</span>
+          <AppSwitch :model-value="conv.isPinned" @update:model-value="togglePin" />
+        </li>
+        <li>
+          <span>{{ t('消息免打扰') }}</span>
+          <AppSwitch :model-value="conv.isMuted" @update:model-value="toggleMute" />
+        </li>
+        <li v-if="isOwner">
+          <span>{{ t('进群需审核') }}</span>
+          <AppSwitch :model-value="bfJoinCheck" @update:model-value="toggleJoinCheck" />
+        </li>
+        <li class="action-btn danger" @click="openClearDialog">
+          {{ t('清空聊天记录') }}
+        </li>
+        <li v-if="isOwner" class="action-btn danger" @click="handleDisbandGroup">
+          {{ t('解散群聊') }}
+        </li>
+        <li v-else class="action-btn danger" @click="handleExitGroup">
+          {{ t('删除并退出') }}
         </li>
       </ul>
 
-      <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
-      <div class="invite-friend" @click="openInvite">{{ t('邀请好友') }}</div>
-    </div>
+      <!-- 管理员 (同 im index.vue 管理员 label) -->
+      <ul v-if="memberType !== 2" class="manager-label">
+        <li>{{ t('管理员') }}</li>
+      </ul>
+
+      <!-- 群成员 (同 im member-list.vue) -->
+      <div class="member-section">
+        <div class="member-head">
+          <div class="member-info" @click="showAllMembers = true">
+            <span class="member-title">{{ t('群成员列表标题', { count: totalCount }) }}</span>
+            <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
+          </div>
+          <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
+        </div>
+
+        <ul class="member-list">
+          <li v-for="member in previewMembers" :key="member.userId" class="member-item">
+            <TextAvatar
+              :name="member.nickname || member.userId"
+              :src="member.avatar"
+              :size="30"
+              rounded
+              style="cursor: pointer;"
+              @click="uiStore.openMemberInfo(member.userId, conv?.targetId)"
+            />
+            <div class="member-detail" style="cursor: pointer;" @click="uiStore.openMemberInfo(member.userId, conv?.targetId)">
+              <h2>{{ member.nickname || member.userId }}</h2>
+              <p>{{ handleOnlineTime(member) }}</p>
+            </div>
+            <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
+            <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
+          </li>
+        </ul>
+
+        <!-- 邀请好友 (同 im index.vue 邀请好友按钮) -->
+        <div class="invite-friend" @click="openInvite">{{ t('邀请好友') }}</div>
+      </div>
+    </template>
+
+    <template v-else>
+      <div class="member-directory">
+        <div class="member-directory-head">
+          <button
+            class="member-refresh"
+            type="button"
+            :title="t('强制刷新群成员')"
+            @click="refreshMembers"
+          >
+            <img
+              src="@/assets/images/refresh.png"
+              alt=""
+              :class="{ spinning: refreshingMembers }"
+            />
+          </button>
+          <label class="member-directory-search">
+            <img :src="searchIcon" alt="" />
+            <input v-model="search" type="text" :placeholder="t('搜索')" />
+          </label>
+          <button class="member-cancel" type="button" @click="showAllMembers = false; search = ''">{{ t('取消') }}</button>
+        </div>
+
+        <ul class="member-list directory-list">
+          <li v-for="member in members" :key="member.userId" class="member-item">
+            <TextAvatar
+              :name="member.nickname || member.userId"
+              :src="member.avatar"
+              :size="35"
+              rounded
+              style="cursor: pointer;"
+              @click="uiStore.openMemberInfo(member.userId, conv?.targetId)"
+            />
+            <div class="member-detail" style="cursor: pointer;" @click="uiStore.openMemberInfo(member.userId, conv?.targetId)">
+              <h2>{{ member.nickname || member.userId }}</h2>
+              <p>{{ handleOnlineTime(member) }}</p>
+            </div>
+            <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
+            <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
+          </li>
+        </ul>
+
+        <div class="invite-friend directory-invite" @click="openInvite">{{ t('邀请好友') }}</div>
+      </div>
+    </template>
 
     <RadioSelectDialog
       v-if="clearMsgTypeList.length > 0"
@@ -632,6 +695,115 @@ function handleOnlineTime(member: any) {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.member-directory {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #fff;
+}
+
+.member-directory-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.member-refresh,
+.member-cancel {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.member-refresh {
+  width: 24px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  img {
+    width: 20px;
+    height: 20px;
+    display: block;
+
+    &.spinning {
+      animation: member-refresh-spin 0.8s linear infinite;
+    }
+  }
+}
+
+.member-cancel {
+  font-size: 13px;
+  color: #333;
+  line-height: 28px;
+}
+
+.member-directory-search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  background: #f4f6f9;
+  border-radius: 4px;
+  padding: 0 8px;
+  box-sizing: border-box;
+
+  img {
+    width: 14px;
+    height: 14px;
+    margin-right: 5px;
+    opacity: 0.55;
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 13px;
+    color: #333;
+  }
+}
+
+.directory-list {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 46px;
+}
+
+.directory-invite {
+  width: 100%;
+  height: 42px;
+  color: #178aff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  border-top: 1px solid #f5f5f5;
+  flex-shrink: 0;
+
+  &:hover {
+    background: #f5f5f5;
+  }
+}
+
+@keyframes member-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .member-item {
