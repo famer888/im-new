@@ -264,6 +264,7 @@
   "共#1#人": "#1# people in total",
   "加入群聊失败": "Failed to join group chat",
   "已提交申请入群": "Submitted application to join the group",
+  "入群审核中，您无法重复操作": "Group join request is pending. You cannot repeat this operation.",
   "加入群聊": "Join Group Chat",
   "加入中...": "Joining...",
   "聊天": "chat",

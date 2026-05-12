@@ -33,7 +33,7 @@ const bfJoinCheck = ref(false)
 const bfResetQrcode = ref(false)
 const groupAliasName = ref('')
 const notice = ref('')
-const qrUrl = ref('')
+const inviteShortLink = ref('')
 const clearMsgTypeList = ref<string[]>([])
 const noticePreview = computed(() => notice.value.trim())
 
@@ -167,7 +167,7 @@ onMounted(async () => {
     const groupBase = detail.group as any
     groupAliasName.value = groupBase?.groupAliasName || detail.groupNickName || ''
     notice.value = detail.groupNotice?.notice || ''
-    qrUrl.value = detail.qrUrl || ''
+    inviteShortLink.value = String(groupBase?.shortLink || (detail as any)?.shortLink || '').trim()
     bfResetQrcode.value = Boolean(detail.bfResetQrcode)
     if (groupBase?.bfJoinCheck !== undefined) bfJoinCheck.value = groupBase.bfJoinCheck
   } catch (e) {
@@ -482,6 +482,7 @@ function handleOnlineTime(member: any) {
       :visible="inviteVisible"
       :group-id="conv.targetId"
       :existing-member-ids="existingMemberIds"
+      :qrcode-url="inviteShortLink"
       @close="inviteVisible = false"
       @invited="handleInvited"
     />

@@ -66,6 +66,7 @@ const props = defineProps<{
   visible: boolean
   groupId: string
   existingMemberIds: Set<string>
+  qrcodeUrl?: string
 }>()
 
 const emit = defineEmits<{
@@ -108,6 +109,29 @@ function showToast(msg: string, type: 'success' | 'error' = 'success', duration 
   toastType.value = type
   toastDuration.value = duration
   toastVisible.value = true
+}
+
+async function copyTextToClipboard(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return
+    }
+  } catch {
+    // fallback below
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'readonly')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  if (!copied) throw new Error('copy command failed')
 }
 
 function displayName(friend: Contact) {
@@ -251,13 +275,14 @@ async function copyGroupInviteLink() {
   if (isCopyingInviteLink.value) return
   isCopyingInviteLink.value = true
   try {
-    const res = await groupQrCode({ groupId: props.groupId, force: false })
-    const inviteLink = res.shortLink || res.qrUrl || ''
+    const cachedLink = String(props.qrcodeUrl || '').trim()
+    const res = cachedLink ? null : await groupQrCode({ groupId: props.groupId, force: false })
+    const inviteLink = cachedLink || res?.shortLink || res?.qrUrl || ''
     if (!inviteLink) {
       showToast($t('获取邀请链接失败'), 'error')
       return
     }
-    await navigator.clipboard.writeText(inviteLink)
+    await copyTextToClipboard(inviteLink)
     showToast($t('链接已复制在剪贴板'))
   } catch (error) {
     console.error('[InviteFriendDialog] copy invite link failed:', error)

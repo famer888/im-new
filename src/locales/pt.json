@@ -264,6 +264,7 @@
   "共#1#人": "#1# pessoas no total",
   "加入群聊失败": "Falha ao entrar no bate-papo em grupo",
   "已提交申请入群": "A inscrição foi enviada para ingressar no grupo",
+  "入群审核中，您无法重复操作": "A solicitação para entrar no grupo está em análise. Você não pode repetir esta operação.",
   "加入群聊": "Participe do bate-papo em grupo",
   "加入中...": "Entrando...",
   "聊天": "bater papo",
