@@ -51,6 +51,7 @@ async function syncMaximizedState() {
 
 function startWindowDrag(e: MouseEvent) {
   if (e.button !== 0) return
+  if (e.detail > 1) return
   getCurrentWindow().startDragging().catch((err) => {
     console.warn('[window] start dragging failed:', err)
   })
@@ -90,6 +91,7 @@ async function close() {
       class="max-box"
       :class="['drag', isMac && 'mac']"
       @mousedown="startWindowDrag"
+      @dblclick.stop.prevent="maximize"
     ></div>
     <template v-if="!isMac">
       <button class="box" type="button" @click.stop="minimize">
