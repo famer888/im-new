@@ -3,7 +3,8 @@ import { onBeforeUnmount, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useGroupStore } from '@/stores/useGroupStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { GROUP_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
+import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { eventBus } from '@/utils/eventBus'
@@ -24,13 +25,16 @@ interface GroupReqItem {
   fromUser?: Record<string, any> | null
   createTime: number
   updateTime: number
+  localId?: string
 }
 
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
 const chatStore = useChatStore()
+const messageStore = useMessageStore()
 const { t } = useI18n()
 const list = ref<GroupReqItem[]>([])
+const notificationConversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
 
 function statusLabel(status: number): string {
   const map: Record<number, string> = {
@@ -111,6 +115,18 @@ function formatReqMessage(item: GroupReqItem): string {
   return `${name}${raw}`
 }
 
+function parseExtraObject(extra: unknown): Record<string, any> {
+  if (!extra) return {}
+  if (typeof extra === 'object') return extra as Record<string, any>
+  if (typeof extra !== 'string') return {}
+  try {
+    const parsed = JSON.parse(extra)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, any> : {}
+  } catch {
+    return {}
+  }
+}
+
 function formatAcceptedGroupDigest(item: GroupReqItem): string {
   const fromName = isSelfUser(item.fromUser, item.sendUid)
     ? t('你')
@@ -131,7 +147,8 @@ function formatAcceptedGroupDigest(item: GroupReqItem): string {
 function parseGroupReqItems(raw: any[]): GroupReqItem[] {
   return raw
     .map((item: any) => ({
-      groupReqId: Number(item.groupReqId),
+      localId: item.groupReqId ? undefined : `api-${item.groupId || ''}-${item.groupReqType || 0}-${item.updateTime || item.createTime || Date.now()}`,
+      groupReqId: Number(item.groupReqId || 0),
       groupId: String(item.groupId ?? ''),
       groupName: item.groupName || '',
       pic: item.pic || '',
@@ -144,10 +161,65 @@ function parseGroupReqItems(raw: any[]): GroupReqItem[] {
       targetUser: item.targetUser || null,
       checkUser: item.checkUser || null,
       fromUser: item.fromUser || null,
-      createTime: Number(item.createTime),
-      updateTime: Number(item.updateTime),
+      createTime: Number(item.createTime || 0),
+      updateTime: Number(item.updateTime || item.createTime || 0),
     }))
     .filter((item: GroupReqItem) => !(item as any).isHide)
+}
+
+function localMessageToGroupReqItem(message: Message): GroupReqItem | null {
+  if (message.msgType !== 8) return null
+  const extra = parseExtraObject(message.extra)
+  const groupId = String(extra.groupId ?? '').trim()
+  const msg = String(message.content || '').trim()
+  if (!groupId || !msg) return null
+
+  const sendTime = Number(message.sendTime || Date.now())
+  return {
+    localId: String(message.id || message.customMsgId || `local-${groupId}-${sendTime}`),
+    groupReqId: Number(extra.groupReqId || 0),
+    groupId,
+    groupName: String(extra.groupName || groupStore.getGroup(groupId)?.name || groupId),
+    pic: String(extra.groupAvatar || groupStore.getGroup(groupId)?.avatar || ''),
+    msg,
+    groupReqType: Number(extra.groupReqType ?? 0),
+    groupReqStatus: Number(extra.groupReqStatus ?? 0),
+    groupHostUid: String(extra.groupHostUid ?? ''),
+    sendUid: String(extra.sendUid ?? extra.fromUid ?? message.senderId ?? ''),
+    receiveUid: String(extra.receiveUid ?? ''),
+    targetUser: extra.targetUser || null,
+    checkUser: extra.checkUser || null,
+    fromUser: extra.fromUser || null,
+    createTime: sendTime,
+    updateTime: sendTime,
+  }
+}
+
+function getLocalGroupReqItems(): GroupReqItem[] {
+  return messageStore
+    .getMessages(notificationConversationId)
+    .map(localMessageToGroupReqItem)
+    .filter((item): item is GroupReqItem => Boolean(item))
+}
+
+function mergeGroupReqItems(apiItems: GroupReqItem[], localItems: GroupReqItem[]): GroupReqItem[] {
+  const merged = new Map<string, GroupReqItem>()
+  const makeKey = (item: GroupReqItem) => {
+    if (item.groupReqId > 0) return `req:${item.groupReqId}`
+    return `local:${item.localId || `${item.groupId}-${item.groupReqType}-${item.updateTime}-${item.msg}`}`
+  }
+
+  for (const item of [...apiItems, ...localItems]) {
+    const key = makeKey(item)
+    const previous = merged.get(key)
+    if (!previous || (item.updateTime || item.createTime) >= (previous.updateTime || previous.createTime)) {
+      merged.set(key, item)
+    }
+  }
+
+  return Array.from(merged.values()).sort(
+    (a, b) => (b.updateTime || b.createTime || 0) - (a.updateTime || a.createTime || 0),
+  )
 }
 
 function syncSidebarPreview(items: GroupReqItem[]) {
@@ -164,15 +236,26 @@ function syncSidebarPreview(items: GroupReqItem[]) {
 }
 
 async function loadList() {
+  let apiItems: GroupReqItem[] = []
+  try {
+    if (authStore.uid) {
+      await messageStore.loadMessages(authStore.uid, notificationConversationId)
+    }
+  } catch (e) {
+    console.warn('[GroupInvitation] load local notifications failed:', e)
+  }
+
   try {
     const res = await getGroupReqList({ pageNum: 1, pageSize: 100 })
     if (res?.groupReqs) {
-      list.value = parseGroupReqItems(res.groupReqs)
-      syncSidebarPreview(list.value)
+      apiItems = parseGroupReqItems(res.groupReqs)
     }
   } catch (e) {
     console.error('[GroupInvitation] loadList failed:', e)
   }
+
+  list.value = mergeGroupReqItems(apiItems, getLocalGroupReqItems())
+  syncSidebarPreview(list.value)
 }
 
 async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
@@ -233,7 +316,7 @@ onBeforeUnmount(() => {
   <div class="group-invitation">
     <h1>{{ t('群通知') }}</h1>
     <ul class="notify-box">
-      <li v-for="(item, index) in list" :key="item.groupReqId">
+      <li v-for="(item, index) in list" :key="item.localId || item.groupReqId">
         <TextAvatar
           class="item-avatar"
           :name="item.groupName"

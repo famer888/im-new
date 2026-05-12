@@ -2242,6 +2242,7 @@ fn group_event_content(item: &imweb::GroupReqEventMsgDto, common: &imweb::Common
         (15, 0 | 1) => format!("{}通过群别名加入了群聊", invited),
         (6, _) => format!("{}被移出群聊", invited),
         (7, _) => format!("{}退出群聊", invited),
+        (13, _) => "该群聊已解散".to_string(),
         (_, 2) => format!("{}拒绝加入群聊", invited),
         _ => "群聊事件".to_string(),
     }
@@ -2434,6 +2435,7 @@ fn group_req_notice_content(item: &imweb::GroupReqMsgDto) -> String {
         (2 | 4, 0 | 1) => format!("{}通过扫描二维码加入了群聊", target_name),
         (14, 0 | 1) => format!("{}通过群链接加入了群聊", target_name),
         (15, 0 | 1) => format!("{}通过群别名加入了群聊", target_name),
+        (13, _) => "该群聊已解散".to_string(),
         (_, 2) => format!("{}拒绝加入群聊", target_name),
         _ => String::new(),
     }
