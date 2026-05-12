@@ -17,8 +17,8 @@
     "tauri:build": "tauri build",
     "tauri:build:mac": "TAURI_TARGET=universal-apple-darwin bash ./scripts/build-release-dist-macos.sh",
     "tauri:build:mac:uat": "tauri build --target universal-apple-darwin -- --mode uat",
-    "tauri:build:win": "tauri build --target x86_64-pc-windows-msvc --bundles nsis",
-    "tauri:build:win:uat": "tauri build --target x86_64-pc-windows-msvc -- --mode uat",
+    "tauri:build:win": "bash ./scripts/tauri-build-win.sh",
+    "tauri:build:win:uat": "bash ./scripts/tauri-build-win.sh -- --mode uat",
     "release:mac": "bash ./release-mac.sh",
     "release:dist:mac": "env -u TAURI_TARGET bash ./scripts/build-release-dist-macos.sh",
     "release:dist:mac:universal": "TAURI_TARGET=universal-apple-darwin bash ./scripts/build-release-dist-macos.sh",
@@ -38,7 +38,7 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.0.0",
+    "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-deep-link": "2.4.7",
     "@tauri-apps/plugin-dialog": "2.6.0",
     "@tauri-apps/plugin-fs": "2.4.5",
@@ -57,7 +57,7 @@
     "vue-router": "^4.3.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.0.0",
+    "@tauri-apps/cli": "2.11.1",
     "@types/crypto-js": "^4.2.2",
     "@types/dompurify": "^3.0.5",
     "@types/pako": "^2.0.4",
