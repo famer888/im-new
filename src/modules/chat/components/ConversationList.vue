@@ -164,9 +164,29 @@ function showFriendOnlineDot(conv: Conversation): boolean {
   return Boolean(c.online)
 }
 
+function normalizeGroupNoticeText(raw: string): string {
+  return raw.replace(/你(?=(?:邀请|申请加入|拒绝加入|同意加入))/g, '')
+}
+
+function translateKnownDigest(raw: string): string {
+  const normalized = normalizeGroupNoticeText(raw)
+  const phraseMap: Record<string, string> = {
+    该群聊已解散: t('该群聊已解散'),
+    拒绝加入: t('拒绝加入'),
+    同意加入: t('同意加入'),
+    申请加入: t('申请加入'),
+    邀请你加入: t('邀请你加入'),
+  }
+  return normalized.replace(/该群聊已解散|拒绝加入|同意加入|申请加入|邀请你加入/g, (matched) => (
+    phraseMap[matched] || matched
+  ))
+}
+
 function formatDigestText(digest: string): string {
   const raw = digest.trim()
   if (!raw) return ''
+  const translated = translateKnownDigest(raw)
+  if (translated !== raw) return translated
   if (raw === '暂不支持该消息类型') return ''
   if (raw.includes('\uFFFD')) return `[${t('名片')}]`
 
@@ -227,9 +247,10 @@ function getGroupReqUserName(user: unknown, fallbackId?: unknown): string {
 }
 
 function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
-  const raw = content.trim().replace(/\s+/g, ' ')
-  if (!extra) return raw
-  if (/^\S*(?:群主|群员|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
+  const raw = normalizeGroupNoticeText(content.trim().replace(/\s+/g, ' '))
+  const translated = translateKnownDigest(raw)
+  if (!extra) return translated
+  if (/^\S*(?:群主|群员|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return translated
 
   const type = Number(extra.groupReqType ?? 0)
   const status = Number(extra.groupReqStatus ?? 0)
@@ -237,7 +258,7 @@ function formatGroupNotificationDigest(content: string, extra: Record<string, un
     /^(拒绝加入|同意加入|申请加入|邀请你加入|加入)/.test(raw) ||
     (status === 2 && raw.includes('拒绝')) ||
     [1, 2, 3, 4, 14, 15].includes(type)
-  if (!shouldPrefix) return raw
+  if (!shouldPrefix) return translated
 
   const user =
     status === 2
@@ -245,9 +266,9 @@ function formatGroupNotificationDigest(content: string, extra: Record<string, un
       : extra.fromUser || extra.targetUser || extra.checkUser
   const fallbackId = status === 2 ? extra.receiveUid : extra.sendUid
   const name = getGroupReqUserName(user, fallbackId)
-  if (!name || raw.includes(name)) return raw
+  if (!name || raw.includes(name)) return translated
 
-  return `${name}${raw}`.slice(0, 200)
+  return `${name}${translated}`.slice(0, 200)
 }
 
 function shouldShowDraft(conv: Conversation): boolean {

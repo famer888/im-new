@@ -352,7 +352,14 @@ export const useChatStore = defineStore('chat', () => {
   function sortConversations() {
     conversations.value.sort((a, b) => {
       if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
-      return b.updatedAt - a.updatedAt
+      const timeDelta = b.updatedAt - a.updatedAt
+      if (timeDelta !== 0) return timeDelta
+      const aIsGroupNotification = a.type === 1 && a.targetId === GROUP_NOTIFICATION_TARGET_ID
+      const bIsGroupNotification = b.type === 1 && b.targetId === GROUP_NOTIFICATION_TARGET_ID
+      if (aIsGroupNotification !== bIsGroupNotification) {
+        return aIsGroupNotification ? 1 : -1
+      }
+      return 0
     })
   }
 
