@@ -5,6 +5,7 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
+import { parseGroupNoticeExtraObject } from '@/utils/groupNoticeDisplay'
 import { isHiddenMessageType } from '@/types'
 import MessageItem from './MessageItem.vue'
 import readBurnBackUrl from '@/assets/images/chat/read-burn-back.png'
@@ -33,6 +34,18 @@ const messageStore = useMessageStore()
 const authStore = useAuthStore()
 const searchStore = useSearchStore()
 
+/** 服务端曾把「拒绝加入」落到群会话；新版本改入「群通知」后，对已落库的记录不再在群内展示 */
+function isLegacyGroupInviteRejectionInGroupChat(conversationId: string | undefined, message: Message): boolean {
+  if (!conversationId?.startsWith('1_')) return false
+  const target = conversationId.slice(2)
+  if (!target || target === 'invitation') return false
+  if (message.msgType !== 8) return false
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  if (!extra) return false
+  if (String(extra.source ?? '') !== 'group-event') return false
+  return Number(extra.groupReqStatus ?? 0) === 2
+}
+
 const containerRef = ref<HTMLElement | null>(null)
 const floatDateRef = ref<HTMLElement | null>(null)
 
@@ -40,6 +53,7 @@ const floatDateRef = ref<HTMLElement | null>(null)
 const sortedMessages = computed(() =>
   props.messages
     .filter((message) => !isHiddenMessageType(message.msgType))
+    .filter((message) => !isLegacyGroupInviteRejectionInGroupChat(props.conversationId, message))
     .slice()
     .sort((a, b) => a.sendTime - b.sendTime),
 )

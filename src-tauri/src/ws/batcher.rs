@@ -928,10 +928,19 @@ impl MessageBatcher {
                 continue;
             }
 
+            let group_id_str = group.group_id.to_string();
+            // 「拒绝加入」等 group_req_status == 2 仅进「群通知」会话，不参与群会话时间线显示
+            let conversation_id =
+                if item.group_req_status == 2 {
+                    "1_invitation".to_string()
+                } else {
+                    format!("1_{}", group.group_id)
+                };
+
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_EVENT_PUSH,
                 msg_id: common.msg_id.to_string(),
-                conversation_id: format!("1_{}", group.group_id),
+                conversation_id,
                 sender_id: item.from_uid.to_string(),
                 msg_type: 8,
                 content,
@@ -940,7 +949,7 @@ impl MessageBatcher {
                 read_status: 0,
                 extra: serde_json::json!({
                     "source": "group-event",
-                    "groupId": group.group_id.to_string(),
+                    "groupId": group_id_str,
                     "groupName": group.group_name,
                     "groupAvatar": group.pic,
                     "groupMuted": group.group_shutup,

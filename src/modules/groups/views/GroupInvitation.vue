@@ -2,6 +2,7 @@
 import { onBeforeUnmount, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { GROUP_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
@@ -33,6 +34,7 @@ interface GroupReqItem {
 }
 
 const authStore = useAuthStore()
+const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const chatStore = useChatStore()
 const messageStore = useMessageStore()
@@ -128,7 +130,10 @@ function formatReqMessage(item: GroupReqItem): string {
   const formattedContent = formatGroupNoticeDisplayText(
     (item.msg || '').trim().replace(/\s+/g, ' '),
     groupReqNoticeExtra(item),
-    { currentUid: authStore.uid },
+    {
+      currentUid: authStore.uid,
+      resolveUidPlaceholder: (id) => contactStore.getDisplayName(id),
+    },
   )
   const raw = normalizeGroupNoticeText(formattedContent)
   if (!raw) {
@@ -174,7 +179,10 @@ function formatAcceptedGroupDigest(item: GroupReqItem): string {
     return formatGroupNoticeDisplayText(
       `${fromName}${t('邀请')}${targetName}${t('加入群聊')}`,
       groupReqNoticeExtra(item),
-      { currentUid: authStore.uid },
+      {
+        currentUid: authStore.uid,
+        resolveUidPlaceholder: (id) => contactStore.getDisplayName(id),
+      },
     )
   }
   return formatReqMessage(item)
