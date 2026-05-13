@@ -120,9 +120,6 @@ const localImagePath = computed(() => {
 const canOpenDirectory = computed(() => Boolean(localImagePath.value))
 const contextMenuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = []
-  if (isVideo.value && localVideoPath.value) {
-    items.push({ key: 'copy_video', label: t('复制') })
-  }
   if (!isVideo.value) {
     items.push(
       { key: 'copy', label: t('复制') },
@@ -381,12 +378,6 @@ async function copyImageToClipboard() {
   await navigator.clipboard.write([new ClipboardItemCtor({ 'image/png': blob })])
 }
 
-async function copyVideoToClipboard() {
-  const path = localVideoPath.value
-  if (!path) throw new Error('video file path unavailable')
-  await invoke('write_clipboard_file', { path })
-}
-
 function promptImageOverwrite(filePath: string): Promise<boolean> {
   if (imageOverwriteResolver) {
     imageOverwriteResolver(false)
@@ -529,10 +520,6 @@ async function handleMenuSelect(key: string) {
     switch (key) {
       case 'copy':
         await copyImageToClipboard()
-        showToast(t('复制成功'))
-        break
-      case 'copy_video':
-        await copyVideoToClipboard()
         showToast(t('复制成功'))
         break
       case 'save_as':

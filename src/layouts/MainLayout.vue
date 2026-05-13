@@ -860,8 +860,8 @@ function messageSupportsVideoOpenDirectory(data: Record<string, unknown>): boole
   return !!(window as any).__TAURI_INTERNALS__ && messageSupportsVideoFileActions(data)
 }
 
-function messageSupportsVideoCopy(data: Record<string, unknown>): boolean {
-  return !!(window as any).__TAURI_INTERNALS__ && messageSupportsVideoFileActions(data)
+function messageSupportsVideoCopy(_data: Record<string, unknown>): boolean {
+  return false
 }
 
 function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean {
