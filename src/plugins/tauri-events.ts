@@ -1098,6 +1098,18 @@ export async function setupTauriListeners() {
           chatStore.clearPendingGroupInviteConversation(groupId)
         }
 
+        const isSelfLeaveGroupEvent =
+          String(extra?.source || '') === 'group-event'
+          && Number(extra?.groupReqType ?? 0) === 7
+          && String(extra?.receiveUid ?? '') === currentUid
+        if (isSelfLeaveGroupEvent) {
+          groupStore.removeGroup(groupId)
+          await chatStore.deleteConversation(currentUid, `1_${groupId}`).catch((err: unknown) => {
+            console.warn('[group-event] delete self-left group conversation failed:', { groupId, err })
+          })
+          continue
+        }
+
         const existingGroup = groupStore.getGroup(groupId)
         const cachedMemberCount = Number(existingGroup?.memberCount || 0)
         const cachedMemberMapCount = groupStore.getMembers(groupId).length
