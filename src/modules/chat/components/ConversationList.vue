@@ -42,7 +42,6 @@ const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
-const PENDING_GROUP_INVITE_RE = /邀请你加入群聊/
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -107,11 +106,19 @@ function ensureGroupNotificationVisible(conversations: Conversation[]): Conversa
   )
   if (hasGroupNotification) return conversations
 
-  const pendingInvite = chatStore.conversations.find(
+  const pendingInvites = chatStore.conversations
+    .filter(
+      (conv) => conv.type === ConversationType.Group
+        && conv.targetId !== GROUP_NOTIFICATION_TARGET_ID
+        && chatStore.isPendingGroupInviteConversation(conv.targetId),
+    )
+    .sort((a, b) => Number(b.lastMsgTime || 0) - Number(a.lastMsgTime || 0))
+  const pendingInvite = pendingInvites[0]
+    || chatStore.conversations.find(
     (conv) => conv.type === ConversationType.Group
       && conv.targetId !== GROUP_NOTIFICATION_TARGET_ID
-      && PENDING_GROUP_INVITE_RE.test(String(conv.lastMsgDigest || '')),
-  )
+      && String(conv.lastMsgDigest || '').includes('邀请你加入群聊'),
+    )
   if (!pendingInvite) return conversations
 
   return [
