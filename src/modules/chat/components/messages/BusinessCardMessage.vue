@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 
 const props = defineProps<{ message: Message }>()
+const authStore = useAuthStore()
 const uiStore = useUIStore()
+const isSelf = computed(() => props.message.senderId === authStore.uid)
 
 const cardData = computed(() => {
   const content = props.message.content ?? ''
@@ -44,7 +47,7 @@ function handleClick() {
 
 <template>
   <div
-    class="business-card-message"
+    :class="['business-card-message', { self: isSelf }]"
     @click="handleClick"
   >
     <TextAvatar
@@ -76,6 +79,13 @@ function handleClick() {
 
   &:hover {
     opacity: 0.8;
+  }
+
+  &.self {
+    border-color: #87cdf6;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 0;
+    background: #98daff;
   }
 }
 
