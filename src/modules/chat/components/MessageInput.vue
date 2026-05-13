@@ -383,6 +383,67 @@ function getLocalFilePath(file: File): string {
   return String(localFile.local || localFile.localPath || localFile.__localPath || localFile.path || '').trim()
 }
 
+function attachLocalPathToFile(file: File, localPath: string): File {
+  const path = localPath.trim()
+  if (!path) return file
+  const localFile = file as LocalPathFile
+  try {
+    localFile.local = path
+    localFile.localPath = path
+    localFile.__localPath = path
+    localFile.path = path
+  } catch {
+    // Some File objects may be non-extensible in embedded webviews.
+  }
+  return file
+}
+
+function isBlobBackedFile(file: File): boolean {
+  return file instanceof Blob
+}
+
+async function ensureBlobBackedFile(file: File, trace?: ImageSendTrace): Promise<File> {
+  if (isBlobBackedFile(file)) return file
+
+  const localPath = getLocalFilePath(file)
+  if (!localPath) return file
+
+  const startedAt = performance.now()
+  const log = (
+    message: string,
+    data?: Record<string, unknown>,
+    level: 'info' | 'warn' | 'error' = 'info',
+  ) => {
+    if (trace) {
+      fileTraceLog(trace, message, data, level)
+    } else {
+      terminalLog(`[file-send] ${message}`, data, level)
+    }
+  }
+
+  log('materialize local path file start', {
+    pathHead: safeHead(localPath, 80),
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  })
+
+  const buffer = await file.arrayBuffer()
+  const materialized = new File([buffer], file.name || 'local-file', {
+    type: file.type || 'application/octet-stream',
+    lastModified: Number(file.lastModified || Date.now()),
+  })
+
+  log('materialize local path file done', {
+    elapsedMs: Math.round(performance.now() - startedAt),
+    name: materialized.name,
+    size: materialized.size,
+    type: materialized.type,
+  })
+
+  return attachLocalPathToFile(materialized, localPath)
+}
+
 function formatReadBurnNotice(seconds: number, enabled: boolean) {
   const name = t('你')
   if (!enabled) return `${name}${t('关闭了阅后即焚')}`
@@ -2546,20 +2607,22 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
     }
     if (file.type.startsWith('image/')) {
       let localPreview: LocalImagePreview | null = null
+      let sendFile = file
       try {
         const trace = createImageTrace()
         const fileKey = createFileKey()
+        sendFile = await ensureBlobBackedFile(file, trace)
         traceLog(trace, 'handle image file', {
           conversationId: convId.value,
           isGroup: isGroup.value,
           isFriend: isFriend.value,
           isFileHelper: isFileHelperChat.value,
-          name: file.name,
-          size: file.size,
-          type: file.type,
+          name: sendFile.name,
+          size: sendFile.size,
+          type: sendFile.type,
         })
         const prepared = isGroup.value && !isFileHelperChat.value
-          ? await prepareGroupImagePayload(file)
+          ? await prepareGroupImagePayload(sendFile)
           : null
         if (prepared) {
           emit('send', JSON.stringify({
@@ -2568,11 +2631,11 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             width: prepared.width,
             height: prepared.height,
             size: prepared.size,
-            name: file.name,
+            name: sendFile.name,
           }), MessageType.Image, withReadBurnExtra())
         } else {
-          localPreview = await appendLocalImagePreview(file, fileKey, trace)
-          const uploaded = await uploadImageLikeIm(file, {
+          localPreview = await appendLocalImagePreview(sendFile, fileKey, trace)
+          const uploaded = await uploadImageLikeIm(sendFile, {
             fileKey,
             width: localPreview?.width,
             height: localPreview?.height,
@@ -2613,9 +2676,9 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         }
         terminalLog('image send prepare/upload failed', {
           message: (error as Error)?.message || String(error),
-          name: file.name,
-          size: file.size,
-          type: file.type,
+          name: sendFile.name || file.name,
+          size: sendFile.size || file.size,
+          type: sendFile.type || file.type,
         }, 'error')
         showToast((error as Error)?.message || t('操作失败'), 'error')
       }
@@ -2623,16 +2686,18 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
       const trace = createImageTrace()
       const fileKey = createFileKey()
       const localPath = getLocalFilePath(file)
+      let sendFile = file
       let localPreview: LocalVideoPreview | null = null
       try {
+        sendFile = await ensureBlobBackedFile(file, trace)
         fileTraceLog(trace, '[single-video-send] video branch entered', {
           conversationId: convId.value,
           conversationType: chatStore.currentConversation?.type,
           targetId: chatStore.currentConversation?.targetId,
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          suffix: getFileSuffix(file),
+          name: sendFile.name,
+          size: sendFile.size,
+          type: sendFile.type,
+          suffix: getFileSuffix(sendFile),
           attachType: getUploadAttachType(MessageType.Video),
           hasLocalPath: Boolean(localPath),
         })
@@ -2641,11 +2706,11 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           isGroup: isGroup.value,
           isFriend: isFriend.value,
           isFileHelper: isFileHelperChat.value,
-          name: file.name,
-          size: file.size,
-          type: file.type,
+          name: sendFile.name,
+          size: sendFile.size,
+          type: sendFile.type,
         })
-        const metadata = await getVideoMetadata(file, trace)
+        const metadata = await getVideoMetadata(sendFile, trace)
         fileTraceLog(trace, '[single-video-send] video metadata ready', {
           width: metadata.width,
           height: metadata.height,
@@ -2653,12 +2718,12 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           thumbDataUrlLen: metadata.thumbDataUrl.length,
           thumbDataUrlHead: metadata.thumbDataUrl.slice(0, 48),
         })
-        localPreview = appendLocalVideoPreview(file, fileKey, metadata, trace)
+        localPreview = appendLocalVideoPreview(sendFile, fileKey, metadata, trace)
         fileTraceLog(trace, '[single-video-send] local preview result', {
           optimisticId: localPreview?.optimisticId || '',
           hasLocalPreview: Boolean(localPreview),
         })
-        const uploaded = await uploadVideoLikeIm(file, metadata, { fileKey, trace })
+        const uploaded = await uploadVideoLikeIm(sendFile, metadata, { fileKey, trace })
         fileTraceLog(trace, 'emit uploaded video message', {
           conversationId: convId.value,
           optimisticId: localPreview?.optimisticId || '',
@@ -2713,9 +2778,9 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         }
         fileTraceLog(trace, 'video upload failed', {
           message: (error as Error)?.message || String(error),
-          name: file.name,
-          size: file.size,
-          type: file.type,
+          name: sendFile.name || file.name,
+          size: sendFile.size || file.size,
+          type: sendFile.type || file.type,
         }, 'error')
         showToast((error as Error)?.message || t('操作失败'), 'error')
       }
