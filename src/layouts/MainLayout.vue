@@ -1391,12 +1391,6 @@ async function openOfficeFileDirectory(data: Record<string, unknown>) {
   await invoke('reveal_file_in_directory', { path: filePath })
 }
 
-async function copyVideoToClipboard(data: Record<string, unknown>) {
-  const filePath = await ensureVideoLocalFile(data)
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('write_clipboard_file', { path: filePath })
-}
-
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -1786,19 +1780,11 @@ async function handleContextMenuSelect(key: string) {
     if (isReadBurnMessage(data) && key !== 'delete_everyone' && key !== 'delete_local') return
     switch (key) {
       case 'copy': {
-        if (messageSupportsVideoCopy(data)) {
-          try {
-            await copyVideoToClipboard(data)
-            showToast(t('复制成功'))
-          } catch {
-            /* clipboard may be unavailable */
-          }
-          break
-        }
         if (messageSupportsImageCopy(data)) {
           try { await copyMessageImage(data) } catch { /* clipboard may be unavailable */ }
           break
         }
+        if (!messageSupportsCopy(data.msgType)) break
         try { await copyMessageText(data) } catch { /* clipboard may be unavailable */ }
         break
       }

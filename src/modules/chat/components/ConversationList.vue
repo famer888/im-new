@@ -17,6 +17,7 @@ import { ConversationType, isHiddenMessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
+import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
@@ -29,6 +30,11 @@ const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+const emojiMap = emojiObj as Record<string, string>
+
+type DigestSegment =
+  | { type: 'text'; text: string }
+  | { type: 'emoji'; text: string; src: string }
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
 function isNotFileHelper(c: Conversation): boolean {
@@ -308,6 +314,45 @@ function getDigest(conv: Conversation): string {
   return ''
 }
 
+function getDigestEmojiSrc(token: string): string {
+  const fileName = emojiMap[token]
+  return fileName ? `/images/emoji/${fileName}.png` : ''
+}
+
+function splitDigestSegments(text: string): DigestSegment[] {
+  const segments: DigestSegment[] = []
+  const tokenPattern = /\[[^\]]+\]/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  const pushText = (value: string) => {
+    if (!value) return
+    const last = segments[segments.length - 1]
+    if (last?.type === 'text') {
+      last.text += value
+    } else {
+      segments.push({ type: 'text', text: value })
+    }
+  }
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    const token = match[0]
+    const src = getDigestEmojiSrc(token)
+    if (!src) continue
+
+    pushText(text.slice(lastIndex, match.index))
+    segments.push({ type: 'emoji', text: token, src })
+    lastIndex = match.index + token.length
+  }
+
+  pushText(text.slice(lastIndex))
+  return segments
+}
+
+function getDigestSegments(conv: Conversation): DigestSegment[] {
+  return splitDigestSegments(getDigest(conv))
+}
+
 function handleSelect(conv: Conversation) {
   if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
     chatStore.setCurrentConversation(conv.id)
@@ -398,7 +443,17 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
             <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[{{ t('有人@我') }}]</span>
             <span v-if="shouldShowDraft(conv)" class="draft-tag">[{{ t('草稿') }}]</span>
             <span v-if="conv.senderName && !shouldShowDraft(conv)" class="sender-name">{{ conv.senderName }}:</span>
-            <span class="conv-digest">{{ getDigest(conv) }}</span>
+            <span class="conv-digest">
+              <template v-for="(segment, index) in getDigestSegments(conv)" :key="`${conv.id}-digest-${index}`">
+                <img
+                  v-if="segment.type === 'emoji'"
+                  class="conv-digest-emoji"
+                  :src="segment.src"
+                  :alt="segment.text"
+                />
+                <span v-else>{{ segment.text }}</span>
+              </template>
+            </span>
             <span v-if="conv.isMuted" class="muted-icon">
               <img :src="mdrIcon" alt="" />
             </span>
@@ -649,6 +704,14 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+.conv-digest-emoji {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin: 0 1px;
+  vertical-align: -3px;
 }
 
 .muted-icon {

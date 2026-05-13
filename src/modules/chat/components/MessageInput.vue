@@ -13,6 +13,7 @@ import { useChannelStore } from '@/stores/useChannelStore'
 import { eventBus } from '@/utils/eventBus'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import { DEFAULT_READ_BURN_SECONDS, getReadBurnTimeText } from '@/utils/readBurn'
+import { emojiObj } from '@/utils/emoji'
 import { getUploadToken, getUploadUrl, updateContacts } from '@/api/imBase'
 import { updateMember } from '@/api/imChannel'
 import { proto } from '@/api/request'
@@ -186,7 +187,9 @@ const GROUP_IMAGE_MIN_DIMENSION = 480
 const GROUP_IMAGE_MIN_QUALITY = 0.42
 const FILE_ENCRYPT_CHUNK_SIZE = 102400
 const VISIBLE_TRAILING_SPACE = '\u00a0'
+const EDITOR_EMOJI_CARET_ANCHOR = '\u200b'
 const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg'])
+const emojiMap = emojiObj as Record<string, string>
 
 interface UploadedImagePayload {
   url: string
@@ -434,10 +437,145 @@ function getStoredDraft(conversationId: string) {
   return chatStore.conversations.find((c) => c.id === conversationId)?.draft || ''
 }
 
+function getEditorEmojiSrc(emoji: string): string {
+  const fileName = emojiMap[emoji]
+  return fileName ? `/images/emoji/${fileName}.png` : ''
+}
+
+function createEditorEmojiNode(emoji: string): HTMLImageElement {
+  const img = document.createElement('img')
+  img.className = 'editor-emoji'
+  img.src = getEditorEmojiSrc(emoji)
+  img.alt = emoji
+  img.title = emoji
+  img.draggable = false
+  img.dataset.emojiText = emoji
+  img.contentEditable = 'false'
+  return img
+}
+
+function createEditorEmojiCaretNode(): Text {
+  return document.createTextNode(EDITOR_EMOJI_CARET_ANCHOR)
+}
+
+function isEditorEmojiCaretNode(node: Node | null | undefined): node is Text {
+  return node?.nodeType === Node.TEXT_NODE && node.textContent === EDITOR_EMOJI_CARET_ANCHOR
+}
+
+function serializeEditorNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent || '').replaceAll(EDITOR_EMOJI_CARET_ANCHOR, '')
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return ''
+
+  if (node instanceof HTMLImageElement && node.dataset.emojiText) {
+    return node.dataset.emojiText
+  }
+  if (node instanceof HTMLBRElement) return '\n'
+  if (node instanceof HTMLAnchorElement) return node.outerHTML
+
+  return Array.from(node.childNodes).map(serializeEditorNode).join('')
+}
+
+function serializeEditorContent(): string {
+  return editorRef.value ? serializeEditorNode(editorRef.value) : content.value
+}
+
+function renderEditorText(text: string) {
+  const editor = editorRef.value
+  if (!editor) return
+
+  editor.textContent = ''
+  const tokenPattern = /\[[^\]]+\]/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    const emoji = match[0]
+    const src = getEditorEmojiSrc(emoji)
+    if (!src) continue
+
+    if (match.index > lastIndex) {
+      editor.appendChild(document.createTextNode(text.slice(lastIndex, match.index)))
+    }
+    editor.appendChild(createEditorEmojiNode(emoji))
+    editor.appendChild(createEditorEmojiCaretNode())
+    lastIndex = match.index + emoji.length
+  }
+
+  if (lastIndex < text.length) {
+    editor.appendChild(document.createTextNode(text.slice(lastIndex)))
+  }
+}
+
+function placeCaretAtTextOffset(offset: number) {
+  const editor = editorRef.value
+  if (!editor) return
+
+  const selection = window.getSelection()
+  const range = document.createRange()
+  let remaining = Math.max(0, offset)
+  let placed = false
+
+  const placeBeforeOrAfter = (node: Node, after: boolean) => {
+    const parent = node.parentNode
+    if (!parent) return false
+    const index = Array.prototype.indexOf.call(parent.childNodes, node)
+    range.setStart(parent, index + (after ? 1 : 0))
+    return true
+  }
+
+  const walk = (node: Node): boolean => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const length = node.textContent?.length ?? 0
+      if (remaining <= length) {
+        range.setStart(node, remaining)
+        return true
+      }
+      remaining -= length
+      return false
+    }
+
+    if (node instanceof HTMLImageElement && node.dataset.emojiText) {
+      const length = node.dataset.emojiText.length
+      if (remaining === length && isEditorEmojiCaretNode(node.nextSibling)) {
+        range.setStart(node.nextSibling, node.nextSibling.length)
+        return true
+      }
+      if (remaining <= length) {
+        return placeBeforeOrAfter(node, remaining >= length)
+      }
+      remaining -= length
+      return false
+    }
+
+    if (node instanceof HTMLBRElement) {
+      if (remaining <= 1) return placeBeforeOrAfter(node, remaining >= 1)
+      remaining -= 1
+      return false
+    }
+
+    for (const child of Array.from(node.childNodes)) {
+      if (walk(child)) return true
+    }
+    return false
+  }
+
+  placed = walk(editor)
+  if (!placed) {
+    range.selectNodeContents(editor)
+    range.collapse(false)
+  }
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  savedSelection.value = range.cloneRange()
+}
+
 function setEditorText(text: string) {
   content.value = text
   if (editorRef.value) {
-    editorRef.value.textContent = text
+    renderEditorText(text)
   }
 }
 
@@ -624,6 +762,7 @@ function handleQrForwardCancel() {
 
 async function handleSend() {
   showEmoji.value = false
+  content.value = serializeEditorContent()
   const text = normalizeEditorText(content.value).trim()
   if (!text && !hasForwardDraft.value) return
 
@@ -730,7 +869,7 @@ function handleEditorKeyup(e: KeyboardEvent) {
 
 function handleInput() {
   if (editorRef.value) {
-    content.value = editorRef.value.textContent ?? ''
+    content.value = serializeEditorContent()
   }
   updateAtListFromCaret()
 }
@@ -760,8 +899,26 @@ function restoreEditorSelection() {
   }
 }
 
+function normalizeEditorFocusCaret() {
+  requestAnimationFrame(() => {
+    const editor = editorRef.value
+    const selection = window.getSelection()
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+    if (!editor || document.activeElement !== editor || !range || !range.collapsed) return
+
+    const lastChild = editor.lastChild
+    if (range.endContainer === editor && range.endOffset === editor.childNodes.length && isEditorEmojiCaretNode(lastChild)) {
+      range.setStart(lastChild, lastChild.length)
+      range.collapse(true)
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      savedSelection.value = range.cloneRange()
+    }
+  })
+}
+
 function getEditorText(): string {
-  return editorRef.value?.textContent ?? ''
+  return serializeEditorContent()
 }
 
 function normalizeEditorText(value: string): string {
@@ -778,7 +935,7 @@ function getCaretTextOffset(): number {
   const preRange = range.cloneRange()
   preRange.selectNodeContents(editor)
   preRange.setEnd(range.endContainer, range.endOffset)
-  return preRange.toString().length
+  return serializeEditorNode(preRange.cloneContents()).length
 }
 
 function getEditorRangeTextOffsets(range: Range): { start: number; end: number } | null {
@@ -794,8 +951,8 @@ function getEditorRangeTextOffsets(range: Range): { start: number; end: number }
   endRange.setEnd(range.endContainer, range.endOffset)
 
   return {
-    start: startRange.toString().length,
-    end: endRange.toString().length,
+    start: serializeEditorNode(startRange.cloneContents()).length,
+    end: serializeEditorNode(endRange.cloneContents()).length,
   }
 }
 
@@ -803,23 +960,10 @@ function setEditorTextAndCaret(text: string, caretOffset: number) {
   const editor = editorRef.value
   if (!editor) return
 
-  editor.textContent = text
+  renderEditorText(text)
   content.value = text
   editor.focus()
-
-  const selection = window.getSelection()
-  const range = document.createRange()
-  const textNode = editor.firstChild
-  if (textNode?.nodeType === Node.TEXT_NODE) {
-    const offset = Math.max(0, Math.min(caretOffset, textNode.textContent?.length ?? 0))
-    range.setStart(textNode, offset)
-  } else {
-    range.setStart(editor, 0)
-  }
-  range.collapse(true)
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-  savedSelection.value = range.cloneRange()
+  placeCaretAtTextOffset(caretOffset)
 }
 
 function insertPlainTextAtSelection(text: string) {
@@ -1122,8 +1266,43 @@ function handleDragOver(e: DragEvent) {
 }
 
 function handleEmojiSelect(emoji: string) {
-  content.value += emoji
-  if (editorRef.value) editorRef.value.textContent = content.value
+  const src = getEditorEmojiSrc(emoji)
+  if (!src) {
+    insertPlainTextAtSelection(emoji)
+    showEmoji.value = false
+    return
+  }
+
+  restoreEditorSelection()
+  const editor = editorRef.value
+  if (!editor) {
+    content.value += emoji
+    showEmoji.value = false
+    return
+  }
+
+  const selection = window.getSelection()
+  let range = selection?.rangeCount ? selection.getRangeAt(0) : null
+  if (!range || !editor.contains(range.commonAncestorContainer)) {
+    range = document.createRange()
+    range.selectNodeContents(editor)
+    range.collapse(false)
+  }
+
+  range.deleteContents()
+  const emojiNode = createEditorEmojiNode(emoji)
+  const caretNode = createEditorEmojiCaretNode()
+  const fragment = document.createDocumentFragment()
+  fragment.append(emojiNode, caretNode)
+  range.insertNode(fragment)
+  range.setStart(caretNode, caretNode.length)
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  savedSelection.value = range.cloneRange()
+  content.value = serializeEditorContent()
+  showAtList.value = false
+  atKeyword.value = ''
   showEmoji.value = false
 }
 
@@ -2745,6 +2924,7 @@ onBeforeUnmount(() => {
           @paste="handlePaste"
           @mouseup="saveEditorSelection"
           @keyup="handleEditorKeyup"
+          @focus="normalizeEditorFocusCaret"
           @blur="saveEditorSelection"
           @contextmenu.prevent.stop="handleEditorContextMenu"
         />
@@ -3103,6 +3283,15 @@ onBeforeUnmount(() => {
     color: #999;
     font-size: 12px;
     pointer-events: none;
+  }
+
+  :deep(.editor-emoji) {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    margin: 0 1px;
+    vertical-align: -4px;
+    user-select: none;
   }
 }
 
