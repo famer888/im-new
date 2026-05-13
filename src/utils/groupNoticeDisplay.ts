@@ -157,7 +157,11 @@ function extractRawInviteActor(raw: string): string {
 }
 
 function stripActorRolePrefix(actor: string): string {
-  return actor.replace(/^(群主|管理员|群员)[:：]\s*/, '').trim()
+  return actor
+    .replace(/^(群主|管理员|群员)[：:\s]*/, '')
+    .replace(/[（(]\s*(群主|管理员|群员)\s*[）)]\s*$/g, '')
+    .replace(/\s*(群主|管理员|群员)\s*$/g, '')
+    .trim()
 }
 
 function getActorName(extra: ExtraObject, raw: string): string {
