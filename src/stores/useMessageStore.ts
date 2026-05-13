@@ -79,10 +79,9 @@ async function resolveWsConnectConfig(): Promise<{
       const currentUid = localStorage.getItem('current-uid') || ''
       const accountListText = localStorage.getItem('login-account-list')
       const accountList = accountListText ? JSON.parse(accountListText) : []
-      if (Array.isArray(accountList) && accountList.length > 0) {
+      if (currentUid && Array.isArray(accountList)) {
         const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
-        const preferred = current || accountList[accountList.length - 1]
-        sessionId = String(preferred?.sessionId || '').trim()
+        sessionId = String(current?.sessionId || '').trim()
       }
     } catch {
       // ignore parse errors

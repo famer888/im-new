@@ -23,10 +23,7 @@ function getSessionIdFromStorage(): string {
       const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
       if (current?.sessionId) return String(current.sessionId)
     }
-    if (Array.isArray(accountList) && accountList.length > 0) {
-      const lastWithSession = [...accountList].reverse().find((item: any) => item?.sessionId)
-      if (lastWithSession?.sessionId) return String(lastWithSession.sessionId)
-    }
+
     const browserSessionText = localStorage.getItem('browser-session')
     if (browserSessionText) {
       const browserSession = JSON.parse(browserSessionText)
