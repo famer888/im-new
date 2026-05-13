@@ -42,6 +42,7 @@ const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
+const PURE_UID_RE = /\b\d{5,}\b/g
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -287,6 +288,52 @@ function parseMessageExtra(rawExtra: unknown): Record<string, unknown> | null {
   return typeof rawExtra === 'object' ? rawExtra as Record<string, unknown> : null
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function str(value: unknown): string {
+  return String(value ?? '').trim()
+}
+
+function getExtraUserNameById(extra: Record<string, unknown> | null): Map<string, string> {
+  const userMap = new Map<string, string>()
+  if (!extra) return userMap
+
+  const addUser = (candidate: unknown) => {
+    const raw = asRecord(candidate)
+    if (!raw) return
+    const nested = asRecord(raw.user) || asRecord(raw.userInfo) || asRecord(raw.user_info)
+    const relation = asRecord(raw.friendRelation) || asRecord(raw.friend_relation)
+    const nestedRelation = nested ? (asRecord(nested.friendRelation) || asRecord(nested.friend_relation)) : null
+
+    const id = [
+      raw.userId, raw.user_id, raw.uid, raw.id,
+      nested?.userId, nested?.user_id, nested?.uid, nested?.id,
+    ].map(str).find(Boolean) || ''
+    if (!id) return
+
+    const name = [
+      raw.remarkName, raw.remark_name,
+      relation?.remarkName, relation?.remark_name,
+      raw.nickname, raw.nickName, raw.nick_name, raw.name, raw.identify,
+      nested?.remarkName, nested?.remark_name,
+      nestedRelation?.remarkName, nestedRelation?.remark_name,
+      nested?.nickname, nested?.nickName, nested?.nick_name, nested?.name, nested?.identify,
+    ].map(str).find(Boolean) || ''
+    if (!name || name === id) return
+    userMap.set(id, name)
+  }
+
+  addUser(extra.fromUser)
+  addUser(extra.targetUser)
+  addUser(extra.checkUser)
+  if (Array.isArray(extra.members)) {
+    for (const member of extra.members) addUser(member)
+  }
+  return userMap
+}
+
 function getGroupReqUserName(user: unknown, fallbackId?: unknown): string {
   const raw = user && typeof user === 'object' ? user as Record<string, unknown> : null
   const relation = raw?.friendRelation && typeof raw.friendRelation === 'object'
@@ -322,7 +369,7 @@ function getGroupNoticeContextMembers(extra: Record<string, unknown> | null) {
   return groupId ? groupStore.getMembers(groupId) : []
 }
 
-function resolveUidNick(id: string, groupId?: string): string {
+function resolveUidNick(id: string, groupId?: string, extra?: Record<string, unknown> | null): string {
   const uid = String(id || '').trim()
   if (!uid) return ''
   if (String(authStore.uid || '') === uid) return t('你')
@@ -343,6 +390,12 @@ function resolveUidNick(id: string, groupId?: string): string {
     }
   }
 
+  const extraName = getExtraUserNameById(extra ?? null).get(uid) || ''
+  if (extraName && extraName !== uid) {
+    groupNoticeDebug('resolve uid by message extra', { uid, groupId: groupId || '', extraName }, 'info')
+    return extraName
+  }
+
   for (const members of groupStore.memberMap.values()) {
     const name = String(members.find((member) => member.userId === uid)?.nickname || '').trim()
     if (name && name !== uid) {
@@ -359,9 +412,12 @@ function formatGroupNotificationDigest(content: string, extra: Record<string, un
   const formattedContent = formatGroupNoticeDisplayText(content, extra, {
     currentUid: authStore.uid,
     actorRole: getGroupNoticeActorRole(extra),
-    resolveUidPlaceholder: (id) => resolveUidNick(id, groupId),
+    resolveUidPlaceholder: (id) => resolveUidNick(id, groupId, extra),
   })
-  const raw = normalizeGroupNoticeText(formattedContent.trim().replace(/\s+/g, ' '))
+  let raw = normalizeGroupNoticeText(formattedContent.trim().replace(/\s+/g, ' '))
+  if (extra && raw.includes('邀请') && raw.includes('加入群聊')) {
+    raw = raw.replace(PURE_UID_RE, (uid) => resolveUidNick(uid, groupId, extra))
+  }
   if (isHiddenGroupNoticeDigest(raw)) return ''
   const translated = translateKnownDigest(raw)
   if (!extra) return translated
@@ -408,7 +464,7 @@ function getMessageDigest(message: Message): string {
       currentUid: authStore.uid,
       actorRole: getGroupNoticeActorRole(extra),
       contextMembers: isGroupNotification ? [] : getGroupNoticeContextMembers(extra),
-      resolveUidPlaceholder: (id) => resolveUidNick(id, groupId),
+      resolveUidPlaceholder: (id) => resolveUidNick(id, groupId, extra),
     })
     groupNoticeDebug('message digest formatted', {
       conversationId: message.conversationId,
@@ -418,7 +474,10 @@ function getMessageDigest(message: Message): string {
       isGroupNotification,
     }, 'info')
     if (isHiddenGroupNoticeDigest(formatted)) return ''
-    return formatted ? formatDigestText(formatted) : ''
+    const normalized = extra && formatted.includes('邀请') && formatted.includes('加入群聊')
+      ? formatted.replace(PURE_UID_RE, (uid) => resolveUidNick(uid, groupId, extra))
+      : formatted
+    return normalized ? formatDigestText(normalized) : ''
   }
   return raw ? formatDigestText(raw) : ''
 }

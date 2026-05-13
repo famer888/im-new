@@ -103,6 +103,7 @@ let activeGroupMemberSyncTimer: number | null = null
 let activeGroupMemberSyncInFlight = false
 let lastActiveGroupMemberSyncAt = 0
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
+const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/
 
 function setInitText(text: string) {
   initText.value = text
@@ -112,6 +113,25 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
   toastVisible.value = true
+}
+
+async function preloadConversationSummariesNeedingNames(uid: string) {
+  if (!uid || !(window as any).__TAURI_INTERNALS__) return
+
+  const targets = chatStore.conversations
+    .filter((conv) => (
+      conv.type === ConversationType.Group
+      && conv.targetId !== GROUP_NOTIFICATION_TARGET_ID
+      && GROUP_NOTICE_UID_PLACEHOLDER_RE.test(String(conv.lastMsgDigest || ''))
+    ))
+    .sort((a, b) => Number(b.lastMsgTime || 0) - Number(a.lastMsgTime || 0))
+    .slice(0, 8)
+
+  if (targets.length === 0) return
+
+  await Promise.allSettled(
+    targets.map((conv) => messageStore.loadMessages(uid, conv.id)),
+  )
 }
 
 function terminalDebugLog(
@@ -300,6 +320,7 @@ onMounted(async () => {
       }
       setInitText(t('数据已载入'))
       appLocale.value = settingStore.settings.language
+      void preloadConversationSummariesNeedingNames(authStore.uid)
       pruneUnknownConversations()
 
       // Bootstrap: if no real conversations exist, seed from contacts/groups
