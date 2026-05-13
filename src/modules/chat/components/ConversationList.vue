@@ -89,15 +89,32 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   }
 }
 
+/** 未确认的入群邀请会先挂在「群通知」，普通会话列表里的群会话预览需要隐藏。 */
+function isPendingInviteConversationPreview(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group) return false
+  if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return true
+
+  // 待确认的入群邀请只保留「群通知」入口，避免普通会话列表提前露出一条群会话。
+  const digest = normalizeGroupNoticeText(String(conv.lastMsgDigest || '').trim().replace(/\s+/g, ' '))
+  return digest.includes('邀请你加入群聊')
+}
+
 const normalConversations = computed(() =>
   chatStore.conversations.filter(
-    c => !c.isArchived && isNotFileHelper(c) && isConversationInCurrentRelations(c),
+    c => !c.isArchived
+      && isNotFileHelper(c)
+      && isConversationInCurrentRelations(c)
+      && !isPendingInviteConversationPreview(c),
   ),
 )
 
 const archivedConversations = computed(() =>
   chatStore.conversations.filter(
-    c => c.isArchived && isNotFileHelper(c) && isConversationInCurrentRelations(c),
+    c => c.isArchived
+      && isNotFileHelper(c)
+      && isConversationInCurrentRelations(c)
+      && !isPendingInviteConversationPreview(c),
   ),
 )
 
