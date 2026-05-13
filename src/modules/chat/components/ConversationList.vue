@@ -482,10 +482,35 @@ function getMessageDigest(message: Message): string {
   return raw ? formatDigestText(raw) : ''
 }
 
+function isSelfLeaveGroupSystemMessage(conversationId: string, message: Message): boolean {
+  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
+  if (message.msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  if (!extra) return false
+  if (String(extra.source ?? '') !== 'group-event') return false
+  if (Number(extra.groupReqType ?? 0) !== 7) return false
+
+  const currentUid = String(authStore.uid || '')
+  if (!currentUid) return false
+
+  const receiveUid = String(extra.receiveUid ?? '')
+  if (receiveUid && receiveUid === currentUid) return true
+
+  const members = Array.isArray(extra.members) ? extra.members : []
+  return members.some((member) => {
+    if (!member || typeof member !== 'object') return false
+    return String((member as Record<string, unknown>).userId ?? '') === currentUid
+  })
+}
+
 function getLoadedLatestDigest(conv: Conversation): string {
   const loaded = messageStore.getMessages(conv.id)
   if (loaded.length === 0) return ''
-  const latest = [...loaded].reverse().find((message) => !isHiddenMessageType(message.msgType))
+  const latest = [...loaded].reverse().find((message) => (
+    !isHiddenMessageType(message.msgType)
+    && !isSelfLeaveGroupSystemMessage(conv.id, message)
+  ))
   if (!latest) return ''
   const isCurrentConversation = conv.id === chatStore.currentConversationId
   const latestTime = Number(latest.sendTime || 0)
