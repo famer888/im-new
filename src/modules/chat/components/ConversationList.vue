@@ -510,15 +510,17 @@ function getDigest(conv: Conversation): string {
   if (loadedDigest) return loadedDigest
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
     if (isHiddenGroupNoticeDigest(conv.lastMsgDigest)) return ''
-    if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    if (conv.type === ConversationType.Group) {
       const placeholders = Array.from(String(conv.lastMsgDigest).matchAll(GROUP_NOTICE_UID_PLACEHOLDER_RE))
         .flatMap((match) => String(match[1] || '').split(/[,，]/))
         .map((id) => id.trim())
         .filter(Boolean)
-      const replaced = formatDigestText(
-        replaceGroupNoticeUidPlaceholders(conv.lastMsgDigest, (id) => resolveUidNick(id)),
-      )
-      groupNoticeDebug('group-notification conv.lastMsgDigest replaced', {
+      let replacedRaw = replaceGroupNoticeUidPlaceholders(conv.lastMsgDigest, (id) => resolveUidNick(id))
+      if (replacedRaw.includes('邀请') && replacedRaw.includes('加入群聊')) {
+        replacedRaw = replacedRaw.replace(PURE_UID_RE, (uid) => resolveUidNick(uid))
+      }
+      const replaced = formatDigestText(replacedRaw)
+      groupNoticeDebug('group conv.lastMsgDigest replaced', {
         conversationId: conv.id,
         rawDigest: conv.lastMsgDigest,
         placeholders,
