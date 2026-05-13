@@ -1,13 +1,17 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use tauri::{Manager, State};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use std::sync::{atomic::{AtomicBool, Ordering}, LazyLock};
+use tauri::{Emitter, Manager, State};
 use tracing::{info, warn};
 
 use crate::config::ConfigManager;
 use crate::db::DbManager;
 use crate::window::WindowManager;
+
+static ACTIVE_LOGIN_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
+static CURRENT_PROCESS_LOGIN_UIDS: LazyLock<parking_lot::Mutex<HashSet<String>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashSet::new()));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
@@ -117,23 +121,74 @@ fn write_active_login_locks(
     std::fs::write(path, data).map_err(|e| e.to_string())
 }
 
-fn show_single_account_warning(app: &tauri::AppHandle, active: &ActiveLoginLock) {
-    let account_text = if active.uid.trim().is_empty() {
-        "当前已有账号".to_string()
-    } else if active.nickname.trim().is_empty() {
-        format!("账号 {}", active.uid)
+fn remember_current_process_login(uid: &str) {
+    let uid = uid.trim();
+    if uid.is_empty() {
+        return;
+    }
+    let mut uids = CURRENT_PROCESS_LOGIN_UIDS.lock();
+    uids.clear();
+    uids.insert(uid.to_string());
+}
+
+fn forget_current_process_login(uid: Option<&str>) {
+    let mut uids = CURRENT_PROCESS_LOGIN_UIDS.lock();
+    if let Some(uid) = uid.map(str::trim).filter(|uid| !uid.is_empty()) {
+        uids.remove(uid);
     } else {
-        format!("账号 {} ({})", active.nickname, active.uid)
-    };
-    app.dialog()
-        .message(format!(
-            "同一台电脑同一账号只能同时登录一次。\n\n{} 正在登录中，请先在已打开的 OCS Chat 中退出该账号后再登录。",
-            account_text
-        ))
-        .title("登录提醒")
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCustom("我知道了".to_string()))
-        .show(|_| {});
+        uids.clear();
+    }
+}
+
+pub fn start_active_login_monitor(app: tauri::AppHandle) {
+    if ACTIVE_LOGIN_MONITOR_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(800));
+
+        loop {
+            interval.tick().await;
+
+            let current_uids = {
+                let uids = CURRENT_PROCESS_LOGIN_UIDS.lock();
+                if uids.is_empty() {
+                    continue;
+                }
+                uids.iter().cloned().collect::<Vec<_>>()
+            };
+
+            let Ok(path) = active_login_lock_path(&app) else {
+                continue;
+            };
+            let locks = read_active_login_locks(&path);
+            let current_pid = std::process::id();
+            let replaced_uid = current_uids.into_iter().find(|uid| {
+                locks
+                    .get(uid)
+                    .map(|active| active.pid != current_pid)
+                    .unwrap_or(true)
+            });
+
+            let Some(uid) = replaced_uid else {
+                continue;
+            };
+
+            forget_current_process_login(Some(&uid));
+            warn!(
+                "active login lock uid={} was replaced by another process, forcing local logout",
+                uid
+            );
+            let _ = app.emit(
+                "auth:force-logout",
+                serde_json::json!({
+                    "reason": "local-login-replaced",
+                    "uid": uid,
+                }),
+            );
+        }
+    });
 }
 
 fn cleanup_legacy_active_login_lock(app: &tauri::AppHandle) {
@@ -161,12 +216,16 @@ fn acquire_active_login_lock(
     }
 
     let uid = request.uid.trim().to_string();
+    let current_pid = std::process::id();
     let mut locks = read_active_login_locks(&path);
-    locks.retain(|_, active| active.pid == std::process::id() || is_process_running(active.pid));
+    locks.retain(|_, active| active.pid == current_pid || is_process_running(active.pid));
+    if !uid.is_empty() {
+        locks.retain(|active_uid, active| active.pid != current_pid || active_uid == &uid);
+    }
 
     if !uid.is_empty() {
         if let Some(active) = locks.get(&uid) {
-            if active.pid != std::process::id() && is_process_running(active.pid) {
+            if active.pid != current_pid && is_process_running(active.pid) {
                 let requested_nickname = request.nickname.trim();
                 let active_nickname = active.nickname.trim();
                 if !requested_nickname.is_empty()
@@ -179,9 +238,9 @@ fn acquire_active_login_lock(
                     );
                     locks.remove(&uid);
                 } else {
-                    show_single_account_warning(app, &active);
-                    return Err(
-                        "同一台电脑同一账号只能同时登录一次，请先退出已登录账号".to_string()
+                    warn!(
+                        "active login lock uid={} pid={} will be replaced by pid={}",
+                        uid, active.pid, current_pid
                     );
                 }
             }
@@ -196,11 +255,13 @@ fn acquire_active_login_lock(
         uid: uid.clone(),
         nickname: request.nickname.trim().to_string(),
         session_id: request.session_id.trim().to_string(),
-        pid: std::process::id(),
+        pid: current_pid,
         created_at: chrono::Utc::now().timestamp_millis(),
     };
     locks.insert(uid, lock);
-    write_active_login_locks(&path, &locks)
+    write_active_login_locks(&path, &locks)?;
+    remember_current_process_login(request.uid.trim());
+    Ok(())
 }
 
 #[tauri::command]
@@ -223,6 +284,8 @@ pub async fn ensure_can_login_on_this_machine(app: tauri::AppHandle) -> Result<b
 }
 
 fn release_active_login_lock(app: &tauri::AppHandle, uid: Option<&str>) {
+    forget_current_process_login(uid);
+
     let Ok(path) = active_login_lock_path(app) else {
         return;
     };
