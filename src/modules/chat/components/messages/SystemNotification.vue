@@ -19,6 +19,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
+const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 
 function translateNoticeText(text: string): string {
   const translatedGroupNotice = translateGroupNoticeText(text, t)
@@ -40,6 +41,9 @@ const parsedNotice = computed(() => {
     actorRole,
     contextMembers,
   })
+  if (content === HIDDEN_GROUP_NOTICE_TEXT) {
+    return { prefix: '', text: '' }
+  }
   if (!content.startsWith('!@#')) {
     return { prefix: '', text: translateNoticeText(content) }
   }
@@ -57,7 +61,7 @@ const parsedNotice = computed(() => {
 </script>
 
 <template>
-  <div class="system-notification">
+  <div v-if="parsedNotice.prefix || parsedNotice.text" class="system-notification">
     <span class="text">
       <strong v-if="parsedNotice.prefix">{{ parsedNotice.prefix }}</strong>{{ parsedNotice.text }}
     </span>
