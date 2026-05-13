@@ -22,6 +22,7 @@ import {
   getGroupNoticeActorId,
   getGroupNoticeGroupId,
   parseGroupNoticeExtraObject,
+  replaceGroupNoticeUidPlaceholders,
 } from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { emojiObj } from '@/utils/emoji'
@@ -301,10 +302,13 @@ function getGroupNoticeContextMembers(extra: Record<string, unknown> | null) {
   return groupId ? groupStore.getMembers(groupId) : []
 }
 
+const resolveUidNick = (id: string) => contactStore.getDisplayName(id)
+
 function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
   const formattedContent = formatGroupNoticeDisplayText(content, extra, {
     currentUid: authStore.uid,
     actorRole: getGroupNoticeActorRole(extra),
+    resolveUidPlaceholder: resolveUidNick,
   })
   const raw = normalizeGroupNoticeText(formattedContent.trim().replace(/\s+/g, ' '))
   if (isHiddenGroupNoticeDigest(raw)) return ''
@@ -352,6 +356,7 @@ function getMessageDigest(message: Message): string {
       currentUid: authStore.uid,
       actorRole: getGroupNoticeActorRole(extra),
       contextMembers: isGroupNotification ? [] : getGroupNoticeContextMembers(extra),
+      resolveUidPlaceholder: resolveUidNick,
     })
     if (isHiddenGroupNoticeDigest(formatted)) return ''
     return formatted ? formatDigestText(formatted) : ''
@@ -387,6 +392,11 @@ function getDigest(conv: Conversation): string {
   if (loadedDigest) return loadedDigest
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
     if (isHiddenGroupNoticeDigest(conv.lastMsgDigest)) return ''
+    if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+      return formatDigestText(
+        replaceGroupNoticeUidPlaceholders(conv.lastMsgDigest, resolveUidNick),
+      )
+    }
     return formatDigestText(conv.lastMsgDigest)
   }
 
