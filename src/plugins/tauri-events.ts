@@ -1094,7 +1094,11 @@ export async function setupTauriListeners() {
           }
           continue
         }
-        if (String(extra?.source || '') === 'group-event-req' && Number(extra?.groupReqStatus ?? 0) === 1) {
+        if (
+          (String(extra?.source || '') === 'group-event-req'
+            || String(extra?.source || '') === 'group-event-req-chat')
+          && Number(extra?.groupReqStatus ?? 0) === 1
+        ) {
           chatStore.clearPendingGroupInviteConversation(groupId)
         }
 
@@ -1224,7 +1228,14 @@ export async function setupTauriListeners() {
         }),
       })
       messageStore.batchAppendMessages(normalized as Message[])
-      if (hasGroupNotificationMessages) {
+      if (
+        hasGroupNotificationMessages
+        || groupEventMessages.some((m: any) => {
+          const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
+          const source = String(extra?.source || '')
+          return source === 'group-event-req' || source === 'group-event-req-chat'
+        })
+      ) {
         eventBus.emit('group-invitation:update')
       }
       if (hasChannelNoticeMessages) {

@@ -170,22 +170,12 @@ function parseExtraObject(extra: unknown): Record<string, any> {
 }
 
 function formatAcceptedGroupDigest(item: GroupReqItem): string {
-  const fromName = getReqUserName(item.fromUser, item.sendUid)
   const targetName = isSelfUser(item.targetUser, item.receiveUid)
     ? t('你')
     : formatReqMemberName(item.targetUser, item.receiveUid)
-
-  if (fromName && targetName) {
-    return formatGroupNoticeDisplayText(
-      `${fromName}${t('邀请')}${targetName}${t('加入群聊')}`,
-      groupReqNoticeExtra(item),
-      {
-        currentUid: authStore.uid,
-        resolveUidPlaceholder: (id) => contactStore.getDisplayName(id),
-      },
-    )
-  }
-  return formatReqMessage(item)
+  const groupName = item.groupName || t('群聊')
+  if (targetName) return `${targetName}${t('同意加入')} ${groupName}`.trim()
+  return `${t('已同意')} ${groupName}`.trim()
 }
 
 function formatRejectedGroupDigest(item: GroupReqItem): string {
@@ -309,6 +299,7 @@ async function cleanupPendingGroupConversations(items: GroupReqItem[]) {
   for (const groupId of pendingGroupIds) {
     chatStore.markPendingGroupInviteConversation(groupId)
     const conversationId = `1_${groupId}`
+    messageStore.clearConversationMessages(conversationId)
     if (!chatStore.conversations.some((conv) => conv.id === conversationId)) continue
     await chatStore.deleteConversation(uid, conversationId).catch((error) => {
       console.warn('[GroupInvitation] cleanup pending group conversation failed:', { groupId, error })
@@ -408,7 +399,9 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
       let shouldPromoteGroup = Boolean(chatStore.conversations.find((conv) => conv.id === `1_${item.groupId}`))
       if (flag) {
         const gid = item.groupId
+        const conversationId = `1_${gid}`
         chatStore.clearPendingGroupInviteConversation(gid)
+        messageStore.clearConversationMessages(conversationId)
         if (!groupStore.groups.find((g) => g.id === gid)) {
           groupStore.groups.push({
             id: gid,
@@ -422,12 +415,14 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
           })
         }
         const conv = chatStore.ensureConversation(1, gid)
+        const acceptedDigest = formatAcceptedGroupDigest(handledItem)
         chatStore.addOrUpdateConversation({
           ...conv,
-          lastMsgDigest: formatAcceptedGroupDigest(item),
+          lastMsgDigest: acceptedDigest,
           lastMsgTime: now,
           updatedAt: now,
         })
+        messageStore.appendLocalSystemNotice(conversationId, acceptedDigest)
         shouldPromoteGroup = true
       }
       syncSidebarPreview(list.value, now)
