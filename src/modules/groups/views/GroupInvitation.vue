@@ -41,6 +41,7 @@ const messageStore = useMessageStore()
 const { t } = useI18n()
 const list = ref<GroupReqItem[]>([])
 const notificationConversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+const SELF_INVITE_REQ_TYPES = new Set([1, 3])
 
 function statusLabel(status: number): string {
   const map: Record<number, string> = {
@@ -86,6 +87,28 @@ function getReqUserName(user: unknown, fallbackId?: unknown): string {
   return names.map((v) => String(v ?? '').trim()).find(Boolean) || ''
 }
 
+function resolveReqUid(uid: string | number | null | undefined): string {
+  const id = String(uid ?? '').trim()
+  if (!id) return ''
+  if (id === String(authStore.uid || '').trim()) return t('你')
+
+  const contactName = contactStore.getDisplayName(id)
+  if (contactName && contactName !== id) return contactName
+  return id
+}
+
+/** 群通知里的人名统一走这里：自己显示“你”，其次用通讯录备注/昵称，最后才退回消息内名字/uid。 */
+function resolveReqDisplayName(user: unknown, fallbackId?: unknown): string {
+  const userId = getReqUserId(user) || String(fallbackId ?? '').trim()
+  const resolvedById = resolveReqUid(userId)
+  if (resolvedById && resolvedById !== userId) return resolvedById
+
+  const embeddedName = getReqUserName(user, fallbackId)
+  if (embeddedName && embeddedName !== userId) return embeddedName
+
+  return resolvedById || embeddedName || ''
+}
+
 function isSelfUser(user: unknown, fallbackId?: unknown): boolean {
   const uid = String(authStore.uid || '')
   if (!uid) return false
@@ -94,13 +117,38 @@ function isSelfUser(user: unknown, fallbackId?: unknown): boolean {
 }
 
 function formatReqMemberName(user: unknown, fallbackId?: unknown): string {
-  const name = getReqUserName(user, fallbackId)
-  if (!name) return ''
-  return name
+  return resolveReqDisplayName(user, fallbackId)
 }
 
 function translateKnownGroupNotice(raw: string): string {
   return translateGroupNoticeText(raw, t)
+}
+
+function isCurrentUid(value: unknown): boolean {
+  const uid = String(authStore.uid || '').trim()
+  return Boolean(uid) && String(value ?? '').trim() === uid
+}
+
+function isSelfInviteItem(item: GroupReqItem): boolean {
+  const memberList = Array.isArray(item.members) ? item.members : []
+  return Boolean(String(authStore.uid || '').trim())
+    && SELF_INVITE_REQ_TYPES.has(Number(item.groupReqType || 0))
+    && (
+      isCurrentUid(item.receiveUid)
+      || isSelfUser(item.targetUser, item.receiveUid)
+      || isSelfUser(item.checkUser)
+      || memberList.some((member) => isSelfUser(member))
+    )
+}
+
+function formatSelfInviteMessage(item: GroupReqItem): string {
+  const actorId = String(item.sendUid || getReqUserId(item.fromUser) || '').trim()
+  let actorName = resolveReqDisplayName(item.fromUser, actorId)
+  if (!actorName && item.groupHostUid && actorId === String(item.groupHostUid).trim()) {
+    actorName = t('群主')
+  }
+  if (!actorName) return t('邀请你加入群聊')
+  return `${actorName}${t('邀请')}${t('你')}${t('加入群聊')}`
 }
 
 function getGroupReqActorRole(item: GroupReqItem): number | null {
@@ -127,12 +175,16 @@ function groupReqNoticeExtra(item: GroupReqItem): Record<string, unknown> {
 }
 
 function formatReqMessage(item: GroupReqItem): string {
+  if (isSelfInviteItem(item)) {
+    return formatSelfInviteMessage(item)
+  }
+
   const formattedContent = formatGroupNoticeDisplayText(
     (item.msg || '').trim().replace(/\s+/g, ' '),
     groupReqNoticeExtra(item),
     {
       currentUid: authStore.uid,
-      resolveUidPlaceholder: (id) => contactStore.getDisplayName(id),
+      resolveUidPlaceholder: resolveReqUid,
     },
   )
   const raw = normalizeGroupNoticeText(formattedContent)
@@ -151,7 +203,10 @@ function formatReqMessage(item: GroupReqItem): string {
   const user = item.groupReqStatus === 2
     ? item.targetUser || item.fromUser || item.checkUser
     : item.fromUser || item.targetUser || item.checkUser
-  const name = getReqUserName(user)
+  const name = resolveReqDisplayName(
+    user,
+    item.groupReqStatus === 2 ? item.receiveUid : item.sendUid,
+  )
   if (!name || raw.includes(name)) return translated
 
   return `${name}${translated}`
@@ -180,7 +235,7 @@ function formatAcceptedGroupDigest(item: GroupReqItem): string {
 
 function formatRejectedGroupDigest(item: GroupReqItem): string {
   const targetName = formatReqMemberName(item.targetUser, item.receiveUid)
-    || getReqUserName(item.fromUser, item.sendUid)
+    || resolveReqDisplayName(item.fromUser, item.sendUid)
     || t('你')
   const groupName = item.groupName || t('群聊')
   return `${targetName}${t('拒绝加入')} ${groupName}`.trim()
@@ -279,7 +334,7 @@ function getPendingGroupNotificationCount(items: GroupReqItem[]): number {
 function isPendingSelfGroupInvite(item: GroupReqItem): boolean {
   const uid = String(authStore.uid || '')
   return Boolean(uid)
-    && [1, 3].includes(Number(item.groupReqType || 0))
+    && SELF_INVITE_REQ_TYPES.has(Number(item.groupReqType || 0))
     && Number(item.groupReqStatus || 0) === 0
     && String(item.receiveUid || '') === uid
     && Boolean(item.groupId)
