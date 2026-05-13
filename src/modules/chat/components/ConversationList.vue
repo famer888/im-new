@@ -41,6 +41,7 @@ const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
+const PENDING_GROUP_INVITE_RE = /邀请你加入群聊/
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -52,6 +53,9 @@ function isNotFileHelper(c: Conversation): boolean {
 }
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
+  const hasGroupNotification = chatStore.conversations.some(
+    (item) => item.type === ConversationType.Group && item.targetId === GROUP_NOTIFICATION_TARGET_ID,
+  )
   if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
     return true
   }
@@ -63,6 +67,7 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
       return Boolean(contactStore.getContact(conv.targetId))
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
+      if (!hasGroupNotification && PENDING_GROUP_INVITE_RE.test(String(conv.lastMsgDigest || ''))) return false
       return Boolean(groupStore.getGroup(conv.targetId))
     case ConversationType.Channel:
       return Boolean(channelStore.getChannel(conv.targetId))
@@ -94,8 +99,34 @@ const archiveUnreadTotal = computed(() =>
 )
 
 const displayList = computed(() =>
-  uiStore.chatArchiveListShow ? archivedConversations.value : normalConversations.value,
+  uiStore.chatArchiveListShow
+    ? archivedConversations.value
+    : ensureGroupNotificationVisible(normalConversations.value),
 )
+
+function ensureGroupNotificationVisible(conversations: Conversation[]): Conversation[] {
+  const hasGroupNotification = conversations.some(
+    (conv) => conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID,
+  )
+  if (hasGroupNotification) return conversations
+
+  const pendingInvite = chatStore.conversations.find(
+    (conv) => conv.type === ConversationType.Group
+      && conv.targetId !== GROUP_NOTIFICATION_TARGET_ID
+      && PENDING_GROUP_INVITE_RE.test(String(conv.lastMsgDigest || '')),
+  )
+  if (!pendingInvite) return conversations
+
+  return [
+    {
+      ...pendingInvite,
+      id: `1_${GROUP_NOTIFICATION_TARGET_ID}`,
+      targetId: GROUP_NOTIFICATION_TARGET_ID,
+      senderName: null,
+    },
+    ...conversations,
+  ]
+}
 
 function getName(conv: Conversation): string {
   if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
