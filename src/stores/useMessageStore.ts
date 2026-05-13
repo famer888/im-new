@@ -24,6 +24,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function messageUsesWsSend(convType: number, msgType: number): boolean {
+  const wsTypes = [0, 1, 2, 3, 7, 12, 18]
+  if (![0, 1, 2].includes(convType)) return false
+  return wsTypes.includes(msgType) || (convType === 0 && msgType === 5)
+}
+
 function normalizeWsUrl(input: string): string {
   const raw = (input || '').trim()
   if (!raw) return ''
@@ -994,7 +1000,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      if ([0, 1, 2, 3, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2)) {
+      if (messageUsesWsSend(convType, msgType)) {
         const stepStartedAt = performance.now()
         if (isSingleVideo) {
           singleVideoLog('ensureWsConnected start', { optimisticId })
@@ -1118,7 +1124,7 @@ export const useMessageStore = defineStore('message', () => {
           stack: (e as Error)?.stack || '',
         }, 'error')
       }
-      const canRetryWs = [0, 1, 2, 3, 7, 12, 18].includes(msgType) && (convType === 1 || convType === 0 || convType === 2) && /Not connected/i.test(errText)
+      const canRetryWs = messageUsesWsSend(convType, msgType) && /Not connected/i.test(errText)
       if (canRetryWs) {
         try {
           console.warn('[send] send_message got Not connected, reconnect + retry once')
