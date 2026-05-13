@@ -462,6 +462,10 @@ function isEditorEmojiCaretNode(node: Node | null | undefined): node is Text {
   return node?.nodeType === Node.TEXT_NODE && node.textContent === EDITOR_EMOJI_CARET_ANCHOR
 }
 
+function isEditorEmojiNode(node: Node | null | undefined): node is HTMLImageElement {
+  return node instanceof HTMLImageElement && Boolean(node.dataset.emojiText)
+}
+
 function serializeEditorNode(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) {
     return (node.textContent || '').replaceAll(EDITOR_EMOJI_CARET_ANCHOR, '')
@@ -808,6 +812,8 @@ async function handleSend() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (handleEditorEmojiDeleteKey(e)) return
+
   if (e.key === 'Escape') {
     if (showQrForwardUpload.value) return
     if (hasForwardDraft.value) {
@@ -915,6 +921,101 @@ function normalizeEditorFocusCaret() {
       savedSelection.value = range.cloneRange()
     }
   })
+}
+
+function getChildNodeIndex(parent: Node, child: Node): number {
+  return Array.prototype.indexOf.call(parent.childNodes, child)
+}
+
+function setEditorCaretAtChildOffset(parent: Node, offset: number) {
+  const selection = window.getSelection()
+  const range = document.createRange()
+  const safeOffset = Math.max(0, Math.min(offset, parent.childNodes.length))
+  const previous = parent.childNodes[safeOffset - 1]
+
+  if (isEditorEmojiCaretNode(previous)) {
+    range.setStart(previous, previous.length)
+  } else if (previous?.nodeType === Node.TEXT_NODE) {
+    range.setStart(previous, previous.textContent?.length ?? 0)
+  } else {
+    range.setStart(parent, safeOffset)
+  }
+
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  savedSelection.value = range.cloneRange()
+}
+
+function removeEditorEmojiNode(emojiNode: HTMLImageElement): boolean {
+  const parent = emojiNode.parentNode
+  if (!parent) return false
+
+  const offset = getChildNodeIndex(parent, emojiNode)
+  const caretNode = emojiNode.nextSibling
+  emojiNode.remove()
+  if (isEditorEmojiCaretNode(caretNode)) caretNode.remove()
+  setEditorCaretAtChildOffset(parent, offset)
+  content.value = serializeEditorContent()
+  showAtList.value = false
+  atKeyword.value = ''
+  return true
+}
+
+function getBackspaceEmojiTarget(container: Node, offset: number): HTMLImageElement | null {
+  if (isEditorEmojiCaretNode(container) && isEditorEmojiNode(container.previousSibling)) {
+    return container.previousSibling
+  }
+
+  if (container === editorRef.value) {
+    const previous = container.childNodes[offset - 1]
+    if (isEditorEmojiCaretNode(previous) && isEditorEmojiNode(previous.previousSibling)) {
+      return previous.previousSibling
+    }
+    if (isEditorEmojiNode(previous)) return previous
+  }
+
+  if (container.nodeType === Node.TEXT_NODE && offset === 0) {
+    const previous = container.previousSibling
+    if (isEditorEmojiCaretNode(previous) && isEditorEmojiNode(previous.previousSibling)) {
+      return previous.previousSibling
+    }
+    if (isEditorEmojiNode(previous)) return previous
+  }
+
+  return null
+}
+
+function getDeleteEmojiTarget(container: Node, offset: number): HTMLImageElement | null {
+  if (container === editorRef.value) {
+    const next = container.childNodes[offset]
+    if (isEditorEmojiNode(next)) return next
+  }
+
+  if (container.nodeType === Node.TEXT_NODE && offset === (container.textContent?.length ?? 0)) {
+    const next = container.nextSibling
+    if (isEditorEmojiNode(next)) return next
+  }
+
+  return null
+}
+
+function handleEditorEmojiDeleteKey(event: KeyboardEvent): boolean {
+  if (!['Backspace', 'Delete'].includes(event.key)) return false
+  if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return false
+
+  const editor = editorRef.value
+  const selection = window.getSelection()
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+  if (!editor || !range || !range.collapsed || !editor.contains(range.commonAncestorContainer)) return false
+
+  const target = event.key === 'Backspace'
+    ? getBackspaceEmojiTarget(range.startContainer, range.startOffset)
+    : getDeleteEmojiTarget(range.startContainer, range.startOffset)
+  if (!target) return false
+
+  event.preventDefault()
+  return removeEditorEmojiNode(target)
 }
 
 function getEditorText(): string {
