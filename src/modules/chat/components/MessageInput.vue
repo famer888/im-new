@@ -2908,7 +2908,7 @@ function getQuoteDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Video) return '[视频]'
   if (msgType === MessageType.File) return '[文件]'
   if (msgType === MessageType.Location) return '[位置]'
-  if (msgType === MessageType.NameCard) return '[名片]'
+  if (msgType === MessageType.NameCard) return getNameCardQuoteDigest(content)
   if (msgType === MessageType.SetImage) return '[骰子]'
   if (msgType === MessageType.AnimatedGame) return '[扑克牌]'
   if (
@@ -2918,6 +2918,26 @@ function getQuoteDigest(msgType: number, content: string | null): string {
     msgType === MessageType.ChatTransferResult
   ) return '暂不支持该消息类型'
   return (content || '').slice(0, 80)
+}
+
+function getNameCardQuoteDigest(content: string | null): string {
+  const name = getNameCardDisplayName(content)
+  return name ? `[名片]${name}` : '[名片]'
+}
+
+function getNameCardDisplayName(content: string | null): string {
+  const raw = String(content || '').trim()
+  if (!raw) return ''
+  if (raw.includes('*|*|*')) {
+    return String(raw.split('*|*|*')[0] || '').trim()
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    const value = parsed?.nickname ?? parsed?.name ?? parsed?.nickName ?? parsed?.nick_name ?? parsed?.uid ?? parsed?.id
+    return String(value || '').trim()
+  } catch {
+    return raw.match(/\d{6,}/)?.[0] || ''
+  }
 }
 
 function getForwardDigest(msgType: number, content: string | null): string {
