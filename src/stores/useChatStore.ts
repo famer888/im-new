@@ -80,6 +80,7 @@ interface ReadProcessingResult {
 export const useChatStore = defineStore('chat', () => {
   const conversations = ref<Conversation[]>([])
   const currentConversationId = ref<string | null>(null)
+  const pendingGroupInviteConversationIds = ref<Set<string>>(new Set())
   const loading = ref(false)
   let _persistUid = ''
 
@@ -109,7 +110,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const totalUnread = computed(() =>
     conversations.value
-      .filter((c) => !c.isMuted && !c.isArchived)
+      .filter((c) => !c.isMuted && !c.isArchived && !(c.type === 1 && isPendingGroupInviteConversation(c.targetId)))
       .reduce((sum, c) => sum + c.unreadCount, 0),
   )
 
@@ -313,6 +314,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function addOrUpdateConversation(conv: Conversation) {
     const normalized = normalizeConversation(conv as any)
+    if (normalized.type === 1 && isPendingGroupInviteConversation(normalized.targetId)) return
     const index = conversations.value.findIndex((c) => c.id === normalized.id)
     if (index >= 0) {
       conversations.value[index] = normalized
@@ -326,6 +328,25 @@ export const useChatStore = defineStore('chat', () => {
     const id = `${type}_${targetId}`
     const existing = conversations.value.find((c) => c.id === id)
     if (existing) return existing
+    if (type === 1 && isPendingGroupInviteConversation(targetId)) {
+      return {
+        id,
+        type,
+        targetId,
+        lastMsgId: null,
+        lastMsgTime: 0,
+        lastMsgDigest: null,
+        unreadCount: 0,
+        isPinned: false,
+        isMuted: false,
+        isArchived: false,
+        draft: null,
+        senderName: null,
+        atMe: false,
+        scheduleDeletion: 0,
+        updatedAt: Date.now(),
+      }
+    }
 
     const conv: Conversation = {
       id,
@@ -347,6 +368,33 @@ export const useChatStore = defineStore('chat', () => {
     conversations.value.unshift(conv)
     sortConversations()
     return conv
+  }
+
+  function isPendingGroupInviteConversation(targetId: string | number | null | undefined): boolean {
+    const id = String(targetId ?? '')
+    return Boolean(id)
+      && id !== GROUP_NOTIFICATION_TARGET_ID
+      && pendingGroupInviteConversationIds.value.has(id)
+  }
+
+  function markPendingGroupInviteConversation(groupId: string | number | null | undefined) {
+    const id = String(groupId ?? '').trim()
+    if (!id || id === GROUP_NOTIFICATION_TARGET_ID) return
+    const next = new Set(pendingGroupInviteConversationIds.value)
+    next.add(id)
+    pendingGroupInviteConversationIds.value = next
+    if (currentConversationId.value === `1_${id}`) {
+      currentConversationId.value = null
+    }
+  }
+
+  function clearPendingGroupInviteConversation(groupId: string | number | null | undefined) {
+    const id = String(groupId ?? '').trim()
+    if (!id) return
+    if (!pendingGroupInviteConversationIds.value.has(id)) return
+    const next = new Set(pendingGroupInviteConversationIds.value)
+    next.delete(id)
+    pendingGroupInviteConversationIds.value = next
   }
 
   function sortConversations() {
@@ -483,6 +531,9 @@ export const useChatStore = defineStore('chat', () => {
     updateConversation,
     addOrUpdateConversation,
     ensureConversation,
+    isPendingGroupInviteConversation,
+    markPendingGroupInviteConversation,
+    clearPendingGroupInviteConversation,
     pinConversation,
     muteConversation,
     markAsRead,

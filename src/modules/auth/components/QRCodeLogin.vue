@@ -8,6 +8,7 @@ import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss } from '@/utils/domainPool'
+import { getOrCreateInstallCode } from '@/utils/installCode'
 import { WebLoginStatus } from '@/proto/generated'
 
 const props = defineProps<{
@@ -275,7 +276,7 @@ async function handleIsLoginGet() {
         sessionUrl: baseUrl,
         wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(baseUrl),
         aesKey: API_CONFIG.aesKey,
-        installCode: '',
+        installCode: getOrCreateInstallCode(),
         uid: loginId,
         nickname: res.nickName || '',
         avatar: res.icon || '',

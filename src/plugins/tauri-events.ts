@@ -33,18 +33,8 @@ function isTauri(): boolean {
 }
 
 function groupInviteDebug(message: string, data?: Record<string, unknown>) {
-  const payload = data || {}
-  console.warn(`[group-invite-debug][front] ${message}`, payload)
-  if (!isTauri()) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level: 'warn',
-        message: `[group-invite-debug][front] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
 }
 
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
@@ -105,6 +95,64 @@ function normalizeGroupEventMember(
   }
 }
 
+function getFiniteGroupRole(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const role = Number(value)
+  return Number.isFinite(role) ? role : null
+}
+
+function getGroupEventActorId(extra: any): string {
+  return String(
+    extra?.fromUid
+      ?? extra?.sendUid
+      ?? extra?.fromUser?.userId
+      ?? extra?.fromUser?.uid
+      ?? '',
+  ).trim()
+}
+
+function resolveGroupEventActorRole(
+  groupStore: ReturnType<typeof useGroupStore>,
+  groupId: string,
+  extra: any,
+): number | null {
+  const actorId = getGroupEventActorId(extra)
+  if (!actorId) return null
+
+  const explicitRole = getFiniteGroupRole(extra?.actorRole ?? extra?.actorMemberRole)
+  if (explicitRole !== null) return explicitRole
+
+  const fromUserRole = getFiniteGroupRole(extra?.fromUser?.role ?? extra?.fromUser?.type ?? extra?.fromUser?.memberType)
+  if (fromUserRole !== null) return fromUserRole
+
+  const cachedRole = groupStore.getMembers(groupId).find((member) => member.userId === actorId)?.role
+  const cachedRoleValue = getFiniteGroupRole(cachedRole)
+  if (cachedRoleValue !== null) return cachedRoleValue
+
+  const checkUserType = getFiniteGroupRole(extra?.checkUserType)
+  if (checkUserType === 1 || checkUserType === 2) return checkUserType
+
+  return null
+}
+
+function enrichGroupEventNoticeExtra(
+  groupStore: ReturnType<typeof useGroupStore>,
+  groupId: string,
+  extra: any,
+) {
+  if (!extra || typeof extra !== 'object') return
+  const actorRole = resolveGroupEventActorRole(groupStore, groupId, extra)
+  if (actorRole === null) return
+
+  extra.actorRole = actorRole
+  if (extra.fromUser && typeof extra.fromUser === 'object') {
+    extra.fromUser = {
+      ...extra.fromUser,
+      role: getFiniteGroupRole(extra.fromUser.role ?? extra.fromUser.type ?? extra.fromUser.memberType) ?? actorRole,
+    }
+  }
+}
+
 function collectGroupEventMemberPatches(
   groupStore: ReturnType<typeof useGroupStore>,
   groupId: string,
@@ -124,6 +172,17 @@ function collectGroupEventMemberPatches(
     if (!userId || userId === '0') return
     addPatch({ userId, role: existingRoleMap.get(userId) ?? 2 })
   }
+  const addActorPatch = (raw: any) => {
+    const actorId = getGroupEventActorId(extra)
+    const existingRole = actorId ? getFiniteGroupRole(existingRoleMap.get(actorId)) : null
+    const fromUserRole = getFiniteGroupRole(raw?.role ?? raw?.type ?? raw?.memberType)
+    const checkUserType = getFiniteGroupRole(extra?.checkUserType)
+    const actorRole = existingRole
+      ?? fromUserRole
+      ?? (checkUserType === 1 || checkUserType === 2 ? checkUserType : null)
+    if (actorRole === null) return
+    addPatch({ ...raw, userId: actorId || getGroupEventUserId(raw), role: actorRole })
+  }
   const removeMode = shouldRemoveGroupEventMembers(extra)
   const reqType = Number(extra?.groupReqType ?? 0)
 
@@ -140,10 +199,9 @@ function collectGroupEventMemberPatches(
       addUidPatch(extra?.fromUid ?? extra?.sendUid ?? extra?.receiveUid)
     }
   } else {
-    addPatch(extra?.fromUser)
+    addActorPatch(extra?.fromUser)
     addPatch(extra?.targetUser)
     addPatch(extra?.checkUser)
-    addUidPatch(extra?.fromUid ?? extra?.sendUid)
   }
 
   return Array.from(patchMap.values())
@@ -161,6 +219,20 @@ function isGroupEventSource(source: string): boolean {
     || source === 'group-event-req'
     || source === 'group-event-req-chat'
   )
+}
+
+function isPendingGroupReqChatMessage(message: any): boolean {
+  const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
+  const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {}
+  return convId.startsWith('1_')
+    && String(extra?.source || '') === 'group-event-req-chat'
+    && Number(extra?.groupReqStatus ?? 0) !== 1
+}
+
+function isPendingGroupInvitationNotice(convId: string, extra: any): boolean {
+  return convId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    && String(extra?.source || '') === 'group-event-req'
+    && Number(extra?.groupReqStatus ?? 0) !== 1
 }
 
 function applyGroupEventMemberPatch(groupStore: ReturnType<typeof useGroupStore>, groupId: string, extra: any) {
@@ -791,8 +863,8 @@ export async function setupTauriListeners() {
     }
 
     if (filtered.length > 0) {
-      const shouldPlaySound = shouldPlayIncomingMessageSound(filtered, currentUid)
-      const normalized: any[] = [...filtered]
+      const normalized: any[] = filtered.filter((m: any) => !isPendingGroupReqChatMessage(m))
+      const shouldPlaySound = shouldPlayIncomingMessageSound(normalized, currentUid)
       if (authStore.uid) {
         const uid = String(authStore.uid)
         try {
@@ -1012,6 +1084,19 @@ export async function setupTauriListeners() {
 
         const groupId = String(extra?.groupId || convId.split('_')[1] || '')
         if (!groupId) continue
+        if (isPendingGroupInvitationNotice(convId, extra)) {
+          const receiveUid = String(extra?.receiveUid ?? '')
+          if (receiveUid && receiveUid === currentUid) {
+            chatStore.markPendingGroupInviteConversation(groupId)
+            await chatStore.deleteConversation(currentUid, `1_${groupId}`).catch((err: unknown) => {
+              console.warn('[group-invite] delete pending group conversation failed:', { groupId, err })
+            })
+          }
+          continue
+        }
+        if (String(extra?.source || '') === 'group-event-req' && Number(extra?.groupReqStatus ?? 0) === 1) {
+          chatStore.clearPendingGroupInviteConversation(groupId)
+        }
 
         const existingGroup = groupStore.getGroup(groupId)
         const cachedMemberCount = Number(existingGroup?.memberCount || 0)
@@ -1038,6 +1123,7 @@ export async function setupTauriListeners() {
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         })
 
+        enrichGroupEventNoticeExtra(groupStore, groupId, extra)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
       }
       for (const m of normalized) {
