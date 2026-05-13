@@ -39,6 +39,8 @@ const messageStore = useMessageStore()
 const uiStore = useUIStore()
 const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
+const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
+const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -184,6 +186,11 @@ function translateKnownDigest(raw: string): string {
   return translateGroupNoticeText(raw, t)
 }
 
+function isHiddenGroupNoticeDigest(digest: string): boolean {
+  const raw = digest.trim().replace(/\s+/g, ' ')
+  return raw === HIDDEN_GROUP_NOTICE_TEXT || HIDDEN_GROUP_QUIT_NOTICE_RE.test(raw)
+}
+
 function formatDigestText(digest: string): string {
   const raw = digest.trim()
   if (!raw) return ''
@@ -269,6 +276,7 @@ function formatGroupNotificationDigest(content: string, extra: Record<string, un
     actorRole: getGroupNoticeActorRole(extra),
   })
   const raw = normalizeGroupNoticeText(formattedContent.trim().replace(/\s+/g, ' '))
+  if (isHiddenGroupNoticeDigest(raw)) return ''
   const translated = translateKnownDigest(raw)
   if (!extra) return translated
   if (/^\S*(?:群主|群员|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return translated
@@ -314,6 +322,7 @@ function getMessageDigest(message: Message): string {
       actorRole: getGroupNoticeActorRole(extra),
       contextMembers: isGroupNotification ? [] : getGroupNoticeContextMembers(extra),
     })
+    if (isHiddenGroupNoticeDigest(formatted)) return ''
     return formatted ? formatDigestText(formatted) : ''
   }
   return raw ? formatDigestText(raw) : ''
@@ -346,6 +355,7 @@ function getDigest(conv: Conversation): string {
   const loadedDigest = getLoadedLatestDigest(conv)
   if (loadedDigest) return loadedDigest
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
+    if (isHiddenGroupNoticeDigest(conv.lastMsgDigest)) return ''
     return formatDigestText(conv.lastMsgDigest)
   }
 
