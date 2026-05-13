@@ -95,9 +95,15 @@ function isPendingInviteConversationPreview(conv: Conversation): boolean {
   if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
   if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return true
 
-  // 待确认的入群邀请只保留「群通知」入口，避免普通会话列表提前露出一条群会话。
-  const digest = normalizeGroupNoticeText(String(conv.lastMsgDigest || '').trim().replace(/\s+/g, ' '))
-  return digest.includes('邀请你加入群聊')
+  // 再兜底看一次当前会话已加载的最新系统消息：只有“待确认”状态才隐藏；
+  // 已同意后的入群系统消息即使文案还带“邀请/加入群聊”，也不能继续挡住群会话。
+  const latest = [...messageStore.getMessages(conv.id)].reverse().find((message) => message.msgType === 8)
+  if (!latest) return false
+
+  const extra = parseGroupNoticeExtraObject(latest.extra)
+  const source = String(extra?.source || '')
+  const status = Number(extra?.groupReqStatus ?? 0)
+  return source === 'group-event-req-chat' && status !== 1
 }
 
 const normalConversations = computed(() =>
