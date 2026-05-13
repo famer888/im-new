@@ -23,6 +23,54 @@ const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
+const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
+const PURE_UID_RE = /\b\d{5,}\b/g
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function str(value: unknown): string {
+  return String(value ?? '').trim()
+}
+
+function getExtraUserNameById(extra: Record<string, unknown> | null): Map<string, string> {
+  const userMap = new Map<string, string>()
+  if (!extra) return userMap
+
+  const addUser = (candidate: unknown) => {
+    const raw = asRecord(candidate)
+    if (!raw) return
+    const nested = asRecord(raw.user) || asRecord(raw.userInfo) || asRecord(raw.user_info)
+    const relation = asRecord(raw.friendRelation) || asRecord(raw.friend_relation)
+    const nestedRelation = nested ? (asRecord(nested.friendRelation) || asRecord(nested.friend_relation)) : null
+
+    const id = [
+      raw.userId, raw.user_id, raw.uid, raw.id,
+      nested?.userId, nested?.user_id, nested?.uid, nested?.id,
+    ].map(str).find(Boolean) || ''
+    if (!id) return
+
+    const name = [
+      raw.remarkName, raw.remark_name,
+      relation?.remarkName, relation?.remark_name,
+      raw.nickname, raw.nickName, raw.nick_name, raw.name, raw.identify,
+      nested?.remarkName, nested?.remark_name,
+      nestedRelation?.remarkName, nestedRelation?.remark_name,
+      nested?.nickname, nested?.nickName, nested?.nick_name, nested?.name, nested?.identify,
+    ].map(str).find(Boolean) || ''
+    if (!name || name === id) return
+    userMap.set(id, name)
+  }
+
+  addUser(extra.fromUser)
+  addUser(extra.targetUser)
+  addUser(extra.checkUser)
+  if (Array.isArray(extra.members)) {
+    for (const member of extra.members) addUser(member)
+  }
+  return userMap
+}
 
 function translateNoticeText(text: string): string {
   const translatedGroupNotice = translateGroupNoticeText(text, t)
@@ -35,15 +83,78 @@ const parsedNotice = computed(() => {
   const extra = parseGroupNoticeExtraObject(props.message.extra)
   const groupId = getGroupNoticeGroupId(extra)
   const actorId = getGroupNoticeActorId(extra)
+  const extraUserNameById = getExtraUserNameById(extra)
   const contextMembers = groupId ? groupStore.getMembers(groupId) : []
+  const memberNameById = new Map(
+    contextMembers
+      .filter((member) => member.userId)
+      .map((member) => [member.userId, String(member.nickname || '').trim()]),
+  )
   const actorRole = groupId && actorId
     ? contextMembers.find((member) => member.userId === actorId)?.role
     : null
-  const content = formatGroupNoticeDisplayText(props.message.content || '', extra, {
+  const rawContent = String(props.message.content || '')
+  const placeholderUids = Array.from(rawContent.matchAll(GROUP_NOTICE_UID_PLACEHOLDER_RE))
+    .flatMap((match) => String(match[1] || '').split(/[,，]/))
+    .map((id) => id.trim())
+    .filter(Boolean)
+  const uniqPlaceholderUids = [...new Set(placeholderUids)]
+  const placeholderResolvePreview = uniqPlaceholderUids.map((id) => {
+    const selfName = String(authStore.uid || '') === id ? t('你') : ''
+    const contactName = contactStore.getDisplayName(id)
+    const memberName = memberNameById.get(id) || ''
+    const extraName = extraUserNameById.get(id) || ''
+    return {
+      id,
+      selfName,
+      contactName,
+      memberName,
+      extraName,
+      resolved: selfName || ((contactName && contactName !== id) ? contactName : (memberName || extraName || contactName)),
+    }
+  })
+
+  console.warn('[group-notice-debug][SystemNotification] before format', {
+    messageId: props.message.id,
+    conversationId: props.message.conversationId,
+    rawContent,
+    extra,
+    groupId,
+    actorId,
+    actorRole,
+    contextMemberCount: contextMembers.length,
+    contextMembers: contextMembers.map((member) => ({
+      userId: member.userId,
+      nickname: member.nickname,
+      role: member.role,
+    })),
+    placeholderResolvePreview,
+  })
+
+  const resolveUidDisplay = (id: string): string => {
+    if (!id) return ''
+    if (String(authStore.uid || '') === id) return t('你')
+    const contactName = contactStore.getDisplayName(id)
+    if (contactName && contactName !== id) return contactName
+    const memberName = memberNameById.get(id) || ''
+    if (memberName && memberName !== id) return memberName
+    const extraName = extraUserNameById.get(id) || ''
+    if (extraName && extraName !== id) return extraName
+    return contactName || id
+  }
+
+  let content = formatGroupNoticeDisplayText(props.message.content || '', extra, {
     currentUid: authStore.uid,
     actorRole,
     contextMembers,
-    resolveUidPlaceholder: (id) => contactStore.getDisplayName(id),
+    resolveUidPlaceholder: resolveUidDisplay,
+  })
+  if (content.includes('邀请') && content.includes('加入群聊')) {
+    content = content.replace(PURE_UID_RE, (uid) => resolveUidDisplay(uid))
+  }
+  console.warn('[group-notice-debug][SystemNotification] after format', {
+    messageId: props.message.id,
+    formattedContent: content,
   })
   if (content === HIDDEN_GROUP_NOTICE_TEXT || HIDDEN_GROUP_QUIT_NOTICE_RE.test(content)) {
     return { prefix: '', text: '' }
