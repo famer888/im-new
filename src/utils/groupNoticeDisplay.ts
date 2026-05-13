@@ -172,13 +172,6 @@ function getActorName(extra: ExtraObject, raw: string): string {
   return actorId || rawActor || ''
 }
 
-function getActorRolePrefix(extra: ExtraObject, actorRole?: number | null): string {
-  const role = getActorRole(extra, actorRole)
-  if (role === 1) return '管理员：'
-  if (role === 2) return '群员：'
-  return ''
-}
-
 function getActorRole(extra: ExtraObject, actorRole?: number | null): number | null {
   const fromUser = asRecord(extra.fromUser)
   return [
@@ -204,8 +197,8 @@ function formatActorDisplayName(
   if (!name) return ''
   const actorId = getExtraUserId(extra, 'fromUid', 'sendUid') || getUserId(extra.fromUser)
   if (actorId && actorId === currentUid && getActorRole(extra, actorRole) === 0) return '你'
-  if (/^(群主|管理员|群员)[:：]/.test(actor)) return actor
-  return `${getActorRolePrefix(extra, actorRole)}${name}`
+  // 邀请入群文案保持稳定，不拼接“群员/管理员”角色前缀，避免异步角色数据导致动态切换。
+  return name
 }
 
 function memberCandidates(extra: ExtraObject): unknown[] {
