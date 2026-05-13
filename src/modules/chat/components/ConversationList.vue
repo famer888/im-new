@@ -65,7 +65,6 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
       return Boolean(contactStore.getContact(conv.targetId))
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
-      if (PENDING_GROUP_INVITE_RE.test(String(conv.lastMsgDigest || ''))) return false
       return Boolean(groupStore.getGroup(conv.targetId))
     case ConversationType.Channel:
       return Boolean(channelStore.getChannel(conv.targetId))
@@ -121,6 +120,7 @@ function ensureGroupNotificationVisible(conversations: Conversation[]): Conversa
       id: `1_${GROUP_NOTIFICATION_TARGET_ID}`,
       targetId: GROUP_NOTIFICATION_TARGET_ID,
       senderName: null,
+      unreadCount: Number(pendingInvite.unreadCount || 0) > 0 ? 1 : 0,
     },
     ...conversations,
   ]

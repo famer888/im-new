@@ -142,6 +142,8 @@ export const useChatStore = defineStore('chat', () => {
 
   function updateGroupNotificationConv(digest: string, time: number, pendingCount: number) {
     const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    // 群通知入口按“是否有待处理”展示红点，避免历史累计未读导致长期显示 5/10 等脏计数。
+    const normalizedUnread = Number(pendingCount || 0) > 0 ? 1 : 0
     const idx = conversations.value.findIndex((c) => c.id === id)
     if (idx >= 0) {
       const conv = conversations.value[idx]
@@ -149,7 +151,7 @@ export const useChatStore = defineStore('chat', () => {
         ...conv,
         lastMsgDigest: digest,
         lastMsgTime: time,
-        unreadCount: pendingCount,
+        unreadCount: normalizedUnread,
         updatedAt: time || conv.updatedAt,
       }
       sortConversations()
@@ -163,7 +165,7 @@ export const useChatStore = defineStore('chat', () => {
       lastMsgId: null,
       lastMsgTime: time,
       lastMsgDigest: digest,
-      unreadCount: pendingCount,
+      unreadCount: normalizedUnread,
       isPinned: false,
       isMuted: false,
       isArchived: false,
