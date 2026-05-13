@@ -22,7 +22,6 @@ const authStore = useAuthStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
-const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
 
@@ -156,7 +155,7 @@ const parsedNotice = computed(() => {
     messageId: props.message.id,
     formattedContent: content,
   })
-  if (content === HIDDEN_GROUP_NOTICE_TEXT || HIDDEN_GROUP_QUIT_NOTICE_RE.test(content)) {
+  if (content === HIDDEN_GROUP_NOTICE_TEXT) {
     return { prefix: '', text: '' }
   }
   if (!content.startsWith('!@#')) {

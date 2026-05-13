@@ -41,11 +41,27 @@ const uiStore = useUIStore()
 const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
-const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
+const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 
 type DigestSegment =
   | { type: 'text'; text: string }
   | { type: 'emoji'; text: string; src: string }
+
+function groupNoticeDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
+  const payload = data || {}
+  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
+  log(`[group-notice-debug][ConversationList] ${message}`, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[group-notice-debug][ConversationList] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
 function isNotFileHelper(c: Conversation): boolean {
@@ -224,7 +240,7 @@ function translateKnownDigest(raw: string): string {
 
 function isHiddenGroupNoticeDigest(digest: string): boolean {
   const raw = digest.trim().replace(/\s+/g, ' ')
-  return raw === HIDDEN_GROUP_NOTICE_TEXT || HIDDEN_GROUP_QUIT_NOTICE_RE.test(raw)
+  return raw === HIDDEN_GROUP_NOTICE_TEXT
 }
 
 function formatDigestText(digest: string): string {
@@ -306,13 +322,44 @@ function getGroupNoticeContextMembers(extra: Record<string, unknown> | null) {
   return groupId ? groupStore.getMembers(groupId) : []
 }
 
-const resolveUidNick = (id: string) => contactStore.getDisplayName(id)
+function resolveUidNick(id: string, groupId?: string): string {
+  const uid = String(id || '').trim()
+  if (!uid) return ''
+  if (String(authStore.uid || '') === uid) return t('你')
+
+  const contactName = contactStore.getDisplayName(uid)
+  if (contactName && contactName !== uid) {
+    groupNoticeDebug('resolve uid by contact', { uid, groupId: groupId || '', contactName }, 'info')
+    return contactName
+  }
+
+  if (groupId) {
+    const groupMemberName = String(
+      groupStore.getMembers(groupId).find((member) => member.userId === uid)?.nickname || '',
+    ).trim()
+    if (groupMemberName && groupMemberName !== uid) {
+      groupNoticeDebug('resolve uid by current group member', { uid, groupId, groupMemberName }, 'info')
+      return groupMemberName
+    }
+  }
+
+  for (const members of groupStore.memberMap.values()) {
+    const name = String(members.find((member) => member.userId === uid)?.nickname || '').trim()
+    if (name && name !== uid) {
+      groupNoticeDebug('resolve uid by cached memberMap', { uid, groupId: groupId || '', name }, 'info')
+      return name
+    }
+  }
+  groupNoticeDebug('resolve uid fallback raw uid', { uid, groupId: groupId || '', contactName }, 'warn')
+  return contactName || uid
+}
 
 function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
+  const groupId = getGroupNoticeGroupId(extra)
   const formattedContent = formatGroupNoticeDisplayText(content, extra, {
     currentUid: authStore.uid,
     actorRole: getGroupNoticeActorRole(extra),
-    resolveUidPlaceholder: resolveUidNick,
+    resolveUidPlaceholder: (id) => resolveUidNick(id, groupId),
   })
   const raw = normalizeGroupNoticeText(formattedContent.trim().replace(/\s+/g, ' '))
   if (isHiddenGroupNoticeDigest(raw)) return ''
@@ -356,12 +403,20 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 8) {
     const extra = parseGroupNoticeExtraObject(message.extra)
     const isGroupNotification = message.conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    const groupId = getGroupNoticeGroupId(extra)
     const formatted = formatGroupNoticeDisplayText(raw, extra, {
       currentUid: authStore.uid,
       actorRole: getGroupNoticeActorRole(extra),
       contextMembers: isGroupNotification ? [] : getGroupNoticeContextMembers(extra),
-      resolveUidPlaceholder: resolveUidNick,
+      resolveUidPlaceholder: (id) => resolveUidNick(id, groupId),
     })
+    groupNoticeDebug('message digest formatted', {
+      conversationId: message.conversationId,
+      groupId: groupId || '',
+      rawContent: raw,
+      formattedContent: formatted,
+      isGroupNotification,
+    }, 'info')
     if (isHiddenGroupNoticeDigest(formatted)) return ''
     return formatted ? formatDigestText(formatted) : ''
   }
@@ -397,9 +452,20 @@ function getDigest(conv: Conversation): string {
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
     if (isHiddenGroupNoticeDigest(conv.lastMsgDigest)) return ''
     if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
-      return formatDigestText(
-        replaceGroupNoticeUidPlaceholders(conv.lastMsgDigest, resolveUidNick),
+      const placeholders = Array.from(String(conv.lastMsgDigest).matchAll(GROUP_NOTICE_UID_PLACEHOLDER_RE))
+        .flatMap((match) => String(match[1] || '').split(/[,，]/))
+        .map((id) => id.trim())
+        .filter(Boolean)
+      const replaced = formatDigestText(
+        replaceGroupNoticeUidPlaceholders(conv.lastMsgDigest, (id) => resolveUidNick(id)),
       )
+      groupNoticeDebug('group-notification conv.lastMsgDigest replaced', {
+        conversationId: conv.id,
+        rawDigest: conv.lastMsgDigest,
+        placeholders,
+        replacedDigest: replaced,
+      }, 'info')
+      return replaced
     }
     return formatDigestText(conv.lastMsgDigest)
   }

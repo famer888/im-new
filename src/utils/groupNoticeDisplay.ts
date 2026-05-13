@@ -9,14 +9,11 @@ interface FormatOptions {
 
 const UID_PLACEHOLDER_GROUP_RE = /#\{uids:([^}]+)\}/g
 
-/** 替换群通知里的 `#{uids:...}`；整行「#{uids} 退出群聊」保持原样，供会话列表隐藏该摘要 */
+/** 替换群通知里的 `#{uids:...}` 为可读昵称 */
 export function replaceGroupNoticeUidPlaceholders(
   raw: string,
   resolveName: (uid: string) => string,
 ): string {
-  const compact = raw.trim().replace(/\s+/g, ' ')
-  if (/^#\{uids:[^}]*\}\s*退出群聊$/.test(compact)) return raw
-
   return raw.replace(UID_PLACEHOLDER_GROUP_RE, (match, idsPart: string) => {
     const ids = String(idsPart ?? '')
       .split(/[,，]/)
@@ -335,14 +332,29 @@ export function formatGroupNoticeDisplayText(
   )
   if (!targets.length) return fin(raw)
 
+  const resolvedTargets = targets.map((target) => {
+    if (!options.resolveUidPlaceholder || !target.id) return target
+    if (target.name && target.name !== target.id) return target
+    const resolved = options.resolveUidPlaceholder(target.id)
+    return resolved ? { ...target, name: resolved } : target
+  })
+
   const actor = getActorName(extra, raw)
-  const actorDisplayName = formatActorDisplayName(actor, extra, currentUid, options.actorRole)
+  const actorId = getExtraUserId(extra, 'fromUid', 'sendUid') || getUserId(extra.fromUser)
+  let actorDisplayName = formatActorDisplayName(actor, extra, currentUid, options.actorRole)
+  if (
+    options.resolveUidPlaceholder
+    && actorId
+    && (!actorDisplayName || actorDisplayName === actorId)
+  ) {
+    actorDisplayName = options.resolveUidPlaceholder(actorId) || actorDisplayName
+  }
   const rawActor = extractRawInviteActor(raw)
-  if (rawHasAllTargets(raw, targets) && rawActor && rawActor !== '你' && rawActor === actorDisplayName) {
+  if (rawHasAllTargets(raw, resolvedTargets) && rawActor && rawActor !== '你' && rawActor === actorDisplayName) {
     return fin(raw)
   }
 
-  const targetText = targets.map((target) => target.name).join('，')
+  const targetText = resolvedTargets.map((target) => target.name).join('，')
   const actorText = actorDisplayName
     ? `${actorDisplayName}邀请`
     : '邀请'
