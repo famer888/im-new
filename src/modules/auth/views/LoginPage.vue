@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSettingStore } from '@/stores/useSettingStore'
+import { getOrCreateInstallCode } from '@/utils/installCode'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
 import FileImport from '../components/FileImport.vue'
@@ -70,7 +71,7 @@ onMounted(async () => {
             session_url: '',
             ws_url: '',
             aes_key: '',
-            install_code: '',
+            install_code: getOrCreateInstallCode(),
             session_id: authStore.session?.sessionId || '',
           },
         })

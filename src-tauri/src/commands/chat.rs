@@ -1738,7 +1738,11 @@ pub async fn mark_as_read(
     if !receipts.is_empty() {
         let req = imweb::SendReceiptMessageReq { receipts };
         let payload = req.encode_to_vec();
-        if let Err(err) = ws_mgr.send_packet(ws_cmds::SEND_RECEIPT, now, &payload) {
+        if let Err(err) = ws_mgr.send_packet(
+            ws_cmds::SEND_RECEIPT,
+            ws_cmds::SEND_RECEIPT as i64,
+            &payload,
+        ) {
             warn!(
                 "mark_as_read send 10106 failed conversation={} err={}",
                 conversation_id, err

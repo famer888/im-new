@@ -13,9 +13,16 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { ConversationType, isHiddenMessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
+import {
+  formatGroupNoticeDisplayText,
+  getGroupNoticeActorId,
+  getGroupNoticeGroupId,
+  parseGroupNoticeExtraObject,
+} from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
@@ -30,6 +37,7 @@ const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
 
 type DigestSegment =
@@ -52,6 +60,7 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
     case ConversationType.Friend:
       return Boolean(contactStore.getContact(conv.targetId))
     case ConversationType.Group:
+      if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
       return Boolean(groupStore.getGroup(conv.targetId))
     case ConversationType.Channel:
       return Boolean(channelStore.getChannel(conv.targetId))
@@ -239,8 +248,27 @@ function getGroupReqUserName(user: unknown, fallbackId?: unknown): string {
   return names.map((v) => String(v ?? '').trim()).find(Boolean) || ''
 }
 
+function getGroupNoticeActorRole(extra: Record<string, unknown> | null): number | null {
+  if (!extra) return null
+  const groupId = getGroupNoticeGroupId(extra)
+  const actorId = getGroupNoticeActorId(extra)
+  if (!groupId || !actorId) return null
+  const role = groupStore.getMembers(groupId).find((member) => member.userId === actorId)?.role
+  return Number.isFinite(Number(role)) ? Number(role) : null
+}
+
+function getGroupNoticeContextMembers(extra: Record<string, unknown> | null) {
+  if (!extra) return []
+  const groupId = getGroupNoticeGroupId(extra)
+  return groupId ? groupStore.getMembers(groupId) : []
+}
+
 function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
-  const raw = normalizeGroupNoticeText(content.trim().replace(/\s+/g, ' '))
+  const formattedContent = formatGroupNoticeDisplayText(content, extra, {
+    currentUid: authStore.uid,
+    actorRole: getGroupNoticeActorRole(extra),
+  })
+  const raw = normalizeGroupNoticeText(formattedContent.trim().replace(/\s+/g, ' '))
   const translated = translateKnownDigest(raw)
   if (!extra) return translated
   if (/^\S*(?:群主|群员|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return translated
@@ -278,6 +306,16 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 12) return `[${t('骰子')}]`
   if (message.msgType === 18) return `[${t('扑克牌')}]`
   if (isHiddenMessageType(message.msgType)) return ''
+  if (message.msgType === 8) {
+    const extra = parseGroupNoticeExtraObject(message.extra)
+    const isGroupNotification = message.conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    const formatted = formatGroupNoticeDisplayText(raw, extra, {
+      currentUid: authStore.uid,
+      actorRole: getGroupNoticeActorRole(extra),
+      contextMembers: isGroupNotification ? [] : getGroupNoticeContextMembers(extra),
+    })
+    return formatted ? formatDigestText(formatted) : ''
+  }
   return raw ? formatDigestText(raw) : ''
 }
 

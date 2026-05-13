@@ -23,19 +23,9 @@ function formatDebugError(error: unknown): string {
 }
 
 function groupMemberRefreshDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
-  const payload = data || {}
-  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
-  log(`[group-member-refresh-debug][group-store] ${message}`, payload)
-  if (!isTauri()) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: `[group-member-refresh-debug][group-store] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 export interface Group {

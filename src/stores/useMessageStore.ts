@@ -7,9 +7,16 @@ import {
   useChatStore,
 } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
+import { useGroupStore } from './useGroupStore'
 import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { isHiddenMessageType } from '@/types'
+import { getOrCreateInstallCode } from '@/utils/installCode'
+import {
+  formatGroupNoticeDisplayText,
+  getGroupNoticeActorId,
+  getGroupNoticeGroupId,
+} from '@/utils/groupNoticeDisplay'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -49,16 +56,17 @@ async function resolveWsConnectConfig(): Promise<{
   let wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
   let aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
   let sessionId = String(authStore.session?.sessionId || '').trim()
-  let installCode = ''
+  let installCode = String(authStore.wsConnectConfig?.installCode || '').trim()
 
   // 兼容历史缓存：若 authStore 尚未带出，直接读 localStorage 的持久化配置
   if (!wsUrl || !aesKey) {
     try {
       const raw = localStorage.getItem('ws-connect-config')
       if (raw) {
-        const parsed = JSON.parse(raw) as { wsUrl?: string; aesKey?: string }
+        const parsed = JSON.parse(raw) as { wsUrl?: string; aesKey?: string; installCode?: string }
         wsUrl = wsUrl || String(parsed.wsUrl || '').trim()
         aesKey = aesKey || String(parsed.aesKey || '').trim()
+        installCode = installCode || String(parsed.installCode || '').trim()
       }
     } catch {
       // ignore parse errors
@@ -99,6 +107,7 @@ async function resolveWsConnectConfig(): Promise<{
     wsUrl = wsUrl.replace(/webbiz/gi, 'websession')
   }
   if (!aesKey) aesKey = API_CONFIG.aesKey
+  installCode = installCode || getOrCreateInstallCode()
 
   return {
     wsUrl: normalizeWsUrl(wsUrl),
@@ -282,16 +291,17 @@ function videoContentSummary(content: string | null | undefined) {
 }
 
 function groupInviteDebug(message: string, data?: Record<string, unknown>) {
-  const payload = data || {}
-  console.warn(`[group-invite-debug][message-store] ${message}`, payload)
-  if (!isTauri()) return
-  tauriInvoke('image_send_log', {
-    payload: {
-      level: 'warn',
-      message: `[group-invite-debug][message-store] ${message}`,
-      data: payload,
-    },
-  }).catch(() => {})
+  void message
+  void data
+}
+
+function isPendingGroupReqChatMessage(message: Message): boolean {
+  const conversationId = String(message.conversationId || '')
+  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
+  if (message.msgType !== 8) return false
+  const extra = parseExtraObject(message.extra)
+  return String(extra?.source || '') === 'group-event-req-chat'
+    && Number(extra?.groupReqStatus ?? 0) !== 1
 }
 
 function messageLogSummary(message: Message | null | undefined) {
@@ -473,6 +483,21 @@ export const useMessageStore = defineStore('message', () => {
   const hasMoreMap = ref<Map<string, boolean>>(new Map())
   let pendingWsConnect: Promise<void> | null = null
 
+  function getGroupNoticeActorRole(extra: Record<string, unknown> | null): number | null {
+    if (!extra) return null
+    const groupId = getGroupNoticeGroupId(extra)
+    const actorId = getGroupNoticeActorId(extra)
+    if (!groupId || !actorId) return null
+    const role = useGroupStore().getMembers(groupId).find((member) => member.userId === actorId)?.role
+    return Number.isFinite(Number(role)) ? Number(role) : null
+  }
+
+  function getGroupNoticeContextMembers(extra: Record<string, unknown> | null) {
+    if (!extra) return []
+    const groupId = getGroupNoticeGroupId(extra)
+    return groupId ? useGroupStore().getMembers(groupId) : []
+  }
+
   async function ensureWsConnected(): Promise<void> {
     if (!isTauri()) return
 
@@ -540,6 +565,11 @@ export const useMessageStore = defineStore('message', () => {
   function formatGroupNotificationDigest(content: string, extra: Record<string, unknown> | null): string {
     const raw = content.trim().replace(/\s+/g, ' ')
     if (!extra) return raw
+    const formatted = formatGroupNoticeDisplayText(raw, extra, {
+      currentUid: useAuthStore().uid,
+      actorRole: getGroupNoticeActorRole(extra),
+    })
+    if (formatted !== raw) return formatted.slice(0, 200)
     if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
 
     const type = Number(extra.groupReqType ?? 0)
@@ -563,14 +593,24 @@ export const useMessageStore = defineStore('message', () => {
 
   function syncConversationSummary(conversationId: string, msg: Message) {
     if (isHiddenMessageType(msg.msgType)) return
+    if (isPendingGroupReqChatMessage(msg)) return
     if (!conversationId || !conversationId.includes('_')) {
       console.warn('[msg] skip syncConversationSummary: invalid conversationId', { conversationId, msgId: msg.id })
       return
     }
-    const digest = getDigestByMessage(msg.msgType, msg.content)
+    let digest = getDigestByMessage(msg.msgType, msg.content)
+    const groupNoticeExtra = msg.msgType === 8 ? parseExtraObject(msg.extra) : null
+    const isGroupNotificationConversation = conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    if (groupNoticeExtra) {
+      digest = formatGroupNoticeDisplayText(digest, groupNoticeExtra, {
+        currentUid: useAuthStore().uid,
+        actorRole: getGroupNoticeActorRole(groupNoticeExtra),
+        contextMembers: isGroupNotificationConversation ? [] : getGroupNoticeContextMembers(groupNoticeExtra),
+      }).slice(0, 200)
+    }
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
     if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
-      const extra = parseExtraObject(msg.extra)
+      const extra = groupNoticeExtra || parseExtraObject(msg.extra)
       const groupDigest = formatGroupNotificationDigest(digest, extra)
       const unreadCount = Number(extra?.unReadNum ?? existing?.unreadCount ?? 0)
       chatStore.updateGroupNotificationConv(
@@ -1322,6 +1362,7 @@ export const useMessageStore = defineStore('message', () => {
     const grouped = new Map<string, Message[]>()
     for (const raw of messages as any[]) {
       const msg = normalizeMessage(raw)
+      if (isPendingGroupReqChatMessage(msg)) continue
       const convId = String(msg.conversationId || '')
       if (convId.startsWith('1_') && msg.msgType === 8) {
         groupInviteDebug('batchAppendMessages normalized group notice', {

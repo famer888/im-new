@@ -371,24 +371,6 @@ impl MessageBatcher {
                 payload.len()
             );
         }
-        if matches!(
-            cmd,
-            cmds::GROUP_MSG_SENT
-                | cmds::GROUP_MSG_RECEIVED
-                | cmds::GROUP_REQ_NUM_PUSH
-                | cmds::GROUP_REQ_MSG_PUSH
-                | cmds::GROUP_READ_RECEIPT_PUSH
-                | cmds::GROUP_EVENT_PUSH
-        ) {
-            info!(
-                "[group-invite-debug][rust] WS frame received cmd={} ({}) encrypted={} payload_len={}",
-                cmd,
-                cmds::cmd_name(cmd),
-                is_encrypted,
-                payload.len()
-            );
-        }
-
         let decoded_payload = if is_encrypted == 0x01 {
             match crypto::aes::decrypt_transport(payload, &self.aes_key) {
                 Ok(d) => d,
@@ -400,22 +382,6 @@ impl MessageBatcher {
         } else {
             payload.to_vec()
         };
-        if matches!(
-            cmd,
-            cmds::GROUP_MSG_SENT
-                | cmds::GROUP_MSG_RECEIVED
-                | cmds::GROUP_REQ_NUM_PUSH
-                | cmds::GROUP_REQ_MSG_PUSH
-                | cmds::GROUP_READ_RECEIPT_PUSH
-                | cmds::GROUP_EVENT_PUSH
-        ) {
-            info!(
-                "[group-invite-debug][rust] WS frame decrypted cmd={} ({}) decoded_payload_len={}",
-                cmd,
-                cmds::cmd_name(cmd),
-                decoded_payload.len()
-            );
-        }
 
         match cmd {
             cmds::HEARTBEAT_RESP => {
@@ -657,10 +623,6 @@ impl MessageBatcher {
             cmds::GROUP_REQ_NUM_PUSH => {
                 match self.decode_group_req_num_push(&decoded_payload) {
                     Ok(mut msgs) => {
-                        info!(
-                            "[group-invite-debug][rust] GROUP_REQ_NUM_PUSH converted group notification count={}",
-                            msgs.len()
-                        );
                         self.buffer.append(&mut msgs);
                         if self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
@@ -669,7 +631,7 @@ impl MessageBatcher {
                         }
                     }
                     Err(e) => {
-                        warn!("[group-invite-debug][rust] decode GROUP_REQ_NUM_PUSH failed: {}", e);
+                        warn!("decode GROUP_REQ_NUM_PUSH failed: {}", e);
                     }
                 }
                 return;
@@ -677,10 +639,6 @@ impl MessageBatcher {
             cmds::GROUP_REQ_MSG_PUSH => {
                 match self.decode_group_req_msg_push(&decoded_payload) {
                     Ok(mut msgs) => {
-                        info!(
-                            "[group-invite-debug][rust] GROUP_REQ_MSG_PUSH converted group notification count={}",
-                            msgs.len()
-                        );
                         self.buffer.append(&mut msgs);
                         if self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
@@ -689,7 +647,7 @@ impl MessageBatcher {
                         }
                     }
                     Err(e) => {
-                        warn!("[group-invite-debug][rust] decode GROUP_REQ_MSG_PUSH failed: {}", e);
+                        warn!("decode GROUP_REQ_MSG_PUSH failed: {}", e);
                     }
                 }
                 return;
@@ -952,56 +910,24 @@ impl MessageBatcher {
     fn decode_group_event_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
         let resp = imweb::PushGroupEventMessage::decode(payload)
             .map_err(|e| format!("decode PushGroupEventMessage: {}", e))?;
-        info!(
-            "[group-invite-debug][rust] GROUP_EVENT_PUSH decoded raw req_events={} update_events={}",
-            resp.group_req_event_msg_dto.len(),
-            resp.group_update_event_msg_dto.len()
-        );
         let mut out = Vec::new();
 
         for item in resp.group_req_event_msg_dto {
             let Some(common) = item.common_msg_dto.as_ref() else {
-                warn!(
-                    "[group-invite-debug][rust] skip req event: missing common from_uid={} receive_uid={} req_type={} req_status={}",
-                    item.from_uid, item.receive_uid, item.group_req_type, item.group_req_status
-                );
                 continue;
             };
             let Some(group) = common.group_base_info.as_ref() else {
-                warn!(
-                    "[group-invite-debug][rust] skip req event: missing group msg_id={} from_uid={} receive_uid={} common_msg={}",
-                    common.msg_id, item.from_uid, item.receive_uid, common.msg
-                );
                 continue;
             };
             if group.group_id <= 0 || common.msg_id <= 0 {
-                warn!(
-                    "[group-invite-debug][rust] skip req event: invalid ids group_id={} msg_id={} from_uid={} receive_uid={}",
-                    group.group_id, common.msg_id, item.from_uid, item.receive_uid
-                );
                 continue;
             }
 
             let content = group_event_content(&item, common);
             if content.trim().is_empty() {
-                warn!(
-                    "[group-invite-debug][rust] skip req event: empty content group_id={} msg_id={} from_uid={} receive_uid={}",
-                    group.group_id, common.msg_id, item.from_uid, item.receive_uid
-                );
                 continue;
             }
 
-            info!(
-                "[group-invite-debug][rust] emit req event conv=1_{} msg_id={} from_uid={} receive_uid={} req_type={} req_status={} group_name={} content={}",
-                group.group_id,
-                common.msg_id,
-                item.from_uid,
-                item.receive_uid,
-                item.group_req_type,
-                item.group_req_status,
-                group.group_name,
-                content
-            );
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_EVENT_PUSH,
                 msg_id: common.msg_id.to_string(),
@@ -1033,36 +959,15 @@ impl MessageBatcher {
 
         for item in resp.group_update_event_msg_dto {
             let Some(common) = item.common_msg_dto.as_ref() else {
-                warn!(
-                    "[group-invite-debug][rust] skip update event: missing common from_uid={} handle_type={}",
-                    item.from_uid, item.handle_type
-                );
                 continue;
             };
             let Some(group) = common.group_base_info.as_ref() else {
-                warn!(
-                    "[group-invite-debug][rust] skip update event: missing group msg_id={} from_uid={} common_msg={}",
-                    common.msg_id, item.from_uid, common.msg
-                );
                 continue;
             };
             if group.group_id <= 0 || common.msg_id <= 0 || common.msg.trim().is_empty() {
-                warn!(
-                    "[group-invite-debug][rust] skip update event: invalid/empty group_id={} msg_id={} from_uid={} handle_type={} common_msg={}",
-                    group.group_id, common.msg_id, item.from_uid, item.handle_type, common.msg
-                );
                 continue;
             }
 
-            info!(
-                "[group-invite-debug][rust] emit update event conv=1_{} msg_id={} from_uid={} handle_type={} group_name={} content={}",
-                group.group_id,
-                common.msg_id,
-                item.from_uid,
-                item.handle_type,
-                group.group_name,
-                common.msg.trim()
-            );
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_EVENT_PUSH,
                 msg_id: common.msg_id.to_string(),
@@ -1096,7 +1001,6 @@ impl MessageBatcher {
         let resp = imweb::PushGroupReqNumResp::decode(payload)
             .map_err(|e| format!("decode PushGroupReqNumResp: {}", e))?;
         let Some(item) = resp.group_req_msg.as_ref() else {
-            info!("[group-invite-debug][rust] GROUP_REQ_NUM_PUSH empty group_req_msg");
             return Ok(Vec::new());
         };
         Ok(group_req_items_to_system_messages(
@@ -1108,10 +1012,6 @@ impl MessageBatcher {
     fn decode_group_req_msg_push(&self, payload: &[u8]) -> Result<Vec<DecodedMessage>, String> {
         let resp = imweb::PushGroupReqMessageResp::decode(payload)
             .map_err(|e| format!("decode PushGroupReqMessageResp: {}", e))?;
-        info!(
-            "[group-invite-debug][rust] GROUP_REQ_MSG_PUSH decoded items={}",
-            resp.group_req_msg.len()
-        );
         Ok(group_req_items_to_system_messages(
             cmds::GROUP_REQ_MSG_PUSH,
             resp.group_req_msg.as_slice(),
@@ -2280,33 +2180,12 @@ fn user_base_to_json(user: &imweb::UserBase) -> serde_json::Value {
 fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto]) -> Vec<DecodedMessage> {
     let mut out = Vec::new();
     for item in items {
-        info!(
-            "[group-invite-debug][rust] GROUP_REQ item group_id={} group_name={} send_uid={} receive_uid={} req_id={} req_type={} req_status={} unread={} msg={}",
-            item.group_id,
-            item.group_name,
-            item.send_uid,
-            item.receive_uid,
-            item.group_req_id,
-            item.group_req_type,
-            item.group_req_status,
-            item.un_read_num,
-            item.msg
-        );
-
         if item.group_id <= 0 {
-            warn!(
-                "[group-invite-debug][rust] skip GROUP_REQ item invalid group_id={} req_id={}",
-                item.group_id, item.group_req_id
-            );
             continue;
         }
 
         let content = group_req_notice_content(item);
         if content.trim().is_empty() {
-            info!(
-                "[group-invite-debug][rust] skip GROUP_REQ item empty notice group_id={} req_id={} req_type={}",
-                item.group_id, item.group_req_id, item.group_req_type
-            );
             continue;
         }
 
@@ -2326,10 +2205,6 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
         let group_member = item.group_member.as_ref().map(group_member_to_json);
         let member_count = if group_member.is_some() { 1 } else { 0 };
 
-        info!(
-            "[group-invite-debug][rust] emit GROUP_REQ as group notification msg_id={} group_id={} content={}",
-            msg_id, item.group_id, content
-        );
         let group_member_json = group_member.into_iter().collect::<Vec<_>>();
         out.push(DecodedMessage {
             cmd,
@@ -2402,7 +2277,9 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
 }
 
 fn should_emit_group_req_chat_notice(item: &imweb::GroupReqMsgDto) -> bool {
-    item.group_id > 0 && matches!(item.group_req_type, 1 | 2 | 3 | 4 | 14 | 15)
+    item.group_id > 0
+        && item.group_req_status == 1
+        && matches!(item.group_req_type, 1 | 2 | 3 | 4 | 14 | 15)
 }
 
 fn group_req_notice_content(item: &imweb::GroupReqMsgDto) -> String {

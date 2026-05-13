@@ -2,6 +2,14 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useGroupStore } from '@/stores/useGroupStore'
+import {
+  formatGroupNoticeDisplayText,
+  getGroupNoticeActorId,
+  getGroupNoticeGroupId,
+  parseGroupNoticeExtraObject,
+} from '@/utils/groupNoticeDisplay'
 import { translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 
 const props = defineProps<{
@@ -9,6 +17,8 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const authStore = useAuthStore()
+const groupStore = useGroupStore()
 
 function translateNoticeText(text: string): string {
   const translatedGroupNotice = translateGroupNoticeText(text, t)
@@ -18,7 +28,18 @@ function translateNoticeText(text: string): string {
 }
 
 const parsedNotice = computed(() => {
-  const content = props.message.content || ''
+  const extra = parseGroupNoticeExtraObject(props.message.extra)
+  const groupId = getGroupNoticeGroupId(extra)
+  const actorId = getGroupNoticeActorId(extra)
+  const contextMembers = groupId ? groupStore.getMembers(groupId) : []
+  const actorRole = groupId && actorId
+    ? contextMembers.find((member) => member.userId === actorId)?.role
+    : null
+  const content = formatGroupNoticeDisplayText(props.message.content || '', extra, {
+    currentUid: authStore.uid,
+    actorRole,
+    contextMembers,
+  })
   if (!content.startsWith('!@#')) {
     return { prefix: '', text: translateNoticeText(content) }
   }

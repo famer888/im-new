@@ -1,7 +1,7 @@
 type TranslateFn = (key: string) => string
 
 export function normalizeGroupNoticeText(raw: string): string {
-  return String(raw || '').replace(/你(?=(?:邀请|申请加入|拒绝加入|同意加入))/g, '')
+  return String(raw || '').replace(/你(?=(?:申请加入|拒绝加入|同意加入))/g, '')
 }
 
 export function translateGroupNoticeText(raw: string, t: TranslateFn): string {

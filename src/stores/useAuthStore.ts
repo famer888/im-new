@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { getUserInfo } from '@/api/imBase'
 import { setBaseUrl } from '@/api/config'
 import { clearActiveSessionContext, setActiveSessionContext } from '@/api/sessionContext'
+import { getOrCreateInstallCode } from '@/utils/installCode'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -33,6 +34,7 @@ export interface AccountInfo {
 export interface WsConnectConfig {
   wsUrl: string
   aesKey: string
+  installCode?: string
 }
 
 interface LogoutOptions {
@@ -129,6 +131,7 @@ export const useAuthStore = defineStore('auth', () => {
         wsConnectConfig.value = {
           wsUrl: normalizeWsUrl(parsed.wsUrl),
           aesKey: String(parsed.aesKey).trim(),
+          installCode: String(parsed.installCode || '').trim() || getOrCreateInstallCode(),
         }
       }
     } catch {
@@ -140,6 +143,7 @@ export const useAuthStore = defineStore('auth', () => {
     const normalized = {
       wsUrl: normalizeWsUrl(config.wsUrl),
       aesKey: String(config.aesKey || '').trim(),
+      installCode: String(config.installCode || '').trim() || getOrCreateInstallCode(),
     }
     wsConnectConfig.value = normalized
     localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(normalized))
@@ -323,6 +327,7 @@ export const useAuthStore = defineStore('auth', () => {
         sourceId: request.sourceId,
       }
       const previousUid = localStorage.getItem(CURRENT_UID_KEY)
+      const installCode = String(request.installCode || '').trim() || getOrCreateInstallCode()
       if (optimisticSession.uid) {
         localStorage.setItem(CURRENT_UID_KEY, optimisticSession.uid)
       }
@@ -330,6 +335,7 @@ export const useAuthStore = defineStore('auth', () => {
         saveWsConnectConfig({
           wsUrl: request.wsUrl.trim(),
           aesKey: request.aesKey.trim(),
+          installCode,
         })
       }
 
@@ -344,7 +350,7 @@ export const useAuthStore = defineStore('auth', () => {
             session_url: request.sessionUrl,
             ws_url: request.wsUrl,
             aes_key: request.aesKey,
-            install_code: request.installCode,
+            install_code: installCode,
             session_id: request.sessionId || '',
           },
         })
@@ -399,6 +405,7 @@ export const useAuthStore = defineStore('auth', () => {
           avatar: account.icon || '',
           source_id: account.sourceId || null,
           session_id: account.sessionId,
+          install_code: getOrCreateInstallCode(),
         },
       })
       const result = normalizeTauriSession(tauriSession, {

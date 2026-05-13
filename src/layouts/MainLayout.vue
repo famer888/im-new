@@ -50,6 +50,7 @@ import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { getOrCreateInstallCode } from '@/utils/installCode'
 
 import { API_CONFIG } from '@/api/config'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
@@ -348,7 +349,7 @@ onMounted(async () => {
           const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
           const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
           const sessionId = String(authStore.session?.sessionId || '').trim()
-          const installCode = ''
+          const installCode = authStore.wsConnectConfig?.installCode || getOrCreateInstallCode()
           if (wsUrl && aesKey) {
             await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
           } else {

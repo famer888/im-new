@@ -214,9 +214,5 @@ fn build_login_packet(aes_key: &str, session_id: &str, install_code: &str) -> Re
         install_code: install_code.to_string(),
     };
     let payload = req.encode_to_vec();
-    let msg_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(commands::LOGIN as i64);
-    codec::encode_packet(commands::LOGIN, msg_id, &payload, aes_key, None)
+    codec::encode_packet(commands::LOGIN, commands::LOGIN as i64, &payload, aes_key, None)
 }

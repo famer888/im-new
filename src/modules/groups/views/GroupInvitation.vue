@@ -8,6 +8,7 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { eventBus } from '@/utils/eventBus'
+import { formatGroupNoticeDisplayText } from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 
 interface GroupReqItem {
@@ -19,11 +20,13 @@ interface GroupReqItem {
   groupReqType: number
   groupReqStatus: number
   groupHostUid: string
+  checkUserType: number
   sendUid: string
   receiveUid: string
   targetUser?: Record<string, any> | null
   checkUser?: Record<string, any> | null
   fromUser?: Record<string, any> | null
+  members?: unknown[]
   createTime: number
   updateTime: number
   localId?: string
@@ -98,8 +101,36 @@ function translateKnownGroupNotice(raw: string): string {
   return translateGroupNoticeText(raw, t)
 }
 
+function getGroupReqActorRole(item: GroupReqItem): number | null {
+  const cachedRole = groupStore.getMembers(item.groupId).find((member) => member.userId === item.sendUid)?.role
+  if (Number.isFinite(Number(cachedRole))) return Number(cachedRole)
+  if (Number(item.checkUserType) === 1 || Number(item.checkUserType) === 2) return Number(item.checkUserType)
+  if (item.groupHostUid && item.sendUid === item.groupHostUid) return 0
+  return null
+}
+
+function groupReqNoticeExtra(item: GroupReqItem): Record<string, unknown> {
+  return {
+    groupReqType: item.groupReqType,
+    groupReqStatus: item.groupReqStatus,
+    checkUserType: item.checkUserType,
+    actorRole: getGroupReqActorRole(item),
+    sendUid: item.sendUid,
+    receiveUid: item.receiveUid,
+    targetUser: item.targetUser,
+    checkUser: item.checkUser,
+    fromUser: item.fromUser,
+    members: item.members || [],
+  }
+}
+
 function formatReqMessage(item: GroupReqItem): string {
-  const raw = normalizeGroupNoticeText((item.msg || '').trim().replace(/\s+/g, ' '))
+  const formattedContent = formatGroupNoticeDisplayText(
+    (item.msg || '').trim().replace(/\s+/g, ' '),
+    groupReqNoticeExtra(item),
+    { currentUid: authStore.uid },
+  )
+  const raw = normalizeGroupNoticeText(formattedContent)
   if (!raw) {
     return item.groupName ? t('群通知条目摘要', { name: item.groupName }) : t('群通知')
   }
@@ -134,18 +165,17 @@ function parseExtraObject(extra: unknown): Record<string, any> {
 }
 
 function formatAcceptedGroupDigest(item: GroupReqItem): string {
-  const fromName = isSelfUser(item.fromUser, item.sendUid)
-    ? t('你')
-    : getReqUserName(item.fromUser, item.sendUid)
+  const fromName = getReqUserName(item.fromUser, item.sendUid)
   const targetName = isSelfUser(item.targetUser, item.receiveUid)
     ? t('你')
     : formatReqMemberName(item.targetUser, item.receiveUid)
 
   if (fromName && targetName) {
-    if (targetName === t('你')) {
-      return `${fromName}${t('邀请')}${targetName}${t('加入群聊')}`
-    }
-    return `${fromName}${t('邀请')}${targetName} ${t('加入群聊')}`
+    return formatGroupNoticeDisplayText(
+      `${fromName}${t('邀请')}${targetName}${t('加入群聊')}`,
+      groupReqNoticeExtra(item),
+      { currentUid: authStore.uid },
+    )
   }
   return formatReqMessage(item)
 }
@@ -170,11 +200,13 @@ function parseGroupReqItems(raw: any[]): GroupReqItem[] {
       groupReqType: item.groupReqType || 0,
       groupReqStatus: item.groupReqStatus || 0,
       groupHostUid: String(item.groupHostUid ?? ''),
+      checkUserType: Number(item.checkUserType ?? -1),
       sendUid: String(item.sendUid ?? ''),
       receiveUid: String(item.receiveUid ?? ''),
       targetUser: item.targetUser || null,
       checkUser: item.checkUser || null,
       fromUser: item.fromUser || null,
+      members: Array.isArray(item.members) ? item.members : [],
       createTime: Number(item.createTime || 0),
       updateTime: Number(item.updateTime || item.createTime || 0),
     }))
@@ -199,11 +231,13 @@ function localMessageToGroupReqItem(message: Message): GroupReqItem | null {
     groupReqType: Number(extra.groupReqType ?? 0),
     groupReqStatus: Number(extra.groupReqStatus ?? 0),
     groupHostUid: String(extra.groupHostUid ?? ''),
+    checkUserType: Number(extra.checkUserType ?? -1),
     sendUid: String(extra.sendUid ?? extra.fromUid ?? message.senderId ?? ''),
     receiveUid: String(extra.receiveUid ?? ''),
     targetUser: extra.targetUser || null,
     checkUser: extra.checkUser || null,
     fromUser: extra.fromUser || null,
+    members: Array.isArray(extra.members) ? extra.members : [],
     createTime: sendTime,
     updateTime: sendTime,
   }
@@ -238,6 +272,36 @@ function sortGroupReqItems(items: GroupReqItem[]): GroupReqItem[] {
   return [...items].sort(
     (a, b) => (b.updateTime || b.createTime || 0) - (a.updateTime || a.createTime || 0),
   )
+}
+
+function isPendingSelfGroupInvite(item: GroupReqItem): boolean {
+  const uid = String(authStore.uid || '')
+  return Boolean(uid)
+    && [1, 3].includes(Number(item.groupReqType || 0))
+    && Number(item.groupReqStatus || 0) === 0
+    && String(item.receiveUid || '') === uid
+    && Boolean(item.groupId)
+}
+
+async function cleanupPendingGroupConversations(items: GroupReqItem[]) {
+  const uid = String(authStore.uid || '')
+  if (!uid) return
+
+  const pendingGroupIds = Array.from(new Set(
+    items
+      .filter(isPendingSelfGroupInvite)
+      .map((item) => String(item.groupId || ''))
+      .filter(Boolean),
+  ))
+
+  for (const groupId of pendingGroupIds) {
+    chatStore.markPendingGroupInviteConversation(groupId)
+    const conversationId = `1_${groupId}`
+    if (!chatStore.conversations.some((conv) => conv.id === conversationId)) continue
+    await chatStore.deleteConversation(uid, conversationId).catch((error) => {
+      console.warn('[GroupInvitation] cleanup pending group conversation failed:', { groupId, error })
+    })
+  }
 }
 
 function syncSidebarPreview(items: GroupReqItem[], timeOverride?: number) {
@@ -299,6 +363,7 @@ async function loadList() {
   }
 
   list.value = mergeGroupReqItems(apiItems, getLocalGroupReqItems())
+  await cleanupPendingGroupConversations(list.value)
   syncSidebarPreview(list.value)
 }
 
@@ -327,6 +392,7 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
       let shouldPromoteGroup = Boolean(chatStore.conversations.find((conv) => conv.id === `1_${item.groupId}`))
       if (flag) {
         const gid = item.groupId
+        chatStore.clearPendingGroupInviteConversation(gid)
         if (!groupStore.groups.find((g) => g.id === gid)) {
           groupStore.groups.push({
             id: gid,
