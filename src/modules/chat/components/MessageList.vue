@@ -46,6 +46,31 @@ function isLegacyGroupInviteRejectionInGroupChat(conversationId: string | undefi
   return Number(extra.groupReqStatus ?? 0) === 2
 }
 
+/** 已由当前用户自己退出群聊时，不在群时间线展示这条退出系统消息。 */
+function isSelfLeaveGroupSystemMessage(conversationId: string | undefined, message: Message): boolean {
+  if (!conversationId?.startsWith('1_')) return false
+  const target = conversationId.slice(2)
+  if (!target || target === 'invitation') return false
+  if (message.msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  if (!extra) return false
+  if (String(extra.source ?? '') !== 'group-event') return false
+  if (Number(extra.groupReqType ?? 0) !== 7) return false
+
+  const currentUid = String(authStore.uid || '')
+  if (!currentUid) return false
+
+  const receiveUid = String(extra.receiveUid ?? '')
+  if (receiveUid && receiveUid === currentUid) return true
+
+  const members = Array.isArray(extra.members) ? extra.members : []
+  return members.some((member) => {
+    if (!member || typeof member !== 'object') return false
+    return String((member as Record<string, unknown>).userId ?? '') === currentUid
+  })
+}
+
 const containerRef = ref<HTMLElement | null>(null)
 const floatDateRef = ref<HTMLElement | null>(null)
 
@@ -54,6 +79,7 @@ const sortedMessages = computed(() =>
   props.messages
     .filter((message) => !isHiddenMessageType(message.msgType))
     .filter((message) => !isLegacyGroupInviteRejectionInGroupChat(props.conversationId, message))
+    .filter((message) => !isSelfLeaveGroupSystemMessage(props.conversationId, message))
     .slice()
     .sort((a, b) => a.sendTime - b.sendTime),
 )
