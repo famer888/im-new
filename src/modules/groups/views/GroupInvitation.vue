@@ -282,6 +282,10 @@ function sortGroupReqItems(items: GroupReqItem[]): GroupReqItem[] {
   )
 }
 
+function getPendingGroupNotificationCount(items: GroupReqItem[]): number {
+  return items.filter((item) => Number(item.groupReqStatus || 0) === 0).length
+}
+
 function isPendingSelfGroupInvite(item: GroupReqItem): boolean {
   const uid = String(authStore.uid || '')
   return Boolean(uid)
@@ -318,20 +322,24 @@ function syncSidebarPreview(items: GroupReqItem[], timeOverride?: number) {
     chatStore.updateGroupNotificationConv(
       formatReqMessage(latest),
       timeOverride || latest.updateTime || latest.createTime,
-      0,
+      getPendingGroupNotificationCount(items),
     )
   } else {
     chatStore.removeGroupNotificationConversation()
   }
 }
 
-function promoteGroupNotificationConversation(item: GroupReqItem, time = Date.now()) {
+function promoteGroupNotificationConversation(item: GroupReqItem, items: GroupReqItem[], time = Date.now()) {
   const newestNonPinnedTime = chatStore.conversations.reduce((latest, conv) => {
     if (conv.isPinned) return latest
     return Math.max(latest, Number(conv.updatedAt || 0), Number(conv.lastMsgTime || 0))
   }, 0)
   const nextTime = Math.max(time, newestNonPinnedTime + 1)
-  chatStore.updateGroupNotificationConv(formatReqMessage(item), nextTime, 0)
+  chatStore.updateGroupNotificationConv(
+    formatReqMessage(item),
+    nextTime,
+    getPendingGroupNotificationCount(items),
+  )
 }
 
 function promoteGroupConversationAboveNotification(groupId: string) {
@@ -426,7 +434,7 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
       if (flag && shouldPromoteGroup) {
         promoteGroupConversationAboveNotification(item.groupId)
       } else if (!flag) {
-        promoteGroupNotificationConversation(handledItem, now)
+        promoteGroupNotificationConversation(handledItem, list.value, now)
       }
     } else {
       console.error(t('操作失败'), (res as any)?.commonResult?.errMsg)

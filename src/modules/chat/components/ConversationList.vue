@@ -505,6 +505,11 @@ function isSelfLeaveGroupSystemMessage(conversationId: string, message: Message)
 }
 
 function getLoadedLatestDigest(conv: Conversation): string {
+  // 群通知右侧列表会合并接口返回与本地消息，排序基于 updateTime；
+  // 本地消息时间线未必就是右侧顶部那一条，因此这里不要反向覆盖已同步好的会话摘要。
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return ''
+  }
   const loaded = messageStore.getMessages(conv.id)
   if (loaded.length === 0) return ''
   const latest = [...loaded].reverse().find((message) => (
@@ -523,9 +528,6 @@ function getLoadedLatestDigest(conv: Conversation): string {
 
   if (!isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
   const digest = getMessageDigest(latest)
-  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
-    return formatGroupNotificationDigest(digest, parseMessageExtra(latest.extra))
-  }
   return digest
 }
 
