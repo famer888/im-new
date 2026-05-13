@@ -759,6 +759,45 @@ mod tests {
     }
 
     #[test]
+    fn private_name_card_is_sent_as_encrypted_name_card_obj() {
+        let rel_key = "0123456789abcdef";
+        let plain = encode_name_card_obj(
+            r#"{"nickname":"Alice","avatar":"https://example.test/a.png","uid":"12345"}"#,
+        );
+        let req_bytes = build_send_private_message_req(
+            10086,
+            88,
+            5,
+            &plain,
+            Some((3, rel_key.to_string())),
+            Some((4, rel_key.to_string())),
+            Some((5, rel_key.to_string())),
+            Some((6, rel_key.to_string())),
+            1_700_000_000_000,
+            42,
+            0,
+            None,
+        )
+        .unwrap();
+
+        let decoded = imweb::OneToOneMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let msg = decoded.one_to_one_message.unwrap();
+        assert_eq!(msg.msg_type, 5);
+        assert_eq!(msg.content, Vec::<u8>::new());
+        assert_eq!(msg.version, 6);
+
+        let web_content = msg.web_content.unwrap();
+        assert_eq!(web_content.version, 4);
+        let decrypted = crypto::aes::decrypt_message(&web_content.content, rel_key).unwrap();
+        assert_eq!(decrypted, plain);
+
+        let card = imweb::NameCardObj::decode(decrypted.as_slice()).unwrap();
+        assert_eq!(card.uid, 12345);
+        assert_eq!(card.nick_name, "Alice");
+        assert_eq!(card.icon, "https://example.test/a.png");
+    }
+
+    #[test]
     fn private_dice_does_not_require_encrypted_content_blocks() {
         let plain = encode_set_image_obj("");
         let req_bytes = build_send_private_message_req(

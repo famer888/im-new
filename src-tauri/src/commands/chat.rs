@@ -554,7 +554,8 @@ pub async fn send_message(
         Err(reason)
     };
 
-    // 按会话类型分流。文本、图片、语音、视频、文件走 WS 发送链路；骰子暂开放单聊和群聊。
+    // 按会话类型分流。文本、图片、语音、视频、文件走 WS 发送链路；单聊额外打通名片转发；
+    // 骰子暂开放单聊和群聊。
     // 其余未实现类型先保持原来的
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
@@ -660,7 +661,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) | (0, 3) | (0, 7) | (0, 12) | (0, 18) => {
+        (0, 1) | (0, 2) | (0, 3) | (0, 5) | (0, 7) | (0, 12) | (0, 18) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,
