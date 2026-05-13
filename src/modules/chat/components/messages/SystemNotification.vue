@@ -20,6 +20,7 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 const groupStore = useGroupStore()
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
+const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
 
 function translateNoticeText(text: string): string {
   const translatedGroupNotice = translateGroupNoticeText(text, t)
@@ -41,7 +42,7 @@ const parsedNotice = computed(() => {
     actorRole,
     contextMembers,
   })
-  if (content === HIDDEN_GROUP_NOTICE_TEXT) {
+  if (content === HIDDEN_GROUP_NOTICE_TEXT || HIDDEN_GROUP_QUIT_NOTICE_RE.test(content)) {
     return { prefix: '', text: '' }
   }
   if (!content.startsWith('!@#')) {
