@@ -416,6 +416,17 @@ export const useGroupStore = defineStore('group', () => {
     return memberMap.value.get(groupId) ?? []
   }
 
+  function removeGroup(groupId: string) {
+    const normalizedId = String(groupId || '').trim()
+    if (!normalizedId) return
+    groups.value = groups.value.filter((group) => group.id !== normalizedId)
+    if (memberMap.value.has(normalizedId)) {
+      const next = new Map(memberMap.value)
+      next.delete(normalizedId)
+      memberMap.value = next
+    }
+  }
+
   return {
     groups,
     memberMap,
@@ -426,6 +437,7 @@ export const useGroupStore = defineStore('group', () => {
     setGroupMembers,
     getGroup,
     getMembers,
+    removeGroup,
     applyOnlineStatusUpdates,
   }
 })

@@ -445,6 +445,7 @@ function handleExitGroup() {
       if (code === 200) {
         showToast(t('退出成功'))
         uiStore.setRightPanel('none')
+        groupStore.removeGroup(conv.value.targetId)
         chatStore.deleteConversation(authStore.uid!, conv.value.id)
       } else {
         showToast((resp as any)?.errorDesc || t('操作失败'), 'error')
