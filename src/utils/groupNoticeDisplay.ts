@@ -3,6 +3,33 @@ interface FormatOptions {
   maxMembers?: number
   actorRole?: number | null
   contextMembers?: unknown[]
+  /** 将会话里的 `#{uids:123}` 等占位替换为可读昵称（如通讯录备注/昵称） */
+  resolveUidPlaceholder?: (uid: string) => string
+}
+
+const UID_PLACEHOLDER_GROUP_RE = /#\{uids:([^}]+)\}/g
+
+/** 替换群通知里的 `#{uids:...}`；整行「#{uids} 退出群聊」保持原样，供会话列表隐藏该摘要 */
+export function replaceGroupNoticeUidPlaceholders(
+  raw: string,
+  resolveName: (uid: string) => string,
+): string {
+  const compact = raw.trim().replace(/\s+/g, ' ')
+  if (/^#\{uids:[^}]*\}\s*退出群聊$/.test(compact)) return raw
+
+  return raw.replace(UID_PLACEHOLDER_GROUP_RE, (match, idsPart: string) => {
+    const ids = String(idsPart ?? '')
+      .split(/[,，]/)
+      .map((id) => id.trim())
+      .filter(Boolean)
+    if (!ids.length) return match
+    return ids.map((id) => resolveName(id)).join('，')
+  })
+}
+
+function finalizeGroupNoticeDisplay(text: string, options: FormatOptions): string {
+  if (!options.resolveUidPlaceholder) return text
+  return replaceGroupNoticeUidPlaceholders(text, options.resolveUidPlaceholder)
 }
 
 interface NoticePerson {
@@ -284,14 +311,16 @@ export function formatGroupNoticeDisplayText(
 ): string {
   const raw = String(content || '').trim().replace(/\s+/g, ' ')
   const extra = parseGroupNoticeExtraObject(rawExtra)
-  if (!raw || !extra) return raw
+  const fin = (text: string) => finalizeGroupNoticeDisplay(text, options)
+  if (!raw) return fin('')
+  if (!extra) return fin(raw)
 
   const reqType = Number(extra.groupReqType ?? 0)
   const reqStatus = Number(extra.groupReqStatus ?? 0)
   if (!INVITE_REQ_TYPES.has(reqType) || !ACTIVE_INVITE_STATUSES.has(reqStatus)) {
-    return raw
+    return fin(raw)
   }
-  if (!raw.includes('邀请') && !raw.includes('加入群聊')) return raw
+  if (!raw.includes('邀请') && !raw.includes('加入群聊')) return fin(raw)
 
   const currentUid = stringValue(options.currentUid)
   const maxMembers = Math.max(1, Number(options.maxMembers || 31))
@@ -307,18 +336,18 @@ export function formatGroupNoticeDisplayText(
     options.contextMembers || [],
     maxMembers,
   )
-  if (!targets.length) return raw
+  if (!targets.length) return fin(raw)
 
   const actor = getActorName(extra, raw)
   const actorDisplayName = formatActorDisplayName(actor, extra, currentUid, options.actorRole)
   const rawActor = extractRawInviteActor(raw)
   if (rawHasAllTargets(raw, targets) && rawActor && rawActor !== '你' && rawActor === actorDisplayName) {
-    return raw
+    return fin(raw)
   }
 
   const targetText = targets.map((target) => target.name).join('，')
   const actorText = actorDisplayName
     ? `${actorDisplayName}邀请`
     : '邀请'
-  return `${actorText}${targetText}加入群聊`
+  return fin(`${actorText}${targetText}加入群聊`)
 }

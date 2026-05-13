@@ -7,6 +7,7 @@ import {
   useChatStore,
 } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
+import { useContactStore } from './useContactStore'
 import { useGroupStore } from './useGroupStore'
 import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
@@ -478,6 +479,9 @@ function filterMessagesHiddenByLogoutClear(uid: string, messages: Message[]) {
 
 export const useMessageStore = defineStore('message', () => {
   const chatStore = useChatStore()
+  function resolveUidNick(id: string) {
+    return useContactStore().getDisplayName(id)
+  }
   const messageMap = ref<Map<string, Message[]>>(new Map())
   const loadingMap = ref<Map<string, boolean>>(new Map())
   const hasMoreMap = ref<Map<string, boolean>>(new Map())
@@ -568,6 +572,7 @@ export const useMessageStore = defineStore('message', () => {
     const formatted = formatGroupNoticeDisplayText(raw, extra, {
       currentUid: useAuthStore().uid,
       actorRole: getGroupNoticeActorRole(extra),
+      resolveUidPlaceholder: resolveUidNick,
     })
     if (formatted !== raw) return formatted.slice(0, 200)
     if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
@@ -606,6 +611,7 @@ export const useMessageStore = defineStore('message', () => {
         currentUid: useAuthStore().uid,
         actorRole: getGroupNoticeActorRole(groupNoticeExtra),
         contextMembers: isGroupNotificationConversation ? [] : getGroupNoticeContextMembers(groupNoticeExtra),
+        resolveUidPlaceholder: resolveUidNick,
       }).slice(0, 200)
     }
     const existing = chatStore.conversations.find((c) => c.id === conversationId)

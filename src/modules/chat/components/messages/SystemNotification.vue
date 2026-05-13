@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import {
   formatGroupNoticeDisplayText,
@@ -18,6 +19,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const authStore = useAuthStore()
+const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const HIDDEN_GROUP_QUIT_NOTICE_RE = /^#\{uids:[^}]*\}\s*退出群聊$/
@@ -41,6 +43,7 @@ const parsedNotice = computed(() => {
     currentUid: authStore.uid,
     actorRole,
     contextMembers,
+    resolveUidPlaceholder: (id) => contactStore.getDisplayName(id),
   })
   if (content === HIDDEN_GROUP_NOTICE_TEXT || HIDDEN_GROUP_QUIT_NOTICE_RE.test(content)) {
     return { prefix: '', text: '' }
