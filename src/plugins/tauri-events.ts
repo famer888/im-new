@@ -635,7 +635,10 @@ export async function setupTauriListeners() {
     resetClientStateAfterLogout()
 
     try {
-      await authStore.logout({ keepHistoryOnLogout: true })
+      await authStore.logout({
+        keepHistoryOnLogout: true,
+        preserveLoginCache: event.payload?.reason === 'local-login-replaced',
+      })
       if (!isTauri()) {
         await router.replace('/login')
         if (window.location.hash !== '#/login') {

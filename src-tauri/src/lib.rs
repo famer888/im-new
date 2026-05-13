@@ -30,6 +30,7 @@ pub fn run() {
             info!("OCS Chat starting...");
 
             let app_handle = app.handle().clone();
+            commands::auth::start_active_login_monitor(app_handle.clone());
 
             // Init database
             let db_manager = db::DbManager::new(&app_data_dir)?;

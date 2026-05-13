@@ -37,6 +37,7 @@ export interface WsConnectConfig {
 
 interface LogoutOptions {
   keepHistoryOnLogout?: boolean
+  preserveLoginCache?: boolean
 }
 
 interface InitSessionOptions {
@@ -422,10 +423,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout(options?: LogoutOptions) {
     const currentUid = resolveCurrentUidForLogout(uid.value, accounts.value)
     const keepHistoryOnLogout = options?.keepHistoryOnLogout ?? true
+    const preserveLoginCache = options?.preserveLoginCache ?? false
 
     console.info('[auth] logout requested', {
       currentUid,
       keepHistoryOnLogout,
+      preserveLoginCache,
       isTauri: isTauri(),
     })
 
@@ -438,10 +441,12 @@ export const useAuthStore = defineStore('auth', () => {
 
     setSession(null)
     clearActiveSessionContext(currentUid)
-    localStorage.removeItem(CURRENT_UID_KEY)
-    localStorage.removeItem('browser-session')
-    clearWsConnectConfig()
-    if (accountIndex >= 0) {
+    if (!preserveLoginCache) {
+      localStorage.removeItem(CURRENT_UID_KEY)
+      localStorage.removeItem('browser-session')
+      clearWsConnectConfig()
+    }
+    if (!preserveLoginCache && accountIndex >= 0) {
       accounts.value[accountIndex] = {
         ...accounts.value[accountIndex],
         sessionId: undefined,
