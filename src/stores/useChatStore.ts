@@ -428,6 +428,12 @@ export const useChatStore = defineStore('chat', () => {
 
   async function markAsRead(uid: string, conversationId: string) {
     if (!isTauri()) return
+    try {
+      const { useMessageStore } = await import('./useMessageStore')
+      await useMessageStore().ensureWsConnected()
+    } catch (error) {
+      console.warn('[ChatStore] ensure ws connected before markAsRead failed:', error)
+    }
     const result = await tauriInvoke<ReadProcessingResult>('mark_as_read', { uid, conversationId })
     updateConversation({ id: conversationId, unreadCount: 0, atMe: false })
     const unreadTotal = conversations.value

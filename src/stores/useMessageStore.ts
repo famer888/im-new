@@ -1816,6 +1816,7 @@ export const useMessageStore = defineStore('message', () => {
 
   return {
     messageMap,
+    ensureWsConnected,
     getMessages,
     isLoading,
     hasMore,
