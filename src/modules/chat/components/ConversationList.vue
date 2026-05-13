@@ -54,9 +54,6 @@ function isNotFileHelper(c: Conversation): boolean {
 }
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
-  const hasGroupNotification = chatStore.conversations.some(
-    (item) => item.type === ConversationType.Group && item.targetId === GROUP_NOTIFICATION_TARGET_ID,
-  )
   if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
     return true
   }
@@ -68,7 +65,7 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
       return Boolean(contactStore.getContact(conv.targetId))
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
-      if (!hasGroupNotification && PENDING_GROUP_INVITE_RE.test(String(conv.lastMsgDigest || ''))) return false
+      if (PENDING_GROUP_INVITE_RE.test(String(conv.lastMsgDigest || ''))) return false
       return Boolean(groupStore.getGroup(conv.targetId))
     case ConversationType.Channel:
       return Boolean(channelStore.getChannel(conv.targetId))
