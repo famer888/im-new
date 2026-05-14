@@ -159,6 +159,7 @@ pub fn run() {
             commands::groups::get_group_members,
             commands::groups::create_group,
             commands::groups::invite_members,
+            commands::log_upload::prepare_log_upload_package,
             commands::channels::get_channels,
             commands::channels::get_channel_info,
             commands::channels::save_channels,

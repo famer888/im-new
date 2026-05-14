@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingStore } from '@/stores/useSettingStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { checkVersion } from '@/api/imBase'
 import { API_CONFIG } from '@/api/config'
 import AppSwitch from '@/components/AppSwitch.vue'
@@ -10,6 +11,7 @@ import pkg from '../../../../package.json'
 
 const { t } = useI18n()
 const settingStore = useSettingStore()
+const uiStore = useUIStore()
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
@@ -108,6 +110,12 @@ async function handleVersionUpdate() {
       <dt>{{ t('版本信息') }} {{ versionText }}</dt>
       <dd>
         <button type="button" @click="handleVersionUpdate">{{ t('版本更新') }}</button>
+      </dd>
+    </dl>
+    <dl>
+      <dt>{{ t('上传日志') }}</dt>
+      <dd>
+        <button type="button" @click="uiStore.openPostUpload()">{{ t('上传日志') }}</button>
       </dd>
     </dl>
 

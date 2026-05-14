@@ -80,6 +80,7 @@ export const useUIStore = defineStore('ui', () => {
   const groupQRCodeTarget = ref({ id: '', name: '' })
   const inviteFriendVisible = ref(false)
   const inviteFriendGroupId = ref('')
+  const postUploadVisible = ref(false)
   const upVersionVisible = ref(false)
   const upVersionInfo = ref<{ version: string; title?: string; content?: string; url: string; flag?: number }>({
     version: '', url: '',
@@ -182,6 +183,9 @@ export const useUIStore = defineStore('ui', () => {
     inviteFriendVisible.value = true
   }
   function closeInviteFriend() { inviteFriendVisible.value = false }
+
+  function openPostUpload() { postUploadVisible.value = true }
+  function closePostUpload() { postUploadVisible.value = false }
 
   function openUpVersion(info: typeof upVersionInfo.value) {
     upVersionInfo.value = info
@@ -307,6 +311,7 @@ export const useUIStore = defineStore('ui', () => {
     groupQRCodeTarget,
     inviteFriendVisible,
     inviteFriendGroupId,
+    postUploadVisible,
     upVersionVisible,
     upVersionInfo,
     contextMenuVisible,
@@ -331,6 +336,8 @@ export const useUIStore = defineStore('ui', () => {
     closeGroupQRCode,
     openInviteFriend,
     closeInviteFriend,
+    openPostUpload,
+    closePostUpload,
     openUpVersion,
     closeUpVersion,
     memberInfoVisible,

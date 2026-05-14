@@ -30,6 +30,7 @@ import ChannelDetail from '@/modules/channels/views/ChannelDetail.vue'
 import RightPanel from '@/modules/chat/components/panels/RightPanel.vue'
 
 import SettingsDialog from '@/modules/settings/views/SettingsDialog.vue'
+import PostUploadDialog from '@/modules/settings/components/PostUploadDialog.vue'
 import AddContactDialog from '@/modules/contacts/components/AddContactDialog.vue'
 import ForwardSelectDialog from '@/modules/chat/components/ForwardSelectDialog.vue'
 import FileImport from '@/modules/auth/components/FileImport.vue'
@@ -2114,6 +2115,7 @@ async function handleForward(targetConvId: string) {
 
     <!-- Global dialogs -->
     <SettingsDialog v-model:visible="uiStore.settingsVisible" />
+    <PostUploadDialog v-model:visible="uiStore.postUploadVisible" />
     <AddContactDialog v-model:visible="uiStore.addContactVisible" />
     <AddGroupPreview
       mode="dialog"
