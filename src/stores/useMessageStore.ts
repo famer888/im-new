@@ -286,6 +286,38 @@ function isPendingGroupReqChatMessage(message: Message): boolean {
     && Number(extra?.groupReqStatus ?? 0) !== 1
 }
 
+function isRejectedGroupInviteNoticeForNotification(conversationId: string, message: Message): boolean {
+  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
+  if (message.msgType !== 8) return false
+
+  const extra = parseExtraObject(message.extra)
+  if (!extra || String(extra.source || '') !== 'group-event') return false
+  if (Number(extra.groupReqStatus ?? 0) !== 2) return false
+
+  const reqType = Number(extra.groupReqType ?? 0)
+  const content = String(message.content || '')
+  return [3, 4, 5].includes(reqType) || content.includes('拒绝')
+}
+
+function cloneGroupNoticeToNotificationMessage(conversationId: string, message: Message): Message {
+  const targetId = conversationId.split('_').slice(1).join('_')
+  const extra = parseExtraObject(message.extra) || {}
+  const noticeExtra = {
+    ...extra,
+    source: 'group-event-req',
+    groupId: String(extra.groupId || targetId || ''),
+  }
+  return {
+    ...message,
+    id: message.id ? `notice-${message.id}` : `notice-${conversationId}-${message.sendTime || Date.now()}`,
+    customMsgId: message.customMsgId
+      ? `notice-${message.customMsgId}`
+      : `notice-${conversationId}-${message.sendTime || Date.now()}`,
+    conversationId: `1_${GROUP_NOTIFICATION_TARGET_ID}`,
+    extra: JSON.stringify(noticeExtra),
+  }
+}
+
 function messageLogSummary(message: Message | null | undefined) {
   if (!message) return null
   return {
@@ -580,6 +612,18 @@ export const useMessageStore = defineStore('message', () => {
       }).slice(0, 200)
     }
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
+    if (isRejectedGroupInviteNoticeForNotification(conversationId, msg)) {
+      const noticeMessage = cloneGroupNoticeToNotificationMessage(conversationId, msg)
+      const noticeExtra = parseExtraObject(noticeMessage.extra)
+      const groupDigest = formatGroupNotificationDigest(digest, noticeExtra)
+      appendMessage(noticeMessage.conversationId, noticeMessage)
+      chatStore.updateGroupNotificationConv(
+        groupDigest || digest || '',
+        msg.sendTime || Date.now(),
+        chatStore.currentConversationId === noticeMessage.conversationId ? 0 : 1,
+      )
+      return
+    }
     if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
       const extra = groupNoticeExtra || parseExtraObject(msg.extra)
       const groupDigest = formatGroupNotificationDigest(digest, extra)
@@ -667,7 +711,11 @@ export const useMessageStore = defineStore('message', () => {
 
     // 最后一条消息被阅后即焚/本地删除后，左侧会话预览要回退到仍可见的最后一条。
     const list = messages ?? getMessages(conversationId)
-    const latest = [...list].reverse().find((item) => !isHiddenMessageType(item.msgType)) ?? null
+    const latest = [...list].reverse().find((item) =>
+      !isHiddenMessageType(item.msgType)
+      && !isPendingGroupReqChatMessage(item)
+      && !isRejectedGroupInviteNoticeForNotification(conversationId, item),
+    ) ?? null
     const digest = latest ? getDigestByMessage(latest.msgType, latest.content) : null
 
     chatStore.addOrUpdateConversation({
