@@ -38,6 +38,14 @@ export const useChannelStore = defineStore('channel', () => {
   const loading = ref(false)
   let activeUid = ''
 
+  function channelDebug(message: string, data: Record<string, unknown> = {}) {
+    console.warn(`[ChannelStore][debug] ${message}`, {
+      activeUid,
+      isTauri: isTauri(),
+      ...data,
+    })
+  }
+
   function removedChannelKey(uid: string): string {
     return `${uid}-removed-channel-ids`
   }
@@ -243,6 +251,7 @@ export const useChannelStore = defineStore('channel', () => {
   async function loadChannels(uid: string) {
     activeUid = uid
     loading.value = true
+    channelDebug('loadChannels start', { uid })
     try {
       let localChannels: Channel[] = []
 
@@ -252,16 +261,26 @@ export const useChannelStore = defineStore('channel', () => {
           localChannels = Array.isArray(localRows)
             ? filterRemovedChannels(localRows.map((item) => normalizeChannel(item)), uid)
             : []
+          channelDebug('local get_channels done', {
+            rawCount: Array.isArray(localRows) ? localRows.length : -1,
+            filteredCount: localChannels.length,
+            sampleIds: localChannels.slice(0, 5).map((item) => item.id),
+          })
           if (localChannels.length > 0) {
             channels.value = localChannels
           }
         } catch (e) {
           // 本地缓存读失败时继续走远端，避免频道列表被一次 SQLite 异常直接清空。
           console.error('[ChannelStore] local get_channels failed:', e)
+          channelDebug('local get_channels failed', { error: String(e) })
         }
       }
 
       const conversationChannels = await loadChannelsFromConversationCache(uid)
+      channelDebug('conversation fallback done', {
+        count: conversationChannels.length,
+        sampleIds: conversationChannels.slice(0, 5).map((item) => item.id),
+      })
       if (conversationChannels.length > 0) {
         channels.value = filterRemovedChannels(mergeChannelsById(conversationChannels, localChannels), uid)
         await hydratePlaceholderChannels(uid)
@@ -274,7 +293,12 @@ export const useChannelStore = defineStore('channel', () => {
       })
     } catch (e) {
       console.error('[ChannelStore] loadChannels failed:', e)
+      channelDebug('loadChannels failed', { error: String(e) })
     } finally {
+      channelDebug('loadChannels final', {
+        count: channels.value.length,
+        sampleIds: channels.value.slice(0, 5).map((item) => item.id),
+      })
       loading.value = false
     }
   }
@@ -312,11 +336,18 @@ export const useChannelStore = defineStore('channel', () => {
       try {
         const resp = await getChannelList({ pageNum, pageSize })
         const code = Number(resp?.code ?? 200)
+        const list = resp?.data?.rowList || []
+        channelDebug('API channelList page', {
+          pageNum,
+          code,
+          msg: resp?.msg || '',
+          rawCount: Array.isArray(list) ? list.length : -1,
+          total: resp?.data?.total ?? null,
+        })
         if (code !== 200 && code !== 0) {
           throw new Error(resp?.msg || 'channel list request failed')
         }
         apiSucceeded = true
-        const list = resp?.data?.rowList || []
         for (const item of list) {
           const id = String(item.channelId || (item as ChannelListItem & { id?: string | number }).id || '')
           if (!id || seen.has(id) || isChannelRemoved(id, uid) || !isJoinedChannel(item)) continue
@@ -330,12 +361,19 @@ export const useChannelStore = defineStore('channel', () => {
         }
       } catch (e) {
         console.error('[ChannelStore] API loadChannels failed:', e)
+        channelDebug('API channelList failed', { pageNum, error: String(e) })
         hasMore = false
       }
     }
 
     if (apiSucceeded) {
       const nextChannels = filterRemovedChannels(allChannels, uid)
+      channelDebug('API channelList result', {
+        collectedCount: allChannels.length,
+        filteredCount: nextChannels.length,
+        seedConversationCount: seed?.conversationChannels?.length || 0,
+        seedLocalCount: seed?.localChannels?.length || 0,
+      })
       channels.value = nextChannels.length > 0
         ? nextChannels
         : filterRemovedChannels(mergeChannelsById(
@@ -357,6 +395,7 @@ export const useChannelStore = defineStore('channel', () => {
       channels.value = mergedChannels
       await hydratePlaceholderChannels(uid)
       await saveChannelsToLocal(uid, mergedChannels)
+      channelDebug('API failed, using merged fallback', { count: mergedChannels.length })
       return
     }
 
@@ -364,6 +403,7 @@ export const useChannelStore = defineStore('channel', () => {
     const fallbackChannels = seed?.conversationChannels || (await loadChannelsFromConversationCache(uid))
     channels.value = filterRemovedChannels(fallbackChannels, uid)
     await hydratePlaceholderChannels(uid)
+    channelDebug('API empty, using conversation fallback', { count: channels.value.length })
     console.warn(
       '[ChannelStore] channel api empty, fallback from conversations',
     )

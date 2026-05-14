@@ -327,9 +327,23 @@ export const useAuthStore = defineStore('auth', () => {
         sourceId: request.sourceId,
       }
       const previousUid = localStorage.getItem(CURRENT_UID_KEY)
+      const optimisticAccountIndex = optimisticSession.uid
+        ? accounts.value.findIndex(a => a.id === optimisticSession.uid)
+        : -1
+      const previousOptimisticAccount = optimisticAccountIndex >= 0
+        ? { ...accounts.value[optimisticAccountIndex] }
+        : null
+      const wroteOptimisticAccount = Boolean(optimisticSession.uid)
       const installCode = String(request.installCode || '').trim() || getOrCreateInstallCode()
       if (optimisticSession.uid) {
         localStorage.setItem(CURRENT_UID_KEY, optimisticSession.uid)
+        addOrUpdateAccount({
+          id: optimisticSession.uid,
+          name: optimisticSession.nickname || optimisticSession.uid,
+          icon: optimisticSession.avatar,
+          sessionId: optimisticSession.sessionId,
+          sourceId: optimisticSession.sourceId,
+        })
       }
       if (request.wsUrl.trim() && request.aesKey.trim()) {
         saveWsConnectConfig({
@@ -359,6 +373,14 @@ export const useAuthStore = defineStore('auth', () => {
           localStorage.setItem(CURRENT_UID_KEY, previousUid)
         } else {
           localStorage.removeItem(CURRENT_UID_KEY)
+        }
+        if (wroteOptimisticAccount) {
+          if (previousOptimisticAccount && optimisticAccountIndex >= 0) {
+            accounts.value[optimisticAccountIndex] = previousOptimisticAccount
+          } else {
+            accounts.value = accounts.value.filter(a => a.id !== optimisticSession.uid)
+          }
+          saveAccounts()
         }
         throw error
       }
