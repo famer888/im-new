@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,4 +58,33 @@ pub fn get_first_normal_domain(
         .find(|d| d.module_code == module_code && d.status == "normal")
         .or_else(|| pool.iter().find(|d| d.module_code == module_code))
         .map(|d| d.domain.clone())
+}
+
+/// Tauri 没有 Electron session.webRequest CORS hook；OSS/动态域名引导统一走主进程 reqwest 拉取，避免 WebView CORS 拦截。
+#[tauri::command]
+pub async fn fetch_url_text(url: String) -> Result<String, String> {
+    let parsed = url::Url::parse(url.trim())
+        .map_err(|e| format!("invalid url: {}", e))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("unsupported url scheme".to_string());
+    }
+
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|e| format!("create http client failed: {}", e))?
+        .get(parsed)
+        .header("Accept", "text/plain,application/json,*/*")
+        .send()
+        .await
+        .map_err(|e| format!("fetch url failed: {}", e))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("fetch url failed: HTTP {}", status.as_u16()));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("read response text failed: {}", e))
 }
