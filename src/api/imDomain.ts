@@ -66,6 +66,15 @@ function generateSign(data: Record<string, unknown>, appSecret: string): string 
   return CryptoJS.MD5(unsigned).toString(CryptoJS.enc.Hex).toUpperCase()
 }
 
+function sortObjectByKeys<T extends Record<string, unknown>>(data: T): T {
+  return Object.keys(data)
+    .sort()
+    .reduce((acc, key) => {
+      acc[key] = data[key]
+      return acc
+    }, {} as Record<string, unknown>) as T
+}
+
 /* ------------------------------------------------------------------ */
 /*  Client token cache                                                 */
 /* ------------------------------------------------------------------ */
@@ -158,6 +167,34 @@ async function callDomainListApi(
   return json.data || {}
 }
 
+async function callDomainReportApi(
+  payload: { secretKey: string; datas: Record<string, unknown>; headers: Record<string, string> },
+): Promise<void> {
+  const domainApiUrl = getDomainUrl()
+  const device = getDeviceConfig()
+  const clientReq = {
+    sessionId: '',
+    appVer: API_CONFIG.appVer,
+    packageCode: API_CONFIG.packageCode,
+    language: API_CONFIG.language,
+    plat: API_CONFIG.plat,
+    sysMac: device.sysMac,
+    sysModel: device.sysModel,
+  }
+  const body = {
+    clientReq,
+    data: encryptHex(JSON.stringify(payload.datas), payload.secretKey),
+  }
+  await fetch(`${domainApiUrl}/api/v4/report`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      accessToken: payload.headers.accessToken,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public: getDynamicDomainList                                       */
 /* ------------------------------------------------------------------ */
@@ -218,4 +255,48 @@ export async function collectAllDomainUrls(moduleCode = 'webBiz'): Promise<strin
   }
 
   return [...new Set(urls)]
+}
+
+export async function reportErrorDomain(options: {
+  domainUrl: string
+  errorPath?: string
+  errorDesc?: string
+  httpStatus?: number
+  moduleCode?: string
+}): Promise<void> {
+  const domainUrl = String(options.domainUrl || '').trim()
+  if (!domainUrl) return
+  const httpStatus = Number(options.httpStatus || 0)
+  if ([429, 403, 502, 504].includes(httpStatus)) return
+
+  try {
+    const { mchId, secretKey, accessToken } = await getClientTokenData()
+    const reqTime = Date.now()
+    let reportReq: Record<string, unknown> = {
+      deviceIp: '',
+      deviceNo: '',
+      deviceType: 'pc',
+      domainSource: 0,
+      domainUrl,
+      errorDesc: String(options.errorDesc || ''),
+      errorType: 0,
+      errorPath: String(options.errorPath || domainUrl),
+      httpStatus,
+      mchId,
+      moduleCode: options.moduleCode || 'ossEndpoint',
+      reqTime,
+      responseType: 0,
+      sign: '',
+    }
+    reportReq = sortObjectByKeys(reportReq)
+    reportReq.sign = generateSign(reportReq, secretKey)
+    // 对齐老 im：上传探活/上传失败的动态 OSS 域名上报到 domain/report，让服务端域名池轮换剔除。
+    await callDomainReportApi({
+      secretKey,
+      datas: reportReq,
+      headers: { accessToken },
+    })
+  } catch (err) {
+    console.warn('[imDomain] reportErrorDomain failed:', err)
+  }
 }

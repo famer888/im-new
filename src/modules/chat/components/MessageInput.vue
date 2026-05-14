@@ -18,6 +18,8 @@ import { getUploadToken, getUploadUrl, updateContacts } from '@/api/imBase'
 import { updateMember } from '@/api/imChannel'
 import { proto } from '@/api/request'
 import { aesEncrypt } from '@/utils/crypto'
+import { getOssUploadCandidates, reportOssUploadCandidateFailure } from '@/utils/ossUploadDomains'
+import type { OssUploadCandidate } from '@/utils/ossUploadDomains'
 import EmojiPicker from './send/EmojiPicker.vue'
 import AtListDialog from './send/AtListDialog.vue'
 import CreateLinkDialog from './send/CreateLinkDialog.vue'
@@ -1835,6 +1837,51 @@ function resolveOssUploadUrl(responseUrl: string, bucket: string, endpoint: stri
   return `https://${normalizedEndpoint}/${key}`
 }
 
+async function putObjectWithOssCandidates(options: {
+  responseUrl: string
+  bucket: string
+  endpoint: string
+  objectKey: string
+  accessKeyId: string
+  accessKeySecret: string
+  securityToken: string
+  body: Uint8Array
+  contentType: string
+  trace?: ImageSendTrace
+  logPrefix?: string
+}): Promise<{ uploadUrl: string; candidate: OssUploadCandidate }> {
+  const candidates = await getOssUploadCandidates({
+    responseUrl: options.responseUrl,
+    bucket: options.bucket,
+    endpoint: options.endpoint,
+    objectKey: options.objectKey,
+  })
+  let lastError: unknown = null
+
+  for (const candidate of candidates) {
+    try {
+      await putObjectToOss({
+        url: candidate.url,
+        bucket: options.bucket,
+        objectKey: options.objectKey,
+        accessKeyId: options.accessKeyId,
+        accessKeySecret: options.accessKeySecret,
+        securityToken: options.securityToken,
+        body: options.body,
+        contentType: options.contentType,
+        trace: options.trace,
+        logPrefix: options.logPrefix,
+      })
+      return { uploadUrl: candidate.url, candidate }
+    } catch (error) {
+      lastError = error
+      await reportOssUploadCandidateFailure(candidate, error)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('上传失败：所有 OSS endpoint 均不可用')
+}
+
 async function hmacSha1Base64(secret: string, text: string): Promise<string> {
   const cryptoApi = window.crypto?.subtle
   if (!cryptoApi) throw new Error('当前环境不支持文件上传签名')
@@ -2007,10 +2054,10 @@ async function uploadImageLikeIm(
     throw new Error('上传图片失败：OSS 参数缺失')
   }
 
-  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
-  await putObjectToOss({
-    url: uploadUrl,
+  const { uploadUrl } = await putObjectWithOssCandidates({
+    responseUrl,
     bucket,
+    endpoint,
     objectKey,
     accessKeyId,
     accessKeySecret,
@@ -2108,10 +2155,10 @@ async function uploadFileLikeIm(
     throw new Error('上传文件失败：OSS 参数缺失')
   }
 
-  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
-  await putObjectToOss({
-    url: uploadUrl,
+  const { uploadUrl } = await putObjectWithOssCandidates({
+    responseUrl,
     bucket,
+    endpoint,
     objectKey,
     accessKeyId,
     accessKeySecret,
@@ -2443,10 +2490,10 @@ async function uploadVideoLikeIm(
     throw new Error('上传视频失败：OSS 参数缺失')
   }
 
-  const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
-  await putObjectToOss({
-    url: uploadUrl,
+  const { uploadUrl } = await putObjectWithOssCandidates({
+    responseUrl,
     bucket,
+    endpoint,
     objectKey,
     accessKeyId,
     accessKeySecret,

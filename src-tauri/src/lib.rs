@@ -206,6 +206,7 @@ pub fn run() {
             commands::domain::mark_domain_error,
             commands::domain::get_first_normal_domain,
             commands::domain::fetch_url_text,
+            commands::domain::probe_url,
             commands::platform::get_platform_info,
             commands::platform::system_beep,
             commands::platform::read_clipboard_files,

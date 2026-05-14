@@ -159,7 +159,10 @@ export function markDomainError(moduleCode: string, domain: string) {
   const list = domainCache.get(moduleCode)
   if (list) {
     const item = list.find(d => d.domain === domain)
-    if (item) item.status = 'error'
+    if (item) {
+      item.status = 'error'
+      saveToStorage()
+    }
   }
 }
 
