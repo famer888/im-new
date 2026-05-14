@@ -1,4 +1,5 @@
 import { getUploadToken, getUploadUrl } from '@/api/imBase'
+import { getOssUploadCandidates, reportOssUploadCandidateFailure } from '@/utils/ossUploadDomains'
 
 interface PrepareLogUploadResult {
   success: boolean
@@ -129,19 +130,32 @@ export async function uploadPackagedLog(options: {
     }
 
     options.onProgress?.(65)
-    const uploadUrl = resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey)
-    await tauriInvoke('upload_oss_object', {
-      request: {
-        url: uploadUrl,
-        bucket,
-        objectKey,
-        accessKeyId,
-        accessKeySecret,
-        securityToken,
-        contentType: 'application/zip',
-        bodyBase64: prepared.bodyBase64,
-      },
-    })
+    const candidates = await getOssUploadCandidates({ responseUrl, bucket, endpoint, objectKey })
+    let uploadUrl = ''
+    let lastError: unknown = null
+    for (const candidate of candidates) {
+      try {
+        // 对齐老 im：日志包上传也按动态 OSS endpoint 探活后的顺序尝试，失败域名上报后继续兜底。
+        await tauriInvoke('upload_oss_object', {
+          request: {
+            url: candidate.url,
+            bucket,
+            objectKey,
+            accessKeyId,
+            accessKeySecret,
+            securityToken,
+            contentType: 'application/zip',
+            bodyBase64: prepared.bodyBase64,
+          },
+        })
+        uploadUrl = candidate.url
+        break
+      } catch (error) {
+        lastError = error
+        await reportOssUploadCandidateFailure(candidate, error)
+      }
+    }
+    if (!uploadUrl) throw lastError instanceof Error ? lastError : new Error('all oss endpoints failed')
 
     const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
     options.onProgress?.(100)

@@ -10,6 +10,13 @@ pub struct DomainItem {
     pub module_code: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeUrlResult {
+    pub status: u16,
+    pub ok: bool,
+}
+
 pub struct DomainPoolState {
     pub domains: Mutex<Vec<DomainItem>>,
 }
@@ -87,4 +94,32 @@ pub async fn fetch_url_text(url: String) -> Result<String, String> {
         .text()
         .await
         .map_err(|e| format!("read response text failed: {}", e))
+}
+
+/// 上传前动态域名探活走主进程，避免 WebView CORS 干扰；能连通且非 5xx 即视为可尝试上传。
+#[tauri::command]
+pub async fn probe_url(url: String) -> Result<ProbeUrlResult, String> {
+    let parsed = url::Url::parse(url.trim())
+        .map_err(|e| format!("invalid url: {}", e))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("unsupported url scheme".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("create http client failed: {}", e))?;
+    let response = match client.head(parsed.clone()).send().await {
+        Ok(response) => response,
+        Err(_) => client
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|e| format!("probe url failed: {}", e))?,
+    };
+    let status = response.status().as_u16();
+    Ok(ProbeUrlResult {
+        status,
+        ok: status < 500,
+    })
 }
