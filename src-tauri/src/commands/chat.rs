@@ -91,8 +91,10 @@ pub struct ScheduledDeletion {
 #[serde(rename_all = "camelCase")]
 pub struct ReadProcessingResult {
     pub read_message_ids: Vec<String>,
+    pub local_read_message_ids: Vec<String>,
     pub scheduled_deletions: Vec<ScheduledDeletion>,
     pub group_read_updates: Vec<GroupReadReceiptUpdate>,
+    pub conversation_read_updates: Vec<ConversationReadUpdate>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -123,6 +125,13 @@ pub struct GroupReadReceiptUpdate {
     pub message_id: String,
     pub read_status: i32,
     pub extra: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationReadUpdate {
+    pub conversation_id: String,
+    pub unread_count: i32,
 }
 
 #[derive(Debug)]
@@ -1957,8 +1966,10 @@ pub async fn mark_as_read(
             Ok((
                 ReadProcessingResult {
                     read_message_ids,
+                    local_read_message_ids: Vec::new(),
                     scheduled_deletions,
                     group_read_updates,
+                    conversation_read_updates: Vec::new(),
                 },
                 receipts,
             ))
@@ -1994,13 +2005,99 @@ pub async fn apply_friend_read_receipts(
 
     db.with_connection(&uid, |conn| {
         let mut read_message_ids = Vec::<String>::new();
+        let mut local_read_message_ids = Vec::<String>::new();
         let mut scheduled_deletions = Vec::<ScheduledDeletion>::new();
+        let mut conversation_read_updates = Vec::<ConversationReadUpdate>::new();
 
         for receipt in receipts {
             if receipt.status != imweb::MsgReceiptStatus::Viewed as i32 {
                 continue;
             }
-            if receipt.target_id != login_uid || receipt.send_uid <= 0 || receipt.msg_id <= 0 {
+            if receipt.msg_id <= 0 {
+                continue;
+            }
+
+            // 对齐旧 im `fnMsgReadSync`：sendUid == loginId 表示同账号其它端
+            // 已读了 targetId 会话内消息，本端需要按该 msgId 的发送时间清红点。
+            if receipt.send_uid == login_uid && receipt.target_id > 0 {
+                let conversation_id = format!("0_{}", receipt.target_id);
+                let matched_send_time = conn
+                    .query_row(
+                        "SELECT send_time
+                         FROM messages
+                         WHERE conversation_id = ?1 AND id = ?2 AND is_deleted = 0
+                         LIMIT 1",
+                        rusqlite::params![conversation_id, receipt.msg_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                let Some(boundary_send_time) = matched_send_time else {
+                    continue;
+                };
+
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT id
+                         FROM messages
+                         WHERE conversation_id = ?1
+                           AND sender_id != ?2
+                           AND is_deleted = 0
+                           AND send_time <= ?3
+                           AND read_status = 0
+                         ORDER BY send_time ASC",
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                let ids = stmt
+                    .query_map(
+                        rusqlite::params![conversation_id, uid, boundary_send_time],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                if !ids.is_empty() {
+                    conn.execute(
+                        "UPDATE messages
+                         SET read_status = 1
+                         WHERE conversation_id = ?1
+                           AND sender_id != ?2
+                           AND is_deleted = 0
+                           AND send_time <= ?3
+                           AND read_status = 0",
+                        rusqlite::params![conversation_id, uid, boundary_send_time],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    local_read_message_ids.extend(ids);
+                }
+
+                let unread_count = conn
+                    .query_row(
+                        "SELECT COUNT(*)
+                         FROM messages
+                         WHERE conversation_id = ?1
+                           AND sender_id != ?2
+                           AND is_deleted = 0
+                           AND read_status = 0",
+                        rusqlite::params![conversation_id, uid],
+                        |row| row.get::<_, i32>(0),
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                conn.execute(
+                    "UPDATE conversations SET unread_count = ?1 WHERE id = ?2",
+                    rusqlite::params![unread_count, conversation_id],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                conversation_read_updates.push(ConversationReadUpdate {
+                    conversation_id,
+                    unread_count,
+                });
+                continue;
+            }
+
+            if receipt.target_id != login_uid || receipt.send_uid <= 0 {
                 continue;
             }
 
@@ -2085,8 +2182,10 @@ pub async fn apply_friend_read_receipts(
 
         Ok(ReadProcessingResult {
             read_message_ids,
+            local_read_message_ids,
             scheduled_deletions,
             group_read_updates: Vec::new(),
+            conversation_read_updates,
         })
     })
     .map_err(|e| e.to_string())

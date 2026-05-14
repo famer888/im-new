@@ -64,6 +64,7 @@ export interface Conversation {
 
 interface ReadProcessingResult {
   readMessageIds: string[]
+  localReadMessageIds?: string[]
   scheduledDeletions: Array<{
     conversationId: string
     messageId: string
@@ -74,6 +75,10 @@ interface ReadProcessingResult {
     messageId: string
     readStatus: number
     extra?: string | null
+  }>
+  conversationReadUpdates?: Array<{
+    conversationId: string
+    unreadCount: number
   }>
 }
 
@@ -481,8 +486,11 @@ export const useChatStore = defineStore('chat', () => {
     const groupReadUpdates = Array.isArray(result?.groupReadUpdates)
       ? result.groupReadUpdates
       : []
+    const conversationReadUpdates = Array.isArray(result?.conversationReadUpdates)
+      ? result.conversationReadUpdates
+      : []
 
-    if (readMessageIds.length > 0 || scheduledDeletions.length > 0 || groupReadUpdates.length > 0) {
+    if (readMessageIds.length > 0 || scheduledDeletions.length > 0 || groupReadUpdates.length > 0 || conversationReadUpdates.length > 0) {
       const [{ useMessageStore }, { useScheduleDeletionStore }] = await Promise.all([
         import('./useMessageStore'),
         import('./useScheduleDeletionStore'),
@@ -495,6 +503,14 @@ export const useChatStore = defineStore('chat', () => {
       }
       if (groupReadUpdates.length > 0) {
         messageStore.applyGroupReadReceiptPatches(groupReadUpdates)
+      }
+      for (const item of conversationReadUpdates) {
+        const unreadCount = Math.max(0, Number(item.unreadCount || 0))
+        updateConversation({
+          id: String(item.conversationId || ''),
+          unreadCount,
+          ...(unreadCount > 0 ? {} : { atMe: false }),
+        })
       }
       for (const item of scheduledDeletions) {
         scheduleDeletionStore.addMessageTimer(
