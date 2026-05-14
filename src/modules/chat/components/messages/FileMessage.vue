@@ -47,6 +47,7 @@ const DANGEROUS_EXTENSIONS = new Set([
   'wsf',
 ])
 
+// PDF/Word/Excel 的前端预览依赖已对齐到 package.json；预览页接入前，文件点击仍走下载后系统打开兜底。
 const fileData = computed(() => {
   try {
     return JSON.parse(props.message.content ?? '{}')
