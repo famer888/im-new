@@ -103,6 +103,7 @@ impl WsManager {
         aes_key: &str,
         session_id: Option<String>,
         install_code: Option<String>,
+        uid: Option<String>,
     ) -> Result<(), WsError> {
         if url.trim().is_empty() {
             *self.status.write() = ConnectionStatus::Disconnected;
@@ -133,11 +134,13 @@ impl WsManager {
         let pending = self.pending_messages.clone();
         let session_id = self.session_id.clone();
         let install_code = self.install_code.clone();
+        let uid = uid.unwrap_or_default();
 
         let handle = tokio::spawn(async move {
             connection::run_connection(
                 &url,
                 &aes_key,
+                uid,
                 session_id,
                 install_code,
                 status,

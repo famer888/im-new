@@ -24,6 +24,7 @@ const localeMessages: Record<LocaleKey, LocaleMessages> = {
 const REMINDER_COOLDOWN_MS = 900
 
 let lastReminderAt = 0
+let directoryPreloadPromise: Promise<void> | null = null
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -54,6 +55,14 @@ function stripText(raw: unknown): string {
     .trim()
 }
 
+function extraString(extra: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = stripText(extra[key])
+    if (value) return value
+  }
+  return ''
+}
+
 function getMessageDigest(message: any): string {
   const msgType = Number(message?.msgType ?? message?.msg_type ?? 0)
   const content = message?.content ?? ''
@@ -75,30 +84,62 @@ function getConversationType(conversationId: string): 'friend' | 'group' | 'chan
   return 'friend'
 }
 
-function getConversationTitle(conversationId: string): string {
+function getConversationTitle(conversationId: string, message?: any): string {
   const chatStore = useChatStore()
   const contactStore = useContactStore()
   const groupStore = useGroupStore()
   const channelStore = useChannelStore()
   const conversation = chatStore.conversations.find((item) => item.id === conversationId)
   const targetId = conversation?.targetId || conversationId.split('_')[1] || ''
+  const extra = parseExtra(message?.extra)
 
   if (conversationId.startsWith('0_')) {
     const contact = contactStore.getContact(targetId)
-    return contact?.remark || contact?.nickname || conversation?.senderName || targetId || t('新消息')
+    const senderName = extraString(extra, ['senderName', 'nickName', 'nickname'])
+    return contact?.remark || contact?.nickname || conversation?.senderName || senderName || targetId || t('新消息')
   }
 
   if (conversationId.startsWith('1_')) {
     const group = groupStore.getGroup(targetId)
-    return group?.name || targetId || t('群聊')
+    const groupName = extraString(extra, ['groupName', 'group_name'])
+    return group?.name || groupName || t('群聊')
   }
 
   if (conversationId.startsWith('2_')) {
     const channel = channelStore.channels.find((item) => item.id === targetId || item.channelId === targetId)
-    return channel?.remark || channel?.channelName || channel?.name || targetId || t('频道通知')
+    const channelName = extraString(extra, ['channelName', 'channel_name'])
+    return channel?.remark || channel?.channelName || channel?.name || channelName || t('频道通知')
   }
 
   return t('新消息')
+}
+
+async function ensureDirectoryLoadedForReminder(uid: string, conversationId: string) {
+  if (!uid) return
+
+  const targetId = conversationId.split('_')[1] || ''
+  const contactStore = useContactStore()
+  const groupStore = useGroupStore()
+  const channelStore = useChannelStore()
+
+  if (conversationId.startsWith('0_') && contactStore.getContact(targetId)) return
+  if (conversationId.startsWith('1_') && groupStore.getGroup(targetId)) return
+  if (
+    conversationId.startsWith('2_')
+    && channelStore.channels.some((item) => item.id === targetId || item.channelId === targetId)
+  ) return
+
+  if (!directoryPreloadPromise) {
+    directoryPreloadPromise = Promise.allSettled([
+      contactStore.loadContacts(uid),
+      groupStore.loadGroups(uid),
+      channelStore.loadChannels(uid),
+    ]).then(() => undefined).finally(() => {
+      directoryPreloadPromise = null
+    })
+  }
+
+  await directoryPreloadPromise
 }
 
 function getConversationAvatar(conversationId: string): string | null {
@@ -187,6 +228,8 @@ async function showNotificationWindow(message: any, unreadCount: number) {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const conversationId = String(message?.conversationId ?? message?.conversation_id ?? '')
+    const uid = String(useAuthStore().uid || '')
+    await ensureDirectoryLoadedForReminder(uid, conversationId)
     const conversationType = getConversationType(conversationId)
     const extra = parseExtra(message?.extra)
     const senderName = stripText(
@@ -202,7 +245,7 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     await invoke('show_notification_window', {
       data: {
         conversationId,
-        title: getConversationTitle(conversationId),
+        title: getConversationTitle(conversationId, message),
         body: digest || t('新消息'),
         avatar: getConversationAvatar(conversationId),
         conversationType,

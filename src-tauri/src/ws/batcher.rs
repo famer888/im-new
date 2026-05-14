@@ -322,6 +322,7 @@ pub struct MessageBatcher {
     last_flush: Instant,
     app_handle: AppHandle,
     aes_key: String,
+    uid: String,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -333,12 +334,13 @@ struct ForceLogoutEvent {
 }
 
 impl MessageBatcher {
-    pub fn new(app_handle: AppHandle, aes_key: String) -> Self {
+    pub fn new(app_handle: AppHandle, aes_key: String, uid: String) -> Self {
         Self {
             buffer: Vec::with_capacity(MAX_BATCH_SIZE),
             last_flush: Instant::now(),
             app_handle,
             aes_key,
+            uid,
         }
     }
 
@@ -1111,20 +1113,24 @@ impl MessageBatcher {
 
         let sender_id = om.send_uid.to_string();
         let receiver_id = om.receive_uid.to_string();
+        let current_uid = self.uid.trim();
+        let is_self = !current_uid.is_empty() && sender_id == current_uid;
+        let peer_id = if is_self {
+            receiver_id.clone()
+        } else {
+            sender_id.clone()
+        };
 
         let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
-        // Wait, how do we know our own UID?
-        // We can check if sender_id == receiver_id.
-        // Actually, if we can't reliably know our own UID from CryptoEngine, we can just let frontend handle it or pass candidate_ids.
-        // But let's assume we can get our own UID from somewhere?
-        // Actually, in imweb we often don't have our own UID easily available in batcher.
-        // Let's just use sender_id, and if frontend detects it's from self, frontend can adjust the conversationId!
-        // Wait, frontend depends on conversationId being correct. Let's just pass `0_{sender}` for now, but if sender==receiver, it's `0_{sender}`.
-        let conversation_id = format!("0_{}", om.send_uid);
+        // 对齐老 im `fnFriendMsgAdd`：
+        // - 自己其他端同步来的消息落到 receiveUid 会话，使用 myselfWebContent。
+        // - 好友发来的消息落到 sendUid 会话，使用 webContent。
+        let conversation_id = format!("0_{}", peer_id);
         let ver = i64::from(om.version);
 
-        // 兼容双端同步：优先按 sender 取 key，失败后退回 receiver。
-        let candidate_ids = if sender_id == receiver_id {
+        let candidate_ids = if is_self {
+            vec![sender_id.clone(), receiver_id.clone()]
+        } else if sender_id == receiver_id {
             vec![sender_id.clone()]
         } else {
             vec![sender_id.clone(), receiver_id.clone()]
@@ -1133,62 +1139,38 @@ impl MessageBatcher {
         let sender_source = if om.source == 1 { "web" } else { "app" };
         // 老 im 接收私聊时，解密 key 使用顶层 `version + source`（发送端密钥），
         // 不是 MessageContent.version（接收端对应设备的 keyVersion）。
-        // 桌面端优先尝试 webContent，和老 im `fnFriendMsgAdd` 保持一致。
-        if let Some(web) = &om.web_content {
-            let attachment_key = if web.attachment_key.trim().is_empty() {
-                om.attachment_key.as_str()
-            } else {
-                web.attachment_key.as_str()
-            };
-            ciphertexts_to_try.push((ver, sender_source, web.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((
-                web.version as i64,
-                "web",
-                web.content.as_slice(),
-                attachment_key,
-            ));
+        // content block 选择也必须按老 im 顺序，避免 AES/PKCS7 误命中后展示乱码。
+        macro_rules! push_content {
+            ($content:expr, $source:expr) => {{
+                let content = $content;
+                let attachment_key = if content.attachment_key.trim().is_empty() {
+                    om.attachment_key.as_str()
+                } else {
+                    content.attachment_key.as_str()
+                };
+                ciphertexts_to_try.push((ver, sender_source, content.content.as_slice(), attachment_key));
+                ciphertexts_to_try.push((
+                    content.version as i64,
+                    $source,
+                    content.content.as_slice(),
+                    attachment_key,
+                ));
+            }};
         }
-        if let Some(app) = &om.app_content {
-            let attachment_key = if app.attachment_key.trim().is_empty() {
-                om.attachment_key.as_str()
-            } else {
-                app.attachment_key.as_str()
-            };
-            ciphertexts_to_try.push((ver, sender_source, app.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((
-                app.version as i64,
-                "app",
-                app.content.as_slice(),
-                attachment_key,
-            ));
-        }
-        if let Some(mapp) = &om.myself_app_content {
-            let attachment_key = if mapp.attachment_key.trim().is_empty() {
-                om.attachment_key.as_str()
-            } else {
-                mapp.attachment_key.as_str()
-            };
-            ciphertexts_to_try.push((ver, sender_source, mapp.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((
-                mapp.version as i64,
-                "app",
-                mapp.content.as_slice(),
-                attachment_key,
-            ));
-        }
-        if let Some(mweb) = &om.myself_web_content {
-            let attachment_key = if mweb.attachment_key.trim().is_empty() {
-                om.attachment_key.as_str()
-            } else {
-                mweb.attachment_key.as_str()
-            };
-            ciphertexts_to_try.push((ver, sender_source, mweb.content.as_slice(), attachment_key));
-            ciphertexts_to_try.push((
-                mweb.version as i64,
-                "web",
-                mweb.content.as_slice(),
-                attachment_key,
-            ));
+        if is_self {
+            if let Some(mweb) = &om.myself_web_content {
+                push_content!(mweb, "web");
+            }
+            if let Some(mapp) = &om.myself_app_content {
+                push_content!(mapp, "app");
+            }
+        } else {
+            if let Some(web) = &om.web_content {
+                push_content!(web, "web");
+            }
+            if let Some(app) = &om.app_content {
+                push_content!(app, "app");
+            }
         }
         // Fallback for old/unencrypted messages that might still use `content`
         if !om.content.is_empty() {
@@ -1270,7 +1252,10 @@ impl MessageBatcher {
                     read_status: 0,
                     extra: serde_json::json!({
                         "receiveUid": om.receive_uid,
+                        "sendUid": om.send_uid,
+                        "isSelfSync": is_self,
                         "version": om.version,
+                        "source": sender_source,
                         "snapchatTime": om.snapchat_time,
                         "deleteSeconds": if om.snapchat_time > 0 { i64::from(om.snapchat_time) * 1000 } else { 0 },
                         "decryptPending": false,
@@ -1499,7 +1484,10 @@ impl MessageBatcher {
             read_status: 0,
             extra: serde_json::json!({
                 "receiveUid": om.receive_uid,
+                "sendUid": om.send_uid,
+                "isSelfSync": is_self,
                 "version": om.version,
+                "source": sender_source,
                 "snapchatTime": om.snapchat_time,
                 "deleteSeconds": if om.snapchat_time > 0 { i64::from(om.snapchat_time) * 1000 } else { 0 },
                 "decryptPending": decrypt_pending,

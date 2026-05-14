@@ -948,6 +948,7 @@ export async function setupTauriListeners() {
                       senderId,
                       peerId,
                       version: Number(candidate.version || 1),
+                      source: String(candidate.source || ''),
                       ciphertextHex: String(candidate.cipherHex || ''),
                       msgType,
                     })
