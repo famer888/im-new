@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   CHANNEL_NOTIFICATION_TARGET_ID,
@@ -43,15 +43,16 @@ const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
+const repairingGroupDigestIds = new Set<string>()
 
 type DigestSegment =
   | { type: 'text'; text: string }
   | { type: 'emoji'; text: string; src: string }
 
 function groupNoticeDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
-  void message
-  void data
-  void level
+  const enabled = localStorage.getItem('debug:conversation-list') === '1'
+  if (!enabled) return
+  console[level](`[conversation-list] ${message}`, data || {})
 }
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
@@ -517,6 +518,77 @@ function isSelfLeaveGroupSystemMessage(conversationId: string, message: Message)
   })
 }
 
+function isRejectedGroupInviteNoticeInGroupChat(conversationId: string, message: Message): boolean {
+  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
+  if (message.msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  if (!extra || String(extra.source ?? '') !== 'group-event') return false
+  if (Number(extra.groupReqStatus ?? 0) !== 2) return false
+
+  const reqType = Number(extra.groupReqType ?? 0)
+  const content = String(message.content || '')
+  return [3, 4, 5].includes(reqType) || content.includes('拒绝')
+}
+
+function isRejectedGroupInviteDigestInGroupChat(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  return /拒绝.*加入|拒絕.*加入|rejected joining|recusou entrar|từ chối tham gia/i.test(
+    String(conv.lastMsgDigest || ''),
+  )
+}
+
+function shouldRepairGroupDigestPreview(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  const digest = String(conv.lastMsgDigest || '').trim()
+  return isHiddenGroupNoticeDigest(digest) || isRejectedGroupInviteDigestInGroupChat(conv)
+}
+
+function repairGroupDigestPreview(conv: Conversation) {
+  if (!shouldRepairGroupDigestPreview(conv)) return
+  if (!authStore.uid) {
+    groupNoticeDebug('skip repair: uid not ready', {
+      conversationId: conv.id,
+      name: getName(conv),
+      lastMsgDigest: conv.lastMsgDigest || '',
+    })
+    return
+  }
+  if (messageStore.getMessages(conv.id).length > 0) return
+  if (repairingGroupDigestIds.has(conv.id)) return
+
+  groupNoticeDebug('repair preview: load messages', {
+    conversationId: conv.id,
+    name: getName(conv),
+    lastMsgId: conv.lastMsgId || '',
+    lastMsgTime: conv.lastMsgTime || 0,
+    lastMsgDigest: conv.lastMsgDigest || '',
+  })
+  repairingGroupDigestIds.add(conv.id)
+  void messageStore.loadMessages(authStore.uid, conv.id).finally(() => {
+    groupNoticeDebug('repair preview: load done', {
+      conversationId: conv.id,
+      loadedCount: messageStore.getMessages(conv.id).length,
+      digest: getDigest(conv),
+    })
+    repairingGroupDigestIds.delete(conv.id)
+  })
+}
+
+function refreshConversationListPreview(reason = 'manual') {
+  groupNoticeDebug('refresh preview', {
+    reason,
+    uid: authStore.uid || '',
+    currentConversationId: chatStore.currentConversationId || '',
+    count: displayList.value.length,
+  })
+  for (const conv of displayList.value) repairGroupDigestPreview(conv)
+}
+
+if (import.meta.env.DEV) {
+  ;(window as unknown as Record<string, unknown>).__refreshConversationListPreview = refreshConversationListPreview
+}
+
 function getLoadedLatestDigest(conv: Conversation): string {
   // 群通知右侧列表会合并接口返回与本地消息，排序基于 updateTime；
   // 本地消息时间线未必就是右侧顶部那一条，因此这里不要反向覆盖已同步好的会话摘要。
@@ -528,9 +600,11 @@ function getLoadedLatestDigest(conv: Conversation): string {
   const latest = [...loaded].reverse().find((message) => (
     !isHiddenMessageType(message.msgType)
     && !isSelfLeaveGroupSystemMessage(conv.id, message)
+    && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
   ))
   if (!latest) return ''
   const isCurrentConversation = conv.id === chatStore.currentConversationId
+  const summaryNeedsRepair = shouldRepairGroupDigestPreview(conv)
   const latestTime = Number(latest.sendTime || 0)
   const convTime = Number(conv.lastMsgTime || 0)
   const lastMsgId = String(conv.lastMsgId || '')
@@ -539,8 +613,20 @@ function getLoadedLatestDigest(conv: Conversation): string {
     && (String(latest.id || '') === lastMsgId || String(latest.customMsgId || '') === lastMsgId),
   )
 
-  if (!isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
+  if (!summaryNeedsRepair && !isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
   const digest = getMessageDigest(latest)
+  groupNoticeDebug('loaded latest digest', {
+    conversationId: conv.id,
+    name: getName(conv),
+    isCurrentConversation,
+    summaryNeedsRepair,
+    latestId: latest.id || latest.customMsgId || '',
+    latestTime,
+    convTime,
+    latestMatchesSummary,
+    rawDigest: conv.lastMsgDigest || '',
+    digest,
+  }, digest ? 'info' : 'warn')
   return digest
 }
 
@@ -550,6 +636,7 @@ function getDigest(conv: Conversation): string {
   if (loadedDigest) return loadedDigest
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
     if (isHiddenGroupNoticeDigest(conv.lastMsgDigest)) return ''
+    if (isRejectedGroupInviteDigestInGroupChat(conv)) return ''
     if (conv.type === ConversationType.Group) {
       const placeholders = Array.from(String(conv.lastMsgDigest).matchAll(GROUP_NOTICE_UID_PLACEHOLDER_RE))
         .flatMap((match) => String(match[1] || '').split(/[,，]/))
@@ -573,6 +660,33 @@ function getDigest(conv: Conversation): string {
 
   return ''
 }
+
+watch(
+  () => [
+    String(authStore.uid || ''),
+    ...displayList.value.map((conv) => `${conv.id}:${conv.lastMsgDigest || ''}`),
+  ],
+  () => {
+    groupNoticeDebug('sidebar data', {
+      uid: authStore.uid || '',
+      currentConversationId: chatStore.currentConversationId || '',
+      items: displayList.value.map((conv) => ({
+        id: conv.id,
+        type: conv.type,
+        targetId: conv.targetId,
+        name: getName(conv),
+        lastMsgId: conv.lastMsgId,
+        lastMsgTime: conv.lastMsgTime,
+        lastMsgDigest: conv.lastMsgDigest,
+        loadedCount: messageStore.getMessages(conv.id).length,
+        shouldRepair: shouldRepairGroupDigestPreview(conv),
+        digest: getDigest(conv),
+      })),
+    })
+    refreshConversationListPreview('watch')
+  },
+  { immediate: true },
+)
 
 function getDigestEmojiSrc(token: string): string {
   const fileName = emojiMap[token]
