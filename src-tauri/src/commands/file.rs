@@ -9,6 +9,19 @@ use base64::{engine::general_purpose, Engine as _};
 
 use crate::crypto;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn hidden_windows_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadResult {
     pub url: String,
@@ -738,7 +751,7 @@ pub async fn reveal_file_in_directory(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer.exe")
+        hidden_windows_command("explorer.exe")
             .arg(format!("/select,{}", file_path.to_string_lossy()))
             .spawn()
             .map_err(|e| format!("reveal file failed: {}", e))?;
@@ -779,7 +792,7 @@ pub async fn open_file(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer.exe")
+        hidden_windows_command("explorer.exe")
             .arg(&file_path)
             .spawn()
             .map_err(|e| format!("open file failed: {}", e))?;
@@ -862,7 +875,7 @@ pub async fn open_in_browser(target: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        match Command::new("cmd")
+        match hidden_windows_command("cmd")
             .args(["/C", "start", "", "chrome"])
             .arg(trimmed)
             .status()
@@ -891,7 +904,7 @@ pub async fn open_in_browser(target: String) -> Result<(), String> {
             }
         }
 
-        let child = Command::new("cmd")
+        let child = hidden_windows_command("cmd")
             .args(["/C", "start", ""])
             .arg(trimmed)
             .spawn()
