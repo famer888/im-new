@@ -80,9 +80,16 @@ function parseDomainListFromOss(data: unknown): string[] {
 
 async function fetchOssDomains(ossUrl: string): Promise<string[]> {
   try {
-    const response = await fetch(ossUrl)
-    if (!response.ok) return []
-    const content = await response.text()
+    let content = ''
+    if ((window as any).__TAURI_INTERNALS__) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      // 对齐老 im 主进程 CORS 处理：OSS 引导域名在 Tauri 中走 Rust 拉取，避免 WebView CORS / 预检失败。
+      content = await invoke<string>('fetch_url_text', { url: ossUrl })
+    } else {
+      const response = await fetch(ossUrl)
+      if (!response.ok) return []
+      content = await response.text()
+    }
     const data = JSON.parse(atob(content.trim()))
     return parseDomainListFromOss(data)
   } catch {
