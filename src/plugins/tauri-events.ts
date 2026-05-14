@@ -380,6 +380,22 @@ function getNewIncomingMessages(messages: any[], currentUid: string): any[] {
   })
 }
 
+const ALERT_HISTORY_GRACE_MS = 5000
+const alertBaselineByUid = new Map<string, number>()
+
+function getMessageSendTime(message: any): number {
+  const value = Number(message?.sendTime ?? message?.send_time ?? 0)
+  if (!Number.isFinite(value) || value <= 0) return Date.now()
+  return value < 10_000_000_000 ? value * 1000 : value
+}
+
+function getRealtimeIncomingMessages(messages: any[], currentUid: string): any[] {
+  const alertBaseline = alertBaselineByUid.get(currentUid) ?? Date.now()
+  alertBaselineByUid.set(currentUid, alertBaseline)
+  const minSendTime = alertBaseline - ALERT_HISTORY_GRACE_MS
+  return getNewIncomingMessages(messages, currentUid).filter((message) => getMessageSendTime(message) >= minSendTime)
+}
+
 let screenshotShortcutBound = false
 let screenshotStarting = false
 let forceLogoutHandling = false
@@ -485,6 +501,7 @@ function resetClientStateAfterLogout() {
   const uiStore = useUIStore()
   const networkStore = useNetworkStore()
 
+  alertBaselineByUid.clear()
   networkStore.setWsStatus('disconnected')
   chatStore.enablePersistence('')
   chatStore.currentConversationId = null
@@ -806,10 +823,6 @@ export async function setupTauriListeners() {
       // Dropped stale messages after local logout history clear.
     }
     if (filtered.length === 0) return
-    const immediateVisible = filtered.filter((m: any) => !Boolean(m?.extra?.decryptPending))
-    if (immediateVisible.length > 0) {
-      messageStore.batchAppendMessages(immediateVisible as Message[])
-    }
     // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
     // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
     //    的消息按 groupId 预热，避免对每条已正常的群消息都发 HTTP 请求。
@@ -874,7 +887,6 @@ export async function setupTauriListeners() {
 
     if (filtered.length > 0) {
       const normalized: any[] = filtered.filter((m: any) => !isPendingGroupReqChatMessage(m))
-      const shouldPlaySound = shouldPlayIncomingMessageSound(normalized, currentUid)
       if (authStore.uid) {
         const uid = String(authStore.uid)
         try {
@@ -1260,7 +1272,8 @@ export async function setupTauriListeners() {
           })
         }
       }
-      const newIncomingMessages = getNewIncomingMessages(normalized, currentUid)
+      const newIncomingMessages = getRealtimeIncomingMessages(normalized, currentUid)
+      const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
       messageStore.batchAppendMessages(normalized as Message[])
       if (
         hasGroupNotificationMessages
