@@ -35,7 +35,8 @@ function normalizeOssEndpoint(endpoint: string): string {
 
 function resolveOssUploadUrl(responseUrl: string, bucket: string, endpoint: string, objectKey: string): string {
   const key = objectKey.replace(/^\/+/, '')
-  if (responseUrl) return stripQuery(responseUrl)
+  // 对齐老 im：上传 endpoint / 服务端回传上传 URL 一律走 HTTPS，避免 HTTP 下被 CORS 预检或代理链路拦截。
+  if (responseUrl) return toHttpsUrl(stripQuery(responseUrl))
 
   const normalizedEndpoint = normalizeOssEndpoint(endpoint)
   if (/aliyuncs\.com$/i.test(normalizedEndpoint)) {
