@@ -240,6 +240,52 @@ export async function getDynamicDomainList(moduleCode = 'webBiz'): Promise<strin
   }
 }
 
+export async function getListDomainDiagnostic(moduleCode = ''): Promise<{
+  success: boolean
+  source: string
+  message: string
+  total: number | null
+  webSessionCount: number | null
+  domainDtoList?: DomainDto[]
+}> {
+  try {
+    const { mchId, secretKey, accessToken } = await getClientTokenData()
+    const reqTime = String(Date.now())
+    const listDomainReq: Record<string, unknown> = {
+      mchId,
+      reqTime,
+      sign: '',
+      moduleCode,
+      deviceIp: '',
+      deviceNo: '',
+    }
+    listDomainReq.sign = generateSign(listDomainReq, secretKey)
+    const res = await callDomainListApi({
+      secretKey,
+      datas: listDomainReq,
+      headers: { accessToken },
+    })
+    const domainDtoList = Array.isArray(res?.domainDtoList) ? res.domainDtoList : []
+    // 对齐老 im 诊断：网络诊断里展示的 listDomain 打点来自真实 POST /api/v4/listDomain 请求。
+    return {
+      success: true,
+      source: 'imDomain.getDomainListApi',
+      message: 'ok',
+      total: domainDtoList.length,
+      webSessionCount: domainDtoList.filter(item => item.moduleCode === 'webSession').length,
+      domainDtoList,
+    }
+  } catch (err) {
+    return {
+      success: false,
+      source: 'imDomain.getDomainListApi',
+      message: err instanceof Error ? err.message : String(err),
+      total: null,
+      webSessionCount: null,
+    }
+  }
+}
+
 /**
  * Collect all available domain URLs for a module.
  * 1. Dynamic API domains
