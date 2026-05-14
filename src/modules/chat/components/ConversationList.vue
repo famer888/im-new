@@ -44,6 +44,7 @@ const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
 const repairingGroupDigestIds = new Set<string>()
+const repairingChannelNameIds = new Set<string>()
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -183,6 +184,34 @@ function getName(conv: Conversation): string {
     default:
       return conv.targetId
   }
+}
+
+function shouldRepairChannelName(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Channel) return false
+  const channel = channelStore.getChannel(conv.targetId)
+  if (!channel) return false
+  const name = String(channel.channelName || channel.name || '').trim()
+  return !name || name === String(conv.targetId)
+}
+
+function repairChannelName(conv: Conversation) {
+  if (!shouldRepairChannelName(conv)) return
+  if (repairingChannelNameIds.has(conv.targetId)) return
+
+  repairingChannelNameIds.add(conv.targetId)
+  groupNoticeDebug('repair channel name: load detail', {
+    conversationId: conv.id,
+    channelId: conv.targetId,
+    currentName: getName(conv),
+  })
+  void channelStore.refreshChannelDetail(conv.targetId).finally(() => {
+    groupNoticeDebug('repair channel name: load done', {
+      conversationId: conv.id,
+      channelId: conv.targetId,
+      currentName: getName(conv),
+    })
+    repairingChannelNameIds.delete(conv.targetId)
+  })
 }
 
 function getAvatar(conv: Conversation): string | null {
@@ -582,7 +611,10 @@ function refreshConversationListPreview(reason = 'manual') {
     currentConversationId: chatStore.currentConversationId || '',
     count: displayList.value.length,
   })
-  for (const conv of displayList.value) repairGroupDigestPreview(conv)
+  for (const conv of displayList.value) {
+    repairGroupDigestPreview(conv)
+    repairChannelName(conv)
+  }
 }
 
 if (import.meta.env.DEV) {
@@ -665,6 +697,10 @@ watch(
   () => [
     String(authStore.uid || ''),
     ...displayList.value.map((conv) => `${conv.id}:${conv.lastMsgDigest || ''}`),
+    ...displayList.value.map((conv) => {
+      const channel = conv.type === ConversationType.Channel ? channelStore.getChannel(conv.targetId) : null
+      return channel ? `${conv.id}:${channel.channelName || ''}:${channel.name || ''}` : ''
+    }),
   ],
   () => {
     groupNoticeDebug('sidebar data', {
@@ -678,8 +714,12 @@ watch(
         lastMsgId: conv.lastMsgId,
         lastMsgTime: conv.lastMsgTime,
         lastMsgDigest: conv.lastMsgDigest,
+        channelName: conv.type === ConversationType.Channel
+          ? channelStore.getChannel(conv.targetId)?.channelName || channelStore.getChannel(conv.targetId)?.name || ''
+          : '',
         loadedCount: messageStore.getMessages(conv.id).length,
         shouldRepair: shouldRepairGroupDigestPreview(conv),
+        shouldRepairChannelName: shouldRepairChannelName(conv),
         digest: getDigest(conv),
       })),
     })

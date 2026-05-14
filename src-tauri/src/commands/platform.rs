@@ -2,6 +2,19 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use tauri::Emitter;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn hidden_windows_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
 #[derive(Debug, Serialize)]
 pub struct PlatformInfo {
     pub os: String,
@@ -50,7 +63,7 @@ pub fn system_beep() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("powershell.exe")
+        let _ = hidden_windows_command("powershell.exe")
             .args(["-NoProfile", "-Command", "[console]::Beep(800,180)"])
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -78,7 +91,7 @@ pub fn read_clipboard_text() -> Result<String, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("powershell.exe")
+        let output = hidden_windows_command("powershell.exe")
             .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
             .output()
             .map_err(|e| e.to_string())?;
@@ -122,7 +135,7 @@ pub fn write_clipboard_text(text: String) -> Result<(), String> {
     {
         use std::io::Write as _;
 
-        let mut child = std::process::Command::new("powershell.exe")
+        let mut child = hidden_windows_command("powershell.exe")
             .args(["-NoProfile", "-Command", "Set-Clipboard -Value ([Console]::In.ReadToEnd())"])
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -347,7 +360,7 @@ $files = New-Object System.Collections.Specialized.StringCollection
 "#,
         path_text
     );
-    let output = std::process::Command::new("powershell.exe")
+    let output = hidden_windows_command("powershell.exe")
         .args(["-NoProfile", "-Sta", "-Command", &script])
         .output()
         .map_err(|e| e.to_string())?;
@@ -524,7 +537,7 @@ if ([System.Windows.Forms.Clipboard]::ContainsImage()) {
   Write-Output $path
 }
 "#;
-    let output = std::process::Command::new("powershell.exe")
+    let output = hidden_windows_command("powershell.exe")
         .args(["-NoProfile", "-Command", script])
         .output()
         .map_err(|e| e.to_string())?;
@@ -622,7 +635,7 @@ try {{
         path_text
     );
 
-    let output = std::process::Command::new("powershell.exe")
+    let output = hidden_windows_command("powershell.exe")
         .args(["-NoProfile", "-Sta", "-Command", &script])
         .output()
         .map_err(|e| e.to_string())?;
@@ -674,7 +687,7 @@ pub async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer.exe")
+        hidden_windows_command("explorer.exe")
             .arg("ms-screenclip:")
             .spawn()
             .map_err(|e| e.to_string())?;

@@ -9,6 +9,12 @@ use crate::config::ConfigManager;
 use crate::db::DbManager;
 use crate::window::WindowManager;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 static ACTIVE_LOGIN_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 static CURRENT_PROCESS_LOGIN_UIDS: LazyLock<parking_lot::Mutex<HashSet<String>>> =
     LazyLock::new(|| parking_lot::Mutex::new(HashSet::new()));
@@ -75,7 +81,9 @@ fn is_process_running(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
-    let output = std::process::Command::new("tasklist")
+    let mut command = std::process::Command::new("tasklist");
+    let output = command
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
         .output();
     output

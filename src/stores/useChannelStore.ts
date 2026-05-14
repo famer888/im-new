@@ -183,6 +183,17 @@ export const useChannelStore = defineStore('channel', () => {
     }
   }
 
+  function getChannelDisplayName(channel: Channel | null | undefined): string {
+    return String(channel?.channelName || channel?.name || '').trim()
+  }
+
+  function isPlaceholderChannel(channel: Channel | null | undefined): boolean {
+    const id = String(channel?.id || channel?.channelId || '').trim()
+    if (!id) return false
+    const displayName = getChannelDisplayName(channel)
+    return !displayName || displayName === id
+  }
+
   // 对齐老 im：频道列表要把“频道主列表”和“消息/会话里出现过的频道”合在一起，避免某一路为空时整段消失。
   function mergeChannelsById(...lists: Channel[][]): Channel[] {
     const map = new Map<string, Channel>()
@@ -253,6 +264,7 @@ export const useChannelStore = defineStore('channel', () => {
       const conversationChannels = await loadChannelsFromConversationCache(uid)
       if (conversationChannels.length > 0) {
         channels.value = filterRemovedChannels(mergeChannelsById(conversationChannels, localChannels), uid)
+        await hydratePlaceholderChannels(uid)
       }
 
       // 先让用户看到本地/会话里的频道，再用远端列表补齐名称、头像、禁用状态等完整信息。
@@ -264,6 +276,21 @@ export const useChannelStore = defineStore('channel', () => {
       console.error('[ChannelStore] loadChannels failed:', e)
     } finally {
       loading.value = false
+    }
+  }
+
+  async function hydratePlaceholderChannels(uid = activeUid) {
+    if (!uid) return
+    const placeholders = channels.value.filter((item) => isPlaceholderChannel(item))
+    if (placeholders.length === 0) return
+
+    for (const item of placeholders) {
+      const id = String(item.id || item.channelId || '').trim()
+      if (!id || isChannelRemoved(id, uid)) continue
+      const detail = await refreshChannelDetail(id)
+      if (detail && !isPlaceholderChannel(detail)) {
+        await saveChannelsToLocal(uid, channels.value)
+      }
     }
   }
 
@@ -309,8 +336,14 @@ export const useChannelStore = defineStore('channel', () => {
 
     if (apiSucceeded) {
       const nextChannels = filterRemovedChannels(allChannels, uid)
-      channels.value = nextChannels
-      await saveChannelsToLocal(uid, nextChannels)
+      channels.value = nextChannels.length > 0
+        ? nextChannels
+        : filterRemovedChannels(mergeChannelsById(
+          seed?.conversationChannels || [],
+          seed?.localChannels || [],
+        ), uid)
+      await hydratePlaceholderChannels(uid)
+      await saveChannelsToLocal(uid, channels.value)
       return
     }
 
@@ -322,6 +355,7 @@ export const useChannelStore = defineStore('channel', () => {
 
     if (mergedChannels.length > 0) {
       channels.value = mergedChannels
+      await hydratePlaceholderChannels(uid)
       await saveChannelsToLocal(uid, mergedChannels)
       return
     }
@@ -329,6 +363,7 @@ export const useChannelStore = defineStore('channel', () => {
     // 如果远端频道列表没返回数据，至少保住会话里已经出现过的频道，不让通讯录区域完全空白。
     const fallbackChannels = seed?.conversationChannels || (await loadChannelsFromConversationCache(uid))
     channels.value = filterRemovedChannels(fallbackChannels, uid)
+    await hydratePlaceholderChannels(uid)
     console.warn(
       '[ChannelStore] channel api empty, fallback from conversations',
     )
@@ -445,5 +480,6 @@ export const useChannelStore = defineStore('channel', () => {
     patchChannel,
     removeChannel,
     refreshChannelDetail,
+    hydratePlaceholderChannels,
   }
 })
