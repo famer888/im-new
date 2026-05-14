@@ -2,7 +2,7 @@
  * Binary protobuf + AES-128-ECB API request pipeline.
  * Matches OCS protocol: [0xC1, 0x80] + uint32(len) + AES(protobuf)
  */
-import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
+import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
 import { API_CONFIG, getBaseUrl } from './config'
 import { getActiveSessionId } from './sessionContext'
 import * as proto from '@/proto/generated'
@@ -92,6 +92,48 @@ function getPlatformSysModel(): string {
   return 'WINDOWS'
 }
 
+export function getApiMetaHeaders(): Record<string, string> {
+  return {
+    // 对齐老 im 97.1.7.0：API 请求显式带版本和签名名，方便服务端按客户端版本/密钥名校验与灰度。
+    'X-App-Version': String(API_CONFIG.appVer),
+    'X-Package-Code': String(API_CONFIG.packageCode),
+    'X-Secret-Name': API_CONFIG.secretName,
+  }
+}
+
+function getSignClientInfo(withSessionId = true, packageCode = API_CONFIG.packageCode) {
+  const device = getDeviceConfig()
+  return {
+    sessionId: withSessionId ? getSessionIdFromStorage() : '',
+    appVer: API_CONFIG.appVer,
+    packageCode,
+    language: API_CONFIG.language,
+    plat: 4,
+    sysModel: getPlatformSysModel(),
+    sysMac: device.sysMac,
+  }
+}
+
+export function getSignedApiHeaders(options?: {
+  withSessionId?: boolean
+  packageCode?: number
+}): Record<string, string> {
+  const client = getSignClientInfo(
+    options?.withSessionId ?? true,
+    options?.packageCode ?? API_CONFIG.packageCode,
+  )
+  const clientStr = JSON.stringify(client)
+  const timestamp = Date.now()
+  const tenOrigin = `${clientStr}//${timestamp}`
+  const oneOrigin = `${API_CONFIG.secretName},${timestamp}`
+  return {
+    ...getApiMetaHeaders(),
+    'X-one': aesEncryptString(oneOrigin, API_CONFIG.headAesKey),
+    'X-ten': aesEncryptString(tenOrigin, API_CONFIG.headAesKey),
+    'X-ten-origin': JSON.stringify(tenOrigin),
+  }
+}
+
 function getClientInfo(withSessionId = true): proto.IClientInfo {
   const sessionId = withSessionId ? getSessionIdFromStorage() : ''
   return {
@@ -178,6 +220,7 @@ export async function requestProto<TReq, TResp>(opts: {
 
   const response = await fetch(url, {
     method: 'POST',
+    headers: getSignedApiHeaders({ withSessionId }),
     body: packet.buffer as ArrayBuffer,
   })
 

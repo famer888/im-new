@@ -3,57 +3,12 @@
  * Request body: AES-128-ECB encrypted JSON with binary packet header.
  * Response body: AES-128-ECB encrypted JSON with binary packet header.
  */
-import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
+import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
 import { API_CONFIG, getOpenChatBaseUrl } from './config'
-import { getDeviceConfig } from './request'
-import { getActiveSessionId } from './sessionContext'
+import { getSignedApiHeaders } from './request'
 import { ungzip } from 'pako'
 
 const CHANNEL_PACKAGE_CODE = 5520
-
-function getSessionIdFromStorage(): string {
-  const activeSessionId = getActiveSessionId()
-  if (activeSessionId) return activeSessionId
-
-  try {
-    const currentUid = localStorage.getItem('current-uid') || ''
-    const accountListText = localStorage.getItem('login-account-list')
-    const accountList = accountListText ? JSON.parse(accountListText) : []
-    if (currentUid && Array.isArray(accountList)) {
-      const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
-      if (current?.sessionId) return String(current.sessionId)
-    }
-
-    const browserSessionText = localStorage.getItem('browser-session')
-    if (browserSessionText) {
-      const browserSession = JSON.parse(browserSessionText)
-      if (browserSession?.sessionId) return String(browserSession.sessionId)
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return ''
-}
-
-function getClientInfoForSign() {
-  const device = getDeviceConfig()
-  return {
-    sessionId: getSessionIdFromStorage(),
-    // 频道接口签名必须和老 im 的 getSignHeader 对齐，否则服务端会把请求判成异常。
-    appVer: API_CONFIG.appVer,
-    packageCode: CHANNEL_PACKAGE_CODE,
-    language: API_CONFIG.language,
-    plat: 4,
-    sysModel: getPlatformSysModel(),
-    sysMac: device.sysMac,
-  }
-}
-
-function getPlatformSysModel(): string {
-  const ua = (navigator.userAgent || '').toLowerCase()
-  if (ua.includes('mac')) return 'MAC'
-  return 'WINDOWS'
-}
 
 function getUint32Bytes(num: number): Uint8Array {
   const buf = new ArrayBuffer(4)
@@ -105,16 +60,8 @@ function quoteLargeIntegerIds(json: string): string {
 }
 
 function getSignHeaders() {
-  const client = getClientInfoForSign()
-  const clientStr = JSON.stringify(client)
-  const timestamp = Date.now()
-  const tenOrigin = `${clientStr}//${timestamp}`
-  const oneOrigin = `${API_CONFIG.secretName},${timestamp}`
-  return {
-    'X-one': aesEncryptString(oneOrigin, API_CONFIG.headAesKey),
-    'X-ten': aesEncryptString(tenOrigin, API_CONFIG.headAesKey),
-    'X-ten-origin': JSON.stringify(tenOrigin),
-  }
+  // 频道接口签名必须和老 im 的 getSignHeader 对齐，否则服务端会把请求判成异常。
+  return getSignedApiHeaders({ packageCode: CHANNEL_PACKAGE_CODE })
 }
 
 export interface ChannelListItem {
