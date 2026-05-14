@@ -57,8 +57,8 @@ const avatarWrapRef = ref<HTMLElement | null>(null)
 const accountDialogPosition = ref({ x: 74, y: 56 })
 const SETTINGS_MENU_WIDTH = 102
 const SETTINGS_MENU_GAP = 4
-/** 两行 + padding，与 .settings-menu-item 大致一致 */
-const SETTINGS_MENU_APPROX_HEIGHT = 80
+/** 三行 + padding，与 .settings-menu-item 大致一致 */
+const SETTINGS_MENU_APPROX_HEIGHT = 120
 const VIEWPORT_MENU_PAD = 8
 
 const settingsMenuVisible = ref(false)
@@ -306,6 +306,11 @@ function handleOpenSettings() {
   uiStore.openSettings()
 }
 
+function handleOpenPostUpload() {
+  settingsMenuVisible.value = false
+  uiStore.openPostUpload()
+}
+
 function handleLogout() {
   settingsMenuVisible.value = false
   logoutConfirmVisible.value = true
@@ -441,6 +446,7 @@ onBeforeUnmount(() => {
         :style="settingsMenuStyle"
       >
         <div class="settings-menu-item" @click="handleOpenSettings">{{ t('系统设置') }}</div>
+        <div class="settings-menu-item" @click="handleOpenPostUpload">{{ t('上传日志') }}</div>
         <div class="settings-menu-item" @click="handleLogout">{{ t('退出登录') }}</div>
       </div>
     </Teleport>
