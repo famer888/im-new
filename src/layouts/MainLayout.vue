@@ -52,6 +52,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
+import { convertFileSrc } from '@tauri-apps/api/core'
 
 import { API_CONFIG } from '@/api/config'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
@@ -1658,8 +1659,22 @@ function suggestImageSaveName(data: Record<string, unknown>): string {
   return normalizeImageFileName(String(data.messageId || 'image'))
 }
 
-async function saveImageAs(src: string, suggestedName: string) {
-  const response = await fetch(src)
+async function resolveImageSaveSource(src: string, data?: Record<string, unknown>): Promise<string> {
+  // 图片另存为优先读取本地缓存文件，避免签名 URL 过期时重新拉 OSS。
+  if ((window as any).__TAURI_INTERNALS__ && data) {
+    try {
+      const localPath = await ensureImageCacheFile(data)
+      if (localPath) return convertFileSrc(localPath)
+    } catch (error) {
+      console.warn('[image-save] local cache fallback failed:', error)
+    }
+  }
+  return src
+}
+
+async function saveImageAs(src: string, suggestedName: string, data?: Record<string, unknown>) {
+  const source = await resolveImageSaveSource(src, data)
+  const response = await fetch(source)
   if (!response.ok) {
     throw new Error(`image fetch failed: ${response.status}`)
   }
@@ -1825,7 +1840,7 @@ async function handleContextMenuSelect(key: string) {
         const imageSrc = String(data.imageSrc || '').trim()
         if (!imageSrc) break
         try {
-          await saveImageAs(imageSrc, suggestImageSaveName(data))
+          await saveImageAs(imageSrc, suggestImageSaveName(data), data)
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
           showToast(t('保存失败详情', { detail }), 'error')
