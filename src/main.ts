@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import App from './App.vue'
 import { router } from './router'
 import { setupTauriListeners } from './plugins/tauri-events'
+import { installTauriElectronBridge } from './shims/tauri-electron-bridge'
 import { initDomainPool, initDomainPoolFromApi, initDomainPoolFromOss, startPolling } from '@/utils/domainPool'
 import { ErrorType, sendErrToSentry } from '@/utils/sentry'
 import './assets/styles/global.scss'
@@ -16,6 +17,8 @@ import pt from '@/locales/pt.json'
 
 const messages = { en, ch, tw, vi, pt }
 type SupportedLocale = keyof typeof messages
+
+installTauriElectronBridge()
 
 function isSupportedLocale(locale: unknown): locale is SupportedLocale {
   return typeof locale === 'string' && locale in messages
