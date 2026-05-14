@@ -10,6 +10,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { collectNetworkDiagnostics } from '@/utils/networkDiagnostics'
 
 const { t: $t } = useI18n()
 const router = useRouter()
@@ -23,6 +24,7 @@ const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const repairingDecrypt = ref(false)
 const resettingCache = ref(false)
+const diagnosingNetwork = ref(false)
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
@@ -42,6 +44,18 @@ async function tauriInvoke(cmd: string, args?: Record<string, unknown>): Promise
   else {
     await invoke(cmd)
   }
+}
+
+async function copyTextToClipboard(text: string) {
+  if (isTauri()) {
+    try {
+      await tauriInvoke('write_clipboard_text', { text })
+      return
+    } catch {
+      /* fallback below */
+    }
+  }
+  await navigator.clipboard.writeText(text)
 }
 
 const resetConfirmVisible = ref(false)
@@ -179,6 +193,21 @@ async function confirmResetCache() {
 
   window.location.reload()
 }
+
+async function handleNetworkDiagnostics() {
+  if (diagnosingNetwork.value) return
+  diagnosingNetwork.value = true
+  try {
+    // 对齐老 im 网络诊断入口：Tauri 无 Electron netLog，生成当前域名/WS 探活摘要并复制给客服排查。
+    const report = await collectNetworkDiagnostics()
+    await copyTextToClipboard(report)
+    showToast($t('诊断报告已复制'))
+  } catch (error) {
+    showToast(formatErrorMessage(error), 'error')
+  } finally {
+    diagnosingNetwork.value = false
+  }
+}
 </script>
 
 <template>
@@ -197,6 +226,14 @@ async function confirmResetCache() {
       <dd>
         <button type="button" :disabled="repairingDecrypt || resettingCache" @click="openResetConfirm">
           {{ $t('重置') }}
+        </button>
+      </dd>
+    </dl>
+    <dl>
+      <dt>{{ $t('网络诊断') }}</dt>
+      <dd>
+        <button type="button" :disabled="diagnosingNetwork" @click="handleNetworkDiagnostics">
+          {{ diagnosingNetwork ? $t('诊断中') : $t('复制诊断报告') }}
         </button>
       </dd>
     </dl>
