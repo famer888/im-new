@@ -4,7 +4,7 @@
  *   - getDomainListApi (JSON + AES-hex) → /api/v4/listDomain
  */
 import CryptoJS from 'crypto-js'
-import { requestProto, proto, getDeviceConfig } from './request'
+import { requestProto, proto, getDeviceConfig, getApiMetaHeaders } from './request'
 import { getDomainUrl, getBaseUrl, getRawBaseUrl, API_CONFIG } from './config'
 
 /* ------------------------------------------------------------------ */
@@ -149,6 +149,7 @@ async function callDomainListApi(
     headers: {
       'Content-Type': 'application/json',
       accessToken: payload.headers.accessToken,
+      ...getApiMetaHeaders(),
     },
     body: JSON.stringify(body),
   })
@@ -190,6 +191,7 @@ async function callDomainReportApi(
     headers: {
       'Content-Type': 'application/json',
       accessToken: payload.headers.accessToken,
+      ...getApiMetaHeaders(),
     },
     body: JSON.stringify(body),
   })

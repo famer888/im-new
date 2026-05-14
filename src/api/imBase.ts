@@ -1,60 +1,16 @@
 /**
  * Login & base API endpoints using the binary protobuf+AES pipeline.
  */
-import { requestProto, proto, getDeviceConfig } from './request'
+import { requestProto, proto, getSignedApiHeaders } from './request'
 import { API_CONFIG, getBaseUrl } from './config'
-import { getActiveSessionId } from './sessionContext'
 import * as $protobuf from 'protobufjs/minimal'
 import {
   GroupMemberOnLineStatusListReq,
   GroupMemberOnLineStatusListResp,
   type IGroupMemberOnLineStatusListResp,
 } from './groupOnlineStatusProto'
-import { aesDecrypt, aesEncrypt, aesEncryptString } from '@/utils/crypto'
+import { aesDecrypt, aesEncrypt } from '@/utils/crypto'
 import { ungzip } from 'pako'
-
-function getSessionIdFromStorage(): string {
-  const activeSessionId = getActiveSessionId()
-  if (activeSessionId) return activeSessionId
-
-  try {
-    const currentUid = localStorage.getItem('current-uid') || ''
-    const accountListText = localStorage.getItem('login-account-list')
-    const accountList = accountListText ? JSON.parse(accountListText) : []
-    if (currentUid && Array.isArray(accountList)) {
-      const current = accountList.find((item: any) => String(item?.id || '') === currentUid)
-      if (current?.sessionId) return String(current.sessionId)
-    }
-
-    const browserSessionText = localStorage.getItem('browser-session')
-    if (browserSessionText) {
-      const browserSession = JSON.parse(browserSessionText)
-      if (browserSession?.sessionId) return String(browserSession.sessionId)
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return ''
-}
-
-function getPlatformSysModel(): string {
-  const ua = (navigator.userAgent || '').toLowerCase()
-  if (ua.includes('mac')) return 'MAC'
-  return 'WINDOWS'
-}
-
-function getSignedJsonClientInfo() {
-  const device = getDeviceConfig()
-  return {
-    sessionId: getSessionIdFromStorage(),
-    appVer: 168,
-    packageCode: 7100,
-    language: API_CONFIG.language,
-    plat: 4,
-    sysModel: getPlatformSysModel(),
-    sysMac: device.sysMac,
-  }
-}
 
 function getUint32Bytes(num: number): Uint8Array {
   const buf = new ArrayBuffer(4)
@@ -75,16 +31,7 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
 }
 
 function getSignedJsonHeaders() {
-  const client = getSignedJsonClientInfo()
-  const clientStr = JSON.stringify(client)
-  const timestamp = Date.now()
-  const tenOrigin = `${clientStr}//${timestamp}`
-  const oneOrigin = `${API_CONFIG.secretName},${timestamp}`
-  return {
-    'X-one': aesEncryptString(oneOrigin, API_CONFIG.headAesKey),
-    'X-ten': aesEncryptString(tenOrigin, API_CONFIG.headAesKey),
-    'X-ten-origin': JSON.stringify(tenOrigin),
-  }
+  return getSignedApiHeaders()
 }
 
 function encodeSignedJsonPacket(data: unknown): Uint8Array {
