@@ -31,6 +31,10 @@ Desktop.ini
 .env
 .env.*
 !.env.example
+!.env.development
+!.env.test
+!.env.uat
+.env.local
 
 # Logs
 *.log
