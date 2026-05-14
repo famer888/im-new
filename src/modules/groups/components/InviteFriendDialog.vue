@@ -90,6 +90,7 @@ const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const toastDuration = ref(2000)
+let tauriCoreImport: Promise<typeof import('@tauri-apps/api/core')> | null = null
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -108,25 +109,6 @@ function groupInviteDebug(message: string, data?: Record<string, unknown>) {
 }
 
 async function copyTextToClipboard(text: string) {
-  if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('write_clipboard_text', { text })
-      return
-    } catch (error) {
-      console.warn('[InviteFriendDialog] native clipboard write failed, fallback to web clipboard:', error)
-    }
-  }
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return
-    }
-  } catch {
-    // fallback below
-  }
-
   const textarea = document.createElement('textarea')
   textarea.value = text
   textarea.setAttribute('readonly', 'readonly')
@@ -137,7 +119,29 @@ async function copyTextToClipboard(text: string) {
   textarea.select()
   const copied = document.execCommand('copy')
   document.body.removeChild(textarea)
-  if (!copied) throw new Error('copy command failed')
+  if (copied) return
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return
+    }
+  } catch {
+    // fallback below
+  }
+
+  if (isTauri()) {
+    try {
+      tauriCoreImport ||= import('@tauri-apps/api/core')
+      const { invoke } = await tauriCoreImport
+      await invoke('write_clipboard_text', { text })
+      return
+    } catch (error) {
+      console.warn('[InviteFriendDialog] native clipboard write failed:', error)
+    }
+  }
+
+  throw new Error('copy command failed')
 }
 
 function displayName(friend: Contact) {
@@ -318,9 +322,9 @@ async function submitInvite(members: string[]) {
 
 async function copyGroupInviteLink() {
   if (isCopyingInviteLink.value) return
+  const cachedLink = String(props.qrcodeUrl || '').trim()
   isCopyingInviteLink.value = true
   try {
-    const cachedLink = String(props.qrcodeUrl || '').trim()
     const res = cachedLink ? null : await groupQrCode({ groupId: props.groupId, force: false })
     const inviteLink = cachedLink || res?.shortLink || res?.qrUrl || ''
     if (!inviteLink) {
