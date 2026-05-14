@@ -40,6 +40,7 @@ const defaultAvatar = computed(() => {
   if (data.value?.conversationType === 'channel') return channelIcon
   return friendIcon
 })
+const avatarSrc = computed(() => safeImageSrc(data.value?.avatar, defaultAvatar.value))
 const isGroup = computed(() => data.value?.conversationType === 'group')
 const messageText = computed(() => {
   const count = Math.max(0, Number(data.value?.unreadCount || 0))
@@ -49,12 +50,48 @@ const messageText = computed(() => {
   return body ? `${summary}：${body}` : summary
 })
 
+// 通知 payload 来自跨窗口 query/event，文本虽由 Vue 转义，仍先收窄长度和控制字符。
+function sanitizeText(value: unknown, maxLength: number): string {
+  return String(value || '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .trim()
+    .slice(0, maxLength)
+}
+
+// 头像 src 不走文本转义，必须按协议白名单兜住 javascript: / 非图片 data URL。
+function safeImageSrc(value: unknown, fallback: string): string {
+  const raw = String(value || '').trim()
+  if (!raw) return fallback
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (/^(asset|tauri|blob):/i.test(raw)) return raw
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp|avif);base64,/i.test(raw)) return raw
+  return fallback
+}
+
+function sanitizeNotificationData(value: unknown): NotificationData | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Partial<NotificationData>
+  const conversationType = ['friend', 'group', 'channel'].includes(String(raw.conversationType || ''))
+    ? raw.conversationType
+    : 'friend'
+
+  return {
+    conversationId: sanitizeText(raw.conversationId, 128),
+    title: sanitizeText(raw.title, 120),
+    body: sanitizeText(raw.body, 500),
+    avatar: safeImageSrc(raw.avatar, ''),
+    conversationType,
+    senderName: sanitizeText(raw.senderName, 120) || null,
+    unreadCount: Math.max(0, Math.min(999, Number(raw.unreadCount || 0))) || null,
+  }
+}
+
 function readNotificationData(raw: unknown): NotificationData | null {
   const text = Array.isArray(raw) ? raw[0] : raw
   if (typeof text !== 'string' || !text) return null
   try {
     const parsed = JSON.parse(decodeURIComponent(text))
-    return parsed && typeof parsed === 'object' ? parsed as NotificationData : null
+    return sanitizeNotificationData(parsed)
   } catch (error) {
     console.warn('[notification] parse notification data failed:', error)
     return null
@@ -76,7 +113,7 @@ onMounted(async () => {
   data.value = readNotificationData(route.query.data)
 
   await listen<NotificationData>('notification:data', (event) => {
-    data.value = event.payload
+    data.value = sanitizeNotificationData(event.payload)
   })
 })
 
@@ -141,7 +178,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
   >
     <div class="info-box">
       <div class="img-box">
-        <img class="avatar" :src="data.avatar || defaultAvatar" alt="" />
+        <img class="avatar" :src="avatarSrc" alt="" />
       </div>
       <div class="info">
         <div class="nickname-box">
