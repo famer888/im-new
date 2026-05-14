@@ -97,6 +97,12 @@ const fileExt = computed(() => {
   const ext = String(fileData.value.ext || fileName.value.split('.').pop() || '').toLowerCase()
   return ext.replace(/^\./, '')
 })
+// 与老 im 的文件气泡保持一致：危险扩展名在消息内直接展示“高危文件”标签。
+const isDangerousFile = computed(() => {
+  const explicitFlag = fileData.value.isDangerous ?? fileData.value.is_dangerous ?? extraData.value.isDangerous ?? extraData.value.is_dangerous
+  if (explicitFlag === true || explicitFlag === 'true' || explicitFlag === 1 || explicitFlag === '1') return true
+  return DANGEROUS_EXTENSIONS.has(fileExt.value)
+})
 const browserOpenTarget = computed(() => {
   return pickBrowserOpenTarget()?.target ?? ''
 })
@@ -286,7 +292,7 @@ async function getDownloadSavePath(url: string): Promise<string> {
   )
 }
 
-function waitForDownloadFile(url: string, key: string, savePath: string, msgId: string): Promise<void> {
+function waitForDownloadFile(url: string, key: string, savePath: string, msgId: string): Promise<{ filePath: string; isDangerous: boolean }> {
   return new Promise(async (resolve, reject) => {
     let settled = false
 
@@ -296,11 +302,14 @@ function waitForDownloadFile(url: string, key: string, savePath: string, msgId: 
         import('@tauri-apps/api/event'),
       ])
 
-      const unlistenDone = await listen(`file:done:${msgId}`, () => {
+      const unlistenDone = await listen<{ filePath?: string; file_path?: string; isDangerous?: boolean; is_dangerous?: boolean }>(`file:done:${msgId}`, (event) => {
         if (settled) return
         settled = true
         cleanupDownloadEvents()
-        resolve()
+        resolve({
+          filePath: event.payload?.filePath || event.payload?.file_path || savePath,
+          isDangerous: Boolean(event.payload?.isDangerous ?? event.payload?.is_dangerous),
+        })
       })
       const unlistenError = await listen<{ error?: string }>(`file:error:${msgId}`, (event) => {
         if (settled) return
@@ -449,7 +458,7 @@ async function handleOpenInBrowser() {
     extraHead: shortValue(props.message.extra, 360),
   })
 
-  if (DANGEROUS_EXTENSIONS.has(fileExt.value)) {
+  if (isDangerousFile.value) {
     logFileOpen('warn', 'blocked dangerous extension', {
       extension: fileExt.value,
     })
@@ -492,15 +501,19 @@ async function handleOpenInBrowser() {
         hasFileKey: Boolean(key),
         fileKeyLen: key.length,
       })
-      await waitForDownloadFile(
+      const downloadResult = await waitForDownloadFile(
         remoteTarget,
         key,
         savePath,
         `file-open-${safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)}-${Date.now()}`,
       )
       if (token !== openToken) return
-      target = savePath
-      cacheLocalPathOnMessage(savePath)
+      target = downloadResult.filePath
+      cacheLocalPathOnMessage(downloadResult.filePath)
+      if (downloadResult.isDangerous) {
+        eventBus.emit('show-toast', { message: '高危文件已隔离，不支持直接打开', type: 'error' })
+        return
+      }
     }
 
     logFileOpen('warn', 'invoke open_in_browser', {
@@ -541,11 +554,14 @@ onBeforeUnmount(() => {
 <template>
   <div :class="['file-message', { self: displayAsSelf }]" @click="handleOpenInBrowser">
     <div class="file-bubble">
-      <div class="file-info">
-        <h2 class="file-name">{{ fileData.name || fileData.fileName || '文件' }}</h2>
+      <img class="file-icon" :src="fileIcon" alt="" />
+      <div class="file-main">
+        <div class="file-title-row">
+          <h2 class="file-name">{{ fileData.name || fileData.fileName || '文件' }}</h2>
+          <span v-if="isDangerousFile" class="danger-badge">高危文件</span>
+        </div>
         <div class="file-size">{{ isOpening ? '打开中...' : fileSize }}</div>
       </div>
-      <img class="file-icon" :src="fileIcon" alt="" />
     </div>
   </div>
 </template>
@@ -556,15 +572,15 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 10px 10px 10px 12px;
+    gap: 8px;
+    padding: 8px 10px;
     background: rgb(243, 243, 243);
     border-radius: 10px;
     border-top-left-radius: 0;
     cursor: pointer;
-    min-width: 300px;
-    min-height: 80px;
-    max-width: 450px;
+    min-width: 240px;
+    min-height: 61px;
+    max-width: 360px;
     word-wrap: break-word;
 
     &:hover {
@@ -591,17 +607,29 @@ onBeforeUnmount(() => {
     flex-shrink: 0;
   }
 
-  .file-info {
+  .file-main {
     display: flex;
     flex-direction: column;
     justify-content: center;
     min-width: 0;
     flex: 1;
+    align-items: flex-start;
+
+    .file-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+    }
 
     .file-name {
+      flex: 1;
+      min-width: 0;
+      max-width: 135px;
       margin: 0;
       padding: 0;
-      line-height: 25px;
+      line-height: 22px;
       font-size: 14px;
       font-weight: 400;
       color: #333;
@@ -616,7 +644,19 @@ onBeforeUnmount(() => {
     .file-size {
       font-size: 12px;
       color: #666;
-      line-height: 20px;
+      line-height: 18px;
+    }
+
+    .danger-badge {
+      flex: none;
+      background: #ff4444;
+      color: #fff;
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 16px;
+      white-space: nowrap;
     }
   }
 }

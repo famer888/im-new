@@ -1271,13 +1271,13 @@ async function resolveFileMessageKey(data: Record<string, unknown>): Promise<str
   }
 }
 
-async function waitForOfficeFileDownload(url: string, fileKey: string, savePath: string, msgId: string) {
+async function waitForOfficeFileDownload(url: string, fileKey: string, savePath: string, msgId: string): Promise<{ filePath: string; isDangerous: boolean }> {
   const [{ invoke }, { listen }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/api/event'),
   ])
 
-  await new Promise<void>(async (resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     let settled = false
     let unlistenDone: (() => void) | null = null
     let unlistenError: (() => void) | null = null
@@ -1289,11 +1289,14 @@ async function waitForOfficeFileDownload(url: string, fileKey: string, savePath:
     }
 
     try {
-      unlistenDone = await listen(`file:done:${msgId}`, () => {
+      unlistenDone = await listen<{ filePath?: string; file_path?: string; isDangerous?: boolean; is_dangerous?: boolean }>(`file:done:${msgId}`, (event) => {
         if (settled) return
         settled = true
         cleanup()
-        resolve()
+        resolve({
+          filePath: event.payload?.filePath || event.payload?.file_path || savePath,
+          isDangerous: Boolean(event.payload?.isDangerous ?? event.payload?.is_dangerous),
+        })
       })
       unlistenError = await listen<{ error?: string }>(`file:error:${msgId}`, (event) => {
         if (settled) return
@@ -1356,8 +1359,9 @@ async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise
 
   const key = await resolveFileMessageKey(data)
   if (!key) throw new Error('文件密钥缺失，无法下载')
-  await waitForOfficeFileDownload(url, key, savePath, `file-menu-${Date.now()}`)
-  return savePath
+  const result = await waitForOfficeFileDownload(url, key, savePath, `file-menu-${Date.now()}`)
+  if (result.isDangerous) throw new Error('高危文件已隔离，不支持直接打开或另存为')
+  return result.filePath
 }
 
 async function saveOfficeFileAs(data: Record<string, unknown>) {

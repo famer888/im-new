@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, State};
@@ -37,6 +37,8 @@ pub struct DownloadProgress {
     pub downloaded_bytes: u64,
     pub status: String, // "downloading", "decrypting", "done", "error"
     pub data_url: Option<String>,
+    pub file_path: Option<String>,
+    pub is_dangerous: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,6 +250,67 @@ fn bytes_head_hex(bytes: &[u8], len: usize) -> String {
         .join(" ")
 }
 
+fn has_dangerous_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "exe" | "bat" | "cmd" | "vbs" | "js" | "ps1" | "scr" | "pif" | "msi" | "com" | "lnk" | "wsf"
+    )
+}
+
+fn has_dangerous_magic(bytes: &[u8]) -> bool {
+    if bytes.len() >= 2 && &bytes[..2] == b"MZ" {
+        return true;
+    }
+    if bytes.len() >= 4 && &bytes[..4] == b"\x7FELF" {
+        return true;
+    }
+    if bytes.len() >= 4
+        && matches!(
+            &bytes[..4],
+            b"\xFE\xED\xFA\xCE"
+                | b"\xFE\xED\xFA\xCF"
+                | b"\xCE\xFA\xED\xFE"
+                | b"\xCF\xFA\xED\xFE"
+        )
+    {
+        return true;
+    }
+    let head = String::from_utf8_lossy(bytes).to_ascii_lowercase();
+    head.contains("@echo")
+        || head.contains("cmd.exe")
+        || head.contains("powershell")
+        || head.contains("createobject")
+}
+
+async fn quarantine_dangerous_file(path: &Path) -> Result<(PathBuf, bool), String> {
+    let head = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("read downloaded file for danger check failed: {}", e))?;
+    if !has_dangerous_extension(path) && !has_dangerous_magic(&head[..head.len().min(512)]) {
+        return Ok((path.to_path_buf(), false));
+    }
+
+    // 高危文件不保留在普通缓存路径，统一移动到系统临时 dangerous 目录并追加 .dangerous 后缀。
+    let dangerous_dir = std::env::temp_dir().join("ocs-chat-dangerous");
+    tokio::fs::create_dir_all(&dangerous_dir)
+        .await
+        .map_err(|e| format!("create dangerous dir failed: {}", e))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file");
+    let dangerous_path = dangerous_dir.join(format!("{}.dangerous", file_name));
+    let _ = tokio::fs::remove_file(&dangerous_path).await;
+    tokio::fs::rename(path, &dangerous_path)
+        .await
+        .map_err(|e| format!("move dangerous file failed: {}", e))?;
+    Ok((dangerous_path, true))
+}
+
 #[tauri::command]
 pub async fn upload_file(
     crypto_engine: State<'_, crypto::CryptoEngine>,
@@ -417,13 +480,19 @@ pub async fn download_file(
     tokio::spawn(async move {
         let download_result = async {
             if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                let meta = tokio::fs::metadata(&path)
+                let (final_path, is_dangerous) = quarantine_dangerous_file(&path).await?;
+                let meta = tokio::fs::metadata(&final_path)
                     .await
                     .map_err(|e| format!("Stat cached file failed: {}", e))?;
                 if !should_emit_data_url {
-                    return Ok::<(u64, Option<String>), String>((meta.len(), None));
+                    return Ok::<(u64, Option<String>, PathBuf, bool), String>((
+                        meta.len(),
+                        None,
+                        final_path,
+                        is_dangerous,
+                    ));
                 }
-                let decoded = tokio::fs::read(&path)
+                let decoded = tokio::fs::read(&final_path)
                     .await
                     .map_err(|e| format!("Read cached file failed: {}", e))?;
                 if should_log_audio_clone {
@@ -431,7 +500,7 @@ pub async fn download_file(
                         target: "group-audio",
                         "download_file cache hit msg_id={} path={} bytes={} head_hex={}",
                         msg_id_clone,
-                        path.to_string_lossy(),
+                        final_path.to_string_lossy(),
                         decoded.len(),
                         bytes_head_hex(&decoded, 16),
                     );
@@ -440,7 +509,7 @@ pub async fn download_file(
                     tracing::warn!(
                         target: "file-open",
                         msg_id = %msg_id_clone,
-                        path = %path.to_string_lossy(),
+                        path = %final_path.to_string_lossy(),
                         bytes = meta.len(),
                         "download_file cache hit"
                     );
@@ -451,7 +520,12 @@ pub async fn download_file(
                     mime,
                     general_purpose::STANDARD.encode(&decoded)
                 );
-                return Ok::<(u64, Option<String>), String>((decoded.len() as u64, Some(data_url)));
+                return Ok::<(u64, Option<String>, PathBuf, bool), String>((
+                    decoded.len() as u64,
+                    Some(data_url),
+                    final_path,
+                    is_dangerous,
+                ));
             }
 
             if should_log_audio_clone {
@@ -534,19 +608,25 @@ pub async fn download_file(
                 tokio::fs::rename(&enc_path, &path)
                     .await
                     .map_err(|e| format!("Move downloaded file failed: {}", e))?;
-                let meta = tokio::fs::metadata(&path)
+                let (final_path, is_dangerous) = quarantine_dangerous_file(&path).await?;
+                let meta = tokio::fs::metadata(&final_path)
                     .await
                     .map_err(|e| format!("Stat downloaded file failed: {}", e))?;
                 if should_log_file_open_clone {
                     tracing::warn!(
                         target: "file-open",
                         msg_id = %msg_id_clone,
-                        path = %path.to_string_lossy(),
+                        path = %final_path.to_string_lossy(),
                         bytes = meta.len(),
                         "download_file saved without decrypt"
                     );
                 }
-                return Ok::<(u64, Option<String>), String>((meta.len(), None));
+                return Ok::<(u64, Option<String>, PathBuf, bool), String>((
+                    meta.len(),
+                    None,
+                    final_path,
+                    is_dangerous,
+                ));
             }
 
             if should_log_audio_clone {
@@ -568,20 +648,21 @@ pub async fn download_file(
             .map_err(|e| format!("Decrypt failed: {}", e))?;
 
             let _ = tokio::fs::remove_file(&enc_path).await;
-            let meta = tokio::fs::metadata(&path)
+            let (final_path, is_dangerous) = quarantine_dangerous_file(&path).await?;
+            let meta = tokio::fs::metadata(&final_path)
                 .await
                 .map_err(|e| format!("Stat failed: {}", e))?;
             if should_log_file_open_clone && !should_emit_data_url {
                 tracing::warn!(
                     target: "file-open",
                     msg_id = %msg_id_clone,
-                    path = %path.to_string_lossy(),
+                    path = %final_path.to_string_lossy(),
                     bytes = meta.len(),
                     "download_file decrypt done"
                 );
             }
             let data_url = if should_emit_data_url {
-                let decoded = tokio::fs::read(&path)
+                let decoded = tokio::fs::read(&final_path)
                     .await
                     .map_err(|e| format!("Read decrypted file failed: {}", e))?;
                 if should_log_audio_clone {
@@ -597,7 +678,7 @@ pub async fn download_file(
                     tracing::warn!(
                         target: "file-open",
                         msg_id = %msg_id_clone,
-                        path = %path.to_string_lossy(),
+                        path = %final_path.to_string_lossy(),
                         bytes = decoded.len(),
                         head_hex = %bytes_head_hex(&decoded, 16),
                         "download_file decrypt done"
@@ -612,12 +693,17 @@ pub async fn download_file(
             } else {
                 None
             };
-            Ok::<(u64, Option<String>), String>((meta.len(), data_url))
+            Ok::<(u64, Option<String>, PathBuf, bool), String>((
+                meta.len(),
+                data_url,
+                final_path,
+                is_dangerous,
+            ))
         }
         .await;
 
         match download_result {
-            Ok((size, data_url)) => {
+            Ok((size, data_url, final_path, is_dangerous)) => {
                 if should_log_audio_clone {
                     tracing::info!(
                         target: "group-audio",
@@ -632,6 +718,8 @@ pub async fn download_file(
                         msg_id = %msg_id_clone,
                         size = size,
                         has_data_url = data_url.is_some(),
+                        file_path = %final_path.to_string_lossy(),
+                        is_dangerous = is_dangerous,
                         "download_file emit done"
                     );
                 }
@@ -644,6 +732,8 @@ pub async fn download_file(
                         downloaded_bytes: size,
                         status: "done".to_string(),
                         data_url,
+                        file_path: Some(final_path.to_string_lossy().to_string()),
+                        is_dangerous,
                     },
                 );
             }
@@ -688,6 +778,8 @@ pub async fn get_download_progress(msg_id: String) -> Result<DownloadProgress, S
         downloaded_bytes: 0,
         status: "idle".to_string(),
         data_url: None,
+        file_path: None,
+        is_dangerous: false,
     })
 }
 
