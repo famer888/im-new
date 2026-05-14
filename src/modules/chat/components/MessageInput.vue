@@ -1808,6 +1808,10 @@ function stripQuery(url: string): string {
   return index >= 0 ? url.slice(0, index) : url
 }
 
+function toHttpsUrl(url: string): string {
+  return String(url || '').replace(/^http:/i, 'https:')
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''
   const chunkSize = 0x8000
@@ -1820,7 +1824,8 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 function resolveOssUploadUrl(responseUrl: string, bucket: string, endpoint: string, objectKey: string): string {
   const key = objectKey.replace(/^\/+/, '')
-  if (responseUrl) return stripQuery(responseUrl)
+  // 对齐老 im：上传 endpoint / 服务端回传上传 URL 一律走 HTTPS，避免 HTTP 下被 CORS 预检或代理链路拦截。
+  if (responseUrl) return toHttpsUrl(stripQuery(responseUrl))
 
   const normalizedEndpoint = normalizeOssEndpoint(endpoint)
   if (/aliyuncs\.com$/i.test(normalizedEndpoint)) {
@@ -2017,7 +2022,7 @@ async function uploadImageLikeIm(
 
   const width = options?.width ?? 0
   const height = options?.height ?? 0
-  const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
+  const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
   traceLog(trace, 'upload done', {
     finalUrlHost: (() => {
       try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
@@ -2117,7 +2122,7 @@ async function uploadFileLikeIm(
     logPrefix: '[file-send] ',
   })
 
-  const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
+  const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
   fileTraceLog(trace, 'upload done', {
     name: file.name,
     originalBytes: file.size,
@@ -2452,7 +2457,7 @@ async function uploadVideoLikeIm(
     logPrefix: '[video-send] ',
   })
 
-  const finalUrl = stripQuery(responseUrl || uploadUrl).replace(/^http:/i, 'https:')
+  const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
   fileTraceLog(trace, 'video upload done', {
     originalBytes: file.size,
     encryptedBytes: encrypted.byteLength,
