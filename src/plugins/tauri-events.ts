@@ -313,6 +313,7 @@ interface ReadProcessingResult {
     messageId: string
     expireAt: number
   }>
+  groupReadUpdates?: GroupReadReceiptUpdate[]
   conversationReadUpdates?: Array<{
     conversationId: string
     unreadCount: number
@@ -1590,12 +1591,27 @@ export async function setupTauriListeners() {
 
     try {
       const { invoke } = await import('@tauri-apps/api/core')
-      const updates = await invoke<GroupReadReceiptUpdate[]>('apply_group_read_receipts', {
+      const result = await invoke<ReadProcessingResult>('apply_group_read_receipts', {
         uid,
         receipts,
       })
       const messageStore = useMessageStore()
-      messageStore.applyGroupReadReceiptPatches(Array.isArray(updates) ? updates : [])
+      messageStore.applyGroupReadReceiptPatches(Array.isArray(result?.groupReadUpdates) ? result.groupReadUpdates : [])
+      if (Array.isArray(result?.readMessageIds) && result.readMessageIds.length > 0) {
+        messageStore.markMessagesRead(result.readMessageIds, 2)
+      }
+      if (Array.isArray(result?.localReadMessageIds) && result.localReadMessageIds.length > 0) {
+        messageStore.markMessagesRead(result.localReadMessageIds, 1)
+      }
+      const chatStore = useChatStore()
+      for (const item of Array.isArray(result?.conversationReadUpdates) ? result.conversationReadUpdates : []) {
+        const unreadCount = Math.max(0, Number(item.unreadCount || 0))
+        chatStore.updateConversation({
+          id: String(item.conversationId || ''),
+          unreadCount,
+          ...(unreadCount > 0 ? {} : { atMe: false }),
+        })
+      }
     } catch (err) {
       console.warn('[group-read] apply_group_read_receipts failed:', err)
     }
