@@ -165,7 +165,6 @@ export const useContactStore = defineStore('contact', () => {
     }
 
     contacts.value = allContacts
-    console.log(`[ContactStore] Loaded ${allContacts.length} contacts via API`)
   }
 
   async function searchContacts(uid: string, keyword: string) {

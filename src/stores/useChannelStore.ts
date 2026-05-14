@@ -290,12 +290,6 @@ export const useChannelStore = defineStore('channel', () => {
         }
         apiSucceeded = true
         const list = resp?.data?.rowList || []
-        console.info('[ChannelStore] page loaded', {
-          pageNum,
-          pageSize,
-          listLen: list.length,
-          accumulated: allChannels.length,
-        })
         for (const item of list) {
           const id = String(item.channelId || (item as ChannelListItem & { id?: string | number }).id || '')
           if (!id || seen.has(id) || isChannelRemoved(id, uid) || !isJoinedChannel(item)) continue
@@ -317,7 +311,6 @@ export const useChannelStore = defineStore('channel', () => {
       const nextChannels = filterRemovedChannels(allChannels, uid)
       channels.value = nextChannels
       await saveChannelsToLocal(uid, nextChannels)
-      console.info('[ChannelStore] loaded from channel API', { count: nextChannels.length })
       return
     }
 
@@ -330,7 +323,6 @@ export const useChannelStore = defineStore('channel', () => {
     if (mergedChannels.length > 0) {
       channels.value = mergedChannels
       await saveChannelsToLocal(uid, mergedChannels)
-      console.info('[ChannelStore] loaded from channel API', { count: allChannels.length })
       return
     }
 

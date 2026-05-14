@@ -140,19 +140,10 @@ function terminalDebugLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'warn',
 ) {
-  const payload = data || {}
-  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
-  log(`[group-member-refresh-debug][${scope}] ${message}`, payload)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: `[group-member-refresh-debug][${scope}] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void scope
+  void message
+  void data
+  void level
 }
 
 function pathBaseName(filePath: string): string {

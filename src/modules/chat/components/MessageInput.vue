@@ -304,18 +304,9 @@ function terminalLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-  log(`[message-input] ${message}`, data || {})
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message,
-        data: data || {},
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function safeHead(value: string, length = 8): string {

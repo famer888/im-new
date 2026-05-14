@@ -92,43 +92,6 @@ const parsedNotice = computed(() => {
   const actorRole = groupId && actorId
     ? contextMembers.find((member) => member.userId === actorId)?.role
     : null
-  const rawContent = String(props.message.content || '')
-  const placeholderUids = Array.from(rawContent.matchAll(GROUP_NOTICE_UID_PLACEHOLDER_RE))
-    .flatMap((match) => String(match[1] || '').split(/[,，]/))
-    .map((id) => id.trim())
-    .filter(Boolean)
-  const uniqPlaceholderUids = [...new Set(placeholderUids)]
-  const placeholderResolvePreview = uniqPlaceholderUids.map((id) => {
-    const selfName = String(authStore.uid || '') === id ? t('你') : ''
-    const contactName = contactStore.getDisplayName(id)
-    const memberName = memberNameById.get(id) || ''
-    const extraName = extraUserNameById.get(id) || ''
-    return {
-      id,
-      selfName,
-      contactName,
-      memberName,
-      extraName,
-      resolved: selfName || ((contactName && contactName !== id) ? contactName : (memberName || extraName || contactName)),
-    }
-  })
-
-  console.warn('[group-notice-debug][SystemNotification] before format', {
-    messageId: props.message.id,
-    conversationId: props.message.conversationId,
-    rawContent,
-    extra,
-    groupId,
-    actorId,
-    actorRole,
-    contextMemberCount: contextMembers.length,
-    contextMembers: contextMembers.map((member) => ({
-      userId: member.userId,
-      nickname: member.nickname,
-      role: member.role,
-    })),
-    placeholderResolvePreview,
-  })
 
   const resolveUidDisplay = (id: string): string => {
     if (!id) return ''
@@ -151,10 +114,6 @@ const parsedNotice = computed(() => {
   if (content.includes('邀请') && content.includes('加入群聊')) {
     content = content.replace(PURE_UID_RE, (uid) => resolveUidDisplay(uid))
   }
-  console.warn('[group-notice-debug][SystemNotification] after format', {
-    messageId: props.message.id,
-    formattedContent: content,
-  })
   if (content === HIDDEN_GROUP_NOTICE_TEXT) {
     return { prefix: '', text: '' }
   }

@@ -635,15 +635,15 @@ export async function groupCheckJoin(
 }
 
 export async function groupUserCheckJoin(
-  data: { groupReqId: number; flag: boolean },
+  data: { groupReqId: number; flag: boolean; msg?: string },
   baseUrl?: string,
-): Promise<proto.GroupCheckJoinResp> {
+): Promise<proto.GroupUserCheckJoinResp> {
   const base = baseUrl || getBaseUrl()
   return requestProto({
     url: `${base}/group/groupUserCheckJoin`,
-    reqType: proto.GroupCheckJoinReq,
-    respType: proto.GroupCheckJoinResp,
-    data: { groupReqId: data.groupReqId, flag: data.flag },
+    reqType: proto.GroupUserCheckJoinReq,
+    respType: proto.GroupUserCheckJoinResp,
+    data: { groupReqId: data.groupReqId, flag: data.flag, msg: data.msg || '' },
   })
 }
 

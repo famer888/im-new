@@ -415,21 +415,9 @@ function logFileOpen(
     fileExt: fileExt.value,
     ...data,
   }
-  const consoleMethod = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
-  consoleMethod(`[file-open] ${message}`, payload)
-
-  if (!(window as any).__TAURI_INTERNALS__) return
-  void import('@tauri-apps/api/core')
-    .then(({ invoke }) =>
-      invoke('image_send_log', {
-        payload: {
-          level,
-          message: `[file-open] ${message}`,
-          data: payload,
-        },
-      }),
-    )
-    .catch(() => undefined)
+  void message
+  void level
+  void payload
 }
 
 async function handleOpenInBrowser() {

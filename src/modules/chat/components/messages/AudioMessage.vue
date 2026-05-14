@@ -27,19 +27,9 @@ function audioTerminalLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  if (!isGroupAudio.value) return
-  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-  log(`[group-audio] ${message}`, data || {})
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: `[group-audio] ${message}`,
-        data: data || {},
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function safeHead(value: string, length = 10): string {

@@ -49,19 +49,9 @@ type DigestSegment =
   | { type: 'emoji'; text: string; src: string }
 
 function groupNoticeDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
-  const payload = data || {}
-  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
-  log(`[group-notice-debug][ConversationList] ${message}`, payload)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: `[group-notice-debug][ConversationList] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */

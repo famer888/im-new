@@ -259,16 +259,6 @@ export interface SearchAliasContentResp {
 async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
   const base = getOpenChatBaseUrl()
   const url = `${base}${path}`
-  const signClient = getClientInfoForSign()
-  console.info('[ChannelAPI] request', {
-    url,
-    data,
-    appVer: signClient.appVer,
-    packageCode: signClient.packageCode,
-    language: signClient.language,
-    plat: signClient.plat,
-    hasSessionId: !!signClient.sessionId,
-  })
 
   // 频道接口不是 protobuf，而是“固定头 + AES(JSON)”这一条老协议，不能复用通用 requestProto。
   const packet = encodePacketWithAesJson(data, API_CONFIG.secretKey)
