@@ -307,10 +307,15 @@ function applyGroupEventMemberPatch(groupStore: ReturnType<typeof useGroupStore>
 
 interface ReadProcessingResult {
   readMessageIds: string[]
+  localReadMessageIds?: string[]
   scheduledDeletions: Array<{
     conversationId: string
     messageId: string
     expireAt: number
+  }>
+  conversationReadUpdates?: Array<{
+    conversationId: string
+    unreadCount: number
   }>
 }
 
@@ -1541,6 +1546,18 @@ export async function setupTauriListeners() {
       })
       if (Array.isArray(result?.readMessageIds) && result.readMessageIds.length > 0) {
         messageStore.markMessagesRead(result.readMessageIds, 2)
+      }
+      if (Array.isArray(result?.localReadMessageIds) && result.localReadMessageIds.length > 0) {
+        messageStore.markMessagesRead(result.localReadMessageIds, 1)
+      }
+      const chatStore = useChatStore()
+      for (const item of Array.isArray(result?.conversationReadUpdates) ? result.conversationReadUpdates : []) {
+        const unreadCount = Math.max(0, Number(item.unreadCount || 0))
+        chatStore.updateConversation({
+          id: String(item.conversationId || ''),
+          unreadCount,
+          ...(unreadCount > 0 ? {} : { atMe: false }),
+        })
       }
       for (const item of Array.isArray(result?.scheduledDeletions) ? result.scheduledDeletions : []) {
         const conversationId = String(item.conversationId || '')
