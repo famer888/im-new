@@ -6,6 +6,7 @@ mod handler;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use serde::Serialize;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -25,6 +26,7 @@ pub struct WsManager {
     heartbeat_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     connection_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     reconnect_count: Arc<std::sync::atomic::AtomicU32>,
+    diagnostics: Arc<RwLock<WsDiagnostics>>,
     pending_messages: Arc<DashMap<String, PendingMessage>>,
     /// AES 传输密钥：帧头 16 字节后的 protobuf 载荷用它做 AES-128-ECB 加解密。
     /// 与老 im 的 `configs.TRENDS_AES_KEY || AES_KEY` 等价，`connect` 时写入。
@@ -32,6 +34,42 @@ pub struct WsManager {
     /// WS 登录上下文：用于连接建立后立刻发送 10001 LoginReq。
     session_id: Arc<RwLock<String>>,
     install_code: Arc<RwLock<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsEventLine {
+    pub time: i64,
+    pub event: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsCloseRecord {
+    pub time: i64,
+    pub url: String,
+    pub code: String,
+    pub reason: String,
+    pub was_clean: Option<bool>,
+    pub unexpected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsErrorRecord {
+    pub time: i64,
+    pub url: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WsDiagnostics {
+    pub reconnect_times: Vec<i64>,
+    pub last_close: Option<WsCloseRecord>,
+    pub last_error: Option<WsErrorRecord>,
+    pub events: Vec<WsEventLine>,
 }
 
 #[derive(Debug)]
@@ -51,6 +89,7 @@ impl WsManager {
             heartbeat_handle: Arc::new(RwLock::new(None)),
             connection_handle: Arc::new(RwLock::new(None)),
             reconnect_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            diagnostics: Arc::new(RwLock::new(WsDiagnostics::default())),
             pending_messages: Arc::new(DashMap::new()),
             aes_key: Arc::new(RwLock::new(None)),
             session_id: Arc::new(RwLock::new(String::new())),
@@ -78,6 +117,7 @@ impl WsManager {
 
         *self.status.write() = ConnectionStatus::Connecting;
         self.emit_status(ConnectionStatus::Connecting);
+        self.record_event("CONNECT_START", url);
 
         *self.aes_key.write() = Some(aes_key.to_string());
         *self.session_id.write() = session_id.unwrap_or_default();
@@ -89,6 +129,7 @@ impl WsManager {
         let send_tx = self.send_tx.clone();
         let app_handle = self.app_handle.clone();
         let reconnect_count = self.reconnect_count.clone();
+        let diagnostics = self.diagnostics.clone();
         let pending = self.pending_messages.clone();
         let session_id = self.session_id.clone();
         let install_code = self.install_code.clone();
@@ -103,6 +144,7 @@ impl WsManager {
                 send_tx,
                 app_handle,
                 reconnect_count,
+                diagnostics,
                 pending,
             )
             .await;
@@ -130,6 +172,7 @@ impl WsManager {
         *self.install_code.write() = String::new();
         self.reconnect_count
             .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.record_event("DISCONNECT", "manual disconnect");
     }
 
     pub fn send(&self, data: Vec<u8>) -> Result<(), WsError> {
@@ -161,6 +204,10 @@ impl WsManager {
 
     pub fn get_status(&self) -> ConnectionStatus {
         *self.status.read()
+    }
+
+    pub fn get_diagnostics(&self) -> WsDiagnostics {
+        self.diagnostics.read().clone()
     }
 
     fn start_heartbeat(&self) {
@@ -197,6 +244,49 @@ impl WsManager {
             ConnectionStatus::Reconnecting => "reconnecting",
         };
         let _ = self.app_handle.emit("ws:status", status_str);
+        self.record_event("STATUS", status_str);
+    }
+
+    fn record_event(&self, event: &str, detail: &str) {
+        push_ws_event(&self.diagnostics, event, detail);
+    }
+}
+
+pub(crate) fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+pub(crate) fn push_ws_event(diagnostics: &Arc<RwLock<WsDiagnostics>>, event: &str, detail: &str) {
+    let mut diag = diagnostics.write();
+    diag.events.push(WsEventLine {
+        time: now_millis(),
+        event: event.to_string(),
+        detail: detail.to_string(),
+    });
+    let len = diag.events.len();
+    if len > 80 {
+        let drop_count = len - 80;
+        diag.events.drain(0..drop_count);
+    }
+}
+
+pub(crate) fn record_ws_reconnect(diagnostics: &Arc<RwLock<WsDiagnostics>>, detail: &str) {
+    let mut diag = diagnostics.write();
+    let now = now_millis();
+    diag.reconnect_times.push(now);
+    diag.reconnect_times.retain(|time| now - *time <= 5 * 60 * 1000);
+    diag.events.push(WsEventLine {
+        time: now,
+        event: "RECONNECT".to_string(),
+        detail: detail.to_string(),
+    });
+    let len = diag.events.len();
+    if len > 80 {
+        let drop_count = len - 80;
+        diag.events.drain(0..drop_count);
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsError};
+use super::{batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsDiagnostics, WsCloseRecord, WsError, WsErrorRecord};
 use crate::proto::imweb;
 use crate::ws::{codec, commands};
 use dashmap::DashMap;
@@ -24,6 +24,7 @@ pub async fn run_connection(
     send_tx: Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: AppHandle,
     reconnect_count: Arc<std::sync::atomic::AtomicU32>,
+    diagnostics: Arc<RwLock<WsDiagnostics>>,
     pending: Arc<DashMap<String, PendingMessage>>,
 ) {
     let current_url = url.to_string();
@@ -45,6 +46,7 @@ pub async fn run_connection(
             &send_tx,
             &app_handle,
             &reconnect_count,
+            &diagnostics,
             &pending,
         )
         .await
@@ -82,6 +84,7 @@ pub async fn run_connection(
             RECONNECT_DELAY_MS
         };
         warn!("Reconnecting in {}ms (attempt {})", delay_ms, count + 1);
+        super::record_ws_reconnect(&diagnostics, &format!("attempt={} delayMs={}", count + 1, delay_ms));
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
 }
@@ -95,18 +98,33 @@ async fn connect_and_run(
     send_tx: &Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: &AppHandle,
     reconnect_count: &Arc<std::sync::atomic::AtomicU32>,
+    diagnostics: &Arc<RwLock<WsDiagnostics>>,
     pending: &Arc<DashMap<String, PendingMessage>>,
 ) -> Result<(), WsError> {
     info!("Connecting to WebSocket: {}", url);
+    super::push_ws_event(diagnostics, "CONNECT_JOB_BEGIN", url);
 
     let (ws_stream, _) = connect_async(url)
         .await
-        .map_err(|e| WsError::ConnectionFailed(e.to_string()))?;
+        .map_err(|e| {
+            let err = e.to_string();
+            {
+                let mut diag = diagnostics.write();
+                diag.last_error = Some(WsErrorRecord {
+                    time: super::now_millis(),
+                    url: url.to_string(),
+                    error: err.clone(),
+                });
+            }
+            super::push_ws_event(diagnostics, "CONNECT_ERROR", &err);
+            WsError::ConnectionFailed(err)
+        })?;
 
     info!("WebSocket connected");
     *status.write() = ConnectionStatus::Connected;
     reconnect_count.store(0, std::sync::atomic::Ordering::Relaxed);
     let _ = app_handle.emit("ws:status", "connected");
+    super::push_ws_event(diagnostics, "CONNECTED", url);
 
     let (mut ws_sink, mut ws_stream_reader) = ws_stream.split();
 
@@ -120,7 +138,18 @@ async fn connect_and_run(
     ws_sink
         .send(Message::Binary(login_packet.into()))
         .await
-        .map_err(|e| WsError::SendFailed)?;
+        .map_err(|e| {
+            {
+                let mut diag = diagnostics.write();
+                diag.last_error = Some(WsErrorRecord {
+                    time: super::now_millis(),
+                    url: url.to_string(),
+                    error: e.to_string(),
+                });
+            }
+            super::push_ws_event(diagnostics, "SEND_ERROR", &e.to_string());
+            WsError::SendFailed
+        })?;
     info!(
         "WebSocket login packet sent cmd=10001 session_id_len={} install_code_len={}",
         sid.len(),
@@ -148,6 +177,18 @@ async fn connect_and_run(
                             close_code,
                             close_reason
                         );
+                        {
+                            let mut diag = diagnostics.write();
+                            diag.last_close = Some(WsCloseRecord {
+                                time: super::now_millis(),
+                                url: url.to_string(),
+                                code: close_code.clone(),
+                                reason: close_reason.clone(),
+                                was_clean: None,
+                                unexpected: true,
+                            });
+                        }
+                        super::push_ws_event(diagnostics, "CLOSE", &format!("code={} reason={}", close_code, close_reason));
                         unexpected_disconnect = Some(format!(
                             "closed by server code={} reason={}",
                             close_code,
@@ -157,11 +198,32 @@ async fn connect_and_run(
                     }
                     Some(Err(e)) => {
                         error!("WebSocket read error: {}", e);
+                        {
+                            let mut diag = diagnostics.write();
+                            diag.last_error = Some(WsErrorRecord {
+                                time: super::now_millis(),
+                                url: url.to_string(),
+                                error: e.to_string(),
+                            });
+                        }
+                        super::push_ws_event(diagnostics, "READ_ERROR", &e.to_string());
                         unexpected_disconnect = Some(e.to_string());
                         break;
                     }
                     None => {
                         info!("WebSocket stream ended");
+                        {
+                            let mut diag = diagnostics.write();
+                            diag.last_close = Some(WsCloseRecord {
+                                time: super::now_millis(),
+                                url: url.to_string(),
+                                code: "none".to_string(),
+                                reason: "stream ended".to_string(),
+                                was_clean: None,
+                                unexpected: false,
+                            });
+                        }
+                        super::push_ws_event(diagnostics, "STREAM_END", url);
                         break;
                     }
                     _ => {}
@@ -185,6 +247,15 @@ async fn connect_and_run(
                 }
                 if let Err(e) = ws_sink.send(Message::Binary(data.into())).await {
                     error!("WebSocket send error: {}", e);
+                    {
+                        let mut diag = diagnostics.write();
+                        diag.last_error = Some(WsErrorRecord {
+                            time: super::now_millis(),
+                            url: url.to_string(),
+                            error: e.to_string(),
+                        });
+                    }
+                    super::push_ws_event(diagnostics, "SEND_ERROR", &e.to_string());
                     unexpected_disconnect = Some(e.to_string());
                     break;
                 }

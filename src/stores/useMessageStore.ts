@@ -32,6 +32,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function recordSendDiagnosticTrace(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
+  try {
+    const raw = localStorage.getItem('last-send-diagnostic-trace')
+    const list = raw ? JSON.parse(raw) : []
+    const next = Array.isArray(list) ? list.slice(-39) : []
+    const dataText = data ? ` ${JSON.stringify(data)}` : ''
+    next.push(`${new Date().toISOString()} [${level}] ${message}${dataText}`)
+    localStorage.setItem('last-send-diagnostic-trace', JSON.stringify(next))
+  } catch {
+    // ignore diagnostic storage errors
+  }
+}
+
 function messageUsesWsSend(convType: number, msgType: number): boolean {
   const wsTypes = [0, 1, 2, 3, 7, 12, 18]
   if (![0, 1, 2].includes(convType)) return false
@@ -970,9 +983,16 @@ export const useMessageStore = defineStore('message', () => {
       data?: Record<string, unknown>,
       level: 'info' | 'warn' | 'error' = 'info',
     ) => {
-      void message
-      void data
-      void level
+      // 对齐老 im“发送诊断”：只记录最近发送链路步骤，供设置里的发送诊断弹窗复制排查。
+      recordSendDiagnosticTrace(message, {
+        uid,
+        conversationId,
+        convType,
+        targetId,
+        msgType,
+        optimisticId,
+        ...data,
+      }, level)
     }
 
     // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。

@@ -24,6 +24,42 @@ pub struct PlatformInfo {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NetworkProxySnapshot {
+    pub ok: bool,
+    pub source: String,
+    pub enabled: bool,
+    pub value: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInterfaceSummary {
+    pub name: String,
+    pub addresses: Vec<String>,
+    pub vpn_like: bool,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VpnSuspicion {
+    pub suspected: bool,
+    pub score: u32,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkEnvSnapshot {
+    pub os: String,
+    pub proxy: NetworkProxySnapshot,
+    pub interfaces: Vec<NetworkInterfaceSummary>,
+    pub vpn_suspicion: VpnSuspicion,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClipboardFilePayload {
     pub name: String,
     pub mime: String,
@@ -45,6 +81,22 @@ pub fn get_platform_info() -> PlatformInfo {
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn get_network_snapshot() -> NetworkEnvSnapshot {
+    let proxy = collect_proxy_snapshot();
+    let interfaces = collect_network_interfaces();
+    let vpn_suspicion = judge_vpn_suspicion(&proxy, &interfaces);
+
+    // 对齐老 im 的 network-env:snapshot：Tauri 没有 Electron resolveProxy/netLog，
+    // 这里采集系统代理、网卡和 VPN 线索，供“网络诊断”弹窗排查。
+    NetworkEnvSnapshot {
+        os: std::env::consts::OS.to_string(),
+        proxy,
+        interfaces,
+        vpn_suspicion,
     }
 }
 
@@ -184,6 +236,262 @@ pub fn write_clipboard_image(data_base64: String) -> Result<(), String> {
     {
         let _ = bytes;
         Err("clipboard image write is not supported on this platform".to_string())
+    }
+}
+
+fn run_command_output(program: &str, args: &[&str]) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    let mut command = hidden_windows_command(program);
+
+    #[cfg(not(target_os = "windows"))]
+    let mut command = std::process::Command::new(program);
+
+    let output = command.args(args).output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("{} exited with {}", program, output.status)
+        } else {
+            stderr
+        })
+    }
+}
+
+fn collect_proxy_snapshot() -> NetworkProxySnapshot {
+    #[cfg(target_os = "macos")]
+    {
+        match run_command_output("scutil", &["--proxy"]) {
+            Ok(output) => {
+                let enabled = output.lines().any(|line| {
+                    let text = line.trim();
+                    (text.starts_with("HTTPEnable")
+                        || text.starts_with("HTTPSEnable")
+                        || text.starts_with("SOCKSEnable")
+                        || text.starts_with("ProxyAutoConfigEnable")
+                        || text.starts_with("ProxyAutoDiscoveryEnable"))
+                        && text.ends_with(": 1")
+                });
+                let value = output
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| line.contains("Proxy") || line.contains("Port") || line.contains("Enable") || line.contains("URL"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return NetworkProxySnapshot {
+                    ok: true,
+                    source: "scutil --proxy".to_string(),
+                    enabled,
+                    value,
+                    error: None,
+                };
+            }
+            Err(error) => {
+                return NetworkProxySnapshot {
+                    ok: false,
+                    source: "scutil --proxy".to_string(),
+                    enabled: false,
+                    value: String::new(),
+                    error: Some(error),
+                };
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        match run_command_output("netsh.exe", &["winhttp", "show", "proxy"]) {
+            Ok(output) => {
+                let normalized = output.trim().replace('\r', " ");
+                let enabled = !normalized.to_ascii_lowercase().contains("direct access");
+                return NetworkProxySnapshot {
+                    ok: true,
+                    source: "netsh winhttp show proxy".to_string(),
+                    enabled,
+                    value: normalized,
+                    error: None,
+                };
+            }
+            Err(error) => {
+                return NetworkProxySnapshot {
+                    ok: false,
+                    source: "netsh winhttp show proxy".to_string(),
+                    enabled: false,
+                    value: String::new(),
+                    error: Some(error),
+                };
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let keys = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"];
+        let value = keys
+            .iter()
+            .filter_map(|key| std::env::var(key).ok().map(|val| format!("{}={}", key, val)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        NetworkProxySnapshot {
+            ok: true,
+            source: "proxy environment variables".to_string(),
+            enabled: !value.is_empty(),
+            value,
+            error: None,
+        }
+    }
+}
+
+fn collect_network_interfaces() -> Vec<NetworkInterfaceSummary> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let raw = run_command_output("ifconfig", &[]).or_else(|_| run_command_output("ip", &["addr"]));
+
+    #[cfg(target_os = "windows")]
+    let raw = run_command_output("ipconfig.exe", &["/all"]);
+
+    match raw {
+        Ok(output) => parse_network_interfaces(&output),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn parse_network_interfaces(output: &str) -> Vec<NetworkInterfaceSummary> {
+    #[cfg(target_os = "windows")]
+    {
+        return parse_windows_interfaces(output);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return parse_unix_interfaces(output);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_unix_interfaces(output: &str) -> Vec<NetworkInterfaceSummary> {
+    let mut items: Vec<NetworkInterfaceSummary> = Vec::new();
+    let mut current_name = String::new();
+    let mut current_addresses: Vec<String> = Vec::new();
+
+    for line in output.lines() {
+        if !line.starts_with(char::is_whitespace) && line.contains(':') {
+            push_interface(&mut items, &current_name, &current_addresses);
+            current_name = line.split(':').next().unwrap_or_default().trim().trim_matches(|c| c == '<' || c == '>').to_string();
+            current_addresses.clear();
+        }
+
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("inet ") {
+            if let Some(addr) = rest.split_whitespace().next() {
+                if !addr.starts_with("127.") {
+                    current_addresses.push(addr.to_string());
+                }
+            }
+        }
+    }
+    push_interface(&mut items, &current_name, &current_addresses);
+    items
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_interfaces(output: &str) -> Vec<NetworkInterfaceSummary> {
+    let mut items: Vec<NetworkInterfaceSummary> = Vec::new();
+    let mut current_name = String::new();
+    let mut current_addresses: Vec<String> = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.ends_with(':') && trimmed.to_ascii_lowercase().contains("adapter") {
+            push_interface(&mut items, &current_name, &current_addresses);
+            current_name = trimmed.trim_end_matches(':').split("adapter").last().unwrap_or(trimmed).trim().to_string();
+            current_addresses.clear();
+        }
+
+        if trimmed.to_ascii_lowercase().contains("ipv4 address") {
+            if let Some(addr) = trimmed.split(':').nth(1) {
+                let cleaned = addr.trim().split('(').next().unwrap_or(addr).trim().to_string();
+                if !cleaned.starts_with("127.") {
+                    current_addresses.push(cleaned);
+                }
+            }
+        }
+    }
+    push_interface(&mut items, &current_name, &current_addresses);
+    items
+}
+
+fn push_interface(items: &mut Vec<NetworkInterfaceSummary>, name: &str, addresses: &[String]) {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() || addresses.is_empty() {
+        return;
+    }
+
+    let reasons = vpn_reasons(normalized_name, addresses);
+    items.push(NetworkInterfaceSummary {
+        name: normalized_name.to_string(),
+        addresses: addresses.to_vec(),
+        vpn_like: !reasons.is_empty(),
+        reasons,
+    });
+}
+
+fn vpn_reasons(name: &str, addresses: &[String]) -> Vec<String> {
+    let mut reasons = Vec::new();
+    let lower_name = name.to_ascii_lowercase();
+    let vpn_names = ["utun", "tun", "tap", "ppp", "wg", "wireguard", "tailscale", "zerotier", "clash", "surge", "sing-box", "v2ray", "trojan", "shadowsocks"];
+    if vpn_names.iter().any(|needle| lower_name.contains(needle)) {
+        reasons.push(format!("interface name looks like VPN/proxy: {}", name));
+    }
+
+    for address in addresses {
+        if address.starts_with("100.")
+            || address.starts_with("10.7.")
+            || address.starts_with("10.8.")
+            || address.starts_with("10.10.")
+            || address.starts_with("172.16.")
+            || address.starts_with("172.17.")
+            || address.starts_with("172.18.")
+            || address.starts_with("172.19.")
+            || address.starts_with("172.20.")
+            || address.starts_with("172.21.")
+            || address.starts_with("172.22.")
+            || address.starts_with("172.23.")
+            || address.starts_with("172.24.")
+            || address.starts_with("172.25.")
+            || address.starts_with("172.26.")
+            || address.starts_with("172.27.")
+            || address.starts_with("172.28.")
+            || address.starts_with("172.29.")
+            || address.starts_with("172.30.")
+            || address.starts_with("172.31.")
+        {
+            reasons.push(format!("address is often used by VPN/private overlay: {}", address));
+            break;
+        }
+    }
+
+    reasons
+}
+
+fn judge_vpn_suspicion(proxy: &NetworkProxySnapshot, interfaces: &[NetworkInterfaceSummary]) -> VpnSuspicion {
+    let mut reasons = Vec::new();
+    let mut score = 0;
+
+    if proxy.enabled {
+        score += 40;
+        reasons.push(format!("system proxy enabled via {}", proxy.source));
+    }
+
+    for item in interfaces.iter().filter(|item| item.vpn_like) {
+        score += 35;
+        reasons.push(format!("{}: {}", item.name, item.reasons.join(", ")));
+    }
+
+    VpnSuspicion {
+        suspected: score >= 35,
+        score,
+        reasons,
     }
 }
 
