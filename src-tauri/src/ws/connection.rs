@@ -18,6 +18,7 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 100;
 pub async fn run_connection(
     url: &str,
     aes_key: &str,
+    uid: String,
     session_id: Arc<RwLock<String>>,
     install_code: Arc<RwLock<String>>,
     status: Arc<RwLock<ConnectionStatus>>,
@@ -40,6 +41,7 @@ pub async fn run_connection(
         let unexpected_disconnect = match connect_and_run(
             &current_url,
             &aes_key,
+            &uid,
             &session_id,
             &install_code,
             &status,
@@ -92,6 +94,7 @@ pub async fn run_connection(
 async fn connect_and_run(
     url: &str,
     aes_key: &str,
+    uid: &str,
     session_id: &Arc<RwLock<String>>,
     install_code: &Arc<RwLock<String>>,
     status: &Arc<RwLock<ConnectionStatus>>,
@@ -156,7 +159,7 @@ async fn connect_and_run(
         code.len()
     );
 
-    let mut batcher = MessageBatcher::new(app_handle.clone(), aes_key.to_string());
+    let mut batcher = MessageBatcher::new(app_handle.clone(), aes_key.to_string(), uid.to_string());
 
     let mut unexpected_disconnect: Option<String> = None;
 

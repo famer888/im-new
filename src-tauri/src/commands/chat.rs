@@ -1138,6 +1138,7 @@ pub fn decrypt_private_incoming(
     sender_id: String,
     peer_id: Option<String>,
     version: Option<i64>,
+    source: Option<String>,
     ciphertext_hex: String,
     msg_type: Option<i32>,
 ) -> Result<String, String> {
@@ -1152,17 +1153,33 @@ pub fn decrypt_private_incoming(
     }
     let mut plain: Option<Vec<u8>> = None;
     let mut last_err: Option<String> = None;
+    let preferred_source = source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| *s == "web" || *s == "app");
     for friend_id in &candidates {
-        match crypto
-            .decrypt_friend_message(friend_id, ver, "web", &data)
-            .or_else(|_| crypto.decrypt_friend_message(friend_id, ver, "app", &data))
-            .or_else(|_| {
-                let key = crypto
-                    .get_latest_friend_key(friend_id, "web")
-                    .or_else(|| crypto.get_latest_friend_key(friend_id, "app"))
-                    .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-                crate::crypto::aes::decrypt_message(&data, &key)
-            }) {
+        let decrypted = if let Some(src) = preferred_source {
+            crypto
+                .decrypt_friend_message(friend_id, ver, src, &data)
+                .or_else(|_| {
+                    let key = crypto
+                        .get_latest_friend_key(friend_id, src)
+                        .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                    crate::crypto::aes::decrypt_message(&data, &key)
+                })
+        } else {
+            crypto
+                .decrypt_friend_message(friend_id, ver, "web", &data)
+                .or_else(|_| crypto.decrypt_friend_message(friend_id, ver, "app", &data))
+                .or_else(|_| {
+                    let key = crypto
+                        .get_latest_friend_key(friend_id, "web")
+                        .or_else(|| crypto.get_latest_friend_key(friend_id, "app"))
+                        .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                    crate::crypto::aes::decrypt_message(&data, &key)
+                })
+        };
+        match decrypted {
             Ok(v) => {
                 plain = Some(v);
                 break;

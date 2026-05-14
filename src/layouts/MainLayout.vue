@@ -365,7 +365,7 @@ onMounted(async () => {
           const sessionId = String(authStore.session?.sessionId || '').trim()
           const installCode = authStore.wsConnectConfig?.installCode || getOrCreateInstallCode()
           if (wsUrl && aesKey) {
-            await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
+            await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid })
           } else {
             networkStore.setWsStatus('disconnected')
             console.warn('[ws] skipped connect: missing ws config')

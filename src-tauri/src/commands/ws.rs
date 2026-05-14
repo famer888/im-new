@@ -9,6 +9,7 @@ pub async fn connect_ws(
     aes_key: String,
     session_id: Option<String>,
     install_code: Option<String>,
+    uid: Option<String>,
 ) -> Result<(), String> {
     tracing::info!(
         target: "ws",
@@ -24,7 +25,7 @@ pub async fn connect_ws(
         );
     }
     ws_mgr
-        .connect(&url, &aes_key, session_id, install_code)
+        .connect(&url, &aes_key, session_id, install_code, uid)
         .await
         .map_err(|e| e.to_string())
 }

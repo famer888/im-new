@@ -65,12 +65,14 @@ async function resolveWsConnectConfig(): Promise<{
   aesKey: string
   sessionId: string
   installCode: string
+  uid: string
 }> {
   const authStore = useAuthStore()
   let wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
   let aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
   let sessionId = String(authStore.session?.sessionId || '').trim()
   let installCode = String(authStore.wsConnectConfig?.installCode || '').trim()
+  let uid = String(authStore.uid || '').trim()
 
   // 兼容历史缓存：若 authStore 尚未带出，直接读 localStorage 的持久化配置
   if (!wsUrl || !aesKey) {
@@ -90,6 +92,7 @@ async function resolveWsConnectConfig(): Promise<{
   if (!sessionId) {
     try {
       const currentUid = localStorage.getItem('current-uid') || ''
+      uid = uid || String(currentUid || '').trim()
       const accountListText = localStorage.getItem('login-account-list')
       const accountList = accountListText ? JSON.parse(accountListText) : []
       if (currentUid && Array.isArray(accountList)) {
@@ -127,6 +130,7 @@ async function resolveWsConnectConfig(): Promise<{
     aesKey,
     sessionId,
     installCode,
+    uid,
   }
 }
 
@@ -518,7 +522,7 @@ export const useMessageStore = defineStore('message', () => {
     const status = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
     if (status === 'connected') return
 
-    const { wsUrl, aesKey, sessionId, installCode } = await resolveWsConnectConfig()
+    const { wsUrl, aesKey, sessionId, installCode, uid } = await resolveWsConnectConfig()
     if (!wsUrl || !aesKey) {
       throw new Error('[ws] connect config missing (wsUrl/aesKey)')
     }
@@ -526,7 +530,7 @@ export const useMessageStore = defineStore('message', () => {
     if (!pendingWsConnect) {
       pendingWsConnect = (async () => {
         console.warn('[ws] ensureWsConnected: reconnecting...', { status, wsUrl })
-        await tauriInvoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode })
+        await tauriInvoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid })
         for (let i = 0; i < 20; i++) {
           const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
           if (s === 'connected') return
