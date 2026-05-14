@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -69,9 +69,14 @@ pub struct ImageSendLogPayload {
 }
 
 static AUDIO_PLAYERS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
+static ACTIVE_DOWNLOADS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn audio_players() -> &'static Mutex<HashMap<String, Child>> {
     AUDIO_PLAYERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn active_downloads() -> &'static Mutex<HashSet<String>> {
+    ACTIVE_DOWNLOADS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 fn stop_audio_children(players: &mut HashMap<String, Child>, keep_id: Option<&str>) {
@@ -368,6 +373,17 @@ pub async fn download_file(
     emit_data_url: Option<bool>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&save_path);
+    // 图片/视频组件会因重渲染、缩略图失败重试、重复点击同时请求同一文件；
+    // 这里按 msg_id + save_path 去重，让后续请求复用当前任务最终的 file:done/file:error 事件。
+    let download_key = format!("{}|{}", msg_id, path.to_string_lossy());
+    {
+        let mut active = active_downloads()
+            .lock()
+            .map_err(|_| "active download lock poisoned".to_string())?;
+        if !active.insert(download_key.clone()) {
+            return Ok(());
+        }
+    }
     let should_emit_data_url = emit_data_url.unwrap_or(true);
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
     let should_log_file_open = log_tag.as_deref() == Some("file-open");
@@ -508,6 +524,8 @@ pub async fn download_file(
             }
 
             let enc_path = path.with_extension("enc");
+            // 上一次过期 URL / 解密失败可能留下半截 .enc，重试前先清掉，避免读到旧密文。
+            let _ = tokio::fs::remove_file(&enc_path).await;
             tokio::fs::write(&enc_path, &bytes)
                 .await
                 .map_err(|e| format!("Write encrypted file failed: {}", e))?;
@@ -630,6 +648,7 @@ pub async fn download_file(
                 );
             }
             Err(e) => {
+                let _ = tokio::fs::remove_file(path.with_extension("enc")).await;
                 if should_log_audio_clone {
                     tracing::error!(
                         target: "group-audio",
@@ -651,6 +670,9 @@ pub async fn download_file(
                     serde_json::json!({ "error": e }),
                 );
             }
+        }
+        if let Ok(mut active) = active_downloads().lock() {
+            active.remove(&download_key);
         }
     });
 
