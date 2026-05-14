@@ -35,23 +35,8 @@ let stopTimer: ReturnType<typeof window.setTimeout> | null = null
 const DICE_MESSAGE_DEBUG = false
 
 function diceMessageLog(message: string, data?: Record<string, unknown>) {
-  if (!DICE_MESSAGE_DEBUG) return
-  const payload = {
-    debugRunId: DICE_REPLAY_COMPONENT_DEBUG_RUN_ID,
-    stateCount: diceAnimationStates.size,
-    ...(data || {}),
-  }
-  console.warn(`[dice-message] ${message}`, payload)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level: 'warn',
-        message: `[dice-message] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
 }
 
 function diceAnimationKey(message: Message): string {

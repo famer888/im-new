@@ -55,19 +55,9 @@ const invitePromptSubmitting = ref(false)
 const pendingInviteIds = ref(new Set<string>())
 
 function inviteMemberRefreshDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
-  const payload = data || {}
-  const log = level === 'error' ? console.error : level === 'info' ? console.info : console.warn
-  log(`[group-member-refresh-debug][group-info-panel] ${message}`, payload)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: `[group-member-refresh-debug][group-info-panel] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {

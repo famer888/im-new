@@ -929,17 +929,17 @@ impl MessageBatcher {
             }
 
             let group_id_str = group.group_id.to_string();
-            // 「拒绝加入」等 group_req_status == 2 仅进「群通知」会话，不参与群会话时间线显示
             let conversation_id =
-                if item.group_req_status == 2 {
+                if group_req_event_goes_to_invitation_only(&item) {
                     "1_invitation".to_string()
                 } else {
                     format!("1_{}", group.group_id)
                 };
 
+            let notice_msg_id = group_req_event_notice_message_id(&item, group.group_id);
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_EVENT_PUSH,
-                msg_id: common.msg_id.to_string(),
+                msg_id: notice_msg_id.clone(),
                 conversation_id,
                 sender_id: item.from_uid.to_string(),
                 msg_type: 8,
@@ -962,6 +962,7 @@ impl MessageBatcher {
                     "receiveUid": item.receive_uid.to_string(),
                     "fromUid": item.from_uid.to_string(),
                     "checkUid": item.check_uid.to_string(),
+                    "notificationIdentity": notice_msg_id,
                 }),
             });
         }
@@ -2157,6 +2158,43 @@ fn group_event_content(item: &imweb::GroupReqEventMsgDto, common: &imweb::Common
     }
 }
 
+fn group_req_event_goes_to_invitation_only(item: &imweb::GroupReqEventMsgDto) -> bool {
+    // 与旧 im 的群事件分支对齐：邀请/扫码/别名入群在待审核阶段只进入
+    // “群通知”伪会话；管理员拒绝申请也只进入群通知，避免未入群用户看到正式群会话。
+    matches!(item.group_req_type, 1 | 2 | 15) && item.group_req_status != 1
+        || matches!(item.group_req_type, 3 | 4) && item.group_req_status == 2
+}
+
+fn first_group_req_event_member_uid(item: &imweb::GroupReqEventMsgDto) -> i64 {
+    item.group_member
+        .iter()
+        .find_map(|member| member.user.as_ref().map(|user| user.uid))
+        .unwrap_or(0)
+}
+
+fn stable_group_req_notice_id(group_id: i64, req_type: i32, send_uid: i64, receive_uid: i64) -> String {
+    format!(
+        "group-req-notice-{}-{}-{}-{}",
+        group_id.max(0),
+        req_type,
+        send_uid.max(0),
+        receive_uid.max(0),
+    )
+}
+
+fn group_req_event_notice_message_id(item: &imweb::GroupReqEventMsgDto, group_id: i64) -> String {
+    stable_group_req_notice_id(
+        group_id,
+        item.group_req_type,
+        item.from_uid,
+        if item.receive_uid > 0 {
+            item.receive_uid
+        } else {
+            first_group_req_event_member_uid(item)
+        },
+    )
+}
+
 fn group_member_to_json(member: &imweb::GroupMemberBase) -> serde_json::Value {
     let user = member.user.as_ref();
     serde_json::json!({
@@ -2198,19 +2236,7 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
             continue;
         }
 
-        let msg_id = if item.group_req_id > 0 {
-            item.group_req_id.to_string()
-        } else if !item.r_id.trim().is_empty() {
-            item.r_id.trim().to_string()
-        } else {
-            format!(
-                "group-req-{}-{}-{}-{}",
-                item.group_id,
-                item.send_uid,
-                item.receive_uid,
-                normalize_timestamp(item.update_time)
-            )
-        };
+        let msg_id = group_req_notice_message_id(item);
         let group_member = item.group_member.as_ref().map(group_member_to_json);
         let member_count = if group_member.is_some() { 1 } else { 0 };
 
@@ -2244,6 +2270,7 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
                 "fromUser": item.from_user.as_ref().map(user_base_to_json),
                 "handleType": item.handle_type,
                 "unReadNum": item.un_read_num,
+                "notificationIdentity": msg_id,
             }),
         });
 
@@ -2283,6 +2310,15 @@ fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto])
         }
     }
     out
+}
+
+fn group_req_notice_message_id(item: &imweb::GroupReqMsgDto) -> String {
+    stable_group_req_notice_id(
+        item.group_id,
+        item.group_req_type,
+        item.send_uid,
+        item.receive_uid,
+    )
 }
 
 fn should_emit_group_req_chat_notice(item: &imweb::GroupReqMsgDto) -> bool {

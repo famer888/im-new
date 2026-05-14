@@ -432,13 +432,6 @@ export const useAuthStore = defineStore('auth', () => {
     const keepHistoryOnLogout = options?.keepHistoryOnLogout ?? true
     const preserveLoginCache = options?.preserveLoginCache ?? false
 
-    console.info('[auth] logout requested', {
-      currentUid,
-      keepHistoryOnLogout,
-      preserveLoginCache,
-      isTauri: isTauri(),
-    })
-
     const previousSession = session.value
     const previousCurrentUid = localStorage.getItem(CURRENT_UID_KEY)
     const previousBrowserSession = localStorage.getItem('browser-session')

@@ -22,6 +22,10 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
+function e2eeDebugLog(...args: unknown[]) {
+  void args
+}
+
 /** 账号维度持久化到 localStorage 的 key lifecycle 数据。 */
 interface OwnKeyPair {
   /** 32 字节 curve25519 私钥（HEX 大写）。 */
@@ -77,7 +81,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
   }
   const cached = loadOwnKey(uid)
   if (cached) {
-    console.log('[e2ee] ensureOwnKeyPair: cache hit', {
+    e2eeDebugLog('[e2ee] ensureOwnKeyPair: cache hit', {
       uid,
       publicKeyHead: cached.publicKey.slice(0, 16),
       keyVersion: cached.keyVersion,
@@ -127,7 +131,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           version: Number(kp.keyVersion || 1),
           source: 'web',
         })
-        console.log('[e2ee] rotated and derived self web rel_key', {
+        e2eeDebugLog('[e2ee] rotated and derived self web rel_key', {
           uid,
           keyVersion: kp.keyVersion,
           pubHead: kp.publicKey.slice(0, 16),
@@ -150,7 +154,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         version: Number(cached.keyVersion || 1),
         source: 'web',
       })
-      console.log('[e2ee] derived self web rel_key (cache hit)');
+      e2eeDebugLog('[e2ee] derived self web rel_key (cache hit)');
     } catch (err) {
       console.error('[e2ee] derive self web rel_key failed (cache hit)', err);
     }
@@ -164,7 +168,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           version: Number(selfAppKeyPair.keyVersion || 1),
           source: 'app',
         })
-        console.log('[e2ee] derived self app rel_key (cache hit)');
+        e2eeDebugLog('[e2ee] derived self app rel_key (cache hit)');
       } catch (err) {
         console.error('[e2ee] derive self app rel_key failed (cache hit)', err);
       }
@@ -175,7 +179,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
 
   if (pendingOwnKey) return pendingOwnKey
   pendingOwnKey = (async () => {
-    console.log('[e2ee] ensureOwnKeyPair: no local cache, fetching from server', { uid })
+    e2eeDebugLog('[e2ee] ensureOwnKeyPair: no local cache, fetching from server', { uid })
     let existing: {
       publicKey?: string
       keyVersion?: number
@@ -186,7 +190,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       const web = (resp as any)?.webKeyPair
       const app = (resp as any)?.appKeyPair
       selfAppKeyPair = app
-      console.log('[e2ee] getKeyPair(self) resp:', {
+      e2eeDebugLog('[e2ee] getKeyPair(self) resp:', {
         hasWeb: !!web,
         webPubHead: web?.publicKey ? String(web.publicKey).slice(0, 16) : null,
         webKeyVersion: web?.keyVersion,
@@ -206,7 +210,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       privateKeyHex: string
       publicKeyHex: string
     }>('generate_curve25519_keypair')
-    console.log('[e2ee] generated new curve25519 keypair', {
+    e2eeDebugLog('[e2ee] generated new curve25519 keypair', {
       privLen: fresh.privateKeyHex.length,
       pubLen: fresh.publicKeyHex.length,
       pubHead: fresh.publicKeyHex.slice(0, 16),
@@ -215,7 +219,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
     const upd = await updateKeyPair({ publicKey: fresh.publicKeyHex })
     const keyVersion = Number((upd as any)?.keyVersion || 0)
     const commonResult = (upd as any)?.commonResult
-    console.log('[e2ee] updateKeyPair resp:', { keyVersion, commonResult })
+    e2eeDebugLog('[e2ee] updateKeyPair resp:', { keyVersion, commonResult })
     if (!keyVersion) {
       throw new Error('[e2ee] updateKeyPair returned empty keyVersion')
     }
@@ -239,7 +243,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         version: Number(kp.keyVersion || 1),
         source: 'web',
       })
-      console.log('[e2ee] derived self web rel_key');
+      e2eeDebugLog('[e2ee] derived self web rel_key');
     } catch (err) {
       console.error('[e2ee] derive self web rel_key failed', err);
     }
@@ -253,12 +257,12 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           version: Number(selfAppKeyPair.keyVersion || 1),
           source: 'app',
         })
-        console.log('[e2ee] derived self app rel_key');
+        e2eeDebugLog('[e2ee] derived self app rel_key');
       } catch (err) {
         console.error('[e2ee] derive self app rel_key failed', err);
       }
     }
-    console.log('[e2ee] ensureOwnKeyPair DONE', {
+    e2eeDebugLog('[e2ee] ensureOwnKeyPair DONE', {
       uid,
       keyVersion: kp.keyVersion,
       pubHead: kp.publicKey.slice(0, 16),
@@ -301,7 +305,7 @@ export async function ensureGroupRelKey(
 
   const cachedHit = await tauriInvoke<boolean>('has_group_rel_key', { groupId: gid })
   if (cachedHit) {
-    console.log('[e2ee] ensureGroupRelKey: rust cache hit', { gid })
+    e2eeDebugLog('[e2ee] ensureGroupRelKey: rust cache hit', { gid })
     return ''
   }
 
@@ -309,7 +313,7 @@ export async function ensureGroupRelKey(
   if (existing) return existing
 
   const task = (async () => {
-    console.log('[e2ee] ensureGroupRelKey: start', { uid, gid })
+    e2eeDebugLog('[e2ee] ensureGroupRelKey: start', { uid, gid })
     await ensureOwnKeyPair(uid)
 
     const resp = await getKeyPair({
@@ -318,7 +322,7 @@ export async function ensureGroupRelKey(
       groupKeyVersion: 1,
     })
     const gkp = (resp as any)?.groupKeyPair
-    console.log('[e2ee] getKeyPair(group) resp:', {
+    e2eeDebugLog('[e2ee] getKeyPair(group) resp:', {
       gid,
       hasGkp: !!gkp,
       publicKeyLen: gkp?.publicKey ? String(gkp.publicKey).length : 0,
@@ -337,7 +341,7 @@ export async function ensureGroupRelKey(
         publicKeyHex: String(gkp.publicKey),
         encryptedMsgKeyHex: String(gkp.msgKey),
       })
-      console.log('[e2ee] ensureGroupRelKey DONE', {
+      e2eeDebugLog('[e2ee] ensureGroupRelKey DONE', {
         gid,
         relKeyLen: relKey.length,
         relKeyHead: relKey.slice(0, 8),
@@ -402,7 +406,7 @@ export async function ensureChannelRelKey(
 
   const cachedHit = await tauriInvoke<boolean>('has_channel_rel_key', { channelId: cid })
   if (cachedHit) {
-    console.log('[e2ee] ensureChannelRelKey: rust cache hit', { cid })
+    e2eeDebugLog('[e2ee] ensureChannelRelKey: rust cache hit', { cid })
     return ''
   }
 
@@ -410,7 +414,7 @@ export async function ensureChannelRelKey(
   if (existing) return existing
 
   const task = (async () => {
-    console.log('[e2ee] ensureChannelRelKey: start', { uid, cid })
+    e2eeDebugLog('[e2ee] ensureChannelRelKey: start', { uid, cid })
     await ensureOwnKeyPair(uid)
 
     const resp = await getKeyPair({
@@ -419,7 +423,7 @@ export async function ensureChannelRelKey(
       channelKeyVersion: 1,
     })
     const ckp = (resp as any)?.channelKeyPair
-    console.log('[e2ee] getKeyPair(channel) resp:', {
+    e2eeDebugLog('[e2ee] getKeyPair(channel) resp:', {
       cid,
       hasCkp: !!ckp,
       publicKeyLen: ckp?.publicKey ? String(ckp.publicKey).length : 0,
@@ -438,7 +442,7 @@ export async function ensureChannelRelKey(
         publicKeyHex: String(ckp.publicKey),
         encryptedMsgKeyHex: String(ckp.msgKey),
       })
-      console.log('[e2ee] ensureChannelRelKey DONE', {
+      e2eeDebugLog('[e2ee] ensureChannelRelKey DONE', {
         cid,
         relKeyLen: relKey.length,
         relKeyHead: relKey.slice(0, 8),
@@ -473,7 +477,7 @@ export async function ensureFriendRelKey(
     throw new Error('ensureFriendRelKey: Tauri only')
   }
   const fid = String(friendId)
-  console.log('[e2ee] ensureFriendRelKey: start', { uid, fid })
+  e2eeDebugLog('[e2ee] ensureFriendRelKey: start', { uid, fid })
   await ensureOwnKeyPair(uid)
   const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', {
     friendId: fid,
@@ -481,7 +485,7 @@ export async function ensureFriendRelKey(
     source: 'web',
   })
   if (cacheHit && !forceRefresh) {
-    console.log('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
+    e2eeDebugLog('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
     return ''
   }
 
@@ -508,7 +512,7 @@ export async function ensureFriendRelKey(
       web = (resp0 as any)?.webKeyPair
       app = (resp0 as any)?.appKeyPair
     }
-    console.log('[e2ee] getKeyPair(friend) resp:', {
+    e2eeDebugLog('[e2ee] getKeyPair(friend) resp:', {
       fid,
       webKeyVersion: web?.keyVersion,
       webPublicKeyLen: web?.publicKey ? String(web.publicKey).length : 0,
@@ -527,7 +531,7 @@ export async function ensureFriendRelKey(
         version: Number(web.keyVersion || 1),
         source: 'web',
       })
-      console.log('[e2ee] derive_friend_rel_key OK(web)', { fid, len: last.length })
+      e2eeDebugLog('[e2ee] derive_friend_rel_key OK(web)', { fid, len: last.length })
     }
     if (app?.publicKey) {
       last = await tauriInvoke<string>('derive_friend_rel_key', {
@@ -537,7 +541,7 @@ export async function ensureFriendRelKey(
         version: Number(app.keyVersion || 1),
         source: 'app',
       })
-      console.log('[e2ee] derive_friend_rel_key OK(app)', { fid, len: last.length })
+      e2eeDebugLog('[e2ee] derive_friend_rel_key OK(app)', { fid, len: last.length })
     }
     return last
   })().finally(() => {
@@ -624,7 +628,7 @@ export async function ensureFriendRelKeyForVersion(
         version: ver,
         source: 'web',
       })
-      console.log('[e2ee] derive_friend_rel_key OK(web/version)', { fid, ver, len: last.length })
+      e2eeDebugLog('[e2ee] derive_friend_rel_key OK(web/version)', { fid, ver, len: last.length })
     }
     if (app?.publicKey && Number(app.keyVersion || 0) === ver) {
       last = await tauriInvoke<string>('derive_friend_rel_key', {
@@ -634,7 +638,7 @@ export async function ensureFriendRelKeyForVersion(
         version: ver,
         source: 'app',
       })
-      console.log('[e2ee] derive_friend_rel_key OK(app/version)', { fid, ver, len: last.length })
+      e2eeDebugLog('[e2ee] derive_friend_rel_key OK(app/version)', { fid, ver, len: last.length })
     }
     return last
   })().finally(() => {

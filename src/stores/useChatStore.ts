@@ -140,11 +140,24 @@ export const useChatStore = defineStore('chat', () => {
     sortConversations()
   }
 
-  function updateGroupNotificationConv(digest: string, time: number, pendingCount: number) {
+  function updateGroupNotificationConv(digest: string, time: number, unreadCount?: number | null) {
     const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
-    // 群通知入口按“是否有待处理”展示红点，避免历史累计未读导致长期显示 5/10 等脏计数。
-    const normalizedUnread = Number(pendingCount || 0) > 0 ? 1 : 0
+    // 对齐旧 im：群通知红点表示“未读通知”，不是“待处理申请数”。
+    // 是否已读由调用方显式传入；这里只负责规整为 0/1，避免 stale currentConversationId 误清红点。
     const idx = conversations.value.findIndex((c) => c.id === id)
+    const existingUnread = idx >= 0 ? Number(conversations.value[idx].unreadCount || 0) : 0
+    const explicitUnread = unreadCount === null || unreadCount === undefined ? null : Number(unreadCount)
+    const normalizedUnread = explicitUnread === null || !Number.isFinite(explicitUnread)
+        ? (existingUnread > 0 ? 1 : 0)
+        : (explicitUnread > 0 ? 1 : 0)
+    console.warn('[group-notification-unread] update conv', {
+      conversationId: id,
+      currentConversationId: currentConversationId.value || '',
+      existingUnread,
+      inputUnread: unreadCount ?? null,
+      normalizedUnread,
+      time,
+    })
     if (idx >= 0) {
       const conv = conversations.value[idx]
       conversations.value[idx] = {
@@ -181,12 +194,27 @@ export const useChatStore = defineStore('chat', () => {
   function clearGroupNotificationUnread() {
     const id = `1_${GROUP_NOTIFICATION_TARGET_ID}`
     const idx = conversations.value.findIndex((c) => c.id === id)
+    const unreadBefore = idx >= 0 ? Number(conversations.value[idx].unreadCount || 0) : 0
     if (idx >= 0) {
       conversations.value[idx] = { ...conversations.value[idx], unreadCount: 0 }
     }
+    console.warn('[group-notification-unread] clear', {
+      conversationId: id,
+      currentConversationId: currentConversationId.value || '',
+      unreadBefore,
+    })
     if (isTauri() && _persistUid) {
       tauriInvoke('mark_as_read', { uid: _persistUid, conversationId: id }).catch((error) => {
         console.warn('[ChatStore] clear group notification unread failed:', error)
+      })
+      const unreadTotal = conversations.value
+        .filter((c) => !c.isMuted && !c.isArchived)
+        .reduce((sum, c) => sum + Math.max(0, Number(c.unreadCount || 0)), 0)
+      tauriInvoke('update_tray_unread_count', {
+        count: unreadTotal,
+        flash: false,
+      }).catch((error) => {
+        console.warn('[ChatStore] update tray unread after clear group notification failed:', error)
       })
     }
   }

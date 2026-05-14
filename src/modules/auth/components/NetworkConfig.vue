@@ -138,7 +138,6 @@ async function fetchAndUpdateDomainPool() {
       await checkDomainsFromIndex(startIndex)
     }
 
-    console.log(`[NetworkCheck] 域名补充完成，新增 ${newUrls.length} 个域名`)
   } catch (err) {
     console.error('[NetworkCheck] fetchAndUpdateDomainPool error:', err)
   }
@@ -155,7 +154,6 @@ async function loadAndCheckDomains() {
 
   if (!poolDomains.length && retryCount.value < 2 && !cancelled.value) {
     retryCount.value++
-    console.log(`[NetworkCheck] 动态域名池为空，进行第${retryCount.value}次补充`)
     await fetchAndUpdateDomainPool()
     poolDomains = getLocalPoolDomains()
   }
@@ -195,7 +193,6 @@ async function fetchDomainList() {
 
     if (validCount.value === 0 && retryCount.value < 2 && !cancelled.value) {
       retryCount.value++
-      console.log(`[NetworkCheck] 全部检测失败，进行第${retryCount.value}次域名补充`)
       await fetchAndUpdateDomainPool()
       await loadAndCheckDomains()
     }
@@ -233,9 +230,6 @@ onBeforeUnmount(() => {
 <template>
   <div class="network-overlay">
     <div class="network-panel">
-      <div class="panel-header">
-        <span class="header-text">Network benchmark</span>
-      </div>
       <div class="domain-list">
         <div
           v-for="(item, index) in domainList"
@@ -287,22 +281,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.panel-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid #3a3a3a;
-  display: flex;
-  font-weight: 900;
-  justify-content: center;
-  align-items: center;
-
-  .header-text {
-    font-size: 17px;
-    font-weight: 700;
-    color: #ffffff;
-    text-align: center;
-  }
 }
 
 .domain-list {

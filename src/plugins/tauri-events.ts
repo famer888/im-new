@@ -192,11 +192,9 @@ function collectGroupEventMemberPatches(
 
   if (removeMode) {
     addPatch(extra?.targetUser)
-    if (reqType === 6) {
-      addUidPatch(extra?.receiveUid)
-    } else if (reqType === 7) {
+    if (reqType === 7) {
       addPatch(extra?.fromUser)
-      addUidPatch(extra?.fromUid ?? extra?.sendUid ?? extra?.receiveUid)
+      addUidPatch(extra?.fromUid ?? extra?.sendUid)
     }
   } else {
     addActorPatch(extra?.fromUser)
@@ -219,6 +217,40 @@ function isGroupEventSource(source: string): boolean {
     || source === 'group-event-req'
     || source === 'group-event-req-chat'
   )
+}
+
+function getFirstGroupEventMemberId(extra: any): string {
+  if (!Array.isArray(extra?.members)) return ''
+  for (const member of extra.members) {
+    const userId = getGroupEventUserId(member)
+    if (userId) return userId
+  }
+  return ''
+}
+
+function getGroupEventAffectedMemberId(extra: any): string {
+  const reqType = Number(extra?.groupReqType ?? 0)
+  const memberId = getFirstGroupEventMemberId(extra)
+  if (memberId) return memberId
+
+  const targetUserId = getGroupEventUserId(extra?.targetUser)
+  if (targetUserId) return targetUserId
+
+  if (reqType === 7) {
+    return getGroupEventActorId(extra)
+  }
+
+  return ''
+}
+
+function shouldRemoveLocalGroupForEvent(extra: any, currentUid: string): boolean {
+  if (String(extra?.source || '') !== 'group-event') return false
+  const reqType = Number(extra?.groupReqType ?? 0)
+  if (reqType === 13) return true
+  if (reqType !== 6 && reqType !== 7) return false
+
+  const affectedMemberId = getGroupEventAffectedMemberId(extra)
+  return Boolean(currentUid && affectedMemberId && affectedMemberId === currentUid)
 }
 
 function isPendingGroupReqChatMessage(message: any): boolean {
@@ -426,10 +458,6 @@ async function flashTrayForIncomingMessage(incomingCount = 1) {
   try {
     const now = Date.now()
     if (now - lastTrayFlashAt < 1200) {
-      console.info('[tray-alert] skip flash by cooldown', {
-        incomingCount,
-        elapsedMs: now - lastTrayFlashAt,
-      })
       return
     }
     lastTrayFlashAt = now
@@ -441,11 +469,6 @@ async function flashTrayForIncomingMessage(incomingCount = 1) {
       totalUnread,
       Math.floor(Number(incomingCount || 0)),
     )
-    console.info('[tray-alert] flashTrayForIncomingMessage', {
-      incomingCount,
-      totalUnread,
-      count,
-    })
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('update_tray_unread_count', { count, flash: true })
   } catch (err) {
@@ -618,7 +641,6 @@ export async function setupTauriListeners() {
         for (const cid of channelIds) {
           try {
             await ensureChannelRelKey(uid, cid)
-            console.info('[channel] warmup channel relKey OK', { cid })
           } catch (err) {
             console.warn('[channel] warmup channel relKey failed', { cid, err: String(err) })
           }
@@ -653,6 +675,12 @@ export async function setupTauriListeners() {
     }
 
     const chatStore = useChatStore()
+    if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
+      console.warn('[group-notification-unread] notification click', {
+        conversationId,
+        currentConversationId: chatStore.currentConversationId || '',
+      })
+    }
     chatStore.setCurrentConversation(conversationId)
     const uiStore = useUIStore()
     if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
@@ -775,30 +803,13 @@ export async function setupTauriListeners() {
       console.warn('[msg:batch] dropped invalid items:', raw.length - valid.length)
     }
     if (filtered.length !== valid.length) {
-      console.info('[msg:batch] dropped replayed messages after logout-clear', {
-        currentUid,
-        dropped: valid.length - filtered.length,
-        logoutClearedHistoryAt,
-      })
+      // Dropped stale messages after local logout history clear.
     }
     if (filtered.length === 0) return
     const immediateVisible = filtered.filter((m: any) => !Boolean(m?.extra?.decryptPending))
     if (immediateVisible.length > 0) {
       messageStore.batchAppendMessages(immediateVisible as Message[])
     }
-    if (filtered.some((m: any) => String(m?.conversationId ?? m?.conversation_id ?? '').startsWith('2_'))) {
-      console.info('[channel] msg:batch received channel messages', filtered
-        .filter((m: any) => String(m?.conversationId ?? m?.conversation_id ?? '').startsWith('2_'))
-        .map((m: any) => ({
-          id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
-          conversationId: String(m?.conversationId ?? m?.conversation_id ?? ''),
-          senderId: String(m?.senderId ?? m?.sender_id ?? ''),
-          msgType: Number(m?.msgType ?? m?.msg_type ?? 0),
-          decryptPending: Boolean(m?.extra?.decryptPending),
-          content: String(m?.content ?? '').slice(0, 80),
-        })))
-    }
-
     // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
     // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
     //    的消息按 groupId 预热，避免对每条已正常的群消息都发 HTTP 请求。
@@ -855,7 +866,6 @@ export async function setupTauriListeners() {
       for (const cid of pendingChannelIds) {
         try {
           await ensureChannelRelKey(uid, cid)
-          console.info('[channel] ensureChannelRelKey on msg:batch OK', { cid })
         } catch (err) {
           console.warn('[channel] ensureChannelRelKey on msg:batch failed', { cid, err: String(err) })
         }
@@ -938,12 +948,6 @@ export async function setupTauriListeners() {
                       }
                     }
                     privateDecrypted = true
-                    console.log('[e2ee] retry decrypt_private OK', {
-                      msgId,
-                      peerId,
-                      msgType,
-                      version: candidate.version,
-                    })
                     break
                   } catch (err) {
                     lastErr = err
@@ -978,7 +982,6 @@ export async function setupTauriListeners() {
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
                 }
-                console.log('[e2ee] retry decrypt_group OK', { msgId, groupId, msgType })
                 continue
               } catch (err) {
                 console.warn('[e2ee] retry decrypt_group FAILED (1st pass)', {
@@ -1001,11 +1004,6 @@ export async function setupTauriListeners() {
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
                 }
-                console.log('[e2ee] retry decrypt_group OK after refresh', {
-                  msgId,
-                  groupId,
-                  msgType,
-                })
               } catch (err) {
                 console.warn('[e2ee] retry decrypt_group FAILED (2nd pass, after refresh)', {
                   msgId,
@@ -1029,7 +1027,6 @@ export async function setupTauriListeners() {
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
                 }
-                console.info('[channel] retry decrypt_channel OK', { msgId, channelId, msgType })
               } catch (err) {
                 console.warn('[channel] retry decrypt_channel FAILED', {
                   msgId,
@@ -1084,9 +1081,38 @@ export async function setupTauriListeners() {
 
         const groupId = String(extra?.groupId || convId.split('_')[1] || '')
         if (!groupId) continue
+        const groupReqType = Number(extra?.groupReqType ?? 0)
+        const groupReqStatus = Number(extra?.groupReqStatus ?? 0)
+        const affectedMemberId = getGroupEventAffectedMemberId(extra)
+        if ([6, 7, 13].includes(groupReqType)) {
+          groupInviteDebug('processing leave/remove/dismiss group event', {
+            currentUid,
+            conversationId: convId,
+            groupId,
+            source,
+            groupReqType,
+            groupReqStatus,
+            receiveUid: String(extra?.receiveUid ?? ''),
+            fromUid: String(extra?.fromUid ?? extra?.sendUid ?? ''),
+            affectedMemberId,
+            senderId: String(m?.senderId ?? m?.sender_id ?? ''),
+            msgId: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
+            content: String(m?.content ?? '').slice(0, 160),
+            hasConversationBefore: chatStore.conversations.some((conv) => conv.id === `1_${groupId}`),
+            hasGroupBefore: Boolean(groupStore.getGroup(groupId)),
+          })
+        }
         if (isPendingGroupInvitationNotice(convId, extra)) {
           const receiveUid = String(extra?.receiveUid ?? '')
           if (receiveUid && receiveUid === currentUid) {
+            groupInviteDebug('delete pending invite conversation', {
+              currentUid,
+              groupId,
+              conversationId: `1_${groupId}`,
+              receiveUid,
+              groupReqType,
+              groupReqStatus,
+            })
             chatStore.markPendingGroupInviteConversation(groupId)
             await chatStore.deleteConversation(currentUid, `1_${groupId}`).catch((err: unknown) => {
               console.warn('[group-invite] delete pending group conversation failed:', { groupId, err })
@@ -1102,14 +1128,35 @@ export async function setupTauriListeners() {
           chatStore.clearPendingGroupInviteConversation(groupId)
         }
 
-        const isSelfLeaveGroupEvent =
-          String(extra?.source || '') === 'group-event'
-          && Number(extra?.groupReqType ?? 0) === 7
-          && String(extra?.receiveUid ?? '') === currentUid
-        if (isSelfLeaveGroupEvent) {
+        const shouldRemoveLocalGroup = shouldRemoveLocalGroupForEvent(extra, currentUid)
+        if (shouldRemoveLocalGroup) {
+          groupInviteDebug('local group removal event matched, removing local group conversation', {
+            currentUid,
+            groupId,
+            conversationId: `1_${groupId}`,
+            source,
+            groupReqType,
+            groupReqStatus,
+            receiveUid: String(extra?.receiveUid ?? ''),
+            fromUid: String(extra?.fromUid ?? extra?.sendUid ?? ''),
+            affectedMemberId,
+            groupExistsBefore: Boolean(groupStore.getGroup(groupId)),
+            conversationExistsBefore: chatStore.conversations.some((conv) => conv.id === `1_${groupId}`),
+            currentConversationId: chatStore.currentConversationId,
+          })
           groupStore.removeGroup(groupId)
           await chatStore.deleteConversation(currentUid, `1_${groupId}`).catch((err: unknown) => {
-            console.warn('[group-event] delete self-left group conversation failed:', { groupId, err })
+            console.warn('[group-event] delete removed group conversation failed:', { groupId, err })
+          })
+          groupInviteDebug('local group removal event finished', {
+            currentUid,
+            groupId,
+            conversationId: `1_${groupId}`,
+            groupReqType,
+            affectedMemberId,
+            groupExistsAfter: Boolean(groupStore.getGroup(groupId)),
+            conversationExistsAfter: chatStore.conversations.some((conv) => conv.id === `1_${groupId}`),
+            currentConversationId: chatStore.currentConversationId,
           })
           continue
         }
@@ -1214,19 +1261,6 @@ export async function setupTauriListeners() {
         }
       }
       const newIncomingMessages = getNewIncomingMessages(normalized, currentUid)
-      console.info('[tray-alert] incoming batch evaluated', {
-        batchSize: normalized.length,
-        currentUid,
-        newIncomingCount: newIncomingMessages.length,
-        newIncomingMessages: newIncomingMessages.slice(0, 5).map((m: any) => {
-          const identity = getMessageIdentity(m)
-          return {
-            ...identity,
-            msgType: Number(m?.msgType ?? m?.msg_type ?? 0),
-            sendTime: Number(m?.sendTime ?? m?.send_time ?? 0),
-          }
-        }),
-      })
       messageStore.batchAppendMessages(normalized as Message[])
       if (
         hasGroupNotificationMessages
@@ -1338,15 +1372,6 @@ export async function setupTauriListeners() {
     const payload = event.payload || ({} as any)
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
-    if (String(payload.conversationId || '').startsWith('2_')) {
-      console.info('[channel] msg:sent receipt received', {
-        conversationId: payload.conversationId,
-        flag: payload.flag,
-        msgId: payload.msgId,
-        sentOverTime: payload.sentOverTime,
-      })
-    }
-
     const receiptApplied = messageStore.applySendReceipt({
       conversationId: payload.conversationId,
       flag: payload.flag,
@@ -1399,13 +1424,16 @@ export async function setupTauriListeners() {
     const payload: any = event.payload || {}
     const lastMsgTime = Number(payload?.lastMsgTime ?? payload?.last_msg_time ?? 0)
     if (logoutClearedHistoryAt > 0 && lastMsgTime > 0 && lastMsgTime <= logoutClearedHistoryAt) {
-      console.info('[conv:update] dropped replayed conversation after logout-clear', {
-        currentUid,
-        conversationId: String(payload?.id ?? ''),
-        lastMsgTime,
-        logoutClearedHistoryAt,
-      })
       return
+    }
+    if (String(payload?.id ?? '') === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
+      console.warn('[group-notification-unread] conv:update', {
+        id: payload?.id,
+        currentConversationId: chatStore.currentConversationId || '',
+        unreadCount: Number(payload?.unreadCount ?? payload?.unread_count ?? 0),
+        lastMsgTime,
+        lastMsgDigest: String(payload?.lastMsgDigest ?? payload?.last_msg_digest ?? ''),
+      })
     }
     chatStore.addOrUpdateConversation(event.payload)
   })

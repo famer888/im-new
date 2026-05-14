@@ -103,18 +103,8 @@ function showToast(msg: string, type: 'success' | 'error' = 'success', duration 
 }
 
 function groupInviteDebug(message: string, data?: Record<string, unknown>) {
-  const payload = data || {}
-  console.warn(`[group-invite-debug][invite-dialog] ${message}`, payload)
-  if (!isTauri()) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level: 'warn',
-        message: `[group-invite-debug][invite-dialog] ${message}`,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
 }
 
 async function copyTextToClipboard(text: string) {

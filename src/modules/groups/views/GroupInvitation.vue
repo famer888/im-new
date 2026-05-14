@@ -41,7 +41,14 @@ const messageStore = useMessageStore()
 const { t } = useI18n()
 const list = ref<GroupReqItem[]>([])
 const notificationConversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
-const SELF_INVITE_REQ_TYPES = new Set([1, 3])
+const SELF_INVITE_REQ_TYPES = new Set([1, 2, 15])
+let groupInvitationRefreshSeq = 0
+let groupInvitationRefreshRunning = false
+let groupInvitationRefreshQueuedReason = ''
+
+function groupInvitationRefreshLog(message: string, data?: Record<string, unknown>) {
+  console.warn(`[group-invitation-refresh] ${message}`, data || {})
+}
 
 function statusLabel(status: number): string {
   const map: Record<number, string> = {
@@ -243,26 +250,31 @@ function formatRejectedGroupDigest(item: GroupReqItem): string {
 
 function parseGroupReqItems(raw: any[]): GroupReqItem[] {
   return raw
-    .map((item: any) => ({
-      localId: item.groupReqId ? undefined : `api-${item.groupId || ''}-${item.groupReqType || 0}-${item.updateTime || item.createTime || Date.now()}`,
-      groupReqId: Number(item.groupReqId || 0),
-      groupId: String(item.groupId ?? ''),
-      groupName: item.groupName || '',
-      pic: item.pic || '',
-      msg: item.msg || '',
-      groupReqType: item.groupReqType || 0,
-      groupReqStatus: item.groupReqStatus || 0,
-      groupHostUid: String(item.groupHostUid ?? ''),
-      checkUserType: Number(item.checkUserType ?? -1),
-      sendUid: String(item.sendUid ?? ''),
-      receiveUid: String(item.receiveUid ?? ''),
-      targetUser: item.targetUser || null,
-      checkUser: item.checkUser || null,
-      fromUser: item.fromUser || null,
-      members: Array.isArray(item.members) ? item.members : [],
-      createTime: Number(item.createTime || 0),
-      updateTime: Number(item.updateTime || item.createTime || 0),
-    }))
+    .map((item: any) => {
+      const targetUser = item.targetUser || null
+      const checkUser = item.checkUser || null
+      const fromUser = item.fromUser || null
+      return {
+        localId: item.groupReqId ? undefined : `api-${item.groupId || ''}-${item.groupReqType || 0}-${item.updateTime || item.createTime || Date.now()}`,
+        groupReqId: Number(item.groupReqId || 0),
+        groupId: String(item.groupId ?? ''),
+        groupName: item.groupName || '',
+        pic: item.pic || '',
+        msg: item.msg || '',
+        groupReqType: item.groupReqType || 0,
+        groupReqStatus: item.groupReqStatus || 0,
+        groupHostUid: String(item.groupHostUid ?? ''),
+        checkUserType: Number(item.checkUserType ?? -1),
+        sendUid: String(item.sendUid ?? getReqUserId(fromUser) ?? ''),
+        receiveUid: String(item.receiveUid ?? getReqUserId(targetUser) ?? ''),
+        targetUser,
+        checkUser,
+        fromUser,
+        members: Array.isArray(item.members) ? item.members : [],
+        createTime: Number(item.createTime || 0),
+        updateTime: Number(item.updateTime || item.createTime || 0),
+      }
+    })
     .filter((item: GroupReqItem) => !(item as any).isHide)
 }
 
@@ -274,6 +286,9 @@ function localMessageToGroupReqItem(message: Message): GroupReqItem | null {
   if (!groupId || !msg) return null
 
   const sendTime = Number(message.sendTime || Date.now())
+  const targetUser = extra.targetUser || null
+  const checkUser = extra.checkUser || null
+  const fromUser = extra.fromUser || null
   return {
     localId: String(message.id || message.customMsgId || `local-${groupId}-${sendTime}`),
     groupReqId: Number(extra.groupReqId || 0),
@@ -285,11 +300,11 @@ function localMessageToGroupReqItem(message: Message): GroupReqItem | null {
     groupReqStatus: Number(extra.groupReqStatus ?? 0),
     groupHostUid: String(extra.groupHostUid ?? ''),
     checkUserType: Number(extra.checkUserType ?? -1),
-    sendUid: String(extra.sendUid ?? extra.fromUid ?? message.senderId ?? ''),
-    receiveUid: String(extra.receiveUid ?? ''),
-    targetUser: extra.targetUser || null,
-    checkUser: extra.checkUser || null,
-    fromUser: extra.fromUser || null,
+    sendUid: String(extra.sendUid ?? extra.fromUid ?? getReqUserId(fromUser) ?? message.senderId ?? ''),
+    receiveUid: String(extra.receiveUid ?? getReqUserId(targetUser) ?? ''),
+    targetUser,
+    checkUser,
+    fromUser,
     members: Array.isArray(extra.members) ? extra.members : [],
     createTime: sendTime,
     updateTime: sendTime,
@@ -303,21 +318,90 @@ function getLocalGroupReqItems(): GroupReqItem[] {
     .filter((item): item is GroupReqItem => Boolean(item))
 }
 
-function mergeGroupReqItems(apiItems: GroupReqItem[], localItems: GroupReqItem[]): GroupReqItem[] {
-  const merged = new Map<string, GroupReqItem>()
-  const makeKey = (item: GroupReqItem) => {
-    if (item.groupReqId > 0) return `req:${item.groupReqId}`
-    return `local:${item.localId || `${item.groupId}-${item.groupReqType}-${item.updateTime}-${item.msg}`}`
-  }
+function normalizeMergeText(value: unknown): string {
+  return normalizeGroupNoticeText(String(value ?? '').trim().replace(/\s+/g, ' ')).slice(0, 120)
+}
 
-  for (const item of [...apiItems, ...localItems]) {
-    const key = makeKey(item)
-    const previous = merged.get(key)
-    if (!previous || (item.updateTime || item.createTime) >= (previous.updateTime || previous.createTime)) {
-      merged.set(key, item)
+function makeSemanticGroupReqKey(item: GroupReqItem): string {
+  const sendUid = item.sendUid || getReqUserId(item.fromUser)
+  const receiveUid = item.receiveUid || getReqUserId(item.targetUser) || getReqUserId(item.checkUser)
+  return [
+    'sem',
+    item.groupId || '',
+    Number(item.groupReqType || 0),
+    Number(item.groupReqStatus || 0),
+    sendUid,
+    receiveUid,
+    normalizeMergeText(item.msg),
+  ].join(':')
+}
+
+function makeLooseGroupReqKey(item: GroupReqItem): string {
+  const sendUid = item.sendUid || getReqUserId(item.fromUser)
+  const receiveUid = item.receiveUid || getReqUserId(item.targetUser) || getReqUserId(item.checkUser)
+  return [
+    'loose',
+    item.groupId || '',
+    Number(item.groupReqType || 0),
+    sendUid,
+    receiveUid,
+  ].join(':')
+}
+
+function makePrimaryGroupReqKey(item: GroupReqItem): string {
+  if (item.groupReqId > 0) return `req:${item.groupReqId}`
+  return `local:${item.localId || `${item.groupId}-${item.groupReqType}-${item.updateTime}-${item.msg}`}`
+}
+
+function chooseGroupReqItem(previous: GroupReqItem | undefined, incoming: GroupReqItem): GroupReqItem {
+  if (!previous) return incoming
+  const previousTime = previous.updateTime || previous.createTime || 0
+  const incomingTime = incoming.updateTime || incoming.createTime || 0
+  if (incoming.groupReqId > 0 && previous.groupReqId <= 0) {
+    return { ...previous, ...incoming, localId: previous.localId || incoming.localId }
+  }
+  if (incomingTime >= previousTime) {
+    return {
+      ...previous,
+      ...incoming,
+      groupReqId: incoming.groupReqId || previous.groupReqId,
+      localId: previous.localId || incoming.localId,
     }
   }
+  return {
+    ...incoming,
+    ...previous,
+    groupReqId: previous.groupReqId || incoming.groupReqId,
+    localId: previous.localId || incoming.localId,
+  }
+}
 
+function mergeGroupReqItems(apiItems: GroupReqItem[], localItems: GroupReqItem[]): GroupReqItem[] {
+  const merged = new Map<string, GroupReqItem>()
+  const aliasToPrimary = new Map<string, string>()
+  const duplicateKeys: string[] = []
+
+  for (const item of [...apiItems, ...localItems]) {
+    const primaryKey = makePrimaryGroupReqKey(item)
+    const semanticKey = makeSemanticGroupReqKey(item)
+    const looseKey = makeLooseGroupReqKey(item)
+    const aliases = [primaryKey, semanticKey, looseKey]
+    const existingKey = aliases.map((key) => aliasToPrimary.get(key)).find(Boolean)
+    const targetKey = existingKey || primaryKey
+    const previous = merged.get(targetKey)
+    if (previous) {
+      duplicateKeys.push(semanticKey)
+    }
+    merged.set(targetKey, chooseGroupReqItem(previous, item))
+    for (const alias of aliases) aliasToPrimary.set(alias, targetKey)
+  }
+
+  if (duplicateKeys.length > 0) {
+    groupInvitationRefreshLog('merge duplicates', {
+      duplicateCount: duplicateKeys.length,
+      duplicateKeys: Array.from(new Set(duplicateKeys)).slice(0, 5),
+    })
+  }
   return sortGroupReqItems(Array.from(merged.values()))
 }
 
@@ -332,11 +416,9 @@ function getPendingGroupNotificationCount(items: GroupReqItem[]): number {
 }
 
 function isPendingSelfGroupInvite(item: GroupReqItem): boolean {
-  const uid = String(authStore.uid || '')
-  return Boolean(uid)
-    && SELF_INVITE_REQ_TYPES.has(Number(item.groupReqType || 0))
+  return SELF_INVITE_REQ_TYPES.has(Number(item.groupReqType || 0))
     && Number(item.groupReqStatus || 0) === 0
-    && String(item.receiveUid || '') === uid
+    && isSelfInviteItem(item)
     && Boolean(item.groupId)
 }
 
@@ -356,9 +438,7 @@ async function cleanupPendingGroupConversations(items: GroupReqItem[]) {
     const conversationId = `1_${groupId}`
     messageStore.clearConversationMessages(conversationId)
     if (!chatStore.conversations.some((conv) => conv.id === conversationId)) continue
-    await chatStore.deleteConversation(uid, conversationId).catch((error) => {
-      console.warn('[GroupInvitation] cleanup pending group conversation failed:', { groupId, error })
-    })
+    await chatStore.deleteConversation(uid, conversationId).catch(() => undefined)
   }
 }
 
@@ -368,7 +448,7 @@ function syncSidebarPreview(items: GroupReqItem[], timeOverride?: number) {
     chatStore.updateGroupNotificationConv(
       formatReqMessage(latest),
       timeOverride || latest.updateTime || latest.createTime,
-      getPendingGroupNotificationCount(items),
+      null,
     )
   } else {
     chatStore.removeGroupNotificationConversation()
@@ -384,7 +464,7 @@ function promoteGroupNotificationConversation(item: GroupReqItem, items: GroupRe
   chatStore.updateGroupNotificationConv(
     formatReqMessage(item),
     nextTime,
-    getPendingGroupNotificationCount(items),
+    null,
   )
 }
 
@@ -405,14 +485,26 @@ function promoteGroupConversationAboveNotification(groupId: string) {
   })
 }
 
-async function loadList() {
+async function doLoadList(reason: string) {
+  const seq = ++groupInvitationRefreshSeq
+  const startedAt = Date.now()
+  const noticeUnreadBefore = Number(
+    chatStore.conversations.find((conv) => conv.id === notificationConversationId)?.unreadCount || 0,
+  )
+  groupInvitationRefreshLog('start', {
+    seq,
+    reason,
+    localBefore: getLocalGroupReqItems().length,
+    currentConversationId: chatStore.currentConversationId || '',
+    noticeUnreadBefore,
+  })
   let apiItems: GroupReqItem[] = []
   try {
     if (authStore.uid) {
       await messageStore.loadMessages(authStore.uid, notificationConversationId)
     }
-  } catch (e) {
-    console.warn('[GroupInvitation] load local notifications failed:', e)
+  } catch {
+    // 本地通知加载失败时继续使用接口数据兜底。
   }
 
   try {
@@ -420,13 +512,50 @@ async function loadList() {
     if (res?.groupReqs) {
       apiItems = parseGroupReqItems(res.groupReqs)
     }
-  } catch (e) {
-    console.error('[GroupInvitation] loadList failed:', e)
+  } catch {
+    // 接口失败时仍展示本地通知，避免页面空白中断。
   }
 
-  list.value = mergeGroupReqItems(apiItems, getLocalGroupReqItems())
+  const localItems = getLocalGroupReqItems()
+  const mergedItems = mergeGroupReqItems(apiItems, localItems)
+  list.value = mergedItems
   await cleanupPendingGroupConversations(list.value)
   syncSidebarPreview(list.value)
+  const noticeUnreadAfter = Number(
+    chatStore.conversations.find((conv) => conv.id === notificationConversationId)?.unreadCount || 0,
+  )
+  groupInvitationRefreshLog('done', {
+    seq,
+    reason,
+    apiCount: apiItems.length,
+    localCount: localItems.length,
+    mergedCount: mergedItems.length,
+    pendingCount: getPendingGroupNotificationCount(mergedItems),
+    currentConversationId: chatStore.currentConversationId || '',
+    noticeUnreadBefore,
+    noticeUnreadAfter,
+    durationMs: Date.now() - startedAt,
+  })
+}
+
+async function loadList(reason = 'manual') {
+  if (groupInvitationRefreshRunning) {
+    groupInvitationRefreshQueuedReason = reason
+    groupInvitationRefreshLog('queued', { reason })
+    return
+  }
+
+  groupInvitationRefreshRunning = true
+  try {
+    let nextReason = reason
+    do {
+      groupInvitationRefreshQueuedReason = ''
+      await doLoadList(nextReason)
+      nextReason = groupInvitationRefreshQueuedReason || ''
+    } while (nextReason)
+  } finally {
+    groupInvitationRefreshRunning = false
+  }
 }
 
 async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
@@ -486,23 +615,25 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
       } else if (!flag) {
         promoteGroupNotificationConversation(handledItem, list.value, now)
       }
-    } else {
-      console.error(t('操作失败'), (res as any)?.commonResult?.errMsg)
     }
-  } catch (e) {
-    console.error('[GroupInvitation] check failed:', e)
+  } catch {
+    // 操作失败保持当前列表状态，不向控制台输出调试信息。
   }
 }
 
 onMounted(() => {
   chatStore.clearGroupNotificationUnread()
-  loadList()
-  eventBus.on('group-invitation:update', loadList)
+  loadList('mounted')
+  eventBus.on('group-invitation:update', handleGroupInvitationUpdate)
 })
 
 onBeforeUnmount(() => {
-  eventBus.off('group-invitation:update', loadList)
+  eventBus.off('group-invitation:update', handleGroupInvitationUpdate)
 })
+
+function handleGroupInvitationUpdate() {
+  loadList('eventBus')
+}
 </script>
 
 <template>

@@ -54,6 +54,9 @@ pub async fn get_messages(
     limit: Option<i64>,
 ) -> Result<Vec<models::Message>, String> {
     db.with_connection(&uid, |conn| {
+        if conversation_id == "1_invitation" {
+            cleanup_all_group_notification_duplicates(conn)?;
+        }
         queries::get_messages(conn, &conversation_id, before_time, limit.unwrap_or(50))
     })
     .map_err(|e| e.to_string())
@@ -239,6 +242,7 @@ pub async fn upsert_incoming_messages(
                     extra: item.extra.as_ref().map(|e| e.to_string()),
                 });
             }
+            rows = dedupe_incoming_group_notification_rows(rows);
 
             if rows.is_empty() {
                 return Ok((0usize, Vec::<String>::new()));
@@ -249,20 +253,29 @@ pub async fn upsert_incoming_messages(
             let mut notification_unread_counts: HashMap<String, i32> = HashMap::new();
             let mut seen_ids_for_unread = HashSet::<String>::new();
             for msg in &rows {
-                if let Some(count) = notification_unread_count(msg) {
-                    notification_unread_counts.insert(msg.conversation_id.clone(), count);
-                }
                 if !seen_ids_for_unread.insert(msg.id.clone()) {
                     continue;
                 }
-                let existed_before = conn
+                let existing_send_time = conn
                     .query_row(
-                        "SELECT 1 FROM messages WHERE id = ?1",
+                        "SELECT send_time FROM messages WHERE id = ?1",
                         rusqlite::params![&msg.id],
-                        |_| Ok(()),
+                        |row| row.get::<_, i64>(0),
                     )
-                    .is_ok();
-                if existed_before {
+                    .optional()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                if msg.conversation_id == "1_invitation" && msg.msg_type == 8 {
+                    if existing_send_time.map(|time| msg.send_time > time).unwrap_or(true) {
+                        let count = notification_unread_count(msg).unwrap_or(1).max(1);
+                        notification_unread_counts.insert(msg.conversation_id.clone(), count);
+                    }
+                    continue;
+                }
+                if existing_send_time.is_some() {
+                    continue;
+                }
+                if let Some(count) = notification_unread_count(msg) {
+                    notification_unread_counts.insert(msg.conversation_id.clone(), count);
                     continue;
                 }
                 if should_count_as_unread(msg, &uid_trim) {
@@ -270,6 +283,7 @@ pub async fn upsert_incoming_messages(
                 }
             }
 
+            delete_existing_group_notification_duplicates(conn, &rows)?;
             queries::batch_insert_messages(conn, &rows)?;
 
             for msg in &rows {
@@ -401,6 +415,205 @@ fn should_count_as_unread(msg: &models::Message, uid: &str) -> bool {
     // 对齐旧 im：阅后即焚配置变更等通知消息是 chatType=51，不进入
     // “未读正文”计数；新项目用 msgType=6/8 承载这类系统提示。
     msg.sender_id != uid && !matches!(msg.msg_type, 6 | 8)
+}
+
+fn dedupe_incoming_group_notification_rows(rows: Vec<models::Message>) -> Vec<models::Message> {
+    let mut deduped = Vec::<models::Message>::with_capacity(rows.len());
+    let mut identity_index = HashMap::<String, usize>::new();
+
+    for row in rows {
+        let Some(identity) = group_notification_identity(&row) else {
+            deduped.push(row);
+            continue;
+        };
+
+        if let Some(index) = identity_index.get(&identity).copied() {
+            if row.send_time >= deduped[index].send_time {
+                deduped[index] = row;
+            }
+        } else {
+            identity_index.insert(identity, deduped.len());
+            deduped.push(row);
+        }
+    }
+
+    deduped
+}
+
+fn delete_existing_group_notification_duplicates(
+    conn: &rusqlite::Connection,
+    rows: &[models::Message],
+) -> Result<(), crate::db::DbError> {
+    let incoming = rows
+        .iter()
+        .filter_map(|msg| group_notification_identity(msg).map(|identity| (identity, msg.id.clone())))
+        .collect::<HashMap<_, _>>();
+    if incoming.is_empty() {
+        return Ok(());
+    }
+
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, extra
+             FROM messages
+             WHERE conversation_id = '1_invitation'
+               AND msg_type = 8
+               AND is_deleted = 0",
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+    let mut delete_ids = Vec::<String>::new();
+    for row in rows {
+        let (id, extra) = row.map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        let Some(identity) = group_notification_identity_from_extra(extra.as_deref(), None) else {
+            continue;
+        };
+        let Some(keep_id) = incoming.get(&identity) else {
+            continue;
+        };
+        if &id != keep_id {
+            delete_ids.push(id);
+        }
+    }
+
+    if delete_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut stmt = conn
+        .prepare_cached("DELETE FROM messages WHERE id = ?1")
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    for id in &delete_ids {
+        stmt.execute(rusqlite::params![id])
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    }
+    warn!(
+        target: "group-notification",
+        "deduped existing group notification messages count={}",
+        delete_ids.len()
+    );
+    Ok(())
+}
+
+fn cleanup_all_group_notification_duplicates(conn: &rusqlite::Connection) -> Result<(), crate::db::DbError> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, send_time, extra
+             FROM messages
+             WHERE conversation_id = '1_invitation'
+               AND msg_type = 8
+               AND is_deleted = 0",
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+    let mut keep_by_identity = HashMap::<String, (String, i64)>::new();
+    let mut delete_ids = Vec::<String>::new();
+    for row in rows {
+        let (id, send_time, extra) =
+            row.map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        let Some(identity) = group_notification_identity_from_extra(extra.as_deref(), None) else {
+            continue;
+        };
+        if let Some((keep_id, keep_time)) = keep_by_identity.get_mut(&identity) {
+            if send_time >= *keep_time {
+                delete_ids.push(keep_id.clone());
+                *keep_id = id;
+                *keep_time = send_time;
+            } else {
+                delete_ids.push(id);
+            }
+        } else {
+            keep_by_identity.insert(identity, (id, send_time));
+        }
+    }
+
+    if delete_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut stmt = conn
+        .prepare_cached("DELETE FROM messages WHERE id = ?1")
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    for id in &delete_ids {
+        stmt.execute(rusqlite::params![id])
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    }
+    warn!(
+        target: "group-notification",
+        "cleaned stored group notification duplicates count={}",
+        delete_ids.len()
+    );
+    Ok(())
+}
+
+fn group_notification_identity(msg: &models::Message) -> Option<String> {
+    if msg.conversation_id != "1_invitation" || msg.msg_type != 8 {
+        return None;
+    }
+    group_notification_identity_from_extra(msg.extra.as_deref(), Some(&msg.sender_id))
+}
+
+fn group_notification_identity_from_extra(raw: Option<&str>, sender_id: Option<&str>) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(raw?).ok()?;
+    let object = match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(map),
+        serde_json::Value::String(raw) => serde_json::from_str::<serde_json::Value>(&raw).ok()?,
+        _ => return None,
+    };
+
+    let group_id = json_string_field(&object, &["groupId", "group_id"])?;
+    let req_type = json_string_field(&object, &["groupReqType", "group_req_type"])?;
+    let send_uid = json_string_field(&object, &["sendUid", "send_uid", "fromUid", "from_uid"])
+        .or_else(|| sender_id.map(|value| value.trim().to_string()))
+        .filter(|value| !value.is_empty())?;
+    let receive_uid = json_string_field(&object, &["receiveUid", "receive_uid"])
+        .or_else(|| json_user_id_field(&object, "targetUser"))
+        .or_else(|| json_user_id_field(&object, "checkUser"))
+        .unwrap_or_default();
+
+    Some(format!(
+        "group-req-notice:{}:{}:{}:{}",
+        group_id, req_type, send_uid, receive_uid,
+    ))
+}
+
+fn json_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    keys.iter()
+        .find_map(|key| object.get(*key))
+        .and_then(json_scalar_to_string)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn json_user_id_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    let user = value.as_object()?.get(key)?;
+    json_string_field(user, &["uid", "userId", "user_id"])
+}
+
+fn json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
 }
 
 fn notification_unread_count(msg: &models::Message) -> Option<i32> {

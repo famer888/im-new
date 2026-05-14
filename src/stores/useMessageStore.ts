@@ -193,30 +193,8 @@ const DICE_REPLAY_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toS
 let diceReplayLogStarted = false
 
 function diceLog(message: string, data?: Record<string, unknown>) {
-  const payload = { debugRunId: DICE_REPLAY_DEBUG_RUN_ID, ...(data || {}) }
-  if (!diceReplayLogStarted) {
-    diceReplayLogStarted = true
-    console.clear()
-    console.warn('[dice-replay] RESET copy logs after this line', { debugRunId: DICE_REPLAY_DEBUG_RUN_ID })
-    if (isTauri()) {
-      tauriInvoke('image_send_log', {
-        payload: {
-          level: 'warn',
-          message: '[dice-replay] RESET copy logs after this line',
-          data: { debugRunId: DICE_REPLAY_DEBUG_RUN_ID },
-        },
-      }).catch(() => {})
-    }
-  }
-  console.warn(`[dice] ${message}`, payload)
-  if (!isTauri()) return
-  tauriInvoke('image_send_log', {
-    payload: {
-      level: 'warn',
-      message: `[dice] ${message}`,
-      data: payload,
-    },
-  }).catch(() => {})
+  void message
+  void data
 }
 
 const GROUP_IMAGE_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -295,6 +273,10 @@ function groupInviteDebug(message: string, data?: Record<string, unknown>) {
   void data
 }
 
+function groupNotificationUnreadLog(message: string, data?: Record<string, unknown>) {
+  console.warn(`[group-notification-unread] ${message}`, data || {})
+}
+
 function isPendingGroupReqChatMessage(message: Message): boolean {
   const conversationId = String(message.conversationId || '')
   if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
@@ -324,17 +306,9 @@ function groupImageLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  const payload = { debugRunId: GROUP_IMAGE_DEBUG_RUN_ID, ...(data || {}) }
-  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
-  log(`[group-image] ${message}`, payload)
-  if (!isTauri()) return
-  tauriInvoke('image_send_log', {
-    payload: {
-      level,
-      message: `[group-image] ${message}`,
-      data: payload,
-    },
-  }).catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function singleVideoLog(
@@ -342,17 +316,9 @@ function singleVideoLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  const payload = { debugRunId: SINGLE_VIDEO_DEBUG_RUN_ID, ...(data || {}) }
-  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
-  log(`[single-video-send][store] ${message}`, payload)
-  if (!isTauri()) return
-  tauriInvoke('image_send_log', {
-    payload: {
-      level,
-      message: `[single-video-send][store] ${message}`,
-      data: payload,
-    },
-  }).catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function isSameMessageIdentity(a: Message, b: Message): boolean {
@@ -617,7 +583,33 @@ export const useMessageStore = defineStore('message', () => {
     if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
       const extra = groupNoticeExtra || parseExtraObject(msg.extra)
       const groupDigest = formatGroupNotificationDigest(digest, extra)
-      const unreadCount = Number(extra?.unReadNum ?? existing?.unreadCount ?? 0)
+      const isCurrentGroupNotification = chatStore.currentConversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
+      const hasServerUnread = Boolean(extra && (
+        Object.prototype.hasOwnProperty.call(extra, 'unReadNum')
+        || Object.prototype.hasOwnProperty.call(extra, 'unreadCount')
+        || Object.prototype.hasOwnProperty.call(extra, 'unread_count')
+      ))
+      const serverUnread = hasServerUnread
+        ? Number(extra?.unReadNum ?? extra?.unreadCount ?? extra?.unread_count ?? 0)
+        : null
+      const unreadCount = isCurrentGroupNotification
+          ? 0
+          : Math.max(
+              1,
+              Number.isFinite(Number(serverUnread)) ? Number(serverUnread) : 0,
+              Number(existing?.unreadCount || 0),
+            )
+      groupNotificationUnreadLog('sync summary', {
+        messageId: msg.id,
+        senderId: msg.senderId,
+        currentConversationId: chatStore.currentConversationId || '',
+        isCurrentGroupNotification,
+        hasServerUnread,
+        serverUnread,
+        existingUnread: Number(existing?.unreadCount || 0),
+        nextUnread: unreadCount,
+        sendTime: msg.sendTime || 0,
+      })
       chatStore.updateGroupNotificationConv(
         groupDigest || existing?.lastMsgDigest || '',
         msg.sendTime || Date.now(),
@@ -851,16 +843,6 @@ export const useMessageStore = defineStore('message', () => {
       return localMsg
     }
 
-    if (convType === 2) {
-      console.clear()
-      console.info('[channel] ===== 清空旧日志，开始频道发送调试 =====', {
-        uid,
-        conversationId,
-        targetId,
-        msgType,
-        contentLen: (content || '').length,
-      })
-    }
     const isSingleVideo = isSingleVideoMessage(conversationId, msgType)
     if (isSingleVideo) {
       singleVideoLog('sendMessage entry', {
@@ -940,25 +922,10 @@ export const useMessageStore = defineStore('message', () => {
       data?: Record<string, unknown>,
       level: 'info' | 'warn' | 'error' = 'info',
     ) => {
-      const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-      log(`[send] ${message}`, {
-        elapsedMs: Math.round(performance.now() - sendStartedAt),
-        conversationId,
-        msgType,
-        optimisticId,
-        ...(data || {}),
-      })
+      void message
+      void data
+      void level
     }
-
-    console.log('[send] begin', {
-      uid,
-      conversationId,
-      convType,
-      targetId,
-      msgType,
-      contentLen: (content || '').length,
-      optimisticId,
-    })
 
     // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。
     if (convType === 1 && targetId && msgType !== 12 && msgType !== 18) {
@@ -1078,14 +1045,6 @@ export const useMessageStore = defineStore('message', () => {
           content: imageContentSummary(content),
         })
       }
-      if (convType === 2) {
-        console.info('[channel] invoke send_message -> Rust', {
-          conversationId,
-          targetId,
-          msgType,
-          optimisticId,
-        })
-      }
       const result = await tauriInvoke<any>('send_message', {
         uid,
         request: {
@@ -1122,13 +1081,6 @@ export const useMessageStore = defineStore('message', () => {
           resultStatus: Number(result?.status ?? 0),
           resultReadStatus: Number(result?.readStatus ?? result?.read_status ?? 0),
           resultContent: imageContentSummary(String(result?.content ?? '')),
-        })
-      }
-      if (convType === 2) {
-        console.info('[channel] Rust send_message returned', {
-          optimisticId,
-          resultId: String(result?.id || result?.customMsgId || result?.custom_msg_id || ''),
-          resultStatus: Number(result?.status ?? 0),
         })
       }
       if (msgType === 12) {

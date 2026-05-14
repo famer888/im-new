@@ -144,7 +144,6 @@ export const useGroupStore = defineStore('group', () => {
       const resp = await getGroupContactList()
       const list = resp.groups || []
       groups.value = list.map((g: any) => normalizeGroup(g))
-      console.log(`[GroupStore] Loaded ${groups.value.length} groups via API`)
     } catch (e) {
       console.error('[GroupStore] API loadGroups failed:', e)
     }
