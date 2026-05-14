@@ -240,19 +240,27 @@ async function handleCopyResult() {
 
 .action-bar {
   position: absolute;
+  left: 20px;
   right: 20px;
   bottom: 20px;
   display: flex;
   align-items: center;
   gap: 10px;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .copy-btn,
 .upload-btn {
-  width: 120px;
-  height: 34px;
+  min-width: 120px;
+  width: auto;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 0 16px;
   border-radius: 4px;
   font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
 
   &:disabled {
@@ -271,5 +279,18 @@ async function handleCopyResult() {
   border: 1px solid #3369fe;
   color: #fff;
   background: #3369fe;
+}
+
+@media (max-width: 520px) {
+  .dialog-card {
+    width: calc(100vw - 32px);
+    padding-bottom: 20px;
+  }
+
+  .action-bar {
+    position: static;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
 }
 </style>
