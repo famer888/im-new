@@ -1,10 +1,13 @@
-use super::{batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsDiagnostics, WsCloseRecord, WsError, WsErrorRecord};
+use super::{
+    batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsCloseRecord, WsDiagnostics,
+    WsError, WsErrorRecord,
+};
 use crate::proto::imweb;
 use crate::ws::{codec, commands};
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use prost::Message as _;
 use parking_lot::RwLock;
+use prost::Message as _;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
@@ -86,7 +89,10 @@ pub async fn run_connection(
             RECONNECT_DELAY_MS
         };
         warn!("Reconnecting in {}ms (attempt {})", delay_ms, count + 1);
-        super::record_ws_reconnect(&diagnostics, &format!("attempt={} delayMs={}", count + 1, delay_ms));
+        super::record_ws_reconnect(
+            &diagnostics,
+            &format!("attempt={} delayMs={}", count + 1, delay_ms),
+        );
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
     }
 }
@@ -107,21 +113,19 @@ async fn connect_and_run(
     info!("Connecting to WebSocket: {}", url);
     super::push_ws_event(diagnostics, "CONNECT_JOB_BEGIN", url);
 
-    let (ws_stream, _) = connect_async(url)
-        .await
-        .map_err(|e| {
-            let err = e.to_string();
-            {
-                let mut diag = diagnostics.write();
-                diag.last_error = Some(WsErrorRecord {
-                    time: super::now_millis(),
-                    url: url.to_string(),
-                    error: err.clone(),
-                });
-            }
-            super::push_ws_event(diagnostics, "CONNECT_ERROR", &err);
-            WsError::ConnectionFailed(err)
-        })?;
+    let (ws_stream, _) = connect_async(url).await.map_err(|e| {
+        let err = e.to_string();
+        {
+            let mut diag = diagnostics.write();
+            diag.last_error = Some(WsErrorRecord {
+                time: super::now_millis(),
+                url: url.to_string(),
+                error: err.clone(),
+            });
+        }
+        super::push_ws_event(diagnostics, "CONNECT_ERROR", &err);
+        WsError::ConnectionFailed(err)
+    })?;
 
     info!("WebSocket connected");
     *status.write() = ConnectionStatus::Connected;
@@ -274,7 +278,11 @@ async fn connect_and_run(
     Ok(())
 }
 
-fn build_login_packet(aes_key: &str, session_id: &str, install_code: &str) -> Result<Vec<u8>, WsError> {
+fn build_login_packet(
+    aes_key: &str,
+    session_id: &str,
+    install_code: &str,
+) -> Result<Vec<u8>, WsError> {
     let req = imweb::LoginReq {
         client_info: Some(imweb::ClientInfo {
             session_id: session_id.to_string(),
@@ -288,5 +296,11 @@ fn build_login_packet(aes_key: &str, session_id: &str, install_code: &str) -> Re
         install_code: install_code.to_string(),
     };
     let payload = req.encode_to_vec();
-    codec::encode_packet(commands::LOGIN, commands::LOGIN as i64, &payload, aes_key, None)
+    codec::encode_packet(
+        commands::LOGIN,
+        commands::LOGIN as i64,
+        &payload,
+        aes_key,
+        None,
+    )
 }
