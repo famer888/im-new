@@ -189,6 +189,11 @@ function collectGroupEventMemberPatches(
   if (Array.isArray(extra?.members)) {
     for (const item of extra.members) addPatch(item)
   }
+  if (Array.isArray(extra?.groupMember)) {
+    for (const item of extra.groupMember) addPatch(item)
+  } else {
+    addPatch(extra?.groupMember)
+  }
 
   if (removeMode) {
     addPatch(extra?.targetUser)
@@ -220,10 +225,13 @@ function isGroupEventSource(source: string): boolean {
 }
 
 function getFirstGroupEventMemberId(extra: any): string {
-  if (!Array.isArray(extra?.members)) return ''
-  for (const member of extra.members) {
-    const userId = getGroupEventUserId(member)
-    if (userId) return userId
+  const memberGroups = [extra?.members, extra?.groupMember]
+  for (const group of memberGroups) {
+    const members = Array.isArray(group) ? group : [group]
+    for (const member of members) {
+      const userId = getGroupEventUserId(member)
+      if (userId) return userId
+    }
   }
   return ''
 }

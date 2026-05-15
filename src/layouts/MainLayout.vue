@@ -728,12 +728,20 @@ function normalizeCopyTextContent(rawContent: unknown, extraData: Record<string,
 
   const atUsers = Array.isArray(extraData.atUsers) ? extraData.atUsers : []
   if (atUsers.length > 0 && content.includes('@')) {
-    for (const user of atUsers) {
-      const nickName = typeof user?.nickName === 'string' ? user.nickName : ''
-      const name = typeof user?.name === 'string' ? user.name : ''
-      if (nickName && name) {
-        content = content.replace(nickName, name)
-      }
+    const usersWithRemark = atUsers
+      .map((user) => ({
+        nickName: typeof user?.nickName === 'string' ? user.nickName : '',
+        name: typeof user?.name === 'string' ? user.name : '',
+      }))
+      .filter((user) => user.nickName && user.name)
+      .sort((a, b) => b.nickName.length - a.nickName.length)
+
+    if (usersWithRemark.length > 0) {
+      const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const nameMap = new Map(usersWithRemark.map((user) => [user.nickName, user.name]))
+      const pattern = usersWithRemark.map((user) => escapeRegExp(user.nickName)).join('|')
+      const atMentionReg = new RegExp(`@(${pattern})(?=$|[\\s@])`, 'g')
+      content = content.replace(atMentionReg, (_, nickName: string) => `@${nameMap.get(nickName) || nickName}`)
     }
   }
 
