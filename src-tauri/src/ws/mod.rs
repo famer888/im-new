@@ -194,11 +194,7 @@ impl WsManager {
         msg_id: i64,
         protobuf_payload: &[u8],
     ) -> Result<(), WsError> {
-        let aes_key = self
-            .aes_key
-            .read()
-            .clone()
-            .ok_or(WsError::NotConnected)?;
+        let aes_key = self.aes_key.read().clone().ok_or(WsError::NotConnected)?;
 
         // mac 段目前按老 im WEB 默认行为不带（老 im 仅在 `TRENDS_AES_KEY` 配置下带 mac）。
         let packet = codec::encode_packet(cmd, msg_id, protobuf_payload, &aes_key, None)?;
@@ -280,7 +276,8 @@ pub(crate) fn record_ws_reconnect(diagnostics: &Arc<RwLock<WsDiagnostics>>, deta
     let mut diag = diagnostics.write();
     let now = now_millis();
     diag.reconnect_times.push(now);
-    diag.reconnect_times.retain(|time| now - *time <= 5 * 60 * 1000);
+    diag.reconnect_times
+        .retain(|time| now - *time <= 5 * 60 * 1000);
     diag.events.push(WsEventLine {
         time: now,
         event: "RECONNECT".to_string(),

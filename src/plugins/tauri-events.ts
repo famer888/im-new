@@ -261,6 +261,38 @@ function shouldRemoveLocalGroupForEvent(extra: any, currentUid: string): boolean
   return Boolean(currentUid && affectedMemberId && affectedMemberId === currentUid)
 }
 
+function getGroupEventReceiptPayload(extra: any): { groupId: number; msgType: number; msgIds: number[] } | null {
+  const source = String(extra?.source || '')
+  if (source !== 'group-event' && source !== 'group-update-event') return null
+
+  const groupId = Number(extra?.groupId || 0)
+  const msgType = Number(extra?.groupMsgType ?? 0)
+  const msgId = Number(extra?.groupEventMsgId ?? 0)
+  if (!Number.isFinite(groupId) || groupId <= 0) return null
+  if (!Number.isFinite(msgId) || msgId <= 0) return null
+
+  return {
+    groupId,
+    msgType: Number.isFinite(msgType) ? msgType : 0,
+    msgIds: [msgId],
+  }
+}
+
+async function sendGroupEventReceipt(extra: any, receiptStatus: 0 | 3) {
+  const payload = getGroupEventReceiptPayload(extra)
+  if (!payload) return
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('send_group_event_receipt', {
+      ...payload,
+      receiptStatus,
+    })
+  } catch (err) {
+    console.warn('[group-event] send receipt failed:', { receiptStatus, payload, err })
+  }
+}
+
 function isPendingGroupReqChatMessage(message: any): boolean {
   const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
   const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {}
@@ -372,6 +404,13 @@ function getMessageIdentity(message: any): { conversationId: string; id: string;
     customMsgId: String(message?.customMsgId ?? message?.custom_msg_id ?? ''),
     senderId: String(message?.senderId ?? message?.sender_id ?? ''),
   }
+}
+
+function getBatchMessageKey(message: any): string {
+  const { conversationId, id, customMsgId } = getMessageIdentity(message)
+  const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {}
+  const fallbackId = String(extra?.notificationIdentity ?? extra?.groupEventMsgId ?? '')
+  return `${conversationId}:${id || customMsgId || fallbackId}`
 }
 
 function isCachedMessage(message: any): boolean {
@@ -1073,6 +1112,7 @@ export async function setupTauriListeners() {
       const chatStore = useChatStore()
       const groupStore = useGroupStore()
       const channelStore = useChannelStore()
+      const locallyConsumedGroupRemovalMessageKeys = new Set<string>()
       const groupEventMessages = normalized.filter((m: any) => {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
         const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
@@ -1111,6 +1151,7 @@ export async function setupTauriListeners() {
         const groupReqType = Number(extra?.groupReqType ?? 0)
         const groupReqStatus = Number(extra?.groupReqStatus ?? 0)
         const affectedMemberId = getGroupEventAffectedMemberId(extra)
+        await sendGroupEventReceipt(extra, 0)
         if ([6, 7, 13].includes(groupReqType)) {
           groupInviteDebug('processing leave/remove/dismiss group event', {
             currentUid,
@@ -1175,6 +1216,7 @@ export async function setupTauriListeners() {
           await chatStore.deleteConversation(currentUid, `1_${groupId}`).catch((err: unknown) => {
             console.warn('[group-event] delete removed group conversation failed:', { groupId, err })
           })
+          locallyConsumedGroupRemovalMessageKeys.add(getBatchMessageKey(m))
           groupInviteDebug('local group removal event finished', {
             currentUid,
             groupId,
@@ -1185,6 +1227,7 @@ export async function setupTauriListeners() {
             conversationExistsAfter: chatStore.conversations.some((conv) => conv.id === `1_${groupId}`),
             currentConversationId: chatStore.currentConversationId,
           })
+          await sendGroupEventReceipt(extra, 3)
           continue
         }
 
@@ -1215,6 +1258,7 @@ export async function setupTauriListeners() {
 
         enrichGroupEventNoticeExtra(groupStore, groupId, extra)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
+        await sendGroupEventReceipt(extra, 3)
       }
       for (const m of normalized) {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
@@ -1287,9 +1331,12 @@ export async function setupTauriListeners() {
           })
         }
       }
-      const newIncomingMessages = getRealtimeIncomingMessages(normalized, currentUid)
+      const appendableNormalized = locallyConsumedGroupRemovalMessageKeys.size > 0
+        ? normalized.filter((m: any) => !locallyConsumedGroupRemovalMessageKeys.has(getBatchMessageKey(m)))
+        : normalized
+      const newIncomingMessages = getRealtimeIncomingMessages(appendableNormalized, currentUid)
       const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
-      messageStore.batchAppendMessages(normalized as Message[])
+      messageStore.batchAppendMessages(appendableNormalized as Message[])
       if (
         hasGroupNotificationMessages
         || groupEventMessages.some((m: any) => {
@@ -1325,7 +1372,7 @@ export async function setupTauriListeners() {
       const hasIncomingForActiveConversation = Boolean(
         currentUid
         && activeConversationId
-        && normalized.some((m: any) => {
+        && appendableNormalized.some((m: any) => {
           const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
           const senderId = String(m?.senderId ?? m?.sender_id ?? '')
           return convId === activeConversationId && senderId && senderId !== currentUid
@@ -1339,7 +1386,7 @@ export async function setupTauriListeners() {
         void flashTrayForIncomingMessage(newIncomingMessages.length)
       }
       if (authStore.uid) {
-        const incoming = normalized.map((m: any) => ({
+        const incoming = appendableNormalized.map((m: any) => ({
           id: String(m?.id ?? m?.msgId ?? m?.msg_id ?? ''),
           customMsgId: m?.customMsgId ?? m?.custom_msg_id ?? null,
           conversationId: String(m?.conversationId ?? m?.conversation_id ?? ''),

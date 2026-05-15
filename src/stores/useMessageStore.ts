@@ -593,9 +593,9 @@ export const useMessageStore = defineStore('message', () => {
 
     const type = Number(extra.groupReqType ?? 0)
     const status = Number(extra.groupReqStatus ?? 0)
+    if (status === 2) return raw
     const shouldPrefix =
       /^(拒绝加入|同意加入|申请加入|邀请你加入|加入)/.test(raw) ||
-      (status === 2 && raw.includes('拒绝')) ||
       [1, 2, 3, 4, 14, 15].includes(type)
     if (!shouldPrefix) return raw
 

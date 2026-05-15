@@ -185,12 +185,10 @@ fn dice_result_from_content(content: &str) -> Option<i32> {
 }
 
 fn has_dice_result_message(messages: &[DecodedMessage]) -> bool {
-    messages
-        .iter()
-        .any(|msg| {
-            (msg.msg_type == 12 && dice_result_from_content(&msg.content).is_some())
-                || (msg.msg_type == 18 && !msg.content.trim().is_empty())
-        })
+    messages.iter().any(|msg| {
+        (msg.msg_type == 12 && dice_result_from_content(&msg.content).is_some())
+            || (msg.msg_type == 18 && !msg.content.trim().is_empty())
+    })
 }
 
 fn decrypt_group_attachment_key(
@@ -470,10 +468,9 @@ impl MessageBatcher {
                 match imweb::PushFriendReqNumResp::decode(decoded_payload.as_slice()) {
                     Ok(resp) => {
                         let total = resp.friend_req_num.max(0);
-                        let _ = self.app_handle.emit(
-                            "friend:req-num",
-                            serde_json::json!({ "total": total }),
-                        );
+                        let _ = self
+                            .app_handle
+                            .emit("friend:req-num", serde_json::json!({ "total": total }));
                         info!("FRIEND_REQ_NUM_PUSH emitted total={}", total);
                     }
                     Err(e) => {
@@ -485,7 +482,10 @@ impl MessageBatcher {
             cmds::FRIEND_RECORD_PUSH => {
                 match self.decode_friend_record_push(&decoded_payload) {
                     Ok(mut msgs) => {
-                        info!("FRIEND_RECORD_PUSH decoded system messages count={}", msgs.len());
+                        info!(
+                            "FRIEND_RECORD_PUSH decoded system messages count={}",
+                            msgs.len()
+                        );
                         self.buffer.append(&mut msgs);
                         if self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
@@ -564,7 +564,10 @@ impl MessageBatcher {
             cmds::CHANNEL_MSG_RECEIVED => {
                 match self.decode_channel_msg_received(&decoded_payload) {
                     Ok(mut msgs) => {
-                        info!("[channel] CHANNEL_MSG_RECEIVED decoded count={}", msgs.len());
+                        info!(
+                            "[channel] CHANNEL_MSG_RECEIVED decoded count={}",
+                            msgs.len()
+                        );
                         self.buffer.append(&mut msgs);
                         if self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
@@ -581,7 +584,10 @@ impl MessageBatcher {
             cmds::CHANNEL_EVENT_PUSH => {
                 match self.decode_channel_event_push(&decoded_payload) {
                     Ok(mut msgs) => {
-                        info!("[channel] CHANNEL_EVENT_PUSH decoded notice count={}", msgs.len());
+                        info!(
+                            "[channel] CHANNEL_EVENT_PUSH decoded notice count={}",
+                            msgs.len()
+                        );
                         self.buffer.append(&mut msgs);
                         if self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
@@ -601,7 +607,10 @@ impl MessageBatcher {
             cmds::GROUP_EVENT_PUSH => {
                 match self.decode_group_event_push(&decoded_payload) {
                     Ok(mut msgs) => {
-                        info!("GROUP_EVENT_PUSH decoded system messages count={}", msgs.len());
+                        info!(
+                            "GROUP_EVENT_PUSH decoded system messages count={}",
+                            msgs.len()
+                        );
                         self.buffer.append(&mut msgs);
                         if self.buffer.len() >= MAX_BATCH_SIZE
                             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
@@ -931,12 +940,11 @@ impl MessageBatcher {
             }
 
             let group_id_str = group.group_id.to_string();
-            let conversation_id =
-                if group_req_event_goes_to_invitation_only(&item) {
-                    "1_invitation".to_string()
-                } else {
-                    format!("1_{}", group.group_id)
-                };
+            let conversation_id = if group_req_event_goes_to_invitation_only(&item) {
+                "1_invitation".to_string()
+            } else {
+                format!("1_{}", group.group_id)
+            };
 
             let notice_msg_id = group_req_event_notice_message_id(&item, group.group_id);
             out.push(DecodedMessage {
@@ -960,6 +968,7 @@ impl MessageBatcher {
                     "groupReqType": item.group_req_type,
                     "groupReqStatus": item.group_req_status,
                     "eventType": common.even_type,
+                    "groupEventMsgId": common.msg_id.to_string(),
                     "groupMsgType": common.msg_type,
                     "receiveUid": item.receive_uid.to_string(),
                     "fromUid": item.from_uid.to_string(),
@@ -999,6 +1008,7 @@ impl MessageBatcher {
                     "memberCount": item.group_member.len(),
                     "members": item.group_member.iter().map(group_member_to_json).collect::<Vec<_>>(),
                     "eventType": common.even_type,
+                    "groupEventMsgId": common.msg_id.to_string(),
                     "groupMsgType": common.msg_type,
                     "handleType": item.handle_type,
                     "fromUid": item.from_uid.to_string(),
@@ -1148,7 +1158,12 @@ impl MessageBatcher {
                 } else {
                     content.attachment_key.as_str()
                 };
-                ciphertexts_to_try.push((ver, sender_source, content.content.as_slice(), attachment_key));
+                ciphertexts_to_try.push((
+                    ver,
+                    sender_source,
+                    content.content.as_slice(),
+                    attachment_key,
+                ));
                 ciphertexts_to_try.push((
                     content.version as i64,
                     $source,
@@ -1215,7 +1230,11 @@ impl MessageBatcher {
         if om.msg_type == 12 || om.msg_type == 18 {
             let content = [
                 om.app_content.as_ref().map(|v| v.content.as_slice()),
-                if om.content.is_empty() { None } else { Some(om.content.as_slice()) },
+                if om.content.is_empty() {
+                    None
+                } else {
+                    Some(om.content.as_slice())
+                },
                 om.web_content.as_ref().map(|v| v.content.as_slice()),
                 om.myself_app_content.as_ref().map(|v| v.content.as_slice()),
                 om.myself_web_content.as_ref().map(|v| v.content.as_slice()),
@@ -1525,7 +1544,9 @@ impl MessageBatcher {
             key_cached,
         );
 
-        let (content, decrypt_pending) = match crypto.decrypt_channel_message(&channel_id_s, &cm.content) {
+        let (content, decrypt_pending) = match crypto
+            .decrypt_channel_message(&channel_id_s, &cm.content)
+        {
             Ok(plain) => {
                 info!(
                     "[channel] CHANNEL_MSG_RECEIVED decrypt OK channel_id={} msg_id={} plain_len={}",
@@ -1541,7 +1562,10 @@ impl MessageBatcher {
                         "[channel] decrypt failed but raw FileObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if let Ok(obj) = imweb::TextObj::decode(cm.content.as_slice()) {
                     warn!(
                         "[channel] decrypt failed but raw TextObj parsed channel_id={} msg_id={} err={}",
@@ -1554,21 +1578,30 @@ impl MessageBatcher {
                         "[channel] decrypt failed but raw ImageObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if cm.msg_type == 2 && imweb::AudioObj::decode(cm.content.as_slice()).is_ok()
                 {
                     warn!(
                         "[channel] decrypt failed but raw AudioObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if cm.msg_type == 3 && imweb::VideoObj::decode(cm.content.as_slice()).is_ok()
                 {
                     warn!(
                         "[channel] decrypt failed but raw VideoObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if cm.msg_type == 5
                     && imweb::NameCardObj::decode(cm.content.as_slice()).is_ok()
                 {
@@ -1576,7 +1609,10 @@ impl MessageBatcher {
                         "[channel] decrypt failed but raw NameCardObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if cm.msg_type == 12
                     && imweb::SetImageObj::decode(cm.content.as_slice()).is_ok()
                 {
@@ -1584,7 +1620,10 @@ impl MessageBatcher {
                         "[channel] decrypt failed but raw SetImageObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if cm.msg_type == 18
                     && imweb::AnimatedGameObj::decode(cm.content.as_slice()).is_ok()
                 {
@@ -1592,7 +1631,10 @@ impl MessageBatcher {
                         "[channel] decrypt failed but raw AnimatedGameObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
-                    (decode_content_obj(cm.msg_type, cm.content.as_slice()), false)
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
                 } else if let Ok(s) = String::from_utf8(cm.content.clone()) {
                     warn!(
                         "[channel] decrypt failed but raw UTF-8 parsed channel_id={} msg_id={} err={}",
@@ -2160,7 +2202,12 @@ fn first_group_req_event_member_uid(item: &imweb::GroupReqEventMsgDto) -> i64 {
         .unwrap_or(0)
 }
 
-fn stable_group_req_notice_id(group_id: i64, req_type: i32, send_uid: i64, receive_uid: i64) -> String {
+fn stable_group_req_notice_id(
+    group_id: i64,
+    req_type: i32,
+    send_uid: i64,
+    receive_uid: i64,
+) -> String {
     format!(
         "group-req-notice-{}-{}-{}-{}",
         group_id.max(0),
@@ -2212,7 +2259,10 @@ fn user_base_to_json(user: &imweb::UserBase) -> serde_json::Value {
     })
 }
 
-fn group_req_items_to_system_messages(cmd: u16, items: &[imweb::GroupReqMsgDto]) -> Vec<DecodedMessage> {
+fn group_req_items_to_system_messages(
+    cmd: u16,
+    items: &[imweb::GroupReqMsgDto],
+) -> Vec<DecodedMessage> {
     let mut out = Vec::new();
     for item in items {
         if item.group_id <= 0 {

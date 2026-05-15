@@ -21,7 +21,11 @@ pub fn ensure_file_helper_conversation(conn: &Connection) -> Result<(), DbError>
 
 // ─── Conversations ───
 
-pub fn get_conversations(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<Conversation>, DbError> {
+pub fn get_conversations(
+    conn: &Connection,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Conversation>, DbError> {
     let mut stmt = conn
         .prepare_cached(
             "SELECT 
@@ -82,7 +86,10 @@ pub fn get_conversations(conn: &Connection, limit: i64, offset: i64) -> Result<V
 }
 
 /// 单条会话（与列表查询字段一致），供 `conv:update` 推送。
-pub fn get_conversation_by_id(conn: &Connection, id: &str) -> Result<Option<Conversation>, DbError> {
+pub fn get_conversation_by_id(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<Conversation>, DbError> {
     let sql = "SELECT 
                 c.id,
                 c.type,
@@ -258,7 +265,10 @@ pub fn batch_insert_messages(conn: &Connection, msgs: &[Message]) -> Result<(), 
     Ok(())
 }
 
-pub fn refresh_conversation_summary(conn: &Connection, conversation_id: &str) -> Result<(), DbError> {
+pub fn refresh_conversation_summary(
+    conn: &Connection,
+    conversation_id: &str,
+) -> Result<(), DbError> {
     // 会话摘要始终跟随“最后一条未删除消息”，避免左侧列表残留已销毁内容。
     conn.execute(
         "UPDATE conversations

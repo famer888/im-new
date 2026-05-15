@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Conversation {
     pub id: String,
     #[serde(rename = "type")]
-    pub conv_type: i32,        // 0: friend, 1: group, 2: channel
+    pub conv_type: i32, // 0: friend, 1: group, 2: channel
     pub target_id: String,
     pub last_msg_id: Option<String>,
     pub last_msg_time: i64,
@@ -27,7 +27,7 @@ pub struct Message {
     pub msg_type: i32,
     pub content: Option<String>,
     pub send_time: i64,
-    pub status: i32,           // 0: sending, 1: sent, 2: delivered, 3: read
+    pub status: i32, // 0: sending, 1: sent, 2: delivered, 3: read
     pub read_status: i32,
     pub version: i64,
     pub is_deleted: bool,

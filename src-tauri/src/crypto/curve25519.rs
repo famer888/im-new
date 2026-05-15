@@ -1,5 +1,5 @@
-use x25519_dalek::{PublicKey, StaticSecret};
 use rand::rngs::OsRng;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use super::CryptoError;
 

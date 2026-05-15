@@ -38,6 +38,7 @@ type ExtraObject = Record<string, unknown>
 
 const INVITE_REQ_TYPES = new Set([1, 3])
 const ACTIVE_INVITE_STATUSES = new Set([0, 1])
+const REJECT_REQ_TYPES = new Set([3, 4, 5])
 
 export function parseGroupNoticeExtraObject(rawExtra: unknown): ExtraObject | null {
   if (!rawExtra) return null
@@ -202,6 +203,54 @@ function formatActorDisplayName(
   return name
 }
 
+function getRejectActorId(extra: ExtraObject): string {
+  return getExtraUserId(extra, 'checkUid')
+    || getUserId(extra.checkUser)
+    || getExtraUserId(extra, 'fromUid', 'sendUid')
+    || getUserId(extra.fromUser)
+}
+
+function resolveDisplayNameById(id: string, options: FormatOptions): string {
+  if (!id || !options.resolveUidPlaceholder) return ''
+  const resolved = options.resolveUidPlaceholder(id)
+  return resolved && resolved !== id ? resolved : ''
+}
+
+function getRejectActorName(extra: ExtraObject, options: FormatOptions): string {
+  const checkId = getExtraUserId(extra, 'checkUid') || getUserId(extra.checkUser)
+  const checkName = getUserDisplayName(extra.checkUser, checkId)
+    || resolveDisplayNameById(checkId, options)
+  if (checkName && checkName !== checkId) return checkName
+
+  const actorId = getExtraUserId(extra, 'fromUid', 'sendUid') || getUserId(extra.fromUser)
+  const actorName = getUserDisplayName(extra.fromUser, actorId)
+    || resolveDisplayNameById(actorId, options)
+  return actorName && actorName !== actorId ? actorName : ''
+}
+
+function formatRejectedGroupNotice(raw: string, extra: ExtraObject, options: FormatOptions): string {
+  const replaced = options.resolveUidPlaceholder
+    ? replaceGroupNoticeUidPlaceholders(raw, (id) => resolveDisplayNameById(id, options))
+    : raw
+  if (!REJECT_REQ_TYPES.has(Number(extra.groupReqType ?? 0)) || Number(extra.groupReqStatus ?? 0) !== 2) {
+    return replaced
+  }
+
+  const comparable = normalizeComparable(replaced)
+  const actorId = getRejectActorId(extra)
+  const actorName = getRejectActorName(extra, options)
+
+  if (actorName && actorName !== actorId && !comparable.includes(normalizeComparable(actorName))) {
+    if (Number(extra.groupReqType ?? 0) === 5) return `${actorName}${replaced}`
+    if (comparable.includes('拒绝')) return `管理员 ${actorName} ${replaced}`
+  }
+
+  if (comparable.includes('拒绝')) return replaced
+  if (!actorName) return replaced
+  if (Number(extra.groupReqType ?? 0) === 5) return `${actorName}拒绝加入群聊`
+  return `管理员 ${actorName} 拒绝你加入群聊`
+}
+
 function memberCandidates(extra: ExtraObject): unknown[] {
   const fromMembers = Array.isArray(extra.members) ? extra.members : []
   const candidates: unknown[] = [...fromMembers]
@@ -311,6 +360,9 @@ export function formatGroupNoticeDisplayText(
 
   const reqType = Number(extra.groupReqType ?? 0)
   const reqStatus = Number(extra.groupReqStatus ?? 0)
+  if (reqStatus === 2) {
+    return formatRejectedGroupNotice(raw, extra, options)
+  }
   if (!INVITE_REQ_TYPES.has(reqType) || !ACTIVE_INVITE_STATUSES.has(reqStatus)) {
     return fin(raw)
   }

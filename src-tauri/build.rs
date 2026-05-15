@@ -10,10 +10,7 @@ fn main() {
     // since these protos use the default (empty) package.
     prost_build::Config::new()
         .out_dir(out_dir)
-        .compile_protos(
-            &[format!("{}/imweb-web.proto", proto_dir)],
-            &[proto_dir],
-        )
+        .compile_protos(&[format!("{}/imweb-web.proto", proto_dir)], &[proto_dir])
         .expect("Failed to compile imweb-web.proto");
 
     // Secondary proto files each get their own subdirectory to avoid symbol
@@ -35,10 +32,7 @@ fn main() {
         std::fs::create_dir_all(&sub_out).expect("Failed to create proto subdirectory");
         prost_build::Config::new()
             .out_dir(&sub_out)
-            .compile_protos(
-                &[format!("{}/{}", proto_dir, file)],
-                &[proto_dir],
-            )
+            .compile_protos(&[format!("{}/{}", proto_dir, file)], &[proto_dir])
             .unwrap_or_else(|e| {
                 println!("cargo:warning=Failed to compile {}: {}", file, e);
             });

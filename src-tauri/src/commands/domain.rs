@@ -41,11 +41,7 @@ pub fn update_domain_pool(state: State<'_, DomainPoolState>, domains: Vec<Domain
 }
 
 #[tauri::command]
-pub fn mark_domain_error(
-    state: State<'_, DomainPoolState>,
-    module_code: String,
-    domain: String,
-) {
+pub fn mark_domain_error(state: State<'_, DomainPoolState>, module_code: String, domain: String) {
     let mut pool = state.domains.lock().unwrap();
     if let Some(item) = pool
         .iter_mut()
@@ -70,8 +66,7 @@ pub fn get_first_normal_domain(
 /// Tauri 没有 Electron session.webRequest CORS hook；OSS/动态域名引导统一走主进程 reqwest 拉取，避免 WebView CORS 拦截。
 #[tauri::command]
 pub async fn fetch_url_text(url: String) -> Result<String, String> {
-    let parsed = url::Url::parse(url.trim())
-        .map_err(|e| format!("invalid url: {}", e))?;
+    let parsed = url::Url::parse(url.trim()).map_err(|e| format!("invalid url: {}", e))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("unsupported url scheme".to_string());
     }
@@ -99,8 +94,7 @@ pub async fn fetch_url_text(url: String) -> Result<String, String> {
 /// 上传前动态域名探活走主进程，避免 WebView CORS 干扰；能连通且非 5xx 即视为可尝试上传。
 #[tauri::command]
 pub async fn probe_url(url: String) -> Result<ProbeUrlResult, String> {
-    let parsed = url::Url::parse(url.trim())
-        .map_err(|e| format!("invalid url: {}", e))?;
+    let parsed = url::Url::parse(url.trim()).map_err(|e| format!("invalid url: {}", e))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("unsupported url scheme".to_string());
     }

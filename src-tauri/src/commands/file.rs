@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
@@ -5,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, State};
-use base64::{engine::general_purpose, Engine as _};
 
 use crate::crypto;
 
@@ -112,18 +112,42 @@ pub fn image_send_log(payload: ImageSendLogPayload) -> Result<(), String> {
         is_file_log,
         payload.level.as_deref().unwrap_or("info"),
     ) {
-        (true, true, _, "error") => tracing::error!(target: "group-audio", data = %data, "{}", payload.message),
-        (true, true, _, "warn") => tracing::warn!(target: "group-audio", data = %data, "{}", payload.message),
-        (true, true, _, _) => tracing::info!(target: "group-audio", data = %data, "{}", payload.message),
-        (true, false, _, "error") => tracing::error!(target: "audio-message", data = %data, "{}", payload.message),
-        (true, false, _, "warn") => tracing::warn!(target: "audio-message", data = %data, "{}", payload.message),
-        (true, false, _, _) => tracing::info!(target: "audio-message", data = %data, "{}", payload.message),
-        (false, _, true, "error") => tracing::error!(target: "file-send", data = %data, "{}", payload.message),
-        (false, _, true, "warn") => tracing::warn!(target: "file-send", data = %data, "{}", payload.message),
-        (false, _, true, _) => tracing::info!(target: "file-send", data = %data, "{}", payload.message),
-        (false, _, false, "error") => tracing::error!(target: "image-send", data = %data, "{}", payload.message),
-        (false, _, false, "warn") => tracing::warn!(target: "image-send", data = %data, "{}", payload.message),
-        (false, _, false, _) => tracing::info!(target: "image-send", data = %data, "{}", payload.message),
+        (true, true, _, "error") => {
+            tracing::error!(target: "group-audio", data = %data, "{}", payload.message)
+        }
+        (true, true, _, "warn") => {
+            tracing::warn!(target: "group-audio", data = %data, "{}", payload.message)
+        }
+        (true, true, _, _) => {
+            tracing::info!(target: "group-audio", data = %data, "{}", payload.message)
+        }
+        (true, false, _, "error") => {
+            tracing::error!(target: "audio-message", data = %data, "{}", payload.message)
+        }
+        (true, false, _, "warn") => {
+            tracing::warn!(target: "audio-message", data = %data, "{}", payload.message)
+        }
+        (true, false, _, _) => {
+            tracing::info!(target: "audio-message", data = %data, "{}", payload.message)
+        }
+        (false, _, true, "error") => {
+            tracing::error!(target: "file-send", data = %data, "{}", payload.message)
+        }
+        (false, _, true, "warn") => {
+            tracing::warn!(target: "file-send", data = %data, "{}", payload.message)
+        }
+        (false, _, true, _) => {
+            tracing::info!(target: "file-send", data = %data, "{}", payload.message)
+        }
+        (false, _, false, "error") => {
+            tracing::error!(target: "image-send", data = %data, "{}", payload.message)
+        }
+        (false, _, false, "warn") => {
+            tracing::warn!(target: "image-send", data = %data, "{}", payload.message)
+        }
+        (false, _, false, _) => {
+            tracing::info!(target: "image-send", data = %data, "{}", payload.message)
+        }
     }
 
     Ok(())
@@ -257,7 +281,18 @@ fn has_dangerous_extension(path: &Path) -> bool {
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
-        "exe" | "bat" | "cmd" | "vbs" | "js" | "ps1" | "scr" | "pif" | "msi" | "com" | "lnk" | "wsf"
+        "exe"
+            | "bat"
+            | "cmd"
+            | "vbs"
+            | "js"
+            | "ps1"
+            | "scr"
+            | "pif"
+            | "msi"
+            | "com"
+            | "lnk"
+            | "wsf"
     )
 }
 
@@ -271,10 +306,7 @@ fn has_dangerous_magic(bytes: &[u8]) -> bool {
     if bytes.len() >= 4
         && matches!(
             &bytes[..4],
-            b"\xFE\xED\xFA\xCE"
-                | b"\xFE\xED\xFA\xCF"
-                | b"\xCE\xFA\xED\xFE"
-                | b"\xCF\xFA\xED\xFE"
+            b"\xFE\xED\xFA\xCE" | b"\xFE\xED\xFA\xCF" | b"\xCE\xFA\xED\xFE" | b"\xCF\xFA\xED\xFE"
         )
     {
         return true;
@@ -347,8 +379,8 @@ pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObj
     } else {
         request.content_type.trim().to_string()
     };
-    let url = url::Url::parse(&request.url)
-        .map_err(|e| format!("invalid oss upload url: {}", e))?;
+    let url =
+        url::Url::parse(&request.url).map_err(|e| format!("invalid oss upload url: {}", e))?;
     let object_path = url.path().trim_start_matches('/');
     let object_key = if object_path.is_empty() {
         request.object_key.trim_start_matches('/')
@@ -358,8 +390,7 @@ pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObj
     let canonical_resource = format!("/{}/{}", request.bucket.trim(), object_key);
     let canonical_headers = format!(
         "x-oss-date:{}\nx-oss-security-token:{}\n",
-        oss_date,
-        request.security_token
+        oss_date, request.security_token
     );
     let string_to_sign = format!(
         "PUT\n\n{}\n{}\n{}{}",
@@ -860,7 +891,10 @@ pub async fn reveal_file_in_directory(path: String) -> Result<(), String> {
         if activate_status.success() {
             return Ok(());
         }
-        return Err(format!("activate Finder failed with status: {}", activate_status));
+        return Err(format!(
+            "activate Finder failed with status: {}",
+            activate_status
+        ));
     }
 
     #[cfg(target_os = "windows")]

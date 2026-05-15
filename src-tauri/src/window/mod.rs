@@ -5,9 +5,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tauri::{
-    AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tracing::info;
 
 const NOTICE_WIDTH: f64 = 278.0;
@@ -46,11 +44,7 @@ impl WindowManager {
         }
     }
 
-    fn position_notification_window(
-        window: &WebviewWindow,
-        index: usize,
-        logical_height: f64,
-    ) {
+    fn position_notification_window(window: &WebviewWindow, index: usize, logical_height: f64) {
         if let Ok(Some(monitor)) = window
             .current_monitor()
             .or_else(|_| window.primary_monitor())
@@ -62,18 +56,15 @@ impl WindowManager {
             let notice_spacing = (NOTICE_SPACING * scale_factor).round() as i32;
             let margin_right = (NOTICE_MARGIN_RIGHT * scale_factor).round() as i32;
             let margin_bottom = (NOTICE_MARGIN_BOTTOM * scale_factor).round() as i32;
-            let x = work_area.position.x
-                + work_area.size.width as i32
-                - notice_width
-                - margin_right;
-            let y = work_area.position.y
-                + work_area.size.height as i32
+            let x =
+                work_area.position.x + work_area.size.width as i32 - notice_width - margin_right;
+            let y = work_area.position.y + work_area.size.height as i32
                 - notice_height
                 - margin_bottom
                 - (index as i32 * (notice_height + notice_spacing));
-            let _ = window.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(x, y),
-            ));
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                x, y,
+            )));
         }
     }
 
@@ -86,7 +77,9 @@ impl WindowManager {
     ) -> Result<(), WindowError> {
         if let Some(label) = self.chat_windows.get(conversation_id) {
             if let Some(window) = app.get_webview_window(label.value()) {
-                window.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
+                window
+                    .set_focus()
+                    .map_err(|e| WindowError::TauriError(e.to_string()))?;
                 return Ok(());
             }
         }
@@ -141,7 +134,9 @@ impl WindowManager {
     ) -> Result<(), WindowError> {
         if let Some((_, label)) = self.chat_windows.remove(conversation_id) {
             if let Some(window) = app.get_webview_window(&label) {
-                window.close().map_err(|e| WindowError::TauriError(e.to_string()))?;
+                window
+                    .close()
+                    .map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
         }
         Ok(())
@@ -151,7 +146,9 @@ impl WindowManager {
     pub fn switch_to_main(&self, app: &AppHandle) -> Result<(), WindowError> {
         let login_was_visible = if let Some(login) = app.get_webview_window("login") {
             let visible = login.is_visible().unwrap_or(false);
-            login.hide().map_err(|e| WindowError::TauriError(e.to_string()))?;
+            login
+                .hide()
+                .map_err(|e| WindowError::TauriError(e.to_string()))?;
             visible
         } else {
             false
@@ -159,19 +156,17 @@ impl WindowManager {
 
         let (main_window, reused_main_window) = match app.get_webview_window("main") {
             Some(w) => {
-                w.show().map_err(|e| WindowError::TauriError(e.to_string()))?;
+                w.show()
+                    .map_err(|e| WindowError::TauriError(e.to_string()))?;
                 (w, true)
             }
             None => {
-                let mut builder = WebviewWindowBuilder::new(
-                    app,
-                    "main",
-                    WebviewUrl::App("/#/home".into()),
-                )
-                .title("OCS Chat")
-                .inner_size(900.0, 600.0)
-                .min_inner_size(800.0, 600.0)
-                .center();
+                let mut builder =
+                    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/#/home".into()))
+                        .title("OCS Chat")
+                        .inner_size(900.0, 600.0)
+                        .min_inner_size(800.0, 600.0)
+                        .center();
 
                 #[cfg(target_os = "macos")]
                 {
@@ -197,11 +192,12 @@ impl WindowManager {
         if reused_main_window && login_was_visible {
             let _ = main_window.eval("window.location.hash = '#/home'; window.location.reload();");
         } else {
-            let _ = main_window.eval(
-                "if (window.location.hash !== '#/home') window.location.hash = '#/home';",
-            );
+            let _ = main_window
+                .eval("if (window.location.hash !== '#/home') window.location.hash = '#/home';");
         }
-        main_window.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
+        main_window
+            .set_focus()
+            .map_err(|e| WindowError::TauriError(e.to_string()))?;
         info!("Switched to main window");
         Ok(())
     }
@@ -224,7 +220,8 @@ impl WindowManager {
         }
 
         if let Some(main) = app.get_webview_window("main") {
-            main.hide().map_err(|e| WindowError::TauriError(e.to_string()))?;
+            main.hide()
+                .map_err(|e| WindowError::TauriError(e.to_string()))?;
         }
 
         match app.get_webview_window("login") {
@@ -241,8 +238,12 @@ impl WindowManager {
                     "window.location.hash = '{}'; window.location.reload();",
                     login_hash
                 ));
-                login.show().map_err(|e| WindowError::TauriError(e.to_string()))?;
-                login.set_focus().map_err(|e| WindowError::TauriError(e.to_string()))?;
+                login
+                    .show()
+                    .map_err(|e| WindowError::TauriError(e.to_string()))?;
+                login
+                    .set_focus()
+                    .map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
             None => {
                 let login_url = if auto_login {
@@ -250,15 +251,12 @@ impl WindowManager {
                 } else {
                     "/#/login?autoLogin=0"
                 };
-                let mut builder = WebviewWindowBuilder::new(
-                    app,
-                    "login",
-                    WebviewUrl::App(login_url.into()),
-                )
-                .title("OCS Chat")
-                .inner_size(300.0, 420.0)
-                .resizable(false)
-                .center();
+                let mut builder =
+                    WebviewWindowBuilder::new(app, "login", WebviewUrl::App(login_url.into()))
+                        .title("OCS Chat")
+                        .inner_size(300.0, 420.0)
+                        .resizable(false)
+                        .center();
 
                 #[cfg(target_os = "macos")]
                 {
@@ -318,24 +316,21 @@ impl WindowManager {
 
         let label = format!("notification_{}", chrono::Utc::now().timestamp_millis());
         let index = labels.len();
-        let data_json = serde_json::to_string(&data)
-            .map_err(|e| WindowError::TauriError(e.to_string()))?;
-        let data_query = url::form_urlencoded::byte_serialize(data_json.as_bytes())
-            .collect::<String>();
+        let data_json =
+            serde_json::to_string(&data).map_err(|e| WindowError::TauriError(e.to_string()))?;
+        let data_query =
+            url::form_urlencoded::byte_serialize(data_json.as_bytes()).collect::<String>();
         let notification_url = format!("/#/notification?data={}", data_query);
 
-        let window = WebviewWindowBuilder::new(
-            app,
-            &label,
-            WebviewUrl::App(notification_url.into()),
-        )
-        .title("Notification")
-        .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
-        .resizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        .build()
-        .map_err(|e| WindowError::TauriError(e.to_string()))?;
+        let window =
+            WebviewWindowBuilder::new(app, &label, WebviewUrl::App(notification_url.into()))
+                .title("Notification")
+                .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
+                .resizable(false)
+                .decorations(false)
+                .always_on_top(true)
+                .build()
+                .map_err(|e| WindowError::TauriError(e.to_string()))?;
 
         // Keep the reminder above the Dock/taskbar by using the monitor work area.
         Self::position_notification_window(&window, index, NOTICE_HEIGHT);
@@ -371,7 +366,9 @@ impl WindowManager {
     ) -> Result<(), WindowError> {
         let label = window.label().to_string();
         if !label.starts_with("notification_") {
-            return Err(WindowError::TauriError("not a notification window".to_string()));
+            return Err(WindowError::TauriError(
+                "not a notification window".to_string(),
+            ));
         }
 
         if pinned {

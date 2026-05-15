@@ -393,7 +393,8 @@ pub fn encode_set_image_obj(content: &str) -> Vec<u8> {
 /// 将扑克牌功能表情编码为旧 im 使用的 AnimatedGameObj protobuf。
 pub fn encode_animated_game_obj(content: &str) -> Vec<u8> {
     let raw = content.trim();
-    let (game_id, current_image) = if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+    let (game_id, current_image) = if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw)
+    {
         let game_id = json_i32(&value, &["gameId", "game_id"])
             .filter(|v| *v > 0)
             .unwrap_or(1);
