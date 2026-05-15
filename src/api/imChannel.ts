@@ -5,10 +5,8 @@
  */
 import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
 import { API_CONFIG, getOpenChatBaseUrl } from './config'
-import { getSignedApiHeaders } from './request'
+import { getOpenChatSignedApiHeaders } from './request'
 import { ungzip } from 'pako'
-
-const CHANNEL_PACKAGE_CODE = 5520
 
 function getUint32Bytes(num: number): Uint8Array {
   const buf = new ArrayBuffer(4)
@@ -57,11 +55,6 @@ function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
 
 function quoteLargeIntegerIds(json: string): string {
   return json.replace(/"([A-Za-z0-9_]*(?:id|Id|ID)[A-Za-z0-9_]*)"\s*:\s*(-?\d{16,})/g, '"$1":"$2"')
-}
-
-function getSignHeaders() {
-  // 频道接口签名必须和老 im 的 getSignHeader 对齐，否则服务端会把请求判成异常。
-  return getSignedApiHeaders({ packageCode: CHANNEL_PACKAGE_CODE })
 }
 
 export interface ChannelListItem {
@@ -214,7 +207,7 @@ async function requestChannelJson<T>(path: string, data: Record<string, unknown>
     headers: {
       'Content-Type': 'application/octet-stream',
       Accept: 'application/json',
-      ...getSignHeaders(),
+      ...getOpenChatSignedApiHeaders(),
     },
     body: packet.buffer as ArrayBuffer,
   })

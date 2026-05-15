@@ -33,6 +33,8 @@ interface ImportMetaEnv {
   readonly VITE_APP_LANGUAGE: string
   readonly VITE_APP_PLATFORM: string
   readonly VITE_APP_SENTRY_DSN: string
+  readonly VITE_APP_OPEN_CHAT_DOMAIN: string
+  readonly VITE_APP_OPEN_CHAT_APP_VER: string
   readonly VITE_APP_SECRET_NAME: string
   readonly VITE_APP_SECRET_KEY: string
   readonly VITE_APP_HEAD_AES_KEY: string

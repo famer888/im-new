@@ -3,7 +3,7 @@
  * Matches OCS protocol: [0xC1, 0x80] + uint32(len) + AES(protobuf)
  */
 import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
-import { API_CONFIG, getBaseUrl } from './config'
+import { API_CONFIG, OPEN_CHAT_PACKAGE_CODE, getBaseUrl } from './config'
 import { getActiveSessionId } from './sessionContext'
 import * as proto from '@/proto/generated'
 import { ungzip } from 'pako'
@@ -92,20 +92,29 @@ function getPlatformSysModel(): string {
   return 'WINDOWS'
 }
 
-export function getApiMetaHeaders(): Record<string, string> {
+export function getApiMetaHeaders(options?: {
+  appVer?: number
+  packageCode?: number
+}): Record<string, string> {
+  const appVer = options?.appVer ?? API_CONFIG.appVer
+  const packageCode = options?.packageCode ?? API_CONFIG.packageCode
   return {
-    // 对齐老 im 97.1.7.0：API 请求显式带版本和签名名，方便服务端按客户端版本/密钥名校验与灰度。
-    'X-App-Version': String(API_CONFIG.appVer),
-    'X-Package-Code': String(API_CONFIG.packageCode),
+    // 对齐老 im：元数据头须与 X-ten 内 clientInfo 的 appVer/packageCode 一致
+    'X-App-Version': String(appVer),
+    'X-Package-Code': String(packageCode),
     'X-Secret-Name': API_CONFIG.secretName,
   }
 }
 
-function getSignClientInfo(withSessionId = true, packageCode = API_CONFIG.packageCode) {
+function getSignClientInfo(
+  withSessionId = true,
+  packageCode = API_CONFIG.packageCode,
+  appVer = API_CONFIG.appVer,
+) {
   const device = getDeviceConfig()
   return {
     sessionId: withSessionId ? getSessionIdFromStorage() : '',
-    appVer: API_CONFIG.appVer,
+    appVer,
     packageCode,
     language: API_CONFIG.language,
     plat: 4,
@@ -117,21 +126,41 @@ function getSignClientInfo(withSessionId = true, packageCode = API_CONFIG.packag
 export function getSignedApiHeaders(options?: {
   withSessionId?: boolean
   packageCode?: number
+  appVer?: number
 }): Record<string, string> {
+  const packageCode = options?.packageCode ?? API_CONFIG.packageCode
+  const appVer = options?.appVer ?? API_CONFIG.appVer
   const client = getSignClientInfo(
     options?.withSessionId ?? true,
-    options?.packageCode ?? API_CONFIG.packageCode,
+    packageCode,
+    appVer,
   )
   const clientStr = JSON.stringify(client)
   const timestamp = Date.now()
   const tenOrigin = `${clientStr}//${timestamp}`
   const oneOrigin = `${API_CONFIG.secretName},${timestamp}`
   return {
-    ...getApiMetaHeaders(),
+    ...getApiMetaHeaders({ appVer, packageCode }),
     'X-one': aesEncryptString(oneOrigin, API_CONFIG.headAesKey),
     'X-ten': aesEncryptString(tenOrigin, API_CONFIG.headAesKey),
     'X-ten-origin': JSON.stringify(tenOrigin),
   }
+}
+
+/**
+ * OpenChat（test-gateway）频道/群相关接口签名：
+ * - packageCode 5520
+ * - appVer 默认 VITE_APP_OPEN_CHAT_APP_VER（与 SECRET_* 在服务端登记一致）
+ */
+export function getOpenChatSignedApiHeaders(options?: {
+  withSessionId?: boolean
+}): Record<string, string> {
+  const appVer = API_CONFIG.openChatAppVer ?? API_CONFIG.appVer
+  return getSignedApiHeaders({
+    withSessionId: options?.withSessionId,
+    packageCode: OPEN_CHAT_PACKAGE_CODE,
+    appVer,
+  })
 }
 
 function getClientInfo(withSessionId = true): proto.IClientInfo {
