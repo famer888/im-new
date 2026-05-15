@@ -38,12 +38,10 @@ impl ConfigManager {
             .map_err(|e| ConfigError::SerializeError(e.to_string()))?;
 
         if let Some(parent) = self.config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ConfigError::IoError(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(|e| ConfigError::IoError(e.to_string()))?;
         }
 
-        std::fs::write(&self.config_path, data)
-            .map_err(|e| ConfigError::IoError(e.to_string()))?;
+        std::fs::write(&self.config_path, data).map_err(|e| ConfigError::IoError(e.to_string()))?;
 
         *self.settings.write() = settings.clone();
         info!("Config saved to {:?}", self.config_path);

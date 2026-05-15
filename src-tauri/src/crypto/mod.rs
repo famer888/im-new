@@ -92,13 +92,7 @@ impl CryptoEngine {
         format!("{}:{}:{}", friend_id, version, source)
     }
 
-    pub fn set_friend_key(
-        &self,
-        friend_id: &str,
-        version: i64,
-        source: &str,
-        rel_key: String,
-    ) {
+    pub fn set_friend_key(&self, friend_id: &str, version: i64, source: &str, rel_key: String) {
         let k = Self::friend_cache_key(friend_id, version, source);
         self.friend_keys.insert(
             k,
@@ -117,11 +111,16 @@ impl CryptoEngine {
 
     /// 获取某个好友在指定 source 下“版本号最大的” relKey。
     pub fn get_latest_friend_key(&self, friend_id: &str, source: &str) -> Option<String> {
-        self.get_latest_friend_key_with_version(friend_id, source).map(|(_, rel)| rel)
+        self.get_latest_friend_key_with_version(friend_id, source)
+            .map(|(_, rel)| rel)
     }
 
     /// 获取某个好友在指定 source 下“版本号最大的” (version, relKey)。
-    pub fn get_latest_friend_key_with_version(&self, friend_id: &str, source: &str) -> Option<(i64, String)> {
+    pub fn get_latest_friend_key_with_version(
+        &self,
+        friend_id: &str,
+        source: &str,
+    ) -> Option<(i64, String)> {
         let prefix = format!("{}:", friend_id);
         let mut best: Option<(i64, String)> = None;
         for entry in self.friend_keys.iter() {
@@ -140,7 +139,9 @@ impl CryptoEngine {
     /// 是否存在该好友任意版本的 relKey（任意 source）。
     pub fn has_any_friend_key(&self, friend_id: &str) -> bool {
         let prefix = format!("{}:", friend_id);
-        self.friend_keys.iter().any(|e| e.key().starts_with(&prefix))
+        self.friend_keys
+            .iter()
+            .any(|e| e.key().starts_with(&prefix))
     }
 
     pub fn remove_friend_keys(&self, friend_id: &str) {
@@ -423,9 +424,7 @@ impl CryptoEngine {
 
 fn parse_protobuf_key(data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if data.len() < 2 {
-        return Err(CryptoError::AesError(
-            "Protobuf key data too short".into(),
-        ));
+        return Err(CryptoError::AesError("Protobuf key data too short".into()));
     }
     if data[0] != 0x0A {
         return Err(CryptoError::AesError(format!(

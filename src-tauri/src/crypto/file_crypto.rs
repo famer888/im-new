@@ -174,12 +174,7 @@ mod tests {
         )
         .unwrap();
 
-        decrypt_file(
-            enc_path.to_str().unwrap(),
-            dec_path.to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        decrypt_file(enc_path.to_str().unwrap(), dec_path.to_str().unwrap(), key).unwrap();
 
         let result = std::fs::read(&dec_path).unwrap();
         assert_eq!(result, original);
@@ -210,12 +205,7 @@ mod tests {
         let enc_size = std::fs::metadata(&enc_path).unwrap().len() as usize;
         assert_eq!(enc_size, DECRYPT_CHUNK_SIZE);
 
-        decrypt_file(
-            enc_path.to_str().unwrap(),
-            dec_path.to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        decrypt_file(enc_path.to_str().unwrap(), dec_path.to_str().unwrap(), key).unwrap();
 
         let result = std::fs::read(&dec_path).unwrap();
         assert_eq!(result, original);
@@ -242,12 +232,7 @@ mod tests {
         )
         .unwrap();
 
-        decrypt_file(
-            enc_path.to_str().unwrap(),
-            dec_path.to_str().unwrap(),
-            key,
-        )
-        .unwrap();
+        decrypt_file(enc_path.to_str().unwrap(), dec_path.to_str().unwrap(), key).unwrap();
 
         let result = std::fs::read(&dec_path).unwrap();
         assert!(result.is_empty());

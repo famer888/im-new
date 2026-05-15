@@ -276,7 +276,10 @@ fn create_stored_zip(entries: &[ZipEntry]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn create_password_zip_with_system(entries: &[ZipEntry], password: &str) -> Result<Vec<u8>, String> {
+fn create_password_zip_with_system(
+    entries: &[ZipEntry],
+    password: &str,
+) -> Result<Vec<u8>, String> {
     if password.trim().is_empty() {
         return Err("password is empty".to_string());
     }
@@ -295,7 +298,12 @@ fn create_password_zip_with_system(entries: &[ZipEntry], password: &str) -> Resu
         }
 
         let mut command = Command::new("zip");
-        command.arg("-j").arg("-q").arg("-P").arg(password).arg(&zip_path);
+        command
+            .arg("-j")
+            .arg("-q")
+            .arg("-P")
+            .arg(password)
+            .arg(&zip_path);
         for path in &file_paths {
             command.arg(path);
         }

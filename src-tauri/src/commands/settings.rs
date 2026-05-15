@@ -66,9 +66,7 @@ impl Default for AppSettings {
 }
 
 #[tauri::command]
-pub async fn get_settings(
-    config: State<'_, ConfigManager>,
-) -> Result<AppSettings, String> {
+pub async fn get_settings(config: State<'_, ConfigManager>) -> Result<AppSettings, String> {
     config.get_settings().map_err(|e| e.to_string())
 }
 

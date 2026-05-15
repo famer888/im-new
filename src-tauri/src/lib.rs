@@ -70,16 +70,13 @@ pub fn run() {
                 } else {
                     "/#/login"
                 };
-                let mut builder = WebviewWindowBuilder::new(
-                    app,
-                    "login",
-                    WebviewUrl::App(login_url.into()),
-                )
-                .title("OCS Chat")
-                .inner_size(300.0, 420.0)
-                .resizable(false)
-                .center()
-                .visible(true);
+                let mut builder =
+                    WebviewWindowBuilder::new(app, "login", WebviewUrl::App(login_url.into()))
+                        .title("OCS Chat")
+                        .inner_size(300.0, 420.0)
+                        .resizable(false)
+                        .center()
+                        .visible(true);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -151,6 +148,7 @@ pub fn run() {
             commands::chat::generate_curve25519_keypair,
             commands::chat::mark_message_sent,
             commands::chat::upsert_incoming_messages,
+            commands::chat::send_group_event_receipt,
             commands::contacts::get_contacts,
             commands::contacts::search_contacts,
             commands::contacts::add_contact,

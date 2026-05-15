@@ -1,5 +1,5 @@
-use rusqlite::Connection;
 use super::DbError;
+use rusqlite::Connection;
 
 const SCHEMA_VERSION: i32 = 2;
 

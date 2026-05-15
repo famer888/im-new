@@ -8,8 +8,8 @@ pub fn init(app_data_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let file_appender = rolling::daily(&log_dir, "ocs-chat");
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,ocs_chat=debug"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ocs_chat=debug"));
 
     fmt()
         .with_writer(file_appender)

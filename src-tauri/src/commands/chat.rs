@@ -274,7 +274,10 @@ pub async fn upsert_incoming_messages(
                     .optional()
                     .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
                 if msg.conversation_id == "1_invitation" && msg.msg_type == 8 {
-                    if existing_send_time.map(|time| msg.send_time > time).unwrap_or(true) {
+                    if existing_send_time
+                        .map(|time| msg.send_time > time)
+                        .unwrap_or(true)
+                    {
                         let count = notification_unread_count(msg).unwrap_or(1).max(1);
                         notification_unread_counts.insert(msg.conversation_id.clone(), count);
                     }
@@ -361,6 +364,38 @@ pub async fn upsert_incoming_messages(
     }
 
     Ok(count)
+}
+
+#[tauri::command]
+pub async fn send_group_event_receipt(
+    ws_mgr: State<'_, WsManager>,
+    group_id: i64,
+    receipt_status: i32,
+    msg_type: i32,
+    msg_ids: Vec<i64>,
+) -> Result<(), String> {
+    if group_id <= 0 {
+        return Err("invalid group_id".to_string());
+    }
+
+    let msg_id = msg_ids.into_iter().filter(|id| *id > 0).collect::<Vec<_>>();
+    if msg_id.is_empty() {
+        return Err("empty group event msg_ids".to_string());
+    }
+
+    let req = imweb::ReceiveGroupEventReceiptMessage {
+        group_id,
+        receipt_status,
+        msg_type,
+        msg_id,
+    };
+    ws_mgr
+        .send_packet(
+            ws_cmds::GROUP_EVENT_RECEIPT,
+            ws_cmds::GROUP_EVENT_RECEIPT as i64,
+            &req.encode_to_vec(),
+        )
+        .map_err(|e| e.to_string())
 }
 
 /// 解析 `{type}_{targetId}` 形式的 conversation_id。
@@ -455,7 +490,9 @@ fn delete_existing_group_notification_duplicates(
 ) -> Result<(), crate::db::DbError> {
     let incoming = rows
         .iter()
-        .filter_map(|msg| group_notification_identity(msg).map(|identity| (identity, msg.id.clone())))
+        .filter_map(|msg| {
+            group_notification_identity(msg).map(|identity| (identity, msg.id.clone()))
+        })
         .collect::<HashMap<_, _>>();
     if incoming.is_empty() {
         return Ok(());
@@ -472,10 +509,7 @@ fn delete_existing_group_notification_duplicates(
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
     let rows = stmt
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         })
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
@@ -512,7 +546,9 @@ fn delete_existing_group_notification_duplicates(
     Ok(())
 }
 
-fn cleanup_all_group_notification_duplicates(conn: &rusqlite::Connection) -> Result<(), crate::db::DbError> {
+fn cleanup_all_group_notification_duplicates(
+    conn: &rusqlite::Connection,
+) -> Result<(), crate::db::DbError> {
     let mut stmt = conn
         .prepare_cached(
             "SELECT id, send_time, extra
@@ -579,7 +615,10 @@ fn group_notification_identity(msg: &models::Message) -> Option<String> {
     group_notification_identity_from_extra(msg.extra.as_deref(), Some(&msg.sender_id))
 }
 
-fn group_notification_identity_from_extra(raw: Option<&str>, sender_id: Option<&str>) -> Option<String> {
+fn group_notification_identity_from_extra(
+    raw: Option<&str>,
+    sender_id: Option<&str>,
+) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(raw?).ok()?;
     let object = match value {
         serde_json::Value::Object(map) => serde_json::Value::Object(map),
@@ -734,12 +773,7 @@ pub async fn send_message(
         conn.execute(
             "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
-                &request.conversation_id,
-                conv_type,
-                &target_id,
-                now
-            ],
+            rusqlite::params![&request.conversation_id, conv_type, &target_id, now],
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         conn.execute(
@@ -922,7 +956,9 @@ pub async fn send_message(
             }
         }
         (2, 12) => {
-            return mark_failed_and_return("dice message is only supported in friend and group chats".to_string());
+            return mark_failed_and_return(
+                "dice message is only supported in friend and group chats".to_string(),
+            );
         }
         (1, _) => {
             warn!(
@@ -1465,7 +1501,8 @@ pub fn decrypt_channel_incoming(
                     }
                 }
                 18 => {
-                    if let Ok(obj) = crate::proto::imweb::AnimatedGameObj::decode(plain.as_slice()) {
+                    if let Ok(obj) = crate::proto::imweb::AnimatedGameObj::decode(plain.as_slice())
+                    {
                         return Ok(obj.current_image);
                     }
                 }
@@ -2516,37 +2553,38 @@ pub async fn recall_message(
     uid: String,
     message_id: String,
 ) -> Result<(), String> {
-    let (db_msg_id, conversation_id) = db.with_connection(&uid, |conn| {
-        let row = conn
-            .query_row(
-                "SELECT id, conversation_id
+    let (db_msg_id, conversation_id) = db
+        .with_connection(&uid, |conn| {
+            let row = conn
+                .query_row(
+                    "SELECT id, conversation_id
                  FROM messages
                  WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1
                  LIMIT 1",
-                rusqlite::params![message_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    rusqlite::params![message_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-        let Some((db_msg_id, conversation_id)) = row else {
-            return Err(crate::db::DbError::SqliteError(format!(
-                "message not found: {}",
-                message_id
-            )));
-        };
+            let Some((db_msg_id, conversation_id)) = row else {
+                return Err(crate::db::DbError::SqliteError(format!(
+                    "message not found: {}",
+                    message_id
+                )));
+            };
 
-        conn.execute(
-            "UPDATE messages
+            conn.execute(
+                "UPDATE messages
              SET is_deleted = 1
              WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1",
-            rusqlite::params![message_id],
-        )
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        queries::refresh_conversation_summary(conn, &conversation_id)?;
-        Ok((db_msg_id, conversation_id))
-    })
-    .map_err(|e| e.to_string())?;
+                rusqlite::params![message_id],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            queries::refresh_conversation_summary(conn, &conversation_id)?;
+            Ok((db_msg_id, conversation_id))
+        })
+        .map_err(|e| e.to_string())?;
 
     let (conv_type, target_id) = parse_conversation_id(&conversation_id)?;
     let target_id_i64 = target_id

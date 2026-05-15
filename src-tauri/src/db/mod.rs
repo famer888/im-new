@@ -17,8 +17,7 @@ pub struct DbManager {
 impl DbManager {
     pub fn new(app_data_dir: &Path) -> Result<Self, DbError> {
         let db_dir = app_data_dir.join("databases");
-        std::fs::create_dir_all(&db_dir)
-            .map_err(|e| DbError::IoError(e.to_string()))?;
+        std::fs::create_dir_all(&db_dir).map_err(|e| DbError::IoError(e.to_string()))?;
 
         Ok(Self {
             app_data_dir: db_dir,
@@ -33,8 +32,7 @@ impl DbManager {
         }
 
         let db_path = self.app_data_dir.join(format!("{}.db", uid));
-        let conn = Connection::open(&db_path)
-            .map_err(|e| DbError::SqliteError(e.to_string()))?;
+        let conn = Connection::open(&db_path).map_err(|e| DbError::SqliteError(e.to_string()))?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=10000; PRAGMA temp_store=MEMORY;")
             .map_err(|e| DbError::SqliteError(e.to_string()))?;
@@ -77,8 +75,7 @@ impl DbManager {
         self.close(uid);
         let db_path = self.app_data_dir.join(format!("{uid}.db"));
         if db_path.exists() {
-            std::fs::remove_file(&db_path)
-                .map_err(|e| DbError::IoError(e.to_string()))?;
+            std::fs::remove_file(&db_path).map_err(|e| DbError::IoError(e.to_string()))?;
         }
         let _ = std::fs::remove_file(self.app_data_dir.join(format!("{uid}.db-wal")));
         let _ = std::fs::remove_file(self.app_data_dir.join(format!("{uid}.db-shm")));

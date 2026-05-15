@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{atomic::{AtomicBool, Ordering}, LazyLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    LazyLock,
+};
 use tauri::{Emitter, Manager, State};
 use tracing::{info, warn};
 
@@ -89,9 +92,9 @@ fn is_process_running(pid: u32) -> bool {
     output
         .ok()
         .map(|out| {
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .any(|line| line.contains(&format!(",\"{}\",", pid)) || line.contains(&format!("\"{}\"", pid)))
+            String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+                line.contains(&format!(",\"{}\",", pid)) || line.contains(&format!("\"{}\"", pid))
+            })
         })
         .unwrap_or(false)
 }
@@ -212,10 +215,7 @@ fn cleanup_legacy_active_login_lock(app: &tauri::AppHandle) {
     }
 }
 
-fn acquire_active_login_lock(
-    app: &tauri::AppHandle,
-    request: &LoginRequest,
-) -> Result<(), String> {
+fn acquire_active_login_lock(app: &tauri::AppHandle, request: &LoginRequest) -> Result<(), String> {
     cleanup_legacy_active_login_lock(app);
 
     let path = active_login_lock_path(app)?;
@@ -340,9 +340,7 @@ pub async fn login(
     // 2. Connect WebSocket
     // 3. Switch to main window
     // Placeholder implementation
-    win_mgr
-        .switch_to_main(&app)
-        .map_err(|e| e.to_string())?;
+    win_mgr.switch_to_main(&app).map_err(|e| e.to_string())?;
 
     Ok(SessionInfo {
         uid: request.uid,

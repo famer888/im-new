@@ -188,7 +188,11 @@ pub fn write_clipboard_text(text: String) -> Result<(), String> {
         use std::io::Write as _;
 
         let mut child = hidden_windows_command("powershell.exe")
-            .args(["-NoProfile", "-Command", "Set-Clipboard -Value ([Console]::In.ReadToEnd())"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+            ])
             .stdin(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -276,7 +280,12 @@ fn collect_proxy_snapshot() -> NetworkProxySnapshot {
                 let value = output
                     .lines()
                     .map(str::trim)
-                    .filter(|line| line.contains("Proxy") || line.contains("Port") || line.contains("Enable") || line.contains("URL"))
+                    .filter(|line| {
+                        line.contains("Proxy")
+                            || line.contains("Port")
+                            || line.contains("Enable")
+                            || line.contains("URL")
+                    })
                     .collect::<Vec<_>>()
                     .join("; ");
                 return NetworkProxySnapshot {
@@ -330,7 +339,11 @@ fn collect_proxy_snapshot() -> NetworkProxySnapshot {
         let keys = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"];
         let value = keys
             .iter()
-            .filter_map(|key| std::env::var(key).ok().map(|val| format!("{}={}", key, val)))
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|val| format!("{}={}", key, val))
+            })
             .collect::<Vec<_>>()
             .join("; ");
         NetworkProxySnapshot {
@@ -377,7 +390,13 @@ fn parse_unix_interfaces(output: &str) -> Vec<NetworkInterfaceSummary> {
     for line in output.lines() {
         if !line.starts_with(char::is_whitespace) && line.contains(':') {
             push_interface(&mut items, &current_name, &current_addresses);
-            current_name = line.split(':').next().unwrap_or_default().trim().trim_matches(|c| c == '<' || c == '>').to_string();
+            current_name = line
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .trim_matches(|c| c == '<' || c == '>')
+                .to_string();
             current_addresses.clear();
         }
 
@@ -404,13 +423,25 @@ fn parse_windows_interfaces(output: &str) -> Vec<NetworkInterfaceSummary> {
         let trimmed = line.trim();
         if trimmed.ends_with(':') && trimmed.to_ascii_lowercase().contains("adapter") {
             push_interface(&mut items, &current_name, &current_addresses);
-            current_name = trimmed.trim_end_matches(':').split("adapter").last().unwrap_or(trimmed).trim().to_string();
+            current_name = trimmed
+                .trim_end_matches(':')
+                .split("adapter")
+                .last()
+                .unwrap_or(trimmed)
+                .trim()
+                .to_string();
             current_addresses.clear();
         }
 
         if trimmed.to_ascii_lowercase().contains("ipv4 address") {
             if let Some(addr) = trimmed.split(':').nth(1) {
-                let cleaned = addr.trim().split('(').next().unwrap_or(addr).trim().to_string();
+                let cleaned = addr
+                    .trim()
+                    .split('(')
+                    .next()
+                    .unwrap_or(addr)
+                    .trim()
+                    .to_string();
                 if !cleaned.starts_with("127.") {
                     current_addresses.push(cleaned);
                 }
@@ -439,7 +470,22 @@ fn push_interface(items: &mut Vec<NetworkInterfaceSummary>, name: &str, addresse
 fn vpn_reasons(name: &str, addresses: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     let lower_name = name.to_ascii_lowercase();
-    let vpn_names = ["utun", "tun", "tap", "ppp", "wg", "wireguard", "tailscale", "zerotier", "clash", "surge", "sing-box", "v2ray", "trojan", "shadowsocks"];
+    let vpn_names = [
+        "utun",
+        "tun",
+        "tap",
+        "ppp",
+        "wg",
+        "wireguard",
+        "tailscale",
+        "zerotier",
+        "clash",
+        "surge",
+        "sing-box",
+        "v2ray",
+        "trojan",
+        "shadowsocks",
+    ];
     if vpn_names.iter().any(|needle| lower_name.contains(needle)) {
         reasons.push(format!("interface name looks like VPN/proxy: {}", name));
     }
@@ -466,7 +512,10 @@ fn vpn_reasons(name: &str, addresses: &[String]) -> Vec<String> {
             || address.starts_with("172.30.")
             || address.starts_with("172.31.")
         {
-            reasons.push(format!("address is often used by VPN/private overlay: {}", address));
+            reasons.push(format!(
+                "address is often used by VPN/private overlay: {}",
+                address
+            ));
             break;
         }
     }
@@ -474,7 +523,10 @@ fn vpn_reasons(name: &str, addresses: &[String]) -> Vec<String> {
     reasons
 }
 
-fn judge_vpn_suspicion(proxy: &NetworkProxySnapshot, interfaces: &[NetworkInterfaceSummary]) -> VpnSuspicion {
+fn judge_vpn_suspicion(
+    proxy: &NetworkProxySnapshot,
+    interfaces: &[NetworkInterfaceSummary],
+) -> VpnSuspicion {
     let mut reasons = Vec::new();
     let mut score = 0;
 
@@ -575,7 +627,10 @@ pub fn stat_local_files(paths: Vec<String>) -> Result<Vec<LocalFileMeta>, String
 
 #[cfg(target_os = "macos")]
 fn write_clipboard_file_macos(path: &std::path::Path) -> Result<(), String> {
-    let path_text = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let path_text = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     let script = format!(
         r#"
 set theFile to POSIX file "{}"
@@ -680,7 +735,9 @@ $files = New-Object System.Collections.Specialized.StringCollection
     }
 }
 
-fn read_files_from_paths(paths: Vec<std::path::PathBuf>) -> Result<Vec<ClipboardFilePayload>, String> {
+fn read_files_from_paths(
+    paths: Vec<std::path::PathBuf>,
+) -> Result<Vec<ClipboardFilePayload>, String> {
     let mut files = Vec::new();
 
     for path in paths {
@@ -737,16 +794,15 @@ end try
         .arg(file_script)
         .output()
         .map_err(|e| e.to_string())?;
-    let file_text = String::from_utf8_lossy(&file_output.stdout).trim().to_string();
+    let file_text = String::from_utf8_lossy(&file_output.stdout)
+        .trim()
+        .to_string();
     if !file_text.is_empty() {
         paths.push(std::path::PathBuf::from(file_text));
         return Ok(paths);
     }
 
-    let png_path = std::env::temp_dir().join(format!(
-        "ocs_clipboard_{}.png",
-        uuid::Uuid::new_v4()
-    ));
+    let png_path = std::env::temp_dir().join(format!("ocs_clipboard_{}.png", uuid::Uuid::new_v4()));
     let png_path_text = png_path.to_string_lossy().to_string();
     let image_script = format!(
         r#"
@@ -769,16 +825,16 @@ return outPath
         .arg(image_script)
         .output()
         .map_err(|e| e.to_string())?;
-    let image_text = String::from_utf8_lossy(&image_output.stdout).trim().to_string();
+    let image_text = String::from_utf8_lossy(&image_output.stdout)
+        .trim()
+        .to_string();
     if !image_text.is_empty() {
         paths.push(std::path::PathBuf::from(image_text));
         return Ok(paths);
     }
 
-    let tiff_path = std::env::temp_dir().join(format!(
-        "ocs_clipboard_{}.tiff",
-        uuid::Uuid::new_v4()
-    ));
+    let tiff_path =
+        std::env::temp_dir().join(format!("ocs_clipboard_{}.tiff", uuid::Uuid::new_v4()));
     let tiff_path_text = tiff_path.to_string_lossy().to_string();
     let tiff_script = format!(
         r#"
@@ -801,12 +857,12 @@ return outPath
         .arg(tiff_script)
         .output()
         .map_err(|e| e.to_string())?;
-    let tiff_text = String::from_utf8_lossy(&tiff_output.stdout).trim().to_string();
+    let tiff_text = String::from_utf8_lossy(&tiff_output.stdout)
+        .trim()
+        .to_string();
     if !tiff_text.is_empty() {
-        let converted_path = std::env::temp_dir().join(format!(
-            "ocs_clipboard_{}.png",
-            uuid::Uuid::new_v4()
-        ));
+        let converted_path =
+            std::env::temp_dir().join(format!("ocs_clipboard_{}.png", uuid::Uuid::new_v4()));
         let _ = std::process::Command::new("sips")
             .args([
                 "-s",
@@ -889,13 +945,14 @@ fn mime_from_path(path: &std::path::Path) -> String {
 
 #[cfg(target_os = "macos")]
 fn write_clipboard_image_macos(bytes: &[u8]) -> Result<(), String> {
-    let path = std::env::temp_dir().join(format!(
-        "ocs_clipboard_write_{}.png",
-        uuid::Uuid::new_v4()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("ocs_clipboard_write_{}.png", uuid::Uuid::new_v4()));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
 
-    let path_text = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let path_text = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     let script = format!(
         r#"
 set imageFile to POSIX file "{}"
@@ -921,13 +978,14 @@ set the clipboard to (read imageFile as «class PNGf»)
 
 #[cfg(target_os = "windows")]
 fn write_clipboard_image_windows(bytes: &[u8]) -> Result<(), String> {
-    let path = std::env::temp_dir().join(format!(
-        "ocs_clipboard_write_{}.png",
-        uuid::Uuid::new_v4()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("ocs_clipboard_write_{}.png", uuid::Uuid::new_v4()));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
 
-    let path_text = path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let path_text = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     let script = format!(
         r#"
 Add-Type -AssemblyName System.Windows.Forms
@@ -961,10 +1019,8 @@ try {{
 pub async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let file_path = std::env::temp_dir().join(format!(
-            "ocs_screenshot_{}.png",
-            uuid::Uuid::new_v4()
-        ));
+        let file_path =
+            std::env::temp_dir().join(format!("ocs_screenshot_{}.png", uuid::Uuid::new_v4()));
         let file_path_text = file_path.to_string_lossy().to_string();
         let app_clone = app.clone();
 

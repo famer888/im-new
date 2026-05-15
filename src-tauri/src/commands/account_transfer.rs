@@ -266,11 +266,17 @@ fn import_current_format_history(
 
     if let Some(rows) = history_obj.get("group_members").and_then(Value::as_array) {
         for row in rows {
-            let member: models::GroupMember = serde_json::from_value(row.clone()).map_err(json_err)?;
+            let member: models::GroupMember =
+                serde_json::from_value(row.clone()).map_err(json_err)?;
             conn.execute(
                 "INSERT OR REPLACE INTO group_members (group_id, user_id, nickname, role)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![member.group_id, member.user_id, member.nickname, member.role],
+                params![
+                    member.group_id,
+                    member.user_id,
+                    member.nickname,
+                    member.role
+                ],
             )
             .map_err(|e| DbError::SqliteError(e.to_string()))?;
         }
@@ -297,16 +303,24 @@ fn import_current_format_history(
 
     if let Some(rows) = history_obj.get("blacklist").and_then(Value::as_array) {
         for row in rows {
-            let blacklist_row: BlacklistRow = serde_json::from_value(row.clone()).map_err(json_err)?;
+            let blacklist_row: BlacklistRow =
+                serde_json::from_value(row.clone()).map_err(json_err)?;
             conn.execute(
                 "INSERT OR REPLACE INTO blacklist (uid, name, added_at) VALUES (?1, ?2, ?3)",
-                params![blacklist_row.uid, blacklist_row.name, blacklist_row.added_at],
+                params![
+                    blacklist_row.uid,
+                    blacklist_row.name,
+                    blacklist_row.added_at
+                ],
             )
             .map_err(|e| DbError::SqliteError(e.to_string()))?;
         }
     }
 
-    if let Some(rows) = history_obj.get("schedule_deletion").and_then(Value::as_array) {
+    if let Some(rows) = history_obj
+        .get("schedule_deletion")
+        .and_then(Value::as_array)
+    {
         for row in rows {
             let deletion_row: ScheduleDeletionRow =
                 serde_json::from_value(row.clone()).map_err(json_err)?;
@@ -335,7 +349,9 @@ fn import_legacy_history(
     let mut legacy_conversation_meta: HashMap<String, (i32, String)> = HashMap::new();
 
     for (table_name, rows_value) in history_obj {
-        let Some((conv_type, target_id, conversation_id)) = parse_legacy_table_name(table_name, uid) else {
+        let Some((conv_type, target_id, conversation_id)) =
+            parse_legacy_table_name(table_name, uid)
+        else {
             continue;
         };
         let Some(rows) = rows_value.as_array() else {
@@ -619,8 +635,7 @@ fn legacy_message_to_current(
         .or_else(|| value_to_i32(obj.get("chatType")))
         .unwrap_or(0);
 
-    let custom_msg_id = value_to_string(obj.get("customMsgId"))
-        .filter(|v| !v.trim().is_empty());
+    let custom_msg_id = value_to_string(obj.get("customMsgId")).filter(|v| !v.trim().is_empty());
     let fallback_id = format!("legacy_{conversation_id}_{send_time}_{index}");
     let id = value_to_string(obj.get("MsgID"))
         .or_else(|| value_to_string(obj.get("msgId")))
@@ -653,7 +668,11 @@ fn legacy_message_to_current(
 
     Some(models::Message {
         id,
-        custom_msg_id: custom_msg_id.or_else(|| Some(format!("legacy_custom_{conversation_id}_{send_time}_{index}"))),
+        custom_msg_id: custom_msg_id.or_else(|| {
+            Some(format!(
+                "legacy_custom_{conversation_id}_{send_time}_{index}"
+            ))
+        }),
         conversation_id: conversation_id.to_string(),
         sender_id,
         msg_type,
@@ -692,12 +711,18 @@ fn value_to_i32(value: Option<&Value>) -> Option<i32> {
 }
 
 fn nested_string(value: Option<&Value>, key: &str) -> Option<String> {
-    value?.as_object()?.get(key).and_then(|v| value_to_string(Some(v)))
+    value?
+        .as_object()?
+        .get(key)
+        .and_then(|v| value_to_string(Some(v)))
 }
 
 fn nested_nested_string(value: Option<&Value>, parent: &str, key: &str) -> Option<String> {
     let parent_value = value?.as_object()?.get(parent)?;
-    parent_value.as_object()?.get(key).and_then(|v| value_to_string(Some(v)))
+    parent_value
+        .as_object()?
+        .get(key)
+        .and_then(|v| value_to_string(Some(v)))
 }
 
 fn json_err(err: serde_json::Error) -> DbError {

@@ -1,6 +1,6 @@
+use std::sync::{Mutex, OnceLock};
 use tauri::State;
 use tauri::{PhysicalSize, Size};
-use std::sync::{Mutex, OnceLock};
 
 use crate::window::{self, NotificationData, WindowManager};
 
@@ -53,7 +53,10 @@ pub async fn toggle_side_bar(
 
     if !is_maximized && open_type.as_str() == "outer" {
         let size = window.outer_size().map_err(|e| e.to_string())?;
-        let next_width = size.width.saturating_sub(SIDEBAR_WIDTH).max(MIN_WINDOW_WIDTH);
+        let next_width = size
+            .width
+            .saturating_sub(SIDEBAR_WIDTH)
+            .max(MIN_WINDOW_WIDTH);
         window
             .set_size(Size::Physical(PhysicalSize::new(next_width, size.height)))
             .map_err(|e| e.to_string())?;
@@ -101,9 +104,7 @@ pub async fn show_login_window(
     app: tauri::AppHandle,
     win_mgr: State<'_, WindowManager>,
 ) -> Result<(), String> {
-    win_mgr
-        .switch_to_login(&app)
-        .map_err(|e| e.to_string())
+    win_mgr.switch_to_login(&app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -22,7 +22,11 @@ pub async fn get_group_members(
 }
 
 #[tauri::command]
-pub async fn create_group(uid: String, name: String, member_ids: Vec<String>) -> Result<(), String> {
+pub async fn create_group(
+    uid: String,
+    name: String,
+    member_ids: Vec<String>,
+) -> Result<(), String> {
     // TODO: Send create group request via WS
     Ok(())
 }

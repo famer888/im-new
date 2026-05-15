@@ -49,7 +49,9 @@ pub async fn get_ws_status(ws_mgr: State<'_, WsManager>) -> Result<String, Strin
 }
 
 #[tauri::command]
-pub async fn get_ws_diagnostics(ws_mgr: State<'_, WsManager>) -> Result<crate::ws::WsDiagnostics, String> {
+pub async fn get_ws_diagnostics(
+    ws_mgr: State<'_, WsManager>,
+) -> Result<crate::ws::WsDiagnostics, String> {
     // 对齐老 im 网络诊断：提供最近重连、Socket close/error 和连接事件摘要给诊断弹窗展示。
     Ok(ws_mgr.get_diagnostics())
 }
