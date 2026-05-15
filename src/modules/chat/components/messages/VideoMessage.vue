@@ -816,7 +816,7 @@ onBeforeUnmount(() => {
     @mousedown.left="handleNativeDragMouseDown"
   >
     <div class="video-content" :style="videoBoxStyle">
-      <div class="video-frame">
+      <div class="video-frame" :class="{ 'no-cover': !isLoaded || loadError || showLoading }">
         <img
           v-if="activeThumbSrc && !loadError"
           ref="thumbElRef"
@@ -827,16 +827,13 @@ onBeforeUnmount(() => {
           @load="handleLoad"
           @error="handleError"
         />
-        <div v-if="showLoading" class="video-loading">
-          <div class="progress-ring spinning">
-            <svg viewBox="0 0 48 48" aria-hidden="true">
-              <circle class="ring-bg" cx="24" cy="24" r="21" fill="none" stroke-width="2" />
-              <circle class="ring-progress" cx="24" cy="24" r="21" fill="none" stroke-width="2" />
-            </svg>
-          </div>
-        </div>
+        <div v-if="showLoading" class="video-loading"></div>
         <div v-if="loadError" class="video-placeholder"></div>
-        <div class="center-control" :class="{ opening: videoOpening }" aria-hidden="true">
+        <div
+          class="center-control"
+          :class="{ opening: videoOpening, 'no-cover': !isLoaded || loadError || showLoading }"
+          aria-hidden="true"
+        >
           <div class="progress-ring">
             <svg viewBox="0 0 48 48" aria-hidden="true">
               <circle class="ring-bg" cx="24" cy="24" r="21" fill="none" stroke-width="2" />
@@ -978,7 +975,11 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   overflow: hidden;
   text-align: center;
-  background: #bababa;
+  // background: #bababa;
+
+  &.no-cover {
+    width: 100%;
+  }
 
   img {
     width: auto;
@@ -1004,16 +1005,15 @@ onBeforeUnmount(() => {
 .video-loading {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  // background: rgba(0, 0, 0, 0.27);
+  z-index: 2;
 }
 
 .progress-ring {
   position: absolute;
-  width: 42px;
-  height: 42px;
+  width: 48px;
+  height: 48px;
 
   &::before {
     content: "";
@@ -1031,13 +1031,13 @@ onBeforeUnmount(() => {
   }
 
   .ring-bg {
-    stroke: rgba(255, 255, 255, 0.32);
+    stroke: rgba(255, 255, 255, 0.3);
   }
 
   .ring-progress {
     stroke: #fff;
-    stroke-dasharray: 36 96;
     stroke-linecap: round;
+    transition: stroke-dashoffset 0.2s ease;
   }
 
   &.spinning {
@@ -1049,7 +1049,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 50%;
   left: 50%;
-  z-index: 3;
+  z-index: 13;
   width: 48px;
   height: 48px;
   transform: translate(-50%, -50%);
@@ -1076,10 +1076,23 @@ onBeforeUnmount(() => {
       stroke-dasharray: 40 92;
     }
   }
+
+  &.no-cover:not(.opening) {
+    .progress-ring {
+      &::before {
+        inset: 0;
+        background: #b8b8b8;
+      }
+
+      svg {
+        display: none;
+      }
+    }
+  }
 }
 
 .play-icon {
-  z-index: 4;
+  z-index: 14;
   width: 0;
   height: 0;
   margin-left: 3px;
