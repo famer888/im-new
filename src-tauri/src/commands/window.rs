@@ -141,3 +141,10 @@ pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
     app.exit(0);
     Ok(())
 }
+
+/// 对齐老 im `app:restart-for-network`：网络诊断里「重启应用」确认后整应用重启。
+#[tauri::command]
+pub async fn restart_app_for_network(app: tauri::AppHandle) -> Result<(), String> {
+    app.restart();
+    Ok(())
+}

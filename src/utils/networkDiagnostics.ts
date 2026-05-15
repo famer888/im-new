@@ -69,6 +69,65 @@ export interface DiagnosticSection {
   ok: boolean
 }
 
+export type DiagnosticItemStatus = 'running' | 'ok' | 'fail' | 'pending'
+
+export interface DiagnosticItem {
+  id: string
+  title: string
+  status: DiagnosticItemStatus
+  children: string[]
+}
+
+export interface NetworkRecoveryStep {
+  name: string
+  ok: boolean
+  skipped?: boolean
+  message?: string
+}
+
+export interface NetworkRecoveryResult {
+  ok: boolean
+  message?: string
+  steps?: NetworkRecoveryStep[]
+  rebuilt?: boolean
+  time?: number
+}
+
+function formatRecoveryResultLines(result: NetworkRecoveryResult): string[] {
+  const steps = result.steps || []
+  const lines = [
+    `时间: ${formatTime(result.time || Date.now())}`,
+    `整体结果: ${result.ok ? '已执行' : '未完成'}`,
+  ]
+  for (const step of steps) {
+    lines.push(
+      `${step.ok ? '✓' : '×'} ${step.name}: ${step.skipped ? '不支持' : step.message || 'ok'}`,
+    )
+  }
+  if (result.message) lines.push(`说明: ${result.message}`)
+  if (result.rebuilt != null) {
+    lines.push(`Socket 重建: ${result.rebuilt ? '已触发' : '未触发'}`)
+  }
+  return lines
+}
+
+function glyphForStatus(status: DiagnosticItemStatus): string {
+  if (status === 'ok') return '✓'
+  if (status === 'fail') return '✕'
+  if (status === 'running') return '…'
+  return '·'
+}
+
+export function formatDiagnosticsPlainText(items: DiagnosticItem[]): string {
+  const lines: string[] = [`[${new Date().toISOString()}]`, '']
+  for (const row of items) {
+    lines.push(`${glyphForStatus(row.status)} ${row.title}`)
+    for (const child of row.children) lines.push(`  ${child}`)
+    lines.push('')
+  }
+  return lines.join('\n').replace(/\n+$/, '')
+}
+
 function uniqueUrls(urls: string[]): string[] {
   return [...new Set(urls.map(url => String(url || '').trim()).filter(Boolean))]
 }
@@ -139,23 +198,74 @@ function getCachedWsUrl(): string {
   }
 }
 
-function getWebSocketCandidates(): string[] {
-  return uniqueUrls([
-    getCachedWsUrl(),
-    ...getAllDomains('webSession').slice(0, 6).map(item => item.domain),
-  ].map(normalizeWsUrl))
+const DOMAIN_LIST_CACHE_KEY = 'domainList'
+/** 对齐老 im Analyst：WSS 短时探测最多条数 */
+const WS_PROBE_MAX_URLS = 20
+
+function getSessionBaselineWsUrl(): string {
+  try {
+    const raw = localStorage.getItem('device-config')
+    if (!raw) return ''
+    const parsed = JSON.parse(raw) as { urls?: { session?: string }; session?: string }
+    const url = parsed?.urls?.session || parsed?.session || ''
+    return normalizeWsUrl(String(url || ''))
+  } catch {
+    return ''
+  }
+}
+
+/** 对齐老 im：domainList 缓存中 moduleCode=webSession 的 domainUrl */
+function getWebSessionUrlsFromDomainList(): string[] {
+  try {
+    const raw = localStorage.getItem(DOMAIN_LIST_CACHE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as {
+      domainDtoList?: Array<{ moduleCode?: string; domainUrl?: string }>
+    }
+    const list = Array.isArray(parsed?.domainDtoList) ? parsed.domainDtoList : []
+    return list
+      .filter(item => item?.moduleCode === 'webSession' && item?.domainUrl)
+      .map(item => String(item.domainUrl).trim())
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 对齐老 im Analyst._collectWsProbeCandidates：
+ * ① session 基线 ② domainList(webSession) ③ 最近连接 URL（去重保序）
+ * 不使用 domain-pool-cache，避免多探测一条仅展示用的池内地址。
+ */
+function collectWsProbeCandidates(): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const pushNorm = (raw: string) => {
+    const url = normalizeWsUrl(raw)
+    if (!url || seen.has(url)) return
+    seen.add(url)
+    out.push(url)
+  }
+
+  pushNorm(getSessionBaselineWsUrl())
+  for (const url of getWebSessionUrlsFromDomainList()) {
+    pushNorm(url)
+  }
+  pushNorm(getCachedWsUrl())
+
+  return out.slice(0, WS_PROBE_MAX_URLS)
 }
 
 function getWebSocketSourceLines(wsCandidates: string[]): string[] {
-  const cachedUrl = normalizeWsUrl(getCachedWsUrl())
-  const sessionDomains = getAllDomains('webSession').map(item => normalizeWsUrl(item.domain)).filter(Boolean)
-  const latest = cachedUrl || wsCandidates[0] || ''
+  const sessionBaseline = getSessionBaselineWsUrl()
+  const lastAttemptUrl = normalizeWsUrl(getCachedWsUrl())
+  const sessionDomains = getWebSessionUrlsFromDomainList().map(normalizeWsUrl).filter(Boolean)
+  const latest = lastAttemptUrl || wsCandidates[0] || ''
   return [
     `最近 onWsConnecting: ${latest ? '登录/设备配置 urls.session (login)' : '暂无 onWsConnecting 打点'}`,
     `URL: ${latest || '-'}`,
     `累计 login/domainPool/fallback/session: ${latest ? 1 : 0}/0/0/0`,
     `isLogin 下发 urls.session: （本轮无打点，或未走扫码 isLogin）`,
-    `setWsUrl 基线（首页 deviceConfig.urls.session）: ${cachedUrl || '-'}`,
+    `setWsUrl 基线（首页 deviceConfig.urls.session）: ${sessionBaseline || lastAttemptUrl || '-'}`,
     sessionDomains.length ? `域名池 webSession（${sessionDomains.length}）:` : '域名池 webSession: （domainList 缓存中无）',
     ...sessionDomains.slice(0, 40).map(url => `  ${url}`),
   ]
@@ -303,7 +413,7 @@ function formatNetworkLogSummary(diag: WsDiagnostics): string[] {
 
 function formatRuntimeCaptureLines(diag: WsDiagnostics, wsProbes: WsProbeResult[], snapshot: NetworkSnapshot | null): string[] {
   const events = diag.events || []
-  const wsTarget = wsProbes[0]?.url || getWebSocketCandidates()[0] || '—'
+  const wsTarget = wsProbes[0]?.url || collectWsProbeCandidates()[0] || '—'
   const dns = wsTarget.replace(/^wss?:\/\//, '').split('/')[0].split(':')[0] || '—'
   return [
     `Socket/连接事件: ${events.length}`,
@@ -351,16 +461,18 @@ export function splitDiagnosticSections(report: string): DiagnosticSection[] {
     .filter(section => section.title)
 }
 
-export async function collectNetworkDiagnostics(): Promise<string> {
-  const snapshot = await getNetworkSnapshot()
-  const wsCandidates = getWebSocketCandidates()
-  const [wsProbes, externalProbes, listDomainDiag, wsDiag] = await Promise.all([
-    Promise.all(wsCandidates.slice(0, 6).map(url => probeWebSocket(url))),
-    probeExternalNetwork(),
-    getListDomainDiagnostic(''),
-    getWsDiagnostics(),
-  ])
-  const listDomainLines = [
+function formatExternalProbeLines(externalProbes: ProbeResult[]): string[] {
+  return [
+    `navigator.onLine: ${navigator.onLine}`,
+    ...externalProbes.map((item) => {
+      const status = item.status == null ? 'fetch 已返回(no-cors)' : `HTTP ${item.status}`
+      return `${item.label}: ${item.ok ? status : `失败 ${item.error || ''}`}`.trim()
+    }),
+  ]
+}
+
+function formatListDomainLines(listDomainDiag: Awaited<ReturnType<typeof getListDomainDiagnostic>>): string[] {
+  return [
     `时间: ${formatTime(Date.now())}`,
     `来源: ${listDomainDiag.source}`,
     `成功: ${listDomainDiag.success}`,
@@ -368,52 +480,166 @@ export async function collectNetworkDiagnostics(): Promise<string> {
     listDomainDiag.total != null ? `domainDtoList 条数: ${listDomainDiag.total}` : '',
     listDomainDiag.webSessionCount != null ? `其中 webSession: ${listDomainDiag.webSessionCount}` : '',
   ].filter(Boolean)
+}
 
-  const lines = [
-    'WSS候选短时探测',
-    ...(wsProbes.length > 0
-      ? wsProbes.map((item) => {
-        const status = item.ok ? 'onopen' : (item.error || 'failed')
-        return `${item.ok ? '✓' : '×'} ${item.url} — ${status}`
+/**
+ * 对齐老 im Analyst.runDiagnostics：先弹窗，再按步骤探测并逐条注入 UI。
+ */
+export async function runNetworkDiagnostics(
+  onUpdate?: (items: DiagnosticItem[]) => void,
+  options?: { recoveryLastResult?: NetworkRecoveryResult | null },
+): Promise<DiagnosticItem[]> {
+  const items: DiagnosticItem[] = []
+  const sleep = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms))
+
+  const notify = () => {
+    onUpdate?.(items.map(item => ({ ...item })))
+  }
+
+  const addRunning = (id: string, title: string) => {
+    items.push({ id, title, status: 'running', children: [] })
+    notify()
+    return items.length - 1
+  }
+
+  const setItem = (index: number, patch: Partial<DiagnosticItem>) => {
+    items[index] = { ...items[index], ...patch }
+    notify()
+  }
+
+  const wsCandidates = collectWsProbeCandidates()
+  const snapshotPromise = getNetworkSnapshot()
+  const wsDiagPromise = getWsDiagnostics()
+  let wsProbes: WsProbeResult[] = []
+
+  try {
+    const recovery = options?.recoveryLastResult
+    if (recovery) {
+      let i = addRunning('network-recovery-last', '最近一次网络修复')
+      await sleep(20)
+      setItem(i, {
+        status: recovery.ok ? 'ok' : 'fail',
+        children: formatRecoveryResultLines(recovery),
       })
-      : ['× no webSession candidate']),
-    '',
-    '网络：onLine + 外网探测',
-    `navigator.onLine: ${navigator.onLine}`,
-    ...externalProbes.map((item) => {
-      const status = item.status == null ? 'fetch 已返回(no-cors)' : `HTTP ${item.status}`
-      return `${item.label}: ${item.ok ? status : `失败 ${item.error || ''}`}`.trim()
-    }),
-    '',
-    'WSS 来源（最近一条 + 累计）',
-    ...getWebSocketSourceLines(wsCandidates),
-    '',
-    'api/v4/listDomain 最近打点',
-    ...listDomainLines,
-    '',
-    '域名池缓存 + 重连取池',
-    ...collectDomainPoolCacheLines(),
-    '',
-    '近 5 分钟重连次数',
-    `${(wsDiag.reconnectTimes || []).filter(time => Date.now() - Number(time) <= 5 * 60 * 1000).length} 次`,
-    '',
-    '最近一次 Socket 关闭',
-    ...formatWsCloseLines(wsDiag),
-    '',
-    '最近一次 Socket error',
-    ...formatWsErrorLines(wsDiag),
-    '',
-    '常驻网络日志摘要',
-    ...formatNetworkLogSummary(wsDiag),
-    '',
-    '本次诊断网络捕获',
-    ...formatRuntimeCaptureLines(wsDiag, wsProbes, snapshot),
-    '',
-    '疑似VPN/隧道网卡',
-    ...formatVpnLines(snapshot),
-  ]
-  // 对齐老 im 的 netlog 弹窗数据结构：按 WSS 探测、外网探测、WSS 来源、listDomain 打点分段输出。
-  return lines.join('\n')
+    }
+
+    let i = addRunning('ws-probe', 'WSS候选短时探测')
+    for (const url of wsCandidates) {
+      wsProbes.push(await probeWebSocket(url))
+    }
+    const okCount = wsProbes.filter(item => item.ok).length
+    setItem(i, {
+      status: wsProbes.length ? (okCount > 0 ? 'ok' : 'fail') : 'pending',
+      children: wsProbes.length
+        ? wsProbes.map((item) => {
+          const status = item.ok ? 'onopen' : (item.error || 'failed')
+          return `${item.ok ? '✓' : '×'} ${item.url} — ${status}`
+        })
+        : ['无候选 URL'],
+    })
+
+    i = addRunning('health', '网络：onLine + 外网探测')
+    const externalProbes = await probeExternalNetwork()
+    const healthLines = formatExternalProbeLines(externalProbes)
+    const navBad = !navigator.onLine
+    const probeBad = externalProbes.some(item => !item.ok)
+    setItem(i, {
+      status: navBad || probeBad ? 'fail' : 'ok',
+      children: healthLines.length ? healthLines : ['—'],
+    })
+
+    i = addRunning('url-src', 'WSS 来源（最近一条 + 累计）')
+    await sleep(40)
+    const latest = normalizeWsUrl(getCachedWsUrl()) || wsCandidates[0] || ''
+    setItem(i, {
+      status: latest ? 'ok' : 'pending',
+      children: getWebSocketSourceLines(wsCandidates),
+    })
+
+    i = addRunning('list-domain', 'api/v4/listDomain 最近打点')
+    await sleep(40)
+    const listDomainDiag = await getListDomainDiagnostic('')
+    setItem(i, {
+      status: listDomainDiag.success ? 'ok' : 'fail',
+      children: formatListDomainLines(listDomainDiag),
+    })
+
+    i = addRunning('pool-stat', '域名池缓存 + 重连取池')
+    await sleep(40)
+    const poolLines = collectDomainPoolCacheLines()
+    const webSessionCount = getAllDomains('webSession').length
+    setItem(i, {
+      status: webSessionCount > 0 ? 'ok' : 'pending',
+      children: poolLines.length ? poolLines : ['无法读取 domainList 缓存'],
+    })
+
+    const wsDiag = await wsDiagPromise
+    i = addRunning('reconnect', '近 5 分钟重连次数')
+    await sleep(40)
+    const reconnectCount = (wsDiag.reconnectTimes || [])
+      .filter(time => Date.now() - Number(time) <= 5 * 60 * 1000).length
+    setItem(i, {
+      status: 'ok',
+      children: [`${reconnectCount} 次`],
+    })
+
+    i = addRunning('last-close', '最近一次 Socket 关闭')
+    await sleep(40)
+    setItem(i, {
+      status: wsDiag.lastClose ? 'ok' : 'pending',
+      children: formatWsCloseLines(wsDiag),
+    })
+
+    i = addRunning('last-err', '最近一次 Socket error')
+    await sleep(20)
+    setItem(i, {
+      status: wsDiag.lastError ? 'fail' : 'ok',
+      children: formatWsErrorLines(wsDiag),
+    })
+
+    i = addRunning('network-history-summary', '常驻网络日志摘要')
+    setItem(i, {
+      status: 'ok',
+      children: formatNetworkLogSummary(wsDiag),
+    })
+
+    const snapshot = await snapshotPromise
+    i = addRunning('runtime-network-capture', '本次诊断网络捕获')
+    setItem(i, {
+      status: snapshot ? 'ok' : 'pending',
+      children: formatRuntimeCaptureLines(wsDiag, wsProbes, snapshot),
+    })
+
+    i = addRunning('vpn-suspect', '疑似VPN/隧道网卡')
+    await sleep(20)
+    const vpnLines = formatVpnLines(snapshot)
+    const vpnBad = Boolean(snapshot?.vpnSuspicion.suspected)
+    setItem(i, {
+      status: vpnBad ? 'fail' : 'ok',
+      children: vpnLines,
+    })
+  } catch (error) {
+    const msg = (error as Error)?.message || String(error)
+    for (let idx = 0; idx < items.length; idx += 1) {
+      if (items[idx]?.status === 'running') {
+        setItem(idx, { status: 'fail', children: ['因异常中断'] })
+      }
+    }
+    items.push({
+      id: `diag-err-${Date.now()}`,
+      title: '诊断流程异常',
+      status: 'fail',
+      children: [msg],
+    })
+    notify()
+  }
+
+  return items.map(item => ({ ...item }))
+}
+
+export async function collectNetworkDiagnostics(): Promise<string> {
+  const items = await runNetworkDiagnostics()
+  return formatDiagnosticsPlainText(items)
 }
 
 function readLastSendTrace(): string[] {

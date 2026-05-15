@@ -193,6 +193,7 @@ pub fn run() {
             commands::window::update_tray_unread_count,
             commands::window::toggle_devtools,
             commands::window::exit_app,
+            commands::window::restart_app_for_network,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::repair::repair_clear_crypto_keys,

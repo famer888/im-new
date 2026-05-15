@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import defaultConfirmAppIcon from '@/assets/images/common/confirm-app-icon.png'
 
 const props = withDefaults(defineProps<{
   visible: boolean
@@ -12,12 +13,17 @@ const props = withDefaults(defineProps<{
   /** default：带标题栏；im：无标题、正文居中、按钮样式对齐老 im */
   variant?: 'default' | 'im'
   type?: 'info' | 'warning' | 'danger'
+  /** 顶部应用图标（对齐老 im 原生确认框 / window.confirm 样式） */
+  showIcon?: boolean
+  icon?: string
 }>(), {
   title: '提示',
   confirmText: '确定',
   cancelText: '取消',
   variant: 'default',
   type: 'info',
+  showIcon: false,
+  icon: '',
 })
 
 const emit = defineEmits<{
@@ -31,6 +37,10 @@ const displayTitle = computed(() => t(props.title))
 const displayContent = computed(() => t(props.content))
 const displayConfirmText = computed(() => t(props.confirmText))
 const displayCancelText = computed(() => t(props.cancelText))
+const iconSrc = computed(() => {
+  if (!props.showIcon) return ''
+  return props.icon || defaultConfirmAppIcon
+})
 
 function close() {
   emit('update:visible', false)
@@ -92,6 +102,7 @@ onBeforeUnmount(() => {
             >×</button>
           </div>
           <div class="modal-body" :class="{ 'modal-body--im': variant === 'im' }">
+            <img v-if="iconSrc" class="modal-app-icon" :src="iconSrc" alt="">
             <p>{{ displayContent }}</p>
           </div>
           <div class="modal-footer" :class="{ 'modal-footer--im': variant === 'im' }">
@@ -203,6 +214,15 @@ onBeforeUnmount(() => {
   font-size: 14px;
   line-height: 20px;
   word-wrap: break-word;
+}
+
+.modal-app-icon {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin: 4px auto 14px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .modal-footer {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -10,7 +10,12 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
-import { collectNetworkDiagnostics, splitDiagnosticSections } from '@/utils/networkDiagnostics'
+import {
+  formatDiagnosticsPlainText,
+  runNetworkDiagnostics,
+  type DiagnosticItem,
+  type NetworkRecoveryResult,
+} from '@/utils/networkDiagnostics'
 import { initDomainPoolFromApi, initDomainPoolFromOss } from '@/utils/domainPool'
 
 const { t: $t } = useI18n()
@@ -20,6 +25,7 @@ const chatStore = useChatStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const messageStore = useMessageStore()
+let lastNetworkRecoveryResult: NetworkRecoveryResult | null = null
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
@@ -29,12 +35,63 @@ const diagnosingNetwork = ref(false)
 const repairingNetwork = ref(false)
 const diagnosticDialogVisible = ref(false)
 const diagnosticDialogTitle = ref('')
-const diagnosticReport = ref('')
+const diagnosticItems = ref<DiagnosticItem[]>([])
 const diagnosticError = ref('')
-const visibleDiagnosticSectionCount = ref(0)
+const diagnosticContentRef = ref<HTMLElement | null>(null)
+const diagnosticCopyHint = ref('')
+let diagnosticRunToken = 0
+let diagnosticCopyHintTimer: ReturnType<typeof setTimeout> | null = null
 
-const diagnosticSections = computed(() => splitDiagnosticSections(diagnosticReport.value))
-const visibleDiagnosticSections = computed(() => diagnosticSections.value.slice(0, visibleDiagnosticSectionCount.value))
+const diagnosticReport = computed(() => formatDiagnosticsPlainText(diagnosticItems.value))
+const hasDiagnosticReport = computed(() => diagnosticItems.value.length > 0)
+
+function statusGlyph(status: DiagnosticItem['status']): string {
+  if (status === 'ok') return '✓'
+  if (status === 'fail') return '✕'
+  if (status === 'running') return '…'
+  return '·'
+}
+
+async function scrollDiagnosticToBottom() {
+  await nextTick()
+  const el = diagnosticContentRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+watch(
+  diagnosticItems,
+  () => {
+    void scrollDiagnosticToBottom()
+  },
+  { deep: true },
+)
+
+function clearDiagnosticCopyHint() {
+  diagnosticCopyHint.value = ''
+  if (diagnosticCopyHintTimer) {
+    clearTimeout(diagnosticCopyHintTimer)
+    diagnosticCopyHintTimer = null
+  }
+}
+
+function setDiagnosticCopyHint(message: string) {
+  diagnosticCopyHint.value = message
+  if (diagnosticCopyHintTimer) clearTimeout(diagnosticCopyHintTimer)
+  diagnosticCopyHintTimer = window.setTimeout(() => {
+    diagnosticCopyHint.value = ''
+    diagnosticCopyHintTimer = null
+  }, 2200)
+}
+
+function closeDiagnosticDialog() {
+  diagnosticDialogVisible.value = false
+  clearDiagnosticCopyHint()
+}
+
+onUnmounted(() => {
+  clearDiagnosticCopyHint()
+})
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => window.setTimeout(resolve, ms))
@@ -73,6 +130,7 @@ async function copyTextToClipboard(text: string) {
 }
 
 const resetConfirmVisible = ref(false)
+const restartConfirmVisible = ref(false)
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message
@@ -208,53 +266,137 @@ async function confirmResetCache() {
   window.location.reload()
 }
 
-async function handleNetworkDiagnostics() {
-  if (diagnosingNetwork.value) return
+function openNetworkDiagnostics() {
+  void handleNetworkDiagnostics()
+}
+
+function beginDiagnosticUi() {
   diagnosticDialogVisible.value = true
   diagnosticDialogTitle.value = $t('网络诊断')
-  diagnosticReport.value = ''
+  diagnosticItems.value = []
   diagnosticError.value = ''
-  visibleDiagnosticSectionCount.value = 0
+  clearDiagnosticCopyHint()
   diagnosingNetwork.value = true
+}
+
+async function runDiagnosticSession(
+  runToken: number,
+  recoveryLastResult: NetworkRecoveryResult | null = null,
+) {
   try {
-    // 对齐老 im 网络诊断弹窗：Tauri 无 Electron netLog，先弹窗再逐步展开运行时/WS/代理/VPN 快照。
-    diagnosticReport.value = await collectNetworkDiagnostics()
-    await revealDiagnosticSections()
+    await runNetworkDiagnostics((items) => {
+      if (runToken !== diagnosticRunToken || !diagnosticDialogVisible.value) return
+      diagnosticItems.value = items
+    }, { recoveryLastResult })
   } catch (error) {
     diagnosticError.value = formatErrorMessage(error)
   } finally {
-    diagnosingNetwork.value = false
+    if (runToken === diagnosticRunToken) {
+      diagnosingNetwork.value = false
+    }
   }
 }
 
-async function revealDiagnosticSections() {
-  for (let i = 1; i <= diagnosticSections.value.length; i += 1) {
-    if (!diagnosticDialogVisible.value) break
-    visibleDiagnosticSectionCount.value = i
-    await sleep(i === 1 ? 80 : 180)
-  }
+async function handleNetworkDiagnostics(options?: { recoveryLastResult?: NetworkRecoveryResult | null }) {
+  if (diagnosingNetwork.value || repairingNetwork.value) return
+  const runToken = ++diagnosticRunToken
+  beginDiagnosticUi()
+  await runDiagnosticSession(runToken, options?.recoveryLastResult ?? null)
 }
 
 async function copyDiagnosticReport() {
-  if (!diagnosticReport.value) return
-  await copyTextToClipboard(diagnosticReport.value)
-  showToast($t('诊断报告已复制'))
+  if (!hasDiagnosticReport.value) return
+  try {
+    await copyTextToClipboard(diagnosticReport.value)
+    setDiagnosticCopyHint($t('复制成功'))
+  } catch {
+    setDiagnosticCopyHint($t('复制失败'))
+  }
 }
 
 async function repairNetworkAndRefresh() {
   if (repairingNetwork.value || diagnosingNetwork.value) return
+  const runToken = ++diagnosticRunToken
   repairingNetwork.value = true
+  // 对齐老 im：先立刻清空列表并显示「检测中」，再后台执行修复，避免长时间无反馈。
+  beginDiagnosticUi()
+
+  const steps: NetworkRecoveryResult['steps'] = []
+  let rebuilt = false
+  let ok = true
+  let message = ''
+
   try {
-    // 软修复仅刷新动态域名缓存并重跑诊断，不修改系统代理/VPN 设置。
-    await Promise.allSettled([initDomainPoolFromOss(), initDomainPoolFromApi()])
-    await handleNetworkDiagnostics()
-    showToast($t('网络诊断已刷新'))
-  } finally {
-    repairingNetwork.value = false
+    const [ossRes, apiRes] = await Promise.allSettled([
+      initDomainPoolFromOss(),
+      initDomainPoolFromApi(),
+    ])
+    const ossOk = ossRes.status === 'fulfilled'
+    const apiOk = apiRes.status === 'fulfilled'
+    steps.push({
+      name: '刷新 OSS 引导域名',
+      ok: ossOk,
+      message: ossOk ? 'ok' : String(ossRes.reason || 'failed'),
+    })
+    steps.push({
+      name: '刷新 listDomain 域名池',
+      ok: apiOk,
+      message: apiOk ? 'ok' : String(apiRes.reason || 'failed'),
+    })
+    if (!ossOk && !apiOk) {
+      ok = false
+      message = '域名刷新失败'
+    }
+
+    if (isTauri()) {
+      try {
+        await tauriInvoke('disconnect_ws')
+        await sleep(600)
+        await messageStore.ensureWsConnected()
+        rebuilt = true
+        steps.push({ name: '重建 WebSocket', ok: true, message: 'ok' })
+      } catch (error) {
+        rebuilt = false
+        ok = false
+        const errText = formatErrorMessage(error)
+        message = message || errText
+        steps.push({ name: '重建 WebSocket', ok: false, message: errText })
+      }
+    } else {
+      steps.push({ name: '重建 WebSocket', ok: false, skipped: true, message: '仅桌面端' })
+    }
+  } catch (error) {
+    ok = false
+    message = formatErrorMessage(error)
   }
+
+  lastNetworkRecoveryResult = {
+    ok,
+    message,
+    steps,
+    rebuilt,
+    time: Date.now(),
+  }
+
+  repairingNetwork.value = false
+  if (runToken !== diagnosticRunToken || !diagnosticDialogVisible.value) return
+  await runDiagnosticSession(runToken, lastNetworkRecoveryResult)
 }
 
-function restartApp() {
+function openRestartConfirm() {
+  restartConfirmVisible.value = true
+}
+
+async function confirmRestartApp() {
+  restartConfirmVisible.value = false
+  if (isTauri()) {
+    try {
+      await tauriInvoke('restart_app_for_network')
+      return
+    } catch {
+      // fallback：无法 relaunch 时至少刷新 WebView
+    }
+  }
   window.location.reload()
 }
 </script>
@@ -279,49 +421,60 @@ function restartApp() {
       </dd>
     </dl>
     <dl>
-      <dt>{{ $t('网络诊断') }}</dt>
+      <dt />
       <dd>
-        <button type="button" :disabled="diagnosingNetwork" @click="handleNetworkDiagnostics">
-          {{ diagnosingNetwork ? $t('诊断中') : $t('打开网络诊断') }}
+        <button type="button" :disabled="diagnosingNetwork" @click="openNetworkDiagnostics">
+          {{ diagnosingNetwork ? $t('诊断中') : $t('网络诊断') }}
         </button>
       </dd>
     </dl>
 
     <Teleport to="body">
-      <div v-if="diagnosticDialogVisible" class="diagnostic-overlay" @click.self="diagnosticDialogVisible = false">
+      <div v-if="diagnosticDialogVisible" class="diagnostic-overlay" @click.self="closeDiagnosticDialog">
         <section class="diagnostic-dialog" role="dialog" aria-modal="true">
           <header>
             <h4>{{ diagnosticDialogTitle }}</h4>
-            <button type="button" class="diagnostic-close" @click="diagnosticDialogVisible = false">×</button>
+            <button type="button" class="diagnostic-close" @click="closeDiagnosticDialog">×</button>
           </header>
 
-          <div class="diagnostic-content">
-            <p v-if="diagnosingNetwork" class="diagnostic-loading">
+          <div ref="diagnosticContentRef" class="diagnostic-content">
+            <p v-if="diagnosticError" class="diagnostic-error">{{ diagnosticError }}</p>
+            <p v-if="diagnosingNetwork && !diagnosticError" class="diagnostic-loading">
               <span class="diagnostic-spinner" />
-              <span>{{ $t('处理中') }}...</span>
+              <span>{{ $t('检测中') }}…</span>
             </p>
-            <p v-else-if="diagnosticError" class="diagnostic-error">{{ diagnosticError }}</p>
-            <template v-else>
-              <article v-for="section in visibleDiagnosticSections" :key="section.title" class="diagnostic-section">
-                <h5>
-                  <span :class="['section-state', section.ok ? 'ok' : 'warn']">{{ section.ok ? '✓' : '!' }}</span>
-                  {{ section.title }}
-                </h5>
-                <ul v-if="section.body.length">
-                  <li v-for="line in section.body" :key="line">{{ line }}</li>
-                </ul>
-              </article>
-            </template>
+            <ul v-if="diagnosticItems.length" class="diagnostic-list">
+              <li
+                v-for="row in diagnosticItems"
+                :key="row.id"
+                class="diagnostic-item"
+              >
+                <span
+                  class="diagnostic-icon"
+                  :class="{
+                    ok: row.status === 'ok',
+                    fail: row.status === 'fail',
+                    pending: row.status === 'pending' || row.status === 'running',
+                  }"
+                >{{ statusGlyph(row.status) }}</span>
+                <div class="diagnostic-main">
+                  <div class="diagnostic-row-title">{{ row.title }}</div>
+                  <ul v-if="row.children.length" class="diagnostic-sub">
+                    <li v-for="(line, idx) in row.children" :key="`${row.id}-${idx}`">{{ line }}</li>
+                  </ul>
+                </div>
+              </li>
+            </ul>
           </div>
 
           <footer>
-            <button type="button" :disabled="!diagnosticReport" @click="copyDiagnosticReport">
-              {{ $t('复制诊断报告') }}
+            <button type="button" :disabled="!hasDiagnosticReport || diagnosingNetwork" @click="copyDiagnosticReport">
+              {{ diagnosticCopyHint || $t('复制诊断报告') }}
             </button>
             <button type="button" :disabled="repairingNetwork || diagnosingNetwork" @click="repairNetworkAndRefresh">
-              {{ repairingNetwork ? $t('诊断中') : $t('尝试网络修复') }}
+              {{ repairingNetwork ? `${$t('网络修复中')}...` : $t('尝试网络修复') }}
             </button>
-            <button type="button" class="danger" @click="restartApp">
+            <button type="button" class="danger" :disabled="repairingNetwork || diagnosingNetwork" @click="openRestartConfirm">
               {{ $t('重启应用') }}
             </button>
           </footer>
@@ -334,6 +487,14 @@ function restartApp() {
       variant="im"
       :content="$t('确认退出，并重置缓存数据？')"
       @confirm="confirmResetCache"
+    />
+
+    <ConfirmDialog
+      v-model:visible="restartConfirmVisible"
+      variant="im"
+      show-icon
+      content="重启应用会关闭当前窗口并重新打开，是否继续？"
+      @confirm="confirmRestartApp"
     />
 
     <Toast
@@ -469,6 +630,7 @@ function restartApp() {
     display: flex;
     align-items: center;
     gap: 8px;
+    margin: 0 0 10px;
     color: #8f8f8f;
   }
 
@@ -485,43 +647,65 @@ function restartApp() {
     color: #ff7777;
   }
 
-  .diagnostic-section {
+  .diagnostic-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .diagnostic-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     animation: diagnostic-section-in 0.18s ease both;
 
-    & + .diagnostic-section {
-      margin-top: 14px;
-      padding-top: 12px;
-      border-top: 1px solid #303030;
-    }
-
-    > h5 {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 0 0 6px;
-      color: #f2f2f2;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    > ul {
-      margin: 0;
-      padding-left: 28px;
-      color: #bdbdbd;
-      font-size: 12px;
-      line-height: 18px;
-      word-break: break-all;
+    &:last-child {
+      border-bottom: none;
     }
   }
 
-  .section-state {
-    width: 14px;
-    color: #f0b84a;
-    font-weight: 700;
+  .diagnostic-icon {
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #888;
 
     &.ok {
-      color: #56e37c;
+      color: #5cdb7a;
     }
+
+    &.fail {
+      color: #ff6b6b;
+    }
+
+    &.pending {
+      color: #888;
+    }
+  }
+
+  .diagnostic-main {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .diagnostic-row-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+  }
+
+  .diagnostic-sub {
+    margin: 4px 0 0;
+    padding: 0 0 0 12px;
+    list-style: disc;
+    font-size: 11px;
+    line-height: 1.45;
+    color: #9a9a9a;
+    word-break: break-all;
   }
 
   > footer {
@@ -553,6 +737,7 @@ function restartApp() {
         color: #ff8d8d;
         border-color: #7a3d3d;
       }
+
     }
   }
 }
