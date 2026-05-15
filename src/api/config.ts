@@ -16,6 +16,16 @@ function normalizeBrandId(input?: string): '45' | '55' | '97' {
 const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)
 const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID}chat.com`).trim()
 
+/** OpenChat 网关（频道等）签名 packageCode，与 webBiz 的 7100 不同 */
+export const OPEN_CHAT_PACKAGE_CODE = 5520
+
+function parseOpenChatAppVer(): number | undefined {
+  const raw = String(import.meta.env.VITE_APP_OPEN_CHAT_APP_VER || '').trim()
+  if (!raw) return undefined
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : undefined
+}
+
 export const API_CONFIG = {
   rawBaseUrl: RAW_BASE_URL,
   aesKey: import.meta.env.VITE_APP_AES_KEY || '1234567890123456',
@@ -23,7 +33,10 @@ export const API_CONFIG = {
   secretName: import.meta.env.VITE_APP_SECRET_NAME || 'eb2c844e110be53a0b008a9766877aea',
   secretKey: import.meta.env.VITE_APP_SECRET_KEY || '1004969fe92844eb',
   appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 168),
+  /** 频道网关单独 appVer，须与 SECRET_* 在服务端登记一致；未配置则与 appVer 相同 */
+  openChatAppVer: parseOpenChatAppVer(),
   packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 7100),
+  openChatPackageCode: OPEN_CHAT_PACKAGE_CODE,
   language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
   rawDomainUrl: RAW_DOMAIN_URL,
