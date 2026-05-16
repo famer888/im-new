@@ -18,12 +18,21 @@ const props = defineProps<{
 const loaded = ref(false)
 const rawContent = computed(() => String(props.content || props.message?.content || ''))
 
+function extractUrlFromRawContent(raw: string): string {
+  const value = String(raw || '').trim()
+  if (!value) return ''
+  const match = value.match(/https?:\/\/[^\s"'<>\\*`]+/i)
+  return match?.[0] || value
+}
+
 const gifUrl = computed(() => {
   try {
     const parsed = JSON.parse(rawContent.value)
-    return parsed.url || parsed.gif || rawContent.value
+    return extractUrlFromRawContent(
+      parsed.url || parsed.gif || parsed.fileUrl || parsed.path || parsed.thumbnailUrl || parsed.thumbUrl || rawContent.value,
+    )
   } catch {
-    return rawContent.value
+    return extractUrlFromRawContent(rawContent.value)
   }
 })
 

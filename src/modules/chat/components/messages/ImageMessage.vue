@@ -18,6 +18,8 @@ const activeSrc = ref('')
 const localFilePath = ref('')
 const showPreview = ref(false)
 const imageElRef = ref<HTMLImageElement | null>(null)
+const naturalImageWidth = ref(0)
+const naturalImageHeight = ref(0)
 let downloadToken = 0
 let materializeToken = 0
 let stopDownloadEvents: Array<() => void> = []
@@ -73,6 +75,13 @@ function normalizeImageSrc(value: unknown, mimeType?: unknown): string {
   return raw
 }
 
+function extractImageUrlFromRawContent(raw: string): string {
+  const value = String(raw || '').trim()
+  if (!value) return ''
+  const match = value.match(/https?:\/\/[^\s"'<>\\*`]+/i)
+  return match?.[0] || value
+}
+
 function isRemoteImageSrc(src: string): boolean {
   return /^https?:\/\//i.test(src)
 }
@@ -113,7 +122,8 @@ const imageData = computed((): {
       size: Number(parsed.size || parsed.fileSize || 0),
     }
   } catch {
-    const [url = '', thumbUrl = '', size = '0'] = raw.split('||')
+    const extractedUrl = extractImageUrlFromRawContent(raw)
+    const [url = '', thumbUrl = '', size = '0'] = extractedUrl.split('||')
     const normalizedUrl = normalizeImageSrc(url)
     const normalizedThumbUrl = normalizeImageSrc(thumbUrl)
     return {
@@ -189,8 +199,8 @@ const imageBoxStyle = computed(() => {
     }
   }
 
-  const sourceWidth = imageData.value.width
-  const sourceHeight = imageData.value.height
+  const sourceWidth = imageData.value.width || naturalImageWidth.value
+  const sourceHeight = imageData.value.height || naturalImageHeight.value
   const height = 150
   const minWidth = 120
   const maxWidth = 400
@@ -266,6 +276,8 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, fileKey, attachmentKey], () =
 }, { immediate: true })
 
 function handleLoad() {
+  naturalImageWidth.value = imageElRef.value?.naturalWidth || 0
+  naturalImageHeight.value = imageElRef.value?.naturalHeight || 0
   isLoaded.value = true
   setCachedImage(imageCacheKey.value, {
     src: activeSrc.value,
@@ -361,7 +373,7 @@ function getImageFileName(fileUrl: string, explicitName = ''): string {
   if (explicitName.trim()) return pathFileName(explicitName.trim()) || safeFileName(explicitName.trim())
   const cleanFileUrl = String(fileUrl || '').split('||')[0].trim()
   if (/^data:image\//i.test(cleanFileUrl)) return 'image.png'
-  const suffix = getFileSuffix(1, cleanFileUrl)
+  const suffix = getFileSuffix(props.message.msgType, cleanFileUrl)
   const fileName = cleanFileUrl.slice(cleanFileUrl.lastIndexOf('/') + 1) + suffix
   return safeFileName(fileName || `image${suffix || '.png'}`)
 }
