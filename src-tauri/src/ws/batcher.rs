@@ -1172,11 +1172,11 @@ impl MessageBatcher {
             }};
         }
         if is_self {
-            if let Some(mweb) = &om.myself_web_content {
-                push_content!(mweb, "web");
-            }
             if let Some(mapp) = &om.myself_app_content {
                 push_content!(mapp, "app");
+            }
+            if let Some(mweb) = &om.myself_web_content {
+                push_content!(mweb, "web");
             }
         } else {
             if let Some(web) = &om.web_content {
