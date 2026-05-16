@@ -998,6 +998,14 @@ export const useMessageStore = defineStore('message', () => {
         ...data,
       }, level)
     }
+    logSendStep('sendMessage entry', {
+      usesWsSend: messageUsesWsSend(convType, msgType),
+      contentLen: String(content || '').length,
+      contentHead: shortLogText(content, 160),
+      extraKeys: Object.keys(sendExtra ?? {}),
+      hasClientMsgId: Boolean(clientMsgId),
+      isFileHelperSend,
+    })
 
     // 发送前先保证对应会话的 relKey 已在 Rust 缓存里；失败则标记为发送失败。
     if (convType === 1 && targetId && msgType !== 12 && msgType !== 18) {
@@ -1084,6 +1092,9 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
+      logSendStep('before channel selection', {
+        usesWsSend: messageUsesWsSend(convType, msgType),
+      })
       if (messageUsesWsSend(convType, msgType)) {
         const stepStartedAt = performance.now()
         if (isSingleVideo) {
@@ -1186,6 +1197,9 @@ export const useMessageStore = defineStore('message', () => {
       return normalized
     } catch (e) {
       const errText = String((e as any)?.message || e || '')
+      logSendStep('sendMessage catch', {
+        error: errText,
+      }, 'error')
       if (isSingleVideo) {
         singleVideoLog('sendMessage catch', {
           optimisticId,
