@@ -1073,6 +1073,35 @@ function videoExtFromUrl(url: string): string {
   return matched?.[0]?.toLowerCase() || '.mp4'
 }
 
+function videoMenuLog(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
+  const payload = data || {}
+  console.warn(`[video-menu] ${message}`, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[video-menu] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
+function videoUrlCandidates(url: string, fileName = ''): string[] {
+  const raw = String(url || '').trim()
+  if (!raw || !isRemoteUrl(raw)) return raw ? [raw] : []
+  const [withoutHash, hash = ''] = raw.split('#')
+  const [base, query = ''] = withoutHash.split('?')
+  const hasVideoExt = /\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i.test(base)
+  if (hasVideoExt) return [raw]
+
+  const suffixFromName = videoExtFromUrl(fileName)
+  const suffixes = [suffixFromName, '.mp4', '.mov'].filter((item, index, list) => item && list.indexOf(item) === index)
+  const withSuffix = suffixes.map(suffix => `${base}${suffix}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`)
+  return [...new Set([...withSuffix, raw])]
+}
+
 function suggestedVideoSaveName(data: Record<string, unknown>): string {
   const source = getVideoFileSource(data)
   const name = sanitizeMediaFileName(source.fileName || String(data.messageId || 'video'))
@@ -1110,7 +1139,18 @@ function isBlobOrDataUrl(url: string): boolean {
   return /^(blob|data):/i.test(url)
 }
 
-async function waitForDownloadFile(url: string, fileKey: string, savePath: string, msgId: string) {
+function showVideoPreparingProgress(progress: number) {
+  const percent = Math.max(1, Math.min(99, Math.round(progress * 100)))
+  showToast(`正在准备视频文件 ${percent}%`)
+}
+
+async function waitForDownloadFile(
+  url: string,
+  fileKey: string,
+  savePath: string,
+  msgId: string,
+  onProgress?: (progress: number) => void,
+) {
   const [{ invoke }, { listen }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/api/event'),
@@ -1120,11 +1160,14 @@ async function waitForDownloadFile(url: string, fileKey: string, savePath: strin
     let settled = false
     let unlistenDone: (() => void) | null = null
     let unlistenError: (() => void) | null = null
+    let unlistenProgress: (() => void) | null = null
     const cleanup = () => {
       unlistenDone?.()
       unlistenError?.()
+      unlistenProgress?.()
       unlistenDone = null
       unlistenError = null
+      unlistenProgress = null
     }
 
     try {
@@ -1140,12 +1183,17 @@ async function waitForDownloadFile(url: string, fileKey: string, savePath: strin
         cleanup()
         reject(new Error(event.payload?.error || '视频下载失败'))
       })
+      unlistenProgress = await listen<{ progress?: number }>(`file:progress:${msgId}`, (event) => {
+        const progress = Number(event.payload?.progress || 0)
+        if (Number.isFinite(progress)) onProgress?.(Math.max(0, Math.min(1, progress)))
+      })
       await invoke('download_file', {
         url,
         fileKey,
         savePath,
         msgId,
-        logTag: 'video',
+        logTag: 'video-menu',
+        emitDataUrl: false,
       })
     } catch (error) {
       if (!settled) {
@@ -1172,27 +1220,83 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
   const url = source.url
   if (!url || isBlobOrDataUrl(url)) throw new Error('video source unavailable')
 
+  videoMenuLog('ensure local file start', {
+    messageId: String(data.messageId || data.msgId || ''),
+    urlHead: url.slice(0, 160),
+    fileName: source.fileName,
+    hasFileKey: Boolean(source.fileKey),
+    fileKeyLen: source.fileKey.length,
+    isRemote: isRemoteUrl(url),
+  })
+
   if (!isRemoteUrl(url)) {
     const localPath = fileUrlToLocalPath(url)
+    videoMenuLog('check local video path', { localPath })
     if (await tauriFileExists(localPath)) return localPath
     throw new Error('video file not found')
   }
 
-  const savePath = await (async () => {
+  const baseSavePath = await (async () => {
     const { appDataDir, join } = await import('@tauri-apps/api/path')
     const baseDir = await appDataDir()
     const messageId = imageCacheSafeName(String(data.messageId || data.msgId || 'video'))
     return join(baseDir, 'video-cache', `${messageId}${videoExtFromUrl(url)}`)
   })()
 
-  if (await tauriFileExists(savePath)) return savePath
-
-  if (source.fileKey) {
-    await waitForDownloadFile(url, source.fileKey, savePath, `video-menu-${Date.now()}`)
-  } else {
-    await writeRemoteFile(url, savePath)
+  if (await tauriFileExists(baseSavePath)) {
+    videoMenuLog('local video cache hit', { savePath: baseSavePath })
+    return baseSavePath
   }
-  return savePath
+
+  const candidates = videoUrlCandidates(url, source.fileName)
+  videoMenuLog('remote video candidates', {
+    baseSavePath,
+    candidateCount: candidates.length,
+    candidates: candidates.map(item => item.slice(0, 160)),
+  })
+
+  let lastError: unknown = null
+  for (const candidate of candidates) {
+    const savePath = ensureVideoSaveExtension(baseSavePath.replace(/\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i, ''), videoExtFromUrl(candidate))
+    if (await tauriFileExists(savePath)) {
+      videoMenuLog('candidate cache hit', { candidateHead: candidate.slice(0, 160), savePath })
+      return savePath
+    }
+
+    try {
+      videoMenuLog('candidate download start', {
+        candidateHead: candidate.slice(0, 160),
+        savePath,
+        encrypted: Boolean(source.fileKey),
+      })
+      if (source.fileKey) {
+        await waitForDownloadFile(
+          candidate,
+          source.fileKey,
+          savePath,
+          `video-menu-${Date.now()}`,
+          showVideoPreparingProgress,
+        )
+      } else {
+        showToast('正在准备视频文件')
+        await writeRemoteFile(candidate, savePath)
+      }
+      videoMenuLog('candidate download success', {
+        candidateHead: candidate.slice(0, 160),
+        savePath,
+      })
+      return savePath
+    } catch (error) {
+      lastError = error
+      videoMenuLog('candidate download failed', {
+        candidateHead: candidate.slice(0, 160),
+        savePath,
+        error: (error as Error)?.message || String(error),
+      }, 'warn')
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('video download failed')
 }
 
 async function saveVideoAs(data: Record<string, unknown>) {
@@ -1235,9 +1339,17 @@ async function saveVideoAs(data: Record<string, unknown>) {
 }
 
 async function openVideoDirectory(data: Record<string, unknown>) {
+  videoMenuLog('open directory click', {
+    messageId: String(data.messageId || data.msgId || ''),
+    msgType: data.msgType,
+    contentHead: String(data.content || '').slice(0, 260),
+  })
+  showToast('正在准备视频文件')
   const filePath = await ensureVideoLocalFile(data)
+  videoMenuLog('reveal video directory', { filePath })
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('reveal_file_in_directory', { path: filePath })
+  showToast('已打开目录')
 }
 
 function fallbackPlainFileKey(key: string): string {
