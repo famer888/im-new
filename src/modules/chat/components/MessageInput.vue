@@ -2504,7 +2504,7 @@ async function uploadVideoLikeIm(
     logPrefix: '[video-send] ',
   })
 
-  const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
+  const finalUrl = toHttpsUrl(stripQuery(uploadUrl || responseUrl))
   fileTraceLog(trace, 'video upload done', {
     originalBytes: file.size,
     encryptedBytes: encrypted.byteLength,
