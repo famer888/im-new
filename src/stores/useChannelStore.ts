@@ -367,19 +367,20 @@ export const useChannelStore = defineStore('channel', () => {
     }
 
     if (apiSucceeded) {
-      const nextChannels = filterRemovedChannels(allChannels, uid)
+      const apiChannels = filterRemovedChannels(allChannels, uid)
+      const nextChannels = filterRemovedChannels(mergeChannelsById(
+        seed?.conversationChannels || [],
+        seed?.localChannels || [],
+        apiChannels,
+      ), uid)
       channelDebug('API channelList result', {
         collectedCount: allChannels.length,
-        filteredCount: nextChannels.length,
+        apiFilteredCount: apiChannels.length,
+        mergedCount: nextChannels.length,
         seedConversationCount: seed?.conversationChannels?.length || 0,
         seedLocalCount: seed?.localChannels?.length || 0,
       })
-      channels.value = nextChannels.length > 0
-        ? nextChannels
-        : filterRemovedChannels(mergeChannelsById(
-          seed?.conversationChannels || [],
-          seed?.localChannels || [],
-        ), uid)
+      channels.value = nextChannels
       await hydratePlaceholderChannels(uid)
       await saveChannelsToLocal(uid, channels.value)
       return
