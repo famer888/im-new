@@ -135,7 +135,11 @@ function loadLastLoginInfo() {
     if (stored) {
       const list = JSON.parse(stored)
       if (Array.isArray(list) && list.length > 0) {
-        const last = list[list.length - 1] || {}
+        const currentUid = String(localStorage.getItem('current-uid') || '').trim()
+        const preferred = currentUid
+          ? list.find((item: any) => String(item?.id || '').trim() === currentUid)
+          : null
+        const last = preferred || list[list.length - 1] || {}
         lastLoginInfo.value = {
           ...last,
           name: String(last.name || last.nickname || last.nickName || last.id || ''),
