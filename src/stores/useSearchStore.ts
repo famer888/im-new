@@ -154,6 +154,7 @@ export const useSearchStore = defineStore('search', () => {
 
   function messageDigestForSearch(m: Message): string {
     if (m.msgType === 1) return '[图片]'
+    if (m.msgType === 9) return '[动画表情]'
     if (m.msgType === 2) return '[语音]'
     if (m.msgType === 3) return '[视频]'
     if (m.msgType === 7) return '[文件]'

@@ -93,6 +93,59 @@ pub fn encode_image_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将前端 GIF/动态表情内容编码为旧 im 使用的 DynamicImageObj protobuf。
+pub fn encode_dynamic_image_obj(content: &str) -> Vec<u8> {
+    let raw = content.trim();
+    let (url, mut thumb_url, width, height, file_size) =
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+            let url = value
+                .get("url")
+                .or_else(|| value.get("gif"))
+                .or_else(|| value.get("fileUrl"))
+                .or_else(|| value.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let thumb_url = value
+                .get("thumbnailUrl")
+                .or_else(|| value.get("thumbUrl"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let width = value.get("width").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let height = value.get("height").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+            let file_size = value
+                .get("size")
+                .or_else(|| value.get("fileSize"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (url, thumb_url, width, height, file_size)
+        } else {
+            let parts: Vec<&str> = raw.split("||").collect();
+            let url = parts.get(0).copied().unwrap_or_default().to_string();
+            let thumb_url = parts.get(1).copied().unwrap_or_default().to_string();
+            let file_size = parts
+                .get(2)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            (url, thumb_url, 0, 0, file_size)
+        };
+
+    if thumb_url.is_empty() {
+        thumb_url = url.clone();
+    }
+
+    let obj = imweb::DynamicImageObj {
+        width,
+        height,
+        file_size,
+        url,
+        thumb_url,
+        r#ref: None,
+    };
+    obj.encode_to_vec()
+}
+
 /// 将前端音频内容编码为旧 im 使用的 AudioObj protobuf。
 ///
 /// 兼容两种输入：
@@ -419,6 +472,7 @@ pub fn encode_animated_game_obj(content: &str) -> Vec<u8> {
 pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
     match msg_type {
         1 => encode_image_obj(content),
+        9 => encode_dynamic_image_obj(content),
         2 => encode_audio_obj(content),
         3 => encode_video_obj(content),
         5 => encode_name_card_obj(content),

@@ -1574,12 +1574,16 @@ async function appendLocalImagePreview(
   file: File,
   fileKey: string,
   trace: ImageSendTrace,
+  options?: {
+    msgType?: MessageType
+    previewUrlOverride?: string
+  },
 ): Promise<LocalImagePreview | null> {
   const conversationId = convId.value
   const uid = authStore.uid
   if (!conversationId || !uid) return null
 
-  const previewUrl = URL.createObjectURL(file)
+  const previewUrl = String(options?.previewUrlOverride || '').trim() || URL.createObjectURL(file)
   const { width, height } = await getImageSize(previewUrl)
   const optimisticId = createOptimisticImageId()
   const extra = withReadBurnExtra({ fileKey, uploadPending: true, imageTraceId: trace.id })
@@ -1588,7 +1592,7 @@ async function appendLocalImagePreview(
     customMsgId: optimisticId,
     conversationId,
     senderId: uid,
-    msgType: MessageType.Image,
+    msgType: options?.msgType ?? MessageType.Image,
     content: JSON.stringify({
       url: previewUrl,
       thumbnailUrl: previewUrl,
@@ -1610,6 +1614,8 @@ async function appendLocalImagePreview(
     width,
     height,
     size: file.size,
+    msgType: options?.msgType ?? MessageType.Image,
+    previewScheme: previewUrl.split(':')[0] || 'unknown',
   })
   return { url: previewUrl, width, height, optimisticId }
 }
@@ -2035,6 +2041,7 @@ async function uploadImageLikeIm(
     width?: number
     height?: number
     trace?: ImageSendTrace
+    msgType?: MessageType
   },
 ): Promise<UploadedImagePayload> {
   const trace = options?.trace ?? createImageTrace()
@@ -2057,7 +2064,7 @@ async function uploadImageLikeIm(
   })
   const [uploadUrlInfo, token] = await Promise.all([
     getUploadUrl({
-      attachType: getUploadAttachType(MessageType.Image),
+      attachType: getUploadAttachType(options?.msgType ?? MessageType.Image),
       attachWorkspaceType: 1,
       fileSize: encrypted.byteLength,
       suffix,
@@ -2690,6 +2697,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
         const trace = createImageTrace()
         const fileKey = createFileKey()
         const isGif = /image\/gif$/i.test(file.type) || getFileSuffix(file) === 'gif'
+        const imageMsgType = isGif ? MessageType.DynamicImage : MessageType.Image
         sendFile = await ensureBlobBackedFile(file, trace)
         traceLog(trace, 'handle image file', {
           conversationId: convId.value,
@@ -2700,7 +2708,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           size: sendFile.size,
           type: sendFile.type,
           isGif,
-          plannedMsgType: MessageType.Image,
+          plannedMsgType: imageMsgType,
         })
         const prepared = isGroup.value && !isFileHelperChat.value && !isGif
           ? await prepareGroupImagePayload(sendFile)
@@ -2712,7 +2720,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             size: sendFile.size,
             type: sendFile.type,
             isGif,
-            msgType: MessageType.Image,
+            msgType: imageMsgType,
             preparedSize: prepared.size,
             preparedWidth: prepared.width,
             preparedHeight: prepared.height,
@@ -2724,14 +2732,19 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             height: prepared.height,
             size: prepared.size,
             name: sendFile.name,
-          }), MessageType.Image, withReadBurnExtra())
+          }), imageMsgType, withReadBurnExtra())
         } else {
-          localPreview = await appendLocalImagePreview(sendFile, fileKey, trace)
+          const previewUrlOverride = isGif ? await fileToDataURL(sendFile) : ''
+          localPreview = await appendLocalImagePreview(sendFile, fileKey, trace, {
+            msgType: imageMsgType,
+            previewUrlOverride,
+          })
           const uploaded = await uploadImageLikeIm(sendFile, {
             fileKey,
             width: localPreview?.width,
             height: localPreview?.height,
             trace,
+            msgType: imageMsgType,
           })
           traceLog(trace, 'emit uploaded image message', {
             conversationId: convId.value,
@@ -2742,7 +2755,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             fileKeyHead: safeHead(uploaded.fileKey),
             fileKeyLen: uploaded.fileKey.length,
             isGif,
-            msgType: MessageType.Image,
+            msgType: imageMsgType,
           })
           terminalLog('image send emit uploaded payload', {
             conversationId: convId.value,
@@ -2750,7 +2763,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             name: uploaded.name,
             size: uploaded.size,
             isGif,
-            msgType: MessageType.Image,
+            msgType: imageMsgType,
             urlHead: uploaded.url.slice(0, 120),
             thumbnailUrlHead: uploaded.thumbnailUrl.slice(0, 120),
             fileKeyLen: uploaded.fileKey.length,
@@ -2763,11 +2776,11 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
             size: uploaded.size,
             name: uploaded.name,
             fileKey: uploaded.fileKey,
-          }), MessageType.Image, withReadBurnExtra({
+          }), imageMsgType, withReadBurnExtra({
             fileKey: uploaded.fileKey,
             ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
           }))
-          if (localPreview?.url.startsWith('blob:')) {
+          if (!isGif && localPreview?.url.startsWith('blob:')) {
             window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
           }
         }
