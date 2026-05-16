@@ -191,6 +191,26 @@ function syncVideoState() {
   isVideoPlaying.value = !video.paused && !video.ended
 }
 
+function handleVideoLoadedMetadata() {
+  syncVideoState()
+}
+
+function handleVideoCanPlay() {
+  syncVideoState()
+}
+
+function handleVideoPlay() {
+  syncVideoState()
+}
+
+function handleVideoPause() {
+  syncVideoState()
+}
+
+function handleVideoError() {
+  syncVideoState()
+}
+
 async function toggleVideoPlayback() {
   const video = videoRef.value
   if (!video) return
@@ -645,17 +665,18 @@ onUnmounted(() => {
           class="media-video"
           :src="videoSrc"
           :poster="payload?.cover"
-          autoplay
           playsinline
           preload="metadata"
           @click.stop="toggleVideoPlayback"
-          @loadedmetadata="syncVideoState"
+          @loadedmetadata="handleVideoLoadedMetadata"
+          @canplay="handleVideoCanPlay"
           @durationchange="syncVideoState"
           @timeupdate="syncVideoState"
-          @play="syncVideoState"
-          @pause="syncVideoState"
+          @play="handleVideoPlay"
+          @pause="handleVideoPause"
           @ended="syncVideoState"
           @volumechange="syncVideoState"
+          @error="handleVideoError"
         ></video>
         <button
           v-if="!isVideoPlaying"

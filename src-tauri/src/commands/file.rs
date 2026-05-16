@@ -3,12 +3,13 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{Emitter, State};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
@@ -55,6 +56,13 @@ struct VideoStreamSource {
     plain_size: u64,
 }
 
+#[derive(Debug, Clone)]
+struct LocalVideoStreamSource {
+    path: PathBuf,
+    mime_type: String,
+    size: u64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateVideoStreamUrlRequest {
@@ -70,6 +78,14 @@ pub struct CreateVideoStreamUrlRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CreateVideoStreamUrlResponse {
     pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLocalVideoStreamUrlRequest {
+    pub path: String,
+    pub mime_type: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +120,7 @@ pub struct ImageSendLogPayload {
 static AUDIO_PLAYERS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
 static ACTIVE_DOWNLOADS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static VIDEO_STREAMS: OnceLock<Mutex<HashMap<String, VideoStreamSource>>> = OnceLock::new();
+static LOCAL_VIDEO_STREAMS: OnceLock<Mutex<HashMap<String, LocalVideoStreamSource>>> = OnceLock::new();
 static VIDEO_STREAM_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static VIDEO_DECRYPTED_CHUNK_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -120,6 +137,10 @@ fn active_downloads() -> &'static Mutex<HashSet<String>> {
 
 fn video_streams() -> &'static Mutex<HashMap<String, VideoStreamSource>> {
     VIDEO_STREAMS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn local_video_streams() -> &'static Mutex<HashMap<String, LocalVideoStreamSource>> {
+    LOCAL_VIDEO_STREAMS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn video_stream_port() -> &'static Mutex<Option<u16>> {
@@ -594,6 +615,82 @@ async fn read_http_request(stream: &mut TcpStream) -> Result<String, String> {
     String::from_utf8(buffer[..read_len].to_vec()).map_err(|e| format!("invalid request utf8: {}", e))
 }
 
+async fn handle_local_video_stream_connection(
+    stream: &mut TcpStream,
+    method: &str,
+    request: &str,
+    _path: &str,
+    source: LocalVideoStreamSource,
+) -> Result<(), String> {
+    let Some((start, end)) = parse_range_header(request, source.size).or_else(|| {
+        if source.size > 0 {
+            Some((0, source.size - 1))
+        } else {
+            None
+        }
+    }) else {
+        let response = http_response(
+            "416 Range Not Satisfiable",
+            &[
+                ("Accept-Ranges", "bytes".to_string()),
+                ("Content-Range", format!("bytes */{}", source.size)),
+                ("Content-Length", "0".to_string()),
+            ],
+            &[],
+        );
+        let _ = stream.write_all(&response).await;
+        return Ok(());
+    };
+
+    let content_length = end - start + 1;
+    let response = http_response(
+        "206 Partial Content",
+        &[
+            ("Content-Type", source.mime_type.clone()),
+            ("Accept-Ranges", "bytes".to_string()),
+            ("Content-Range", format!("bytes {}-{}/{}", start, end, source.size)),
+            ("Content-Length", content_length.to_string()),
+            ("Cache-Control", "no-store".to_string()),
+            ("Connection", "close".to_string()),
+        ],
+        &[],
+    );
+    stream
+        .write_all(&response)
+        .await
+        .map_err(|e| format!("write local video response headers failed: {}", e))?;
+    if method == "HEAD" {
+        return Ok(());
+    }
+
+    let mut file = tokio::fs::File::open(&source.path)
+        .await
+        .map_err(|e| format!("open local video failed: {}", e))?;
+    file.seek(SeekFrom::Start(start))
+        .await
+        .map_err(|e| format!("seek local video failed: {}", e))?;
+
+    let mut remaining = content_length;
+    let mut buffer = vec![0u8; 128 * 1024];
+    while remaining > 0 {
+        let read_size = buffer.len().min(remaining as usize);
+        let n = file
+            .read(&mut buffer[..read_size])
+            .await
+            .map_err(|e| format!("read local video failed: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        stream
+            .write_all(&buffer[..n])
+            .await
+            .map_err(|e| format!("write local video body failed: {}", e))?;
+        remaining = remaining.saturating_sub(n as u64);
+    }
+
+    Ok(())
+}
+
 async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::Client) -> Result<(), String> {
     let request = read_http_request(&mut stream).await?;
     let mut lines = request.lines();
@@ -641,6 +738,23 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
         streams.get(&token).cloned()
     };
     let Some(source) = source else {
+        let local_source = {
+            let streams = local_video_streams()
+                .lock()
+                .map_err(|_| "local video stream lock poisoned".to_string())?;
+            streams.get(&token).cloned()
+        };
+        if let Some(local_source) = local_source {
+            return handle_local_video_stream_connection(
+                &mut stream,
+                method,
+                &request,
+                path,
+                local_source,
+            )
+            .await;
+        }
+
         eprintln!("[video-stream] local stream token not found token={}", token);
         tracing::warn!(
             target: "video-stream",
@@ -931,6 +1045,51 @@ pub async fn create_video_stream_url(
                 file_key,
                 mime_type,
                 plain_size: request.size,
+            },
+        );
+    }
+
+    Ok(CreateVideoStreamUrlResponse {
+        url: format!("http://localhost:{}/video/{}/{}", port, token, name),
+    })
+}
+
+#[tauri::command]
+pub async fn create_local_video_stream_url(
+    request: CreateLocalVideoStreamUrlRequest,
+) -> Result<CreateVideoStreamUrlResponse, String> {
+    let path = PathBuf::from(request.path.trim());
+    if !path.exists() {
+        return Err(format!("local video file not found: {}", path.to_string_lossy()));
+    }
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("stat local video failed: {}", e))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("local video file is invalid".to_string());
+    }
+
+    let port = ensure_video_stream_server().await?;
+    let name = safe_stream_file_name(
+        request
+            .name
+            .as_deref()
+            .or_else(|| path.file_name().and_then(|value| value.to_str()))
+            .unwrap_or("video.mp4"),
+    );
+    let mime_type = video_mime_from_name(&name, request.mime_type.as_deref().unwrap_or(""));
+    let token = Uuid::new_v4().to_string();
+
+    {
+        let mut streams = local_video_streams()
+            .lock()
+            .map_err(|_| "local video stream lock poisoned".to_string())?;
+        streams.insert(
+            token.clone(),
+            LocalVideoStreamSource {
+                path,
+                mime_type,
+                size: metadata.len(),
             },
         );
     }

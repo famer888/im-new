@@ -596,12 +596,25 @@ async function openMediaWindow(pathOrUrl: string) {
     import('@tauri-apps/api/window') as Promise<any>,
   ])
   const bounds = await getMediaWindowBounds(windowApi)
+  const isLocalFileTarget = !/^https?:/i.test(target)
+  let mediaSrc = target
+  let mediaFilePath: string | null = isLocalFileTarget ? target : null
+  if (isLocalFileTarget && isLocalFilePath(target)) {
+    const result = await invoke<{ url: string }>('create_local_video_stream_url', {
+      request: {
+        path: fileUrlToLocalPath(target),
+        mimeType: videoData.value.mimeType || '',
+        name: getVideoFileName(target, videoData.value.name),
+      },
+    })
+    mediaSrc = result.url
+  }
 
   mediaViewerState.send({
     title: '视频',
     mediaType: 'video',
-    src: target,
-    filePath: /^https?:/i.test(target) ? null : target,
+    src: mediaSrc,
+    filePath: mediaFilePath,
     width: videoData.value.width || undefined,
     height: videoData.value.height || undefined,
     duration: videoData.value.duration || undefined,
@@ -1055,67 +1068,45 @@ function handleVideoClick(event: MouseEvent) {
 }
 
 async function handleOpenVideo() {
-  if (videoOpening.value) return
+  if (videoOpening.value) {
+    return
+  }
   const url = videoData.value.url
   const localSource = localVideoSourcePath.value
-  if (!url && !localSource && !localVideoPath.value) return
+  if (!url && !localSource && !localVideoPath.value) {
+    return
+  }
 
   videoOpening.value = true
   try {
-    videoStreamLog('open click', {
-      messageId: props.message.id || props.message.customMsgId || '',
-      hasUrl: Boolean(url),
-      urlHead: url.slice(0, 120),
-      size: videoData.value.size || 0,
-      hasFileKey: Boolean(fileKey.value),
-      hasAttachmentKey: Boolean(attachmentKey.value),
-      localVideoPath: localVideoPath.value,
-      localSource,
-    })
-    if (localVideoPath.value && await localFileExists(localVideoPath.value)) {
-      videoStreamLog('open local cached file', { path: localVideoPath.value })
+    const localVideoExists = localVideoPath.value ? await localFileExists(localVideoPath.value) : false
+    if (localVideoPath.value && localVideoExists) {
       await openMediaWindow(localVideoPath.value)
       return
     }
 
-    if (localSource && await localFileExists(localSource)) {
+    const localSourceExists = localSource ? await localFileExists(localSource) : false
+    if (localSource && localSourceExists) {
       localVideoPath.value = localSource
-      videoStreamLog('open local source file', { path: localSource })
       await openMediaWindow(localSource)
       return
     }
 
     const key = await resolveFileKey()
     const isEncryptedRemote = /^https?:\/\//i.test(url) && Boolean(key)
-    videoStreamLog('open remote decision', {
-      isTauri: Boolean((window as any).__TAURI_INTERNALS__),
-      isEncryptedRemote,
-      keyLen: key.length,
-      size: videoData.value.size || 0,
-      mimeType: videoData.value.mimeType || '',
-    })
     if ((window as any).__TAURI_INTERNALS__ && isEncryptedRemote) {
       if (videoData.value.size > 0) {
         const streamUrl = await createEncryptedVideoStreamUrl(url, key)
-        videoStreamLog('open stream media window', { streamUrl })
         await openMediaWindow(streamUrl)
         return
       }
-      videoStreamLog('fallback full download because size missing', {
-        messageId: props.message.id || props.message.customMsgId || '',
-      }, 'warn')
       const path = await downloadVideoToLocal(url, key)
       await openMediaWindow(path)
       return
     }
 
-    videoStreamLog('open direct url', { urlHead: url.slice(0, 120) })
     await openMediaWindow(url)
   } catch (error) {
-    videoStreamLog('open failed', {
-      message: (error as Error)?.message || String(error),
-      stack: (error as Error)?.stack || '',
-    }, 'error')
     console.warn('[video] open failed:', error)
   } finally {
     videoOpening.value = false
