@@ -2702,7 +2702,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           isGif,
           plannedMsgType: MessageType.Image,
         })
-        const prepared = isGroup.value && !isFileHelperChat.value
+        const prepared = isGroup.value && !isFileHelperChat.value && !isGif
           ? await prepareGroupImagePayload(sendFile)
           : null
         if (prepared) {
