@@ -1203,34 +1203,35 @@ pub fn decrypt_private_incoming(
         .as_deref()
         .map(str::trim)
         .filter(|s| *s == "web" || *s == "app");
-    for friend_id in &candidates {
-        let decrypted = if let Some(src) = preferred_source {
-            crypto
-                .decrypt_friend_message(friend_id, ver, src, &data)
-                .or_else(|_| {
-                    let key = crypto
-                        .get_latest_friend_key(friend_id, src)
-                        .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-                    crate::crypto::aes::decrypt_message(&data, &key)
-                })
-        } else {
-            crypto
-                .decrypt_friend_message(friend_id, ver, "web", &data)
-                .or_else(|_| crypto.decrypt_friend_message(friend_id, ver, "app", &data))
-                .or_else(|_| {
-                    let key = crypto
-                        .get_latest_friend_key(friend_id, "web")
-                        .or_else(|| crypto.get_latest_friend_key(friend_id, "app"))
-                        .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-                    crate::crypto::aes::decrypt_message(&data, &key)
-                })
-        };
-        match decrypted {
-            Ok(v) => {
-                plain = Some(v);
-                break;
+    let source_orders: Vec<Vec<&str>> = if let Some(src) = preferred_source {
+        let alternate = if src == "web" { "app" } else { "web" };
+        vec![vec![src], vec![src, alternate]]
+    } else {
+        vec![vec!["web", "app"]]
+    };
+    'friend_loop: for friend_id in &candidates {
+        for source_order in &source_orders {
+            let mut decrypted = Err(crate::crypto::CryptoError::KeyNotFound);
+            for src in source_order {
+                decrypted = crypto
+                    .decrypt_friend_message(friend_id, ver, src, &data)
+                    .or_else(|_| {
+                        let key = crypto
+                            .get_latest_friend_key(friend_id, src)
+                            .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                        crate::crypto::aes::decrypt_message(&data, &key)
+                    });
+                if decrypted.is_ok() {
+                    break;
+                }
             }
-            Err(e) => last_err = Some(e.to_string()),
+            match decrypted {
+                Ok(v) => {
+                    plain = Some(v);
+                    break 'friend_loop;
+                }
+                Err(e) => last_err = Some(e.to_string()),
+            }
         }
     }
     let plain = plain.ok_or_else(|| last_err.unwrap_or_else(|| "decrypt failed".to_string()))?;

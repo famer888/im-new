@@ -988,10 +988,19 @@ export async function setupTauriListeners() {
                         Number(candidate.version || 0),
                         String(candidate.source || ''),
                       )
+                      if (senderId === uid && peerId && peerId !== uid) {
+                        await ensureFriendRelKeyForVersion(
+                          uid,
+                          peerId,
+                          Number(candidate.version || 0),
+                          String(candidate.source || ''),
+                        )
+                      }
                     } catch (keyErr) {
                       console.warn('[e2ee] ensureFriendRelKeyForVersion failed', {
                         msgId,
                         senderId,
+                        peerId,
                         version: candidate.version,
                         source: candidate.source,
                         err: String(keyErr),
