@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { invoke as tauriInvoke } from '@tauri-apps/api/core'
-import type { Message } from '@/stores/useMessageStore'
+import { convertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core'
+import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
@@ -13,6 +13,7 @@ const props = defineProps<{
 }>()
 
 const authStore = useAuthStore()
+const messageStore = useMessageStore()
 const isLoaded = ref(false)
 const loadError = ref(false)
 const activeThumbSrc = ref('')
@@ -30,6 +31,7 @@ const localVideoPath = ref('')
 const thumbElRef = ref<HTMLImageElement | null>(null)
 let downloadToken = 0
 let videoOpenToken = 0
+let coverToken = 0
 let pendingVideoLocalFilePromise: Promise<string> | null = null
 let stopDownloadEvents: Array<() => void> = []
 let stopVideoDownloadEvents: Array<() => void> = []
@@ -37,6 +39,11 @@ let nativeDragStartPoint: { x: number; y: number } | null = null
 let nativeDragStarted = false
 let suppressNextClick = false
 const NATIVE_DRAG_THRESHOLD = 4
+const MAX_CACHED_VIDEO_COVER_DATA_URL_BYTES = 512 * 1024
+
+function videoMessageIdForCache(): string {
+  return safeName(props.message.id || props.message.customMsgId || `${props.message.conversationId || 'video'}-${props.message.sendTime || ''}`)
+}
 
 interface VideoContent {
   url: string
@@ -95,7 +102,7 @@ function parseLegacyVideo(raw: string): VideoContent {
   const [url = '', thumbUrl = ''] = head.split('*P')
   return {
     url: normalizeVideoUrl(url),
-    thumbUrl: normalizeImageSrc(thumbUrl || url),
+    thumbUrl: normalizeImageSrc(thumbUrl),
     duration: Number(duration || 0) || 0,
     width: Number(width || 0) || 0,
     height: Number(height || 0) || 0,
@@ -125,7 +132,7 @@ const videoData = computed<VideoContent>(() => {
       '',
     ).trim()
     const thumbUrl = normalizeImageSrc(
-      parsed.thumbUrl || parsed.thumbnailUrl || parsed.thumbnail || parsed.cover || url,
+      parsed.thumbUrl || parsed.thumbnailUrl || parsed.thumbnail || parsed.cover || '',
       parsed.thumbMimeType || parsed.thumb_mime_type || parsed.mimeType || parsed.mime,
     )
     return {
@@ -177,13 +184,15 @@ const extraLocalVideoPath = computed(() =>
     '',
   ).trim(),
 )
-const localThumbSrc = computed(() => normalizeImageSrc(
+const localThumbSrc = computed(() => ensureMediaSrc(normalizeImageSrc(
   extraData.value.localThumbDataUrl ||
   extraData.value.local_thumb_data_url ||
+  extraData.value.localThumbPath ||
+  extraData.value.local_thumb_path ||
   extraData.value.localThumbUrl ||
   extraData.value.local_thumb_url ||
   '',
-))
+)))
 const groupId = computed(() => {
   const extraGroupId = String(extraData.value.groupId || '').trim()
   if (extraGroupId) return extraGroupId
@@ -315,10 +324,15 @@ function getVideoFileName(url: string, explicitName = '', localPath = ''): strin
 function ensureMediaSrc(src: string): string {
   const raw = String(src || '').trim()
   if (!raw) return ''
-  if (/^(https?|asset|file|blob|data):/i.test(raw)) return raw
+  if (/^(https?|asset|blob|data):/i.test(raw)) return raw
+  if (/^file:/i.test(raw)) {
+    const localPath = fileUrlToLocalPath(raw)
+    return (window as any).__TAURI_INTERNALS__ ? convertFileSrc(localPath) : raw
+  }
   const normalized = raw.replace(/\\/g, '/')
-  if (/^[A-Za-z]:\//.test(normalized)) return `file:///${encodeURI(normalized)}`
-  if (normalized.startsWith('/')) return `file://${encodeURI(normalized)}`
+  if (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('/')) {
+    return (window as any).__TAURI_INTERNALS__ ? convertFileSrc(normalized) : `file://${encodeURI(normalized)}`
+  }
   return raw
 }
 
@@ -371,6 +385,39 @@ async function localFileExists(path: string): Promise<boolean> {
   }
 }
 
+async function getVideoCoverCachePath(): Promise<string> {
+  if (!(window as any).__TAURI_INTERNALS__) return ''
+  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const baseDir = await appDataDir()
+  return join(baseDir, 'video-cover-cache', `${videoMessageIdForCache()}.jpg`)
+}
+
+async function usePersistedVideoCoverCache(reason: string): Promise<boolean> {
+  try {
+    const cachePath = await getVideoCoverCachePath()
+    void reason
+    if (!cachePath) return false
+
+    const exists = await localFileExists(cachePath)
+    if (!exists) return false
+
+    loadError.value = false
+    isLoaded.value = false
+    activeThumbSrc.value = ensureMediaSrc(cachePath)
+    markLoadedIfImageAlreadyComplete()
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function useCachedOrGenerateFirstFrameCover(reason: string) {
+  const token = coverToken
+  if (await usePersistedVideoCoverCache(reason)) return
+  if (token !== coverToken) return
+  void generateFirstFrameCover(reason)
+}
+
 async function downloadAndDecryptThumb() {
   const url = videoData.value.thumbUrl
   const key = await resolveFileKey()
@@ -416,8 +463,7 @@ async function downloadAndDecryptThumb() {
       if (token !== downloadToken) return
       cleanupDownloadEvents()
       if (!useLocalThumbFallback()) {
-        loadError.value = true
-        isLoaded.value = true
+        void useCachedOrGenerateFirstFrameCover('thumb-download-error')
       }
     })
     stopDownloadEvents = [unlistenDone, unlistenError]
@@ -432,8 +478,7 @@ async function downloadAndDecryptThumb() {
     if (token !== downloadToken) return
     cleanupDownloadEvents()
     if (!useLocalThumbFallback()) {
-      loadError.value = true
-      isLoaded.value = true
+      void useCachedOrGenerateFirstFrameCover('thumb-download-catch')
     }
   }
 }
@@ -687,6 +732,211 @@ async function probeEncryptedVideoStreamUrl(streamUrl: string) {
   }
 }
 
+function captureVideoFirstFrame(src: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const source = ensureMediaSrc(src)
+    if (!source) {
+      reject(new Error('video source unavailable'))
+      return
+    }
+
+    const video = document.createElement('video')
+    const canvas = document.createElement('canvas')
+    let settled = false
+    let seekTimer = 0
+    const timer = window.setTimeout(() => fail(new Error('video cover capture timeout')), 8000)
+
+    const cleanup = () => {
+      window.clearTimeout(timer)
+      window.clearTimeout(seekTimer)
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      video.removeEventListener('loadeddata', handleFrameReady)
+      video.removeEventListener('canplay', handleFrameReady)
+      video.removeEventListener('seeked', handleFrameReady)
+      video.removeEventListener('error', handleError)
+      video.removeAttribute('src')
+      video.load()
+    }
+
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
+
+    const finish = () => {
+      if (settled) return
+      const width = video.videoWidth || 0
+      const height = video.videoHeight || 0
+      if (!width || !height || video.readyState < 2) return
+
+      settled = true
+      const maxEdge = 720
+      const scale = Math.min(1, maxEdge / Math.max(width, height))
+      canvas.width = Math.max(1, Math.round(width * scale))
+      canvas.height = Math.max(1, Math.round(height * scale))
+      const context = canvas.getContext('2d')
+      if (!context) {
+        cleanup()
+        reject(new Error('video cover canvas unavailable'))
+        return
+      }
+
+      try {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82)
+        cleanup()
+        resolve(dataUrl)
+      } catch (error) {
+        cleanup()
+        reject(error instanceof Error ? error : new Error('video cover capture failed'))
+      }
+    }
+
+    const handleLoadedMetadata = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0
+      const targetTime = duration > 1 ? 0.1 : 0
+      if (targetTime > 0) {
+        try {
+          video.currentTime = targetTime
+          return
+        } catch {
+          // Some codecs do not allow seeking before enough data is buffered.
+        }
+      }
+      seekTimer = window.setTimeout(finish, 80)
+    }
+
+    const handleFrameReady = () => {
+      window.clearTimeout(seekTimer)
+      seekTimer = window.setTimeout(finish, 80)
+    }
+
+    const handleError = () => fail(new Error('video cover source load failed'))
+
+    video.preload = 'metadata'
+    video.muted = true
+    video.playsInline = true
+    if (/^https?:\/\//i.test(source)) video.crossOrigin = 'anonymous'
+    video.addEventListener('loadedmetadata', handleLoadedMetadata)
+    video.addEventListener('loadeddata', handleFrameReady)
+    video.addEventListener('canplay', handleFrameReady)
+    video.addEventListener('seeked', handleFrameReady)
+    video.addEventListener('error', handleError)
+    video.src = source
+    video.load()
+  })
+}
+
+function dataUrlByteLength(dataUrl: string): number {
+  const base64 = String(dataUrl || '').split(',', 2)[1] || ''
+  if (!base64) return 0
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor(base64.length * 3 / 4) - padding)
+}
+
+async function cacheGeneratedVideoCover(dataUrl: string) {
+  if (!/^data:image\//i.test(dataUrl)) return
+  if (localThumbSrc.value) return
+
+  const bytes = dataUrlByteLength(dataUrl)
+  if (bytes <= 0 || bytes > MAX_CACHED_VIDEO_COVER_DATA_URL_BYTES) {
+    return
+  }
+
+  const messageId = props.message.id || props.message.customMsgId || ''
+  if (!messageId) return
+
+  let cachePath = ''
+  try {
+    cachePath = await getVideoCoverCachePath()
+    if (cachePath && (window as any).__TAURI_INTERNALS__) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('save_base64_image', {
+        filePath: cachePath,
+        base64Data: dataUrl,
+      })
+    }
+  } catch {
+    // Disk cache is an optimization; the in-memory preview can still be used.
+  }
+
+  const nextExtra = {
+    ...(extraData.value || {}),
+    localThumbDataUrl: dataUrl,
+    local_thumb_data_url: dataUrl,
+    ...(cachePath ? { localThumbPath: cachePath, local_thumb_path: cachePath } : {}),
+    videoCoverCachedAt: Date.now(),
+  }
+  messageStore.updateMessage(messageId, {
+    extra: JSON.stringify(nextExtra),
+  })
+}
+
+async function buildVideoCoverSources(): Promise<string[]> {
+  const sources: string[] = []
+  const localSource = localVideoSourcePath.value
+  if (localSource && await localFileExists(localSource)) sources.push(localSource)
+  if (localVideoPath.value && await localFileExists(localVideoPath.value)) sources.push(localVideoPath.value)
+
+  const url = videoData.value.url
+  if (!url) return [...new Set(sources)]
+  if (/^(blob|data):/i.test(url) || isLocalFilePath(url)) {
+    sources.push(url)
+    return [...new Set(sources)]
+  }
+
+  const key = await resolveFileKey()
+  const isEncryptedRemote = /^https?:\/\//i.test(url) && Boolean(key)
+  if ((window as any).__TAURI_INTERNALS__ && isEncryptedRemote && videoData.value.size > 0) {
+    sources.push(await createEncryptedVideoStreamUrl(url, key))
+    return [...new Set(sources)]
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    const candidates = getVideoUrlCandidates(url, videoData.value.name)
+    sources.push(...candidates)
+  }
+  return [...new Set(sources)]
+}
+
+async function generateFirstFrameCover(reason = 'fallback') {
+  const token = ++coverToken
+  try {
+    if (await usePersistedVideoCoverCache(`generate:${reason}`)) return
+    if (token !== coverToken) return
+
+    const sources = await buildVideoCoverSources()
+
+    let lastError: unknown = null
+    for (const source of sources) {
+      try {
+        const cover = await captureVideoFirstFrame(source)
+        if (token !== coverToken) return
+        loadError.value = false
+        isLoaded.value = false
+        activeThumbSrc.value = cover
+        void cacheGeneratedVideoCover(cover)
+        markLoadedIfImageAlreadyComplete()
+        return
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    if (token !== coverToken) return
+    loadError.value = true
+    isLoaded.value = true
+    void lastError
+  } catch (error) {
+    if (token !== coverToken) return
+    loadError.value = true
+    isLoaded.value = true
+    void error
+  }
+}
+
 async function ensureVideoLocalFile(): Promise<string> {
   if (localVideoPath.value && await localFileExists(localVideoPath.value)) return localVideoPath.value
 
@@ -872,9 +1122,11 @@ async function handleOpenVideo() {
   }
 }
 
-watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, localVideoSourcePath], () => {
+watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, localVideoSourcePath], async () => {
   downloadToken += 1
   videoOpenToken += 1
+  coverToken += 1
+  const token = coverToken
   pendingVideoLocalFilePromise = null
   cleanupDownloadEvents()
   cleanupVideoDownloadEvents()
@@ -883,11 +1135,10 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, lo
   activeThumbSrc.value = ''
   localVideoPath.value = localVideoSourcePath.value
   const hasLocalFallback = useLocalThumbFallback()
+  if (!hasLocalFallback && await usePersistedVideoCoverCache('watch-precheck')) return
+  if (token !== coverToken) return
   if (!videoData.value.thumbUrl) {
-    if (!hasLocalFallback) {
-      loadError.value = true
-      isLoaded.value = true
-    }
+    if (!hasLocalFallback) void useCachedOrGenerateFirstFrameCover('no-thumb-url')
     return
   }
   if ((fileKey.value || attachmentKey.value) && isRemoteThumb.value) {
@@ -904,13 +1155,13 @@ function handleLoad() {
 
 function handleError() {
   if (activeThumbSrc.value !== localThumbSrc.value && useLocalThumbFallback()) return
-  loadError.value = true
-  isLoaded.value = true
+  void useCachedOrGenerateFirstFrameCover('thumb-image-error')
 }
 
 onBeforeUnmount(() => {
   downloadToken += 1
   videoOpenToken += 1
+  coverToken += 1
   pendingVideoLocalFilePromise = null
   closeInlinePreview()
   cleanupNativeDragListeners()
@@ -1082,7 +1333,7 @@ onBeforeUnmount(() => {
 
 .video-frame {
   position: relative;
-  width: fit-content;
+  width: 100%;
   height: 150px;
   border-radius: 6px;
   overflow: hidden;
@@ -1094,10 +1345,10 @@ onBeforeUnmount(() => {
   }
 
   img {
-    width: auto;
-    height: 150px;
+    width: 100%;
+    height: 100%;
     display: inline-block;
-    object-fit: contain;
+    object-fit: cover;
     opacity: 0;
     pointer-events: none;
     -webkit-user-drag: none;
