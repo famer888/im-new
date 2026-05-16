@@ -1340,6 +1340,17 @@ pub async fn download_file(
     let should_emit_data_url = emit_data_url.unwrap_or(true);
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
     let should_log_file_open = log_tag.as_deref() == Some("file-open");
+    let should_log_video_menu = log_tag.as_deref() == Some("video-menu");
+    if should_log_video_menu {
+        eprintln!(
+            "[video-menu] download_file request msg_id={} url_head={} save_path={} file_key_len={} emit_data_url={}",
+            msg_id,
+            url.chars().take(180).collect::<String>(),
+            save_path,
+            file_key.len(),
+            should_emit_data_url,
+        );
+    }
     if should_log_audio {
         tracing::info!(
             target: "group-audio",
@@ -1366,6 +1377,7 @@ pub async fn download_file(
     let msg_id_clone = msg_id.clone();
     let should_log_audio_clone = should_log_audio;
     let should_log_file_open_clone = should_log_file_open;
+    let should_log_video_menu_clone = should_log_video_menu;
 
     tokio::spawn(async move {
         let download_result = async {
@@ -1375,6 +1387,14 @@ pub async fn download_file(
                     .await
                     .map_err(|e| format!("Stat cached file failed: {}", e))?;
                 if !should_emit_data_url {
+                    if should_log_video_menu_clone {
+                        eprintln!(
+                            "[video-menu] download_file cache hit msg_id={} path={} bytes={}",
+                            msg_id_clone,
+                            final_path.to_string_lossy(),
+                            meta.len(),
+                        );
+                    }
                     return Ok::<(u64, Option<String>, PathBuf, bool), String>((
                         meta.len(),
                         None,
@@ -1434,6 +1454,13 @@ pub async fn download_file(
                     "download_file http start"
                 );
             }
+            if should_log_video_menu_clone {
+                eprintln!(
+                    "[video-menu] download_file http start msg_id={} url_head={}",
+                    msg_id_clone,
+                    url.chars().take(180).collect::<String>(),
+                );
+            }
             let response = reqwest::get(&url)
                 .await
                 .map_err(|e| format!("Download failed: {}", e))?;
@@ -1456,11 +1483,27 @@ pub async fn download_file(
                     "download_file http response"
                 );
             }
+            if should_log_video_menu_clone {
+                eprintln!(
+                    "[video-menu] download_file http response msg_id={} status={} ok={}",
+                    msg_id_clone,
+                    status.as_u16(),
+                    status.is_success(),
+                );
+            }
             if !status.is_success() {
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|e| format!("read error body failed: {}", e));
+                if should_log_video_menu_clone {
+                    eprintln!(
+                        "[video-menu] download_file http error msg_id={} status={} body_head={}",
+                        msg_id_clone,
+                        status.as_u16(),
+                        body.chars().take(400).collect::<String>(),
+                    );
+                }
                 return Err(format!(
                     "Download failed: HTTP {} body_head={}",
                     status.as_u16(),
@@ -1525,6 +1568,14 @@ pub async fn download_file(
                 tracing::info!(
                     target: "group-audio",
                     "download_file http body msg_id={} encrypted_bytes={} encrypted_head_hex={}",
+                    msg_id_clone,
+                    downloaded_bytes,
+                    bytes_head_hex(&first_chunk_head, 16),
+                );
+            }
+            if should_log_video_menu_clone {
+                eprintln!(
+                    "[video-menu] download_file http body msg_id={} encrypted_bytes={} encrypted_head_hex={}",
                     msg_id_clone,
                     downloaded_bytes,
                     bytes_head_hex(&first_chunk_head, 16),
