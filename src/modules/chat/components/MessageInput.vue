@@ -1850,13 +1850,48 @@ async function putObjectWithOssCandidates(options: {
   trace?: ImageSendTrace
   logPrefix?: string
 }): Promise<{ uploadUrl: string; candidate: OssUploadCandidate }> {
+  const primaryUploadUrl = resolveOssUploadUrl(
+    options.responseUrl,
+    options.bucket,
+    options.endpoint,
+    options.objectKey,
+  )
+  const primaryCandidate: OssUploadCandidate | null = primaryUploadUrl
+    ? {
+        url: primaryUploadUrl,
+        domainUrl: primaryUploadUrl,
+        source: options.responseUrl ? 'response' : 'token',
+      }
+    : null
+  let lastError: unknown = null
+
+  if (primaryCandidate) {
+    try {
+      await putObjectToOss({
+        url: primaryCandidate.url,
+        bucket: options.bucket,
+        objectKey: options.objectKey,
+        accessKeyId: options.accessKeyId,
+        accessKeySecret: options.accessKeySecret,
+        securityToken: options.securityToken,
+        body: options.body,
+        contentType: options.contentType,
+        trace: options.trace,
+        logPrefix: options.logPrefix,
+      })
+      return { uploadUrl: primaryCandidate.url, candidate: primaryCandidate }
+    } catch (error) {
+      lastError = error
+      await reportOssUploadCandidateFailure(primaryCandidate, error)
+    }
+  }
+
   const candidates = await getOssUploadCandidates({
     responseUrl: options.responseUrl,
     bucket: options.bucket,
     endpoint: options.endpoint,
     objectKey: options.objectKey,
-  })
-  let lastError: unknown = null
+  }).then((items) => items.filter((item) => item.url !== primaryCandidate?.url))
 
   for (const candidate of candidates) {
     try {
@@ -2654,6 +2689,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
       try {
         const trace = createImageTrace()
         const fileKey = createFileKey()
+        const isGif = /image\/gif$/i.test(file.type) || getFileSuffix(file) === 'gif'
         sendFile = await ensureBlobBackedFile(file, trace)
         traceLog(trace, 'handle image file', {
           conversationId: convId.value,
@@ -2663,11 +2699,24 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           name: sendFile.name,
           size: sendFile.size,
           type: sendFile.type,
+          isGif,
+          plannedMsgType: MessageType.Image,
         })
         const prepared = isGroup.value && !isFileHelperChat.value
           ? await prepareGroupImagePayload(sendFile)
           : null
         if (prepared) {
+          terminalLog('image send prepared inline payload', {
+            conversationId: convId.value,
+            name: sendFile.name,
+            size: sendFile.size,
+            type: sendFile.type,
+            isGif,
+            msgType: MessageType.Image,
+            preparedSize: prepared.size,
+            preparedWidth: prepared.width,
+            preparedHeight: prepared.height,
+          })
           emit('send', JSON.stringify({
             url: prepared.dataUrl,
             thumbnailUrl: prepared.dataUrl,
@@ -2691,6 +2740,19 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
               try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
             })(),
             fileKeyHead: safeHead(uploaded.fileKey),
+            fileKeyLen: uploaded.fileKey.length,
+            isGif,
+            msgType: MessageType.Image,
+          })
+          terminalLog('image send emit uploaded payload', {
+            conversationId: convId.value,
+            optimisticId: localPreview?.optimisticId || '',
+            name: uploaded.name,
+            size: uploaded.size,
+            isGif,
+            msgType: MessageType.Image,
+            urlHead: uploaded.url.slice(0, 120),
+            thumbnailUrlHead: uploaded.thumbnailUrl.slice(0, 120),
             fileKeyLen: uploaded.fileKey.length,
           })
           emit('send', JSON.stringify({

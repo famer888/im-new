@@ -52,10 +52,28 @@ const senderName = computed(() => {
   return contactStore.getDisplayName(props.message.senderId)
 })
 
+function getImageMessageUrl(content: string | null): string {
+  const raw = String(content || '').trim()
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw)
+    return String(parsed?.url || parsed?.thumbnailUrl || '')
+  } catch {
+    return raw
+  }
+}
+
+function isGifImageMessage(message: Message): boolean {
+  if (message.msgType === MessageType.DynamicImage) return true
+  if (message.msgType !== MessageType.Image) return false
+  const url = getImageMessageUrl(message.content).split('?')[0].toLowerCase()
+  return url.endsWith('.gif')
+}
+
 const messageComponent = computed(() => {
   switch (props.message.msgType) {
     case MessageType.Text: return TextMessage
-    case MessageType.Image: return ImageMessage
+    case MessageType.Image: return isGifImageMessage(props.message) ? GifMessage : ImageMessage
     case MessageType.DynamicImage: return GifMessage
     case MessageType.Video: return VideoMessage
     case MessageType.Audio: return AudioMessage

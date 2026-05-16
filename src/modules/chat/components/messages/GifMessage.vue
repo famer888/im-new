@@ -7,20 +7,23 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { Message } from '@/stores/useMessageStore'
 
 const props = defineProps<{
-  content: string
-  isSelf: boolean
+  message?: Message
+  content?: string
+  isSelf?: boolean
 }>()
 
 const loaded = ref(false)
+const rawContent = computed(() => String(props.content || props.message?.content || ''))
 
 const gifUrl = computed(() => {
   try {
-    const parsed = JSON.parse(props.content)
-    return parsed.url || parsed.gif || props.content
+    const parsed = JSON.parse(rawContent.value)
+    return parsed.url || parsed.gif || rawContent.value
   } catch {
-    return props.content
+    return rawContent.value
   }
 })
 
