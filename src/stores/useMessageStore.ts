@@ -9,7 +9,13 @@ import {
 import { useAuthStore } from './useAuthStore'
 import { useContactStore } from './useContactStore'
 import { useGroupStore } from './useGroupStore'
-import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import {
+  ensureChannelRelKey,
+  ensureFriendRelKey,
+  ensureFriendRelKeyForVersion,
+  ensureGroupRelKey,
+  ensureOwnKeyPair,
+} from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { isHiddenMessageType } from '@/types'
 import { getOrCreateInstallCode } from '@/utils/installCode'
@@ -204,6 +210,31 @@ function stringifyExtra(rawExtra: unknown): string | null {
     }
   }
   return null
+}
+
+function buildPrivateCipherCandidates(extra: Record<string, unknown>) {
+  const candidates = Array.isArray(extra.cipherCandidates)
+    ? extra.cipherCandidates
+        .map((item: any) => ({
+          version: Number(item?.version || extra?.version || 1),
+          source: String(item?.source || ''),
+          cipherHex: String(item?.cipherHex || ''),
+          attachmentKey: String(item?.attachmentKey || item?.attachment_key || ''),
+        }))
+        .filter((item: { cipherHex: string }) => !!item.cipherHex)
+    : []
+
+  const cipherHex = String(extra.cipherHex || '')
+  if (cipherHex && candidates.length === 0) {
+    candidates.push({
+      version: Number(extra.version || 1),
+      source: '',
+      cipherHex,
+      attachmentKey: String(extra.attachmentKey || extra.attachment_key || ''),
+    })
+  }
+
+  return candidates
 }
 
 const DICE_REPLAY_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -784,6 +815,112 @@ export const useMessageStore = defineStore('message', () => {
     return hasMoreMap.value.get(conversationId) ?? true
   }
 
+  async function retryDecryptPendingPrivateMessages(uid: string, messages: Message[]) {
+    if (!isTauri() || !uid || messages.length === 0) return messages
+
+    const pendingPeerIds = Array.from(new Set(
+      messages
+        .filter((message) => {
+          if (!String(message.conversationId || '').startsWith('0_')) return false
+          const extra = parseExtraObject(message.extra)
+          return Boolean(extra?.decryptPending)
+        })
+        .map((message) => String(message.conversationId || '').split('_')[1] || '')
+        .filter((peerId) => !!peerId && peerId !== uid),
+    ))
+    for (const peerId of pendingPeerIds) {
+      try {
+        await ensureFriendRelKey(uid, peerId, true)
+      } catch (error) {
+        console.warn('[e2ee] ensureFriendRelKey on loadMessages failed', {
+          peerId,
+          err: String(error),
+        })
+      }
+    }
+
+    await ensureOwnKeyPair(uid).catch(() => {})
+
+    for (const message of messages) {
+      const conversationId = String(message.conversationId || '')
+      if (!conversationId.startsWith('0_')) continue
+
+      const extra = parseExtraObject(message.extra) || {}
+      if (!extra.decryptPending) continue
+
+      const cipherCandidates = buildPrivateCipherCandidates(extra)
+      if (cipherCandidates.length === 0) continue
+
+      const peerId = String(conversationId.split('_')[1] || '')
+      const senderId = String(message.senderId || '')
+      if (!senderId) continue
+
+      for (const candidate of cipherCandidates) {
+        try {
+          try {
+            await ensureFriendRelKeyForVersion(
+              uid,
+              senderId,
+              Number(candidate.version || 0),
+              String(candidate.source || ''),
+            )
+            if (senderId === uid && peerId && peerId !== uid) {
+              await ensureFriendRelKeyForVersion(
+                uid,
+                peerId,
+                Number(candidate.version || 0),
+                String(candidate.source || ''),
+              )
+            }
+          } catch (keyError) {
+            console.warn('[e2ee] ensureFriendRelKeyForVersion on loadMessages failed', {
+              messageId: message.id,
+              senderId,
+              peerId,
+              version: candidate.version,
+              source: candidate.source,
+              err: String(keyError),
+            })
+          }
+
+          const plain = await tauriInvoke<string>('decrypt_private_incoming', {
+            senderId,
+            peerId,
+            version: Number(candidate.version || 1),
+            source: String(candidate.source || ''),
+            ciphertextHex: String(candidate.cipherHex || ''),
+            msgType: Number(message.msgType || 0),
+          })
+
+          const nextExtra = {
+            ...extra,
+            decryptPending: false,
+            cipherHex: candidate.cipherHex,
+          } as Record<string, unknown>
+          if (candidate.attachmentKey && !nextExtra.fileKey) {
+            nextExtra.fileKey = candidate.attachmentKey
+          }
+
+          message.content = plain
+          message.extra = stringifyExtra(nextExtra)
+          break
+        } catch (error) {
+          console.warn('[e2ee] retry decrypt_private on loadMessages failed', {
+            messageId: message.id,
+            conversationId,
+            senderId,
+            peerId,
+            version: candidate.version,
+            source: candidate.source,
+            err: String(error),
+          })
+        }
+      }
+    }
+
+    return messages
+  }
+
   async function loadMessages(uid: string, conversationId: string, force = false) {
     if (!isTauri()) return
     if (isLoading(conversationId) && !force) return
@@ -806,10 +943,15 @@ export const useMessageStore = defineStore('message', () => {
         conversationId,
         limit: PAGE_SIZE,
       })
-      const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
+      const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
+      const normalized = await retryDecryptPendingPrivateMessages(uid, normalizedBase)
       const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
       const mergedResult = mergeLoadedMessagesWithLocal(conversationId, filteredResult.messages, existingBeforeLoad)
       messageMap.value.set(conversationId, mergedResult.messages)
+      const latestMessage = mergedResult.messages[mergedResult.messages.length - 1]
+      if (latestMessage) {
+        syncConversationSummary(conversationId, latestMessage)
+      }
       const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
       if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
         groupImageLog('loadMessages done', {
@@ -846,7 +988,8 @@ export const useMessageStore = defineStore('message', () => {
         beforeTime,
         limit: PAGE_SIZE,
       })
-      const normalized = Array.isArray(result) ? result.map(normalizeMessage) : []
+      const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
+      const normalized = await retryDecryptPendingPrivateMessages(uid, normalizedBase)
       const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
       if (filteredResult.messages.length > 0) {
         const merged = [...filteredResult.messages, ...existing]
