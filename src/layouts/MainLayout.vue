@@ -1783,21 +1783,49 @@ function suggestImageSaveName(data: Record<string, unknown>): string {
   return normalizeImageFileName(String(data.messageId || 'image'))
 }
 
-async function resolveImageSaveSource(src: string, data?: Record<string, unknown>): Promise<string> {
-  // 图片另存为优先读取本地缓存文件，避免签名 URL 过期时重新拉 OSS。
-  if ((window as any).__TAURI_INTERNALS__ && data) {
-    try {
-      const localPath = await ensureImageCacheFile(data)
-      if (localPath) return convertFileSrc(localPath)
-    } catch (error) {
-      console.warn('[image-save] local cache fallback failed:', error)
+async function saveImageAs(src: string, suggestedName: string, data?: Record<string, unknown>) {
+  if ((window as any).__TAURI_INTERNALS__) {
+    const {
+      filePath,
+      canceled,
+      needsOverwriteConfirm,
+    } = await userSelectPngSavePathWithOverwrite(suggestedName)
+    if (!filePath || canceled) return
+    const finalPath = filePath.toLowerCase().endsWith('.png') ? filePath : `${filePath}.png`
+    if (needsOverwriteConfirm) {
+      const confirmed = await promptImageOverwrite(finalPath)
+      if (!confirmed) return
+    }
+
+    if (data) {
+      try {
+        const localPath = await ensureImageCacheFile(data)
+        if (localPath) {
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('copy_file_overwrite', {
+            sourcePath: localPath,
+            targetPath: finalPath,
+          })
+          showToast(t('保存成功'))
+          return
+        }
+      } catch (error) {
+        console.warn('[image-save] local copy fallback failed:', error)
+      }
     }
   }
-  return src
-}
 
-async function saveImageAs(src: string, suggestedName: string, data?: Record<string, unknown>) {
-  const source = await resolveImageSaveSource(src, data)
+  const source = data && (window as any).__TAURI_INTERNALS__
+    ? (() => {
+        try {
+          const imagePath = String(data.imagePath || '').trim()
+          if (imagePath) return convertFileSrc(imagePath)
+        } catch {
+          // ignore local path conversion failure and fallback to original src
+        }
+        return src
+      })()
+    : src
   const response = await fetch(source)
   if (!response.ok) {
     throw new Error(`image fetch failed: ${response.status}`)
@@ -1811,18 +1839,10 @@ async function saveImageAs(src: string, suggestedName: string, data?: Record<str
   const dataUrl = await blobToDataUrl(blob)
 
   if ((window as any).__TAURI_INTERNALS__) {
-    const {
-      filePath,
-      canceled,
-      needsOverwriteConfirm,
-    } = await userSelectPngSavePathWithOverwrite(suggestedName)
-    if (!filePath || canceled) return
-    const finalPath = filePath.toLowerCase().endsWith('.png') ? filePath : `${filePath}.png`
-    if (needsOverwriteConfirm) {
-      const confirmed = await promptImageOverwrite(finalPath)
-      if (!confirmed) return
-    }
-    const err = await exportBase64ImgToLocal(dataUrl, finalPath)
+    const err = await exportBase64ImgToLocal(dataUrl, (() => {
+      const fixedPath = suggestedName.toLowerCase().endsWith('.png') ? suggestedName : `${suggestedName}.png`
+      return fixedPath
+    })())
     if (err) {
       throw err
     }

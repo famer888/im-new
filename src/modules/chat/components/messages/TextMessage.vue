@@ -530,6 +530,8 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
   const context = label.replace(/^@+/, '').trim()
   if (!context) return { type: 'missing' }
 
+  // OpenChat 网关（固定 VITE_APP_OPEN_CHAT_DOMAIN）与业务域名（可为线路池/localStorage）
+  // 可能不一致；searchAliasContent 抛错或未命中时仍需走 biz 的 groupOrUserDetail。
   try {
     const aliasResp = await searchAliasContent({ fromUid: authStore.uid || 0, content: context })
     if (Number(aliasResp?.code ?? 0) === 200 && aliasResp?.data) {
@@ -541,7 +543,11 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
           : { type: 'private-channel', channel: channelInfo as Record<string, any> }
       }
     }
+  } catch (error) {
+    console.warn('[TextMessage] searchAliasContent failed, fallback to groupOrUserDetail:', error)
+  }
 
+  try {
     const resp = await groupOrUserDetail({ fromUid: authStore.uid || 0, context })
     const profile = parseMemberProfile(resp)
     if (profile) {
@@ -557,7 +563,7 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
       return { type: 'add-group', target: groupTarget }
     }
   } catch (error) {
-    console.warn('[TextMessage] resolve alias target failed:', error)
+    console.warn('[TextMessage] groupOrUserDetail failed:', error)
   }
 
   return { type: 'missing' }
