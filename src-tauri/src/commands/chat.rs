@@ -147,6 +147,7 @@ struct ReadCandidate {
 fn message_digest(msg_type: i32, content: Option<&str>) -> String {
     match msg_type {
         1 => "[图片]".to_string(),
+        9 => "[动画表情]".to_string(),
         2 => "[语音]".to_string(),
         3 => "[视频]".to_string(),
         5 => "[名片]".to_string(),
@@ -889,7 +890,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 12) | (1, 18) => {
+        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 9) | (1, 12) | (1, 18) => {
             if let Err(e) = pipeline::send_group_message(
                 &ws_mgr,
                 &crypto,
@@ -917,7 +918,7 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) | (0, 3) | (0, 5) | (0, 7) | (0, 12) | (0, 18) => {
+        (0, 1) | (0, 2) | (0, 3) | (0, 5) | (0, 7) | (0, 9) | (0, 12) | (0, 18) => {
             if let Err(e) = pipeline::send_private_message(
                 &ws_mgr,
                 &crypto,
@@ -936,7 +937,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (2, 1) | (2, 2) | (2, 3) | (2, 7) => {
+        (2, 1) | (2, 2) | (2, 3) | (2, 7) | (2, 9) => {
             if let Err(e) = pipeline::send_channel_message(
                 &ws_mgr,
                 &crypto,
@@ -1247,6 +1248,20 @@ pub fn decrypt_private_incoming(
                 .to_string());
             }
         }
+        9 => {
+            if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice()) {
+                return Ok(serde_json::json!({
+                    "url": obj.url,
+                    "gif": obj.url,
+                    "thumbnailUrl": obj.thumb_url,
+                    "thumbUrl": obj.thumb_url,
+                    "width": obj.width,
+                    "height": obj.height,
+                    "size": obj.file_size,
+                })
+                .to_string());
+            }
+        }
         2 => {
             if let Ok(obj) = crate::proto::imweb::AudioObj::decode(plain.as_slice()) {
                 return Ok(serde_json::json!({
@@ -1324,6 +1339,20 @@ pub fn decrypt_group_incoming(
                             "height": obj.height,
                             "size": obj.file_size,
                             "sizeType": obj.size_type,
+                        })
+                        .to_string());
+                    }
+                }
+                9 => {
+                    if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "gif": obj.url,
+                            "thumbnailUrl": obj.thumb_url,
+                            "thumbUrl": obj.thumb_url,
+                            "width": obj.width,
+                            "height": obj.height,
+                            "size": obj.file_size,
                         })
                         .to_string());
                     }
@@ -1462,6 +1491,20 @@ pub fn decrypt_channel_incoming(
                             "height": obj.height,
                             "size": obj.file_size,
                             "sizeType": obj.size_type,
+                        })
+                        .to_string());
+                    }
+                }
+                9 => {
+                    if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice()) {
+                        return Ok(serde_json::json!({
+                            "url": obj.url,
+                            "gif": obj.url,
+                            "thumbnailUrl": obj.thumb_url,
+                            "thumbUrl": obj.thumb_url,
+                            "width": obj.width,
+                            "height": obj.height,
+                            "size": obj.file_size,
                         })
                         .to_string());
                     }

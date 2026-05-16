@@ -46,7 +46,7 @@ function recordSendDiagnosticTrace(message: string, data?: Record<string, unknow
 }
 
 function messageUsesWsSend(convType: number, msgType: number): boolean {
-  const wsTypes = [0, 1, 2, 3, 7, 12, 18]
+  const wsTypes = [0, 1, 2, 3, 7, 9, 12, 18]
   if (![0, 1, 2].includes(convType)) return false
   return wsTypes.includes(msgType) || (convType === 0 && msgType === 5)
 }
@@ -550,6 +550,7 @@ export const useMessageStore = defineStore('message', () => {
       return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
     }
     if (msgType === 1) return '[图片]'
+    if (msgType === 9) return '[动画表情]'
     if (msgType === 2) return '[语音]'
     if (msgType === 3) return '[视频]'
     if (msgType === 5) return '[名片]'

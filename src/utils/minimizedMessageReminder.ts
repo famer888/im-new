@@ -68,6 +68,7 @@ function getMessageDigest(message: any): string {
   const content = message?.content ?? ''
   if (msgType === 0) return stripText(content).slice(0, 120)
   if (msgType === 1) return `[${t('图片')}]`
+  if (msgType === 9) return `[${t('动画表情')}]`
   if (msgType === 2) return `[${t('语音')}]`
   if (msgType === 3) return `[${t('视频')}]`
   if (msgType === 5) return `[${t('名片')}]`

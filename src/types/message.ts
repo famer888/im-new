@@ -92,7 +92,7 @@ export function getMessageComponentName(msgType: number): string {
     [MessageType.NameCard]: 'BusinessCardMessage',
     [MessageType.File]: 'FileMessage',
     [MessageType.Notice]: 'NoticeMessage',
-    [MessageType.DynamicImage]: 'GifMessage',
+    [MessageType.DynamicImage]: 'ImageMessage',
     [MessageType.SetImage]: 'DiceMessage',
     [MessageType.Html2]: 'RichTextMessage',
     [MessageType.AnimatedGame]: 'PokerMessage',

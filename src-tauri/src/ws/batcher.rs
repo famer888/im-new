@@ -31,6 +31,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Ok(obj) => image_obj_to_json(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
+        9 => match imweb::DynamicImageObj::decode(plain) {
+            Ok(obj) => dynamic_image_obj_to_json(obj),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
         2 => match imweb::AudioObj::decode(plain) {
             Ok(obj) => audio_obj_to_json(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
@@ -89,6 +93,19 @@ fn image_obj_to_json(obj: imweb::ImageObj) -> String {
         "height": obj.height,
         "size": obj.file_size,
         "sizeType": obj.size_type,
+    })
+    .to_string()
+}
+
+fn dynamic_image_obj_to_json(obj: imweb::DynamicImageObj) -> String {
+    serde_json::json!({
+        "url": obj.url,
+        "gif": obj.url,
+        "thumbnailUrl": obj.thumb_url,
+        "thumbUrl": obj.thumb_url,
+        "width": obj.width,
+        "height": obj.height,
+        "size": obj.file_size,
     })
     .to_string()
 }
@@ -793,6 +810,17 @@ impl MessageBatcher {
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
                         )
+                    } else if gm.msg_type == 9
+                        && imweb::DynamicImageObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw DynamicImageObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                        )
                     } else if gm.msg_type == 2
                         && imweb::AudioObj::decode(gm.content.as_slice()).is_ok()
                     {
@@ -1355,6 +1383,24 @@ impl MessageBatcher {
                             "[加密消息，等待密钥同步]".to_string()
                         }
                     }
+                } else if om.msg_type == 9 {
+                    match imweb::DynamicImageObj::decode(fallback_cipher) {
+                        Ok(obj) => {
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED decrypt failed but raw DynamicImageObj parsed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            dynamic_image_obj_to_json(obj)
+                        }
+                        Err(_) => {
+                            decrypt_pending = true;
+                            warn!(
+                                "PRIVATE_MSG_RECEIVED dynamic image decrypt failed sender_uid={} msg_id={} err={}",
+                                om.send_uid, om.msg_id, e
+                            );
+                            "[加密消息，等待密钥同步]".to_string()
+                        }
+                    }
                 } else if om.msg_type == 2 {
                     match imweb::AudioObj::decode(fallback_cipher) {
                         Ok(obj) => {
@@ -1574,6 +1620,17 @@ impl MessageBatcher {
                 {
                     warn!(
                         "[channel] decrypt failed but raw ImageObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
+                } else if cm.msg_type == 9
+                    && imweb::DynamicImageObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw DynamicImageObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
                     (

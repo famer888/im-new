@@ -21,7 +21,6 @@ const DiceMessage = defineAsyncComponent(() => import('./messages/DiceMessage.vu
 const PokerMessage = defineAsyncComponent(() => import('./messages/PokerMessage.vue'))
 const RichTextMessage = defineAsyncComponent(() => import('./messages/RichTextMessage.vue'))
 const QuoteMessage = defineAsyncComponent(() => import('./messages/QuoteMessage.vue'))
-const GifMessage = defineAsyncComponent(() => import('./messages/GifMessage.vue'))
 const RedPacketMessage = defineAsyncComponent(() => import('./messages/RedPacketMessage.vue'))
 const TransferMessage = defineAsyncComponent(() => import('./messages/TransferMessage.vue'))
 const LocationMessage = defineAsyncComponent(() => import('./messages/LocationMessage.vue'))
@@ -56,6 +55,8 @@ const messageComponent = computed(() => {
   switch (props.message.msgType) {
     case MessageType.Text: return TextMessage
     case MessageType.Image: return ImageMessage
+    // DynamicImage still needs the robust local/remote image pipeline here.
+    // A plain <img> GIF component regressed on macOS and group messages.
     case MessageType.DynamicImage: return ImageMessage
     case MessageType.Video: return VideoMessage
     case MessageType.Audio: return AudioMessage
@@ -108,6 +109,7 @@ const isImageLikeBubble = computed(() =>
 function getQuoteContentDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Text) return (content || '').slice(0, 60)
   if (msgType === MessageType.Image) return '[图片]'
+  if (msgType === MessageType.DynamicImage) return '[动画表情]'
   if (msgType === MessageType.Audio) return '[语音]'
   if (msgType === MessageType.Video) return '[视频]'
   if (msgType === MessageType.File) return '[文件]'
