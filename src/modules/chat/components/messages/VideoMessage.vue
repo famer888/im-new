@@ -51,6 +51,19 @@ interface VideoContent {
   fileKey: string
 }
 
+function videoStreamLog(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
+  const payload = data || {}
+  console.warn(`[video-stream] ${message}`, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void tauriInvoke('image_send_log', {
+    payload: {
+      level,
+      message: `[video-stream] ${message}`,
+      data: payload,
+    },
+  }).catch(() => {})
+}
+
 function isLikelyBase64ImagePayload(value: string): boolean {
   const raw = value.trim()
   if (!raw || raw.length < 32 || raw.length % 4 !== 0) return false
@@ -603,6 +616,77 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
   })
 }
 
+async function createEncryptedVideoStreamUrl(url: string, key: string): Promise<string> {
+  const urlCandidates = getVideoUrlCandidates(url, videoData.value.name)
+  videoStreamLog('create stream url start', {
+    messageId: props.message.id || props.message.customMsgId || '',
+    urlHead: url.slice(0, 120),
+    keyLen: key.length,
+    size: videoData.value.size || 0,
+    mimeType: videoData.value.mimeType || '',
+    name: videoData.value.name || '',
+    candidateCount: urlCandidates.length,
+    candidateHeads: urlCandidates.map(item => item.slice(0, 120)),
+  })
+  const { invoke } = await import('@tauri-apps/api/core')
+  const result = await invoke<{ url: string }>('create_video_stream_url', {
+    request: {
+      url,
+      urlCandidates,
+      fileKey: key,
+      mimeType: videoData.value.mimeType || '',
+      size: videoData.value.size || 0,
+      name: getVideoFileName(url, videoData.value.name),
+    },
+  })
+  videoStreamLog('create stream url done', {
+    messageId: props.message.id || props.message.customMsgId || '',
+    streamUrl: result.url,
+  })
+  void probeEncryptedVideoStreamUrl(result.url)
+  return result.url
+}
+
+function getVideoUrlCandidates(url: string, name = ''): string[] {
+  const raw = String(url || '').trim()
+  if (!raw || !/^https?:\/\//i.test(raw)) return []
+  const candidates = [raw]
+  const [withoutHash, hash = ''] = raw.split('#')
+  const [base, query = ''] = withoutHash.split('?')
+  const suffixFromName = videoExt(name)
+  const hasVideoExt = /\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i.test(base)
+  if (!hasVideoExt) {
+    const suffixes = [suffixFromName, '.mp4', '.mov'].filter((item, index, list) => item && list.indexOf(item) === index)
+    for (const suffix of suffixes) {
+      candidates.push(`${base}${suffix}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`)
+    }
+  }
+  return [...new Set(candidates)]
+}
+
+async function probeEncryptedVideoStreamUrl(streamUrl: string) {
+  try {
+    const response = await fetch(streamUrl, {
+      headers: { Range: 'bytes=0-1023' },
+      cache: 'no-store',
+    })
+    const bytes = await response.arrayBuffer()
+    videoStreamLog('probe stream url done', {
+      streamUrl,
+      ok: response.ok,
+      status: response.status,
+      contentType: response.headers.get('content-type') || '',
+      contentRange: response.headers.get('content-range') || '',
+      bytes: bytes.byteLength,
+    }, response.ok ? 'info' : 'warn')
+  } catch (error) {
+    videoStreamLog('probe stream url failed', {
+      streamUrl,
+      message: (error as Error)?.message || String(error),
+    }, 'error')
+  }
+}
+
 async function ensureVideoLocalFile(): Promise<string> {
   if (localVideoPath.value && await localFileExists(localVideoPath.value)) return localVideoPath.value
 
@@ -700,10 +784,7 @@ function handleNativeDragMouseUp() {
 function handleNativeDragMouseDown(event: MouseEvent) {
   if (event.button !== 0) return
 
-  if (!(window as any).__TAURI_INTERNALS__) {
-    prepareVideoLocalFileForDrag()
-    return
-  }
+  if (!(window as any).__TAURI_INTERNALS__) return
 
   event.preventDefault()
   nativeDragStartPoint = { x: event.clientX, y: event.clientY }
@@ -711,7 +792,6 @@ function handleNativeDragMouseDown(event: MouseEvent) {
   cleanupNativeDragListeners()
   window.addEventListener('mousemove', handleNativeDragMouseMove, true)
   window.addEventListener('mouseup', handleNativeDragMouseUp, true)
-  prepareVideoLocalFileForDrag()
 }
 
 function handleVideoClick(event: MouseEvent) {
@@ -732,27 +812,60 @@ async function handleOpenVideo() {
 
   videoOpening.value = true
   try {
+    videoStreamLog('open click', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      hasUrl: Boolean(url),
+      urlHead: url.slice(0, 120),
+      size: videoData.value.size || 0,
+      hasFileKey: Boolean(fileKey.value),
+      hasAttachmentKey: Boolean(attachmentKey.value),
+      localVideoPath: localVideoPath.value,
+      localSource,
+    })
     if (localVideoPath.value && await localFileExists(localVideoPath.value)) {
+      videoStreamLog('open local cached file', { path: localVideoPath.value })
       await openMediaWindow(localVideoPath.value)
       return
     }
 
     if (localSource && await localFileExists(localSource)) {
       localVideoPath.value = localSource
+      videoStreamLog('open local source file', { path: localSource })
       await openMediaWindow(localSource)
       return
     }
 
     const key = await resolveFileKey()
     const isEncryptedRemote = /^https?:\/\//i.test(url) && Boolean(key)
+    videoStreamLog('open remote decision', {
+      isTauri: Boolean((window as any).__TAURI_INTERNALS__),
+      isEncryptedRemote,
+      keyLen: key.length,
+      size: videoData.value.size || 0,
+      mimeType: videoData.value.mimeType || '',
+    })
     if ((window as any).__TAURI_INTERNALS__ && isEncryptedRemote) {
+      if (videoData.value.size > 0) {
+        const streamUrl = await createEncryptedVideoStreamUrl(url, key)
+        videoStreamLog('open stream media window', { streamUrl })
+        await openMediaWindow(streamUrl)
+        return
+      }
+      videoStreamLog('fallback full download because size missing', {
+        messageId: props.message.id || props.message.customMsgId || '',
+      }, 'warn')
       const path = await downloadVideoToLocal(url, key)
       await openMediaWindow(path)
       return
     }
 
+    videoStreamLog('open direct url', { urlHead: url.slice(0, 120) })
     await openMediaWindow(url)
   } catch (error) {
+    videoStreamLog('open failed', {
+      message: (error as Error)?.message || String(error),
+      stack: (error as Error)?.stack || '',
+    }, 'error')
     console.warn('[video] open failed:', error)
   } finally {
     videoOpening.value = false
@@ -812,7 +925,6 @@ onBeforeUnmount(() => {
     :class="{ preparing: videoPreparingForDrag }"
     :title="dragFileName"
     @click.stop="handleVideoClick"
-    @pointerenter="prepareVideoLocalFileForDrag"
     @mousedown.left="handleNativeDragMouseDown"
   >
     <div class="video-content" :style="videoBoxStyle">
