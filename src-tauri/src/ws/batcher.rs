@@ -1130,7 +1130,6 @@ impl MessageBatcher {
         } else {
             sender_id.clone()
         };
-
         let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
         // 对齐老 im `fnFriendMsgAdd`：
         // - 自己其他端同步来的消息落到 receiveUid 会话，使用 myselfWebContent。
@@ -1486,7 +1485,6 @@ impl MessageBatcher {
                 }
             }
         };
-
         info!(
             "PRIVATE_MSG_RECEIVED sender_uid={} receive_uid={} msg_id={} conversation_id={}",
             om.send_uid, om.receive_uid, om.msg_id, conversation_id

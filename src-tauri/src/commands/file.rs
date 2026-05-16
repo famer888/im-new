@@ -1740,7 +1740,6 @@ pub async fn download_file(
                     bytes_head_hex(&first_chunk_head, 16),
                 );
             }
-
             if file_key.trim().is_empty() {
                 tokio::fs::rename(&enc_path, &path)
                     .await
