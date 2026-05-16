@@ -21,6 +21,8 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 static ACTIVE_LOGIN_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
 static CURRENT_PROCESS_LOGIN_UIDS: LazyLock<parking_lot::Mutex<HashSet<String>>> =
     LazyLock::new(|| parking_lot::Mutex::new(HashSet::new()));
+static CURRENT_SESSION: LazyLock<parking_lot::RwLock<Option<SessionInfo>>> =
+    LazyLock::new(|| parking_lot::RwLock::new(None));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoginRequest {
@@ -44,7 +46,7 @@ pub struct LoginRequest {
     pub session_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub uid: String,
     pub session_id: String,
@@ -342,13 +344,16 @@ pub async fn login(
     // Placeholder implementation
     win_mgr.switch_to_main(&app).map_err(|e| e.to_string())?;
 
-    Ok(SessionInfo {
+    let session = SessionInfo {
         uid: request.uid,
         session_id: request.session_id,
         nickname: request.nickname,
         avatar: request.avatar,
         source_id: request.source_id,
-    })
+    };
+    *CURRENT_SESSION.write() = Some(session.clone());
+
+    Ok(session)
 }
 
 #[tauri::command]
@@ -363,6 +368,7 @@ pub async fn logout(
     info!("logout requested uid={:?}", uid);
     ws_mgr.disconnect().await;
     release_active_login_lock(&app, uid.as_deref());
+    *CURRENT_SESSION.write() = None;
 
     if let Some(uid) = uid.as_deref().map(str::trim).filter(|uid| !uid.is_empty()) {
         let keep_history = config
@@ -394,6 +400,5 @@ pub async fn logout(
 
 #[tauri::command]
 pub async fn get_session() -> Result<Option<SessionInfo>, String> {
-    // Check local stored session
-    Ok(None)
+    Ok(CURRENT_SESSION.read().clone())
 }
