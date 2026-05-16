@@ -3022,6 +3022,7 @@ async function handleScheduleDeletionConfirm(seconds: number) {
 function getQuoteDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Text) return (content || '').slice(0, 80)
   if (msgType === MessageType.Image) return '[图片]'
+  if (msgType === MessageType.DynamicImage) return '[动画表情]'
   if (msgType === MessageType.Audio) return '[语音]'
   if (msgType === MessageType.Video) return '[视频]'
   if (msgType === MessageType.File) return '[文件]'
@@ -3061,6 +3062,7 @@ function getNameCardDisplayName(content: string | null): string {
 function getForwardDigest(msgType: number, content: string | null): string {
   if (msgType === MessageType.Text) return (content || '').slice(0, 80)
   if (msgType === MessageType.Image) return '[图片]'
+  if (msgType === MessageType.DynamicImage) return '[动画表情]'
   if (msgType === MessageType.Audio) return '[语音]'
   if (msgType === MessageType.Video) return '[视频]'
   if (msgType === MessageType.File) return '[文件]'
