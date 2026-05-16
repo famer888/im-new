@@ -492,6 +492,7 @@ function shouldShowDraft(conv: Conversation): boolean {
 function getMessageDigest(message: Message): string {
   const raw = (message.content || '').trim()
   if (message.msgType === 1) return `[${t('图片')}]`
+  if (message.msgType === 9) return `[${t('动画表情')}]`
   if (message.msgType === 2) return `[${t('语音')}]`
   if (message.msgType === 3) return `[${t('视频')}]`
   if (message.msgType === 5) return `[${t('名片')}]`
