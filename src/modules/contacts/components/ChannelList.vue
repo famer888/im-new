@@ -7,7 +7,6 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 import jtIcon from '@/assets/images/headNav/jt-icon.png'
-import channelFeatureIcon from '@/assets/images/channel/feature.png'
 
 const { t } = useI18n()
 const channelStore = useChannelStore()
@@ -63,7 +62,6 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
         />
       </div>
       <h3 class="channel-name">
-        <img class="channel-feature" :src="channelFeatureIcon" alt="" />
         <span class="channel-name-text">
           {{ (ch.channelName || ch.name || ch.id || '').replaceAll('🪵', '?') }}
         </span>
@@ -135,13 +133,6 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   color: #333;
   font-weight: normal;
   line-height: 18px;
-}
-
-.channel-feature {
-  width: 14px;
-  height: 16px;
-  margin-right: 4px;
-  flex-shrink: 0;
 }
 
 .channel-name-text {
