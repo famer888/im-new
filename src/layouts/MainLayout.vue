@@ -1622,6 +1622,23 @@ async function writeImageBlobWithWebClipboard(blob: Blob, mime: string) {
   )
 }
 
+async function writeImageBlobWithNativeClipboard(blob: Blob) {
+  if (!(window as any).__TAURI_INTERNALS__) {
+    throw new Error('native clipboard image write unsupported')
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  const dataUrl = await blobToDataUrl(blob)
+  const dataBase64 = dataUrl.split(',', 2)[1] || ''
+  if (!dataBase64) {
+    throw new Error('image base64 encode failed')
+  }
+  await withClipboardTimeout(
+    invoke('write_clipboard_image', { dataBase64 }),
+    'native clipboard image write',
+    8000,
+  )
+}
+
 async function copyImageToClipboard(src: string) {
   const response = await fetch(src)
   if (!response.ok) {
@@ -1636,6 +1653,15 @@ async function copyImageToClipboard(src: string) {
     mime = 'image/png'
   }
 
+  if ((window as any).__TAURI_INTERNALS__) {
+    try {
+      await writeImageBlobWithNativeClipboard(blob)
+      return
+    } catch (error) {
+      console.warn('[clipboard] native image write failed, fallback to web:', error)
+    }
+  }
+
   try {
     await writeImageBlobWithWebClipboard(blob, mime)
     return
@@ -1647,17 +1673,7 @@ async function copyImageToClipboard(src: string) {
   }
 
   if ((window as any).__TAURI_INTERNALS__) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const dataUrl = await blobToDataUrl(blob)
-    const dataBase64 = dataUrl.split(',', 2)[1] || ''
-    if (!dataBase64) {
-      throw new Error('image base64 encode failed')
-    }
-    await withClipboardTimeout(
-      invoke('write_clipboard_image', { dataBase64 }),
-      'native clipboard image write',
-      8000,
-    )
+    await writeImageBlobWithNativeClipboard(blob)
     return
   }
 }
@@ -1668,7 +1684,15 @@ async function copyMessageText(data: Record<string, unknown>) {
 }
 
 async function copyMessageImage(data: Record<string, unknown>) {
-  const imageSrc = String(data.imageSrc || '').trim()
+  let imageSrc = String(data.imageSrc || '').trim()
+  const imagePath = String(data.imagePath || '').trim()
+  if ((window as any).__TAURI_INTERNALS__ && imagePath) {
+    try {
+      imageSrc = convertFileSrc(imagePath)
+    } catch (error) {
+      console.warn('[clipboard] image local path conversion failed:', error)
+    }
+  }
   if (!imageSrc) {
     throw new Error('image source unavailable')
   }
@@ -2012,11 +2036,23 @@ async function handleContextMenuSelect(key: string) {
     switch (key) {
       case 'copy': {
         if (messageSupportsImageCopy(data)) {
-          try { await copyMessageImage(data) } catch { /* clipboard may be unavailable */ }
+          try {
+            await copyMessageImage(data)
+            showToast(t('复制成功'))
+          } catch (error) {
+            console.warn('[clipboard] copy image failed:', error)
+            showToast(t('复制失败'), 'error')
+          }
           break
         }
         if (!messageSupportsCopy(data.msgType)) break
-        try { await copyMessageText(data) } catch { /* clipboard may be unavailable */ }
+        try {
+          await copyMessageText(data)
+          showToast(t('复制成功'))
+        } catch (error) {
+          console.warn('[clipboard] copy text failed:', error)
+          showToast(t('复制失败'), 'error')
+        }
         break
       }
       case 'save_as': {

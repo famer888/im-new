@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
+import '@js-preview/excel/lib/index.css'
 import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import Toast from '@/components/Toast.vue'
@@ -17,6 +18,7 @@ import restoreIcon from '@/assets/windows_control_icons/restore-w-30.png'
 const { t } = useI18n()
 const payload = ref<MediaViewerPayload | null>(null)
 const videoRef = ref<HTMLVideoElement | null>(null)
+const excelPreviewRef = ref<HTMLElement | null>(null)
 const isMaximized = ref(false)
 const rotation = ref(0)
 const isVideoPlaying = ref(false)
@@ -35,6 +37,15 @@ const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
+let excelPreviewer: { destroy?: () => void } | null = null
+let excelPreviewToken = 0
+
+type ExcelPreviewModule = {
+  init?: (el: HTMLElement) => { preview?: (src: string) => Promise<void> | void; destroy?: () => void }
+  default?: {
+    init?: (el: HTMLElement) => { preview?: (src: string) => Promise<void> | void; destroy?: () => void }
+  }
+}
 
 function ensureMediaSrc(src: string): string {
   const raw = String(src || '').trim()
@@ -81,12 +92,21 @@ function imageExtFromDataUrl(src: string): string {
   return '.png'
 }
 
-const imageSrc = computed(() => ensureMediaSrc(payload.value?.src || payload.value?.filePath || ''))
+const imageSrc = computed(() => {
+  if (payload.value?.mediaType && payload.value.mediaType !== 'image') return ''
+  return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
+})
 const videoSrc = computed(() => {
   if (payload.value?.mediaType !== 'video') return ''
   return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
 })
 const isVideo = computed(() => payload.value?.mediaType === 'video')
+const isFile = computed(() => payload.value?.mediaType === 'file')
+const isExcelFile = computed(() => isFile.value && payload.value?.fileKind === 'excel')
+const filePreviewSrc = computed(() => {
+  if (!isExcelFile.value) return ''
+  return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
+})
 const isPortraitVideo = computed(() => {
   const w = Number(payload.value?.width || 0)
   const h = Number(payload.value?.height || 0)
@@ -111,15 +131,31 @@ const localVideoPath = computed(() => {
   return ''
 })
 const localImagePath = computed(() => {
+  if (isFile.value) return localFilePath.value
   const filePath = String(payload.value?.filePath || '').trim()
   if (filePath) return fileUrlToLocalPath(filePath)
   const src = String(payload.value?.src || '').trim()
   if (/^file:/i.test(src)) return fileUrlToLocalPath(src)
   return ''
 })
+const localFilePath = computed(() => {
+  if (!isFile.value) return ''
+  const filePath = String(payload.value?.filePath || '').trim()
+  if (filePath) return fileUrlToLocalPath(filePath)
+  const src = String(payload.value?.src || '').trim()
+  if (/^file:/i.test(src)) return fileUrlToLocalPath(src)
+  if (src && !/^(https?|asset|blob|data):/i.test(src)) return fileUrlToLocalPath(src)
+  return ''
+})
 const canOpenDirectory = computed(() => Boolean(localImagePath.value))
 const contextMenuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = []
+  if (isFile.value) {
+    if (canOpenWithDefaultApp.value) {
+      items.push({ key: 'open_default', label: t('使用默认应用打开') })
+    }
+    return items
+  }
   if (!isVideo.value) {
     items.push(
       { key: 'copy', label: t('复制') },
@@ -150,6 +186,7 @@ function currentMediaWindow() {
 
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   resetVideoState()
+  destroyExcelPreviewer()
   payload.value = nextPayload
   rotation.value = 0
   menuVisible.value = false
@@ -157,7 +194,12 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
     document.title = nextPayload.title
   } else if (nextPayload?.mediaType === 'video') {
     document.title = '视频'
+  } else if (nextPayload?.mediaType === 'file') {
+    document.title = '文件'
   }
+  void nextTick(() => {
+    void setupExcelPreview()
+  })
 }
 
 function resetVideoState() {
@@ -172,6 +214,43 @@ function resetVideoState() {
   videoDuration.value = 0
   videoVolume.value = 1
   isVideoMuted.value = false
+}
+
+function destroyExcelPreviewer() {
+  excelPreviewToken += 1
+  if (excelPreviewer?.destroy) {
+    try {
+      excelPreviewer.destroy()
+    } catch (error) {
+      console.warn('[media-viewer] excel preview destroy failed:', error)
+    }
+  }
+  excelPreviewer = null
+  if (excelPreviewRef.value) {
+    excelPreviewRef.value.innerHTML = ''
+  }
+}
+
+async function setupExcelPreview() {
+  const token = ++excelPreviewToken
+  const mount = excelPreviewRef.value
+  const src = filePreviewSrc.value
+  if (!mount || !src || !isExcelFile.value) return
+
+  mount.innerHTML = ''
+  try {
+    const excelModule = await import('@js-preview/excel') as ExcelPreviewModule
+    if (token !== excelPreviewToken) return
+    const initPreview = excelModule.init || excelModule.default?.init
+    if (!initPreview) throw new Error('excel preview init unavailable')
+    const previewer = initPreview(mount)
+    excelPreviewer = previewer
+    await previewer.preview?.(src)
+  } catch (error) {
+    if (token !== excelPreviewToken) return
+    console.warn('[media-viewer] excel preview failed:', error)
+    showToast('文件预览失败，请使用默认应用打开', 'error')
+  }
 }
 
 function formatVideoTime(value: number): string {
@@ -530,7 +609,7 @@ function handleContextMenu(event: MouseEvent) {
 }
 
 async function openImageDirectory() {
-  const path = localImagePath.value
+  const path = isFile.value ? localFilePath.value : localImagePath.value
   if (!path) return
   await invoke('reveal_file_in_directory', { path })
 }
@@ -606,6 +685,7 @@ onUnmounted(() => {
   document.body.classList.remove(mediaViewerPageClass)
   document.getElementById('app')?.classList.remove(mediaViewerPageClass)
   resetVideoState()
+  destroyExcelPreviewer()
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
   unlistenWindowEvents = []
@@ -617,7 +697,7 @@ onUnmounted(() => {
 <template>
   <div
     class="media-viewer"
-    :class="{ 'is-video-mode': isVideo, 'is-desktop-fullscreen': isVideoFullscreen }"
+    :class="{ 'is-video-mode': isVideo, 'is-file-mode': isFile, 'is-desktop-fullscreen': isVideoFullscreen }"
     @contextmenu="handleContextMenu"
   >
     <div class="media-titlebar">
@@ -757,6 +837,12 @@ onUnmounted(() => {
         </button>
       </div>
       <div
+        v-else-if="isExcelFile"
+        class="file-preview-wrap"
+      >
+        <div ref="excelPreviewRef" class="excel-preview-mount"></div>
+      </div>
+      <div
         v-else-if="imageSrc"
         class="media-image-wrap"
         :style="{ transform: `rotate(${rotation}deg)` }"
@@ -767,7 +853,7 @@ onUnmounted(() => {
 
     <div v-if="!isVideo || canOpenWithDefaultApp" class="bottom-actions">
       <button
-        v-if="!isVideo"
+        v-if="!isVideo && !isFile"
         class="action-btn"
         type="button"
         title="Rotate"
@@ -838,6 +924,12 @@ onUnmounted(() => {
   --media-chrome-bg: rgba(16, 16, 20, 0.95);
 }
 
+.media-viewer.is-file-mode {
+  background: #f5f6f8;
+  color: #1f2329;
+  border-radius: 0;
+}
+
 .media-viewer.is-desktop-fullscreen {
   border-radius: 0;
   background: #000;
@@ -877,6 +969,26 @@ onUnmounted(() => {
 
 .media-viewer.is-video-mode .titlebar-btn {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.75));
+}
+
+.media-viewer.is-file-mode .media-titlebar {
+  background: #252525;
+  border-radius: 5px 5px 0 0;
+  overflow: hidden;
+}
+
+.media-viewer.is-file-mode .media-title {
+  position: absolute;
+  left: 140px;
+  right: 140px;
+  margin: 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .media-drag-layer {
@@ -1032,6 +1144,20 @@ onUnmounted(() => {
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+.file-preview-wrap {
+  position: absolute;
+  inset: 32px 0 0;
+  overflow: hidden;
+  background: #f5f6f8;
+}
+
+.excel-preview-mount {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: #fff;
 }
 
 .media-video {
@@ -1259,6 +1385,11 @@ onUnmounted(() => {
   z-index: 130;
 }
 
+.media-viewer.is-file-mode .bottom-actions {
+  right: 16px;
+  bottom: 16px;
+}
+
 .media-viewer.is-desktop-fullscreen .bottom-actions {
   display: none;
 }
@@ -1315,6 +1446,25 @@ onUnmounted(() => {
 
   &:hover svg {
     fill: #fff;
+  }
+}
+
+.media-viewer.is-file-mode .action-btn-text {
+  min-height: 32px;
+  padding: 7px 13px;
+  border-radius: 8px;
+  background: #4b5565;
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 6px 18px rgba(22, 30, 42, 0.18);
+
+  svg {
+    fill: #fff;
+  }
+
+  &:hover {
+    background: #3f4856;
+    color: #fff;
   }
 }
 </style>
