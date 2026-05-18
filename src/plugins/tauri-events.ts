@@ -27,6 +27,7 @@ import {
   ensureGroupRelKey,
   refreshGroupRelKey,
 } from '@/utils/e2ee'
+import { isHiddenMessageType } from '@/types'
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -435,6 +436,12 @@ function getNewIncomingMessages(messages: any[], currentUid: string): any[] {
 
 const ALERT_HISTORY_GRACE_MS = 5000
 const alertBaselineByUid = new Map<string, number>()
+const HIDDEN_BATCH_UPDATE_GRACE_MS = 10_000
+const hiddenOnlyBatchByConversation = new Map<string, {
+  hiddenMaxSendTime: number
+  previous: Conversation | null
+  expiresAt: number
+}>()
 
 function getMessageSendTime(message: any): number {
   const value = Number(message?.sendTime ?? message?.send_time ?? 0)
@@ -447,6 +454,43 @@ function getRealtimeIncomingMessages(messages: any[], currentUid: string): any[]
   alertBaselineByUid.set(currentUid, alertBaseline)
   const minSendTime = alertBaseline - ALERT_HISTORY_GRACE_MS
   return getNewIncomingMessages(messages, currentUid).filter((message) => getMessageSendTime(message) >= minSendTime)
+}
+
+function getBatchMsgType(message: any): number {
+  return Number(message?.msgType ?? message?.msg_type ?? 0)
+}
+
+function isHiddenBatchMessage(message: any): boolean {
+  return isHiddenMessageType(getBatchMsgType(message))
+}
+
+function rememberHiddenOnlyBatchConversations(messages: any[], visibleMessages: any[]) {
+  const chatStore = useChatStore()
+  const visibleConvIds = new Set(
+    visibleMessages
+      .map((m: any) => String(m?.conversationId ?? m?.conversation_id ?? ''))
+      .filter((convId) => convId.includes('_')),
+  )
+  for (const convId of visibleConvIds) {
+    hiddenOnlyBatchByConversation.delete(convId)
+  }
+
+  const hiddenMaxByConv = new Map<string, number>()
+  for (const message of messages) {
+    if (!isHiddenBatchMessage(message)) continue
+    const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
+    if (!convId.includes('_') || visibleConvIds.has(convId)) continue
+    hiddenMaxByConv.set(convId, Math.max(hiddenMaxByConv.get(convId) ?? 0, getMessageSendTime(message)))
+  }
+
+  const expiresAt = Date.now() + HIDDEN_BATCH_UPDATE_GRACE_MS
+  for (const [convId, hiddenMaxSendTime] of hiddenMaxByConv) {
+    hiddenOnlyBatchByConversation.set(convId, {
+      hiddenMaxSendTime,
+      previous: chatStore.conversations.find((conv) => conv.id === convId) ?? null,
+      expiresAt,
+    })
+  }
 }
 
 let screenshotShortcutBound = false
@@ -1351,7 +1395,9 @@ export async function setupTauriListeners() {
       const appendableNormalized = locallyConsumedGroupRemovalMessageKeys.size > 0
         ? normalized.filter((m: any) => !locallyConsumedGroupRemovalMessageKeys.has(getBatchMessageKey(m)))
         : normalized
-      const newIncomingMessages = getRealtimeIncomingMessages(appendableNormalized, currentUid)
+      const visibleAppendableNormalized = appendableNormalized.filter((m: any) => !isHiddenBatchMessage(m))
+      rememberHiddenOnlyBatchConversations(appendableNormalized, visibleAppendableNormalized)
+      const newIncomingMessages = getRealtimeIncomingMessages(visibleAppendableNormalized, currentUid)
       const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
       messageStore.batchAppendMessages(appendableNormalized as Message[])
       const privateConversationIds = Array.from(new Set(
@@ -1397,7 +1443,7 @@ export async function setupTauriListeners() {
       const hasIncomingForActiveConversation = Boolean(
         currentUid
         && activeConversationId
-        && appendableNormalized.some((m: any) => {
+        && visibleAppendableNormalized.some((m: any) => {
           const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
           const senderId = String(m?.senderId ?? m?.sender_id ?? '')
           return convId === activeConversationId && senderId && senderId !== currentUid
@@ -1522,8 +1568,29 @@ export async function setupTauriListeners() {
     const currentUid = String(authStore.uid || '')
     const logoutClearedHistoryAt = getLogoutClearedHistoryAt(currentUid)
     const payload: any = event.payload || {}
+    const conversationId = String(payload?.id ?? '')
     const lastMsgTime = Number(payload?.lastMsgTime ?? payload?.last_msg_time ?? 0)
     if (logoutClearedHistoryAt > 0 && lastMsgTime > 0 && lastMsgTime <= logoutClearedHistoryAt) {
+      return
+    }
+    const hiddenOnlyBatch = hiddenOnlyBatchByConversation.get(conversationId)
+    if (hiddenOnlyBatch && hiddenOnlyBatch.expiresAt < Date.now()) {
+      hiddenOnlyBatchByConversation.delete(conversationId)
+    } else if (
+      hiddenOnlyBatch
+      && lastMsgTime > 0
+      && lastMsgTime <= hiddenOnlyBatch.hiddenMaxSendTime
+    ) {
+      if (!hiddenOnlyBatch.previous) return
+      chatStore.addOrUpdateConversation({
+        ...payload,
+        lastMsgId: hiddenOnlyBatch.previous.lastMsgId,
+        lastMsgTime: hiddenOnlyBatch.previous.lastMsgTime,
+        lastMsgDigest: hiddenOnlyBatch.previous.lastMsgDigest,
+        unreadCount: hiddenOnlyBatch.previous.unreadCount,
+        atMe: hiddenOnlyBatch.previous.atMe,
+        updatedAt: hiddenOnlyBatch.previous.updatedAt,
+      })
       return
     }
     if (String(payload?.id ?? '') === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {

@@ -270,6 +270,17 @@ function formatTime(ts: number): string {
   return d.format('YYYY/MM/DD')
 }
 
+function getDisplayTime(conv: Conversation): number {
+  if (conv.id !== chatStore.currentConversationId) return conv.lastMsgTime
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return conv.lastMsgTime
+
+  const loaded = messageStore.getMessages(conv.id)
+  if (loaded.length === 0) return conv.lastMsgTime
+
+  const latest = getLoadedLatestVisibleMessage(conv)
+  return latest ? Number(latest.sendTime || 0) : 0
+}
+
 /** 与 im 会话列表 `&.online` 绿点一致：单聊好友在线且允许展示时显示 */
 function showFriendOnlineDot(conv: Conversation): boolean {
   if (conv.type !== ConversationType.Friend) return false
@@ -623,19 +634,23 @@ if (import.meta.env.DEV) {
   ;(window as unknown as Record<string, unknown>).__refreshConversationListPreview = refreshConversationListPreview
 }
 
+function getLoadedLatestVisibleMessage(conv: Conversation): Message | null {
+  const loaded = messageStore.getMessages(conv.id)
+  if (loaded.length === 0) return null
+  return [...loaded].reverse().find((message) => (
+    !isHiddenMessageType(message.msgType)
+    && !isSelfLeaveGroupSystemMessage(conv.id, message)
+    && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
+  )) ?? null
+}
+
 function getLoadedLatestDigest(conv: Conversation): string {
   // 群通知右侧列表会合并接口返回与本地消息，排序基于 updateTime；
   // 本地消息时间线未必就是右侧顶部那一条，因此这里不要反向覆盖已同步好的会话摘要。
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
     return ''
   }
-  const loaded = messageStore.getMessages(conv.id)
-  if (loaded.length === 0) return ''
-  const latest = [...loaded].reverse().find((message) => (
-    !isHiddenMessageType(message.msgType)
-    && !isSelfLeaveGroupSystemMessage(conv.id, message)
-    && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
-  ))
+  const latest = getLoadedLatestVisibleMessage(conv)
   if (!latest) return ''
   const isCurrentConversation = conv.id === chatStore.currentConversationId
   const summaryNeedsRepair = shouldRepairGroupDigestPreview(conv)
@@ -861,7 +876,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
               />
               <span class="conv-name-text">{{ getName(conv) }}</span>
             </h3>
-            <span class="conv-time">{{ formatTime(conv.lastMsgTime) }}</span>
+            <span class="conv-time">{{ formatTime(getDisplayTime(conv)) }}</span>
           </div>
           <div class="conv-row-bottom">
             <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[{{ t('有人@我') }}]</span>

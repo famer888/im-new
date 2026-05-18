@@ -188,7 +188,31 @@ const previewSrc = computed(() => activeSrc.value || imageData.value.url)
 const dragFileName = computed(() =>
   pathFileName(localFilePath.value) || getImageFileName(downloadUrl.value || imageData.value.url, imageData.value.name),
 )
-const showImageLoading = computed(() => !activeSrc.value || (!isLoaded.value && !loadError.value))
+const extraData = computed((): Record<string, any> => {
+  const raw = props.message.extra
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw as Record<string, any>
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
+})
+const isOwnSingleImageUploadPlaceholder = computed(() => {
+  const type = Number(props.message.msgType)
+  return props.message.conversationId.startsWith('0_')
+    && (type === 1 || type === 9)
+    && String(props.message.senderId || '') === String(authStore.uid || '')
+    && Boolean(extraData.value.uploadPending)
+    && Number(props.message.status) <= 0
+})
+const isOwnSingleImageUploading = computed(() =>
+  isOwnSingleImageUploadPlaceholder.value && Number(props.message.status) === 0,
+)
+const showImageLoading = computed(() => {
+  if (isOwnSingleImageUploadPlaceholder.value) return isOwnSingleImageUploading.value
+  return !activeSrc.value || (!isLoaded.value && !loadError.value)
+})
 const showImageOverlay = computed(() => !loadError.value && showImageLoading.value)
 const canOpenPreview = computed(() => Boolean(previewSrc.value) && isLoaded.value && !loadError.value && !showImageOverlay.value)
 const imageBoxStyle = computed(() => {
@@ -214,16 +238,6 @@ const imageBoxStyle = computed(() => {
     height: `${height}px`,
   }
 })
-const extraData = computed((): Record<string, any> => {
-  const raw = props.message.extra
-  if (!raw) return {}
-  if (typeof raw === 'object') return raw as Record<string, any>
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return {}
-  }
-})
 const fileKey = computed(() => String(extraData.value.fileKey || extraData.value.file_key || '').trim())
 const attachmentKey = computed(() =>
   String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
@@ -245,11 +259,15 @@ const imageCacheKey = computed(() => [
   attachmentKey.value || '',
 ].join('|'))
 
-watch([thumbnailUrl, downloadUrl, localSourcePath, fileKey, attachmentKey], () => {
+watch([thumbnailUrl, downloadUrl, localSourcePath, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
   localFilePath.value = ''
+  if (isOwnSingleImageUploadPlaceholder.value) {
+    cleanupDownloadEvents()
+    return
+  }
   if (!thumbnailUrl.value && !imageData.value.url && !fileKey.value && !attachmentKey.value) {
     loadError.value = true
     isLoaded.value = true
@@ -298,6 +316,7 @@ function markLoadedIfImageAlreadyComplete() {
 }
 
 function handleError() {
+  if (isOwnSingleImageUploadPlaceholder.value) return
   const originalUrl = imageData.value.url
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
     activeSrc.value = originalUrl
@@ -420,6 +439,7 @@ async function resolveFileKey(): Promise<string> {
 }
 
 async function downloadAndDecryptImage() {
+  if (isOwnSingleImageUploadPlaceholder.value) return
   const url = downloadUrl.value
   const key = await resolveFileKey()
   if (!url || !key) {
@@ -485,6 +505,7 @@ async function downloadAndDecryptImage() {
 }
 
 async function materializeDataImageForDrag() {
+  if (isOwnSingleImageUploadPlaceholder.value) return
   const src = String(activeSrc.value || '').trim()
   if (!(window as any).__TAURI_INTERNALS__ || localFilePath.value || !/^data:image\//i.test(src)) return
 
@@ -536,7 +557,7 @@ onBeforeUnmount(() => {
       @click="openPreview"
     >
       <img
-        v-if="activeSrc && !loadError"
+        v-if="activeSrc && !loadError && !isOwnSingleImageUploadPlaceholder"
         ref="imageElRef"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"
