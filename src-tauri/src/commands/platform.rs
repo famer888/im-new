@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 #[cfg(target_os = "windows")]
@@ -13,6 +14,28 @@ fn hidden_windows_command(program: &str) -> std::process::Command {
     let mut command = std::process::Command::new(program);
     command.creation_flags(CREATE_NO_WINDOW);
     command
+}
+
+fn command_status_with_timeout(
+    command: &mut std::process::Command,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, String> {
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Ok(status);
+        }
+
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("clipboard command timed out".to_string());
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -961,18 +984,17 @@ set the clipboard to (read imageFile as «class PNGf»)
         path_text
     );
 
-    let output = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut command = std::process::Command::new("osascript");
+    command.arg("-e").arg(script);
+    let status = command_status_with_timeout(&mut command, Duration::from_secs(6));
 
     let _ = std::fs::remove_file(&path);
 
-    if output.status.success() {
+    let status = status?;
+    if status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(format!("osascript failed with status: {}", status))
     }
 }
 
@@ -1001,17 +1023,17 @@ try {{
         path_text
     );
 
-    let output = hidden_windows_command("powershell.exe")
-        .args(["-NoProfile", "-Sta", "-Command", &script])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut command = hidden_windows_command("powershell.exe");
+    command.args(["-NoProfile", "-Sta", "-Command", &script]);
+    let status = command_status_with_timeout(&mut command, Duration::from_secs(6));
 
     let _ = std::fs::remove_file(&path);
 
-    if output.status.success() {
+    let status = status?;
+    if status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(format!("SetImage failed with status: {}", status))
     }
 }
 

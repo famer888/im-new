@@ -753,11 +753,34 @@ async function writeTextClipboard(text: string) {
   const blob = new Blob([normalized], { type: 'text/plain' })
   const ClipboardItemCtor = window.ClipboardItem
   if (ClipboardItemCtor && navigator.clipboard?.write) {
-    await navigator.clipboard.write([new ClipboardItemCtor({ 'text/plain': blob })])
-    return
+    try {
+      await withClipboardTimeout(
+        navigator.clipboard.write([new ClipboardItemCtor({ 'text/plain': blob })]),
+        'web clipboard text write',
+      )
+      return
+    } catch (error) {
+      console.warn('[clipboard] web text write failed:', error)
+    }
   }
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(normalized)
+    try {
+      await withClipboardTimeout(
+        navigator.clipboard.writeText(normalized),
+        'web clipboard text write',
+      )
+      return
+    } catch (error) {
+      console.warn('[clipboard] web text writeText failed:', error)
+    }
+  }
+  if ((window as any).__TAURI_INTERNALS__) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await withClipboardTimeout(
+      invoke('write_clipboard_text', { text: normalized }),
+      'native clipboard text write',
+      5000,
+    )
     return
   }
   throw new Error('clipboard text write unsupported')
@@ -1572,6 +1595,33 @@ function blobToPng(blob: Blob): Promise<Blob> {
   })
 }
 
+function withClipboardTimeout<T>(task: Promise<T>, label: string, timeoutMs = 5000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`${label} timed out`))
+    }, timeoutMs)
+
+    task.then((result) => {
+      window.clearTimeout(timer)
+      resolve(result)
+    }).catch((error) => {
+      window.clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
+
+async function writeImageBlobWithWebClipboard(blob: Blob, mime: string) {
+  const ClipboardItemCtor = window.ClipboardItem
+  if (!ClipboardItemCtor || !navigator.clipboard?.write) {
+    throw new Error('clipboard image write unsupported')
+  }
+  await withClipboardTimeout(
+    navigator.clipboard.write([new ClipboardItemCtor({ [mime]: blob })]),
+    'web clipboard image write',
+  )
+}
+
 async function copyImageToClipboard(src: string) {
   const response = await fetch(src)
   if (!response.ok) {
@@ -1586,6 +1636,16 @@ async function copyImageToClipboard(src: string) {
     mime = 'image/png'
   }
 
+  try {
+    await writeImageBlobWithWebClipboard(blob, mime)
+    return
+  } catch (error) {
+    if (!(window as any).__TAURI_INTERNALS__) {
+      throw error
+    }
+    console.warn('[clipboard] web image write failed, fallback to native:', error)
+  }
+
   if ((window as any).__TAURI_INTERNALS__) {
     const { invoke } = await import('@tauri-apps/api/core')
     const dataUrl = await blobToDataUrl(blob)
@@ -1593,15 +1653,13 @@ async function copyImageToClipboard(src: string) {
     if (!dataBase64) {
       throw new Error('image base64 encode failed')
     }
-    await invoke('write_clipboard_image', { dataBase64 })
+    await withClipboardTimeout(
+      invoke('write_clipboard_image', { dataBase64 }),
+      'native clipboard image write',
+      8000,
+    )
     return
   }
-
-  const ClipboardItemCtor = window.ClipboardItem
-  if (!ClipboardItemCtor || !navigator.clipboard?.write) {
-    throw new Error('clipboard image write unsupported')
-  }
-  await navigator.clipboard.write([new ClipboardItemCtor({ [mime]: blob })])
 }
 
 async function copyMessageText(data: Record<string, unknown>) {
