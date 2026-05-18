@@ -41,6 +41,12 @@ let excelPreviewer: { destroy?: () => void } | null = null
 let excelPreviewToken = 0
 
 type ExcelPreviewSource = string | ArrayBuffer
+type ExcelPreviewSourceKind = 'url' | 'local-array-buffer'
+
+interface ExcelPreviewSourceCandidate {
+  kind: ExcelPreviewSourceKind
+  load: () => Promise<ExcelPreviewSource>
+}
 
 type ExcelPreviewModule = {
   init?: (el: HTMLElement) => { preview?: (src: ExcelPreviewSource) => Promise<void> | void; destroy?: () => void }
@@ -77,6 +83,16 @@ function ensureMediaSrc(src: string): string {
 
 function fileUrlToLocalPath(src: string): string {
   const raw = String(src || '').trim()
+  if (/^asset:/i.test(raw) || /^https?:\/\/asset\.localhost/i.test(raw)) {
+    try {
+      const parsed = new URL(raw)
+      let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
+      if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
+      return pathname
+    } catch {
+      return raw.replace(/^asset:\/\/[^/]+\/?/i, '')
+    }
+  }
   if (!/^file:/i.test(raw)) return raw
   try {
     const parsed = new URL(raw)
@@ -108,6 +124,35 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
     bytes[i] = binary.charCodeAt(i)
   }
   return bytes.buffer
+}
+
+async function readLocalExcelArrayBuffer(localPath: string): Promise<ArrayBuffer> {
+  const files = await invoke<LocalFilePayload[]>('read_local_files', { paths: [localPath] })
+  const dataBase64 = files[0]?.dataBase64 || files[0]?.data_base64 || ''
+  if (!dataBase64) throw new Error('local excel file read returned empty data')
+  return base64ToArrayBuffer(dataBase64)
+}
+
+function createExcelPreviewSourceCandidates(src: string, localPath: string): ExcelPreviewSourceCandidate[] {
+  const candidates: ExcelPreviewSourceCandidate[] = []
+  const normalizedSrc = String(src || '').trim()
+  const normalizedLocalPath = String(localPath || '').trim()
+
+  if ((window as any).__TAURI_INTERNALS__ && normalizedLocalPath) {
+    candidates.push({
+      kind: 'local-array-buffer',
+      load: () => readLocalExcelArrayBuffer(normalizedLocalPath),
+    })
+  }
+
+  if (normalizedSrc) {
+    candidates.push({
+      kind: 'url',
+      load: async () => normalizedSrc,
+    })
+  }
+
+  return candidates
 }
 
 const imageSrc = computed(() => {
@@ -161,7 +206,7 @@ const localFilePath = computed(() => {
   const filePath = String(payload.value?.filePath || '').trim()
   if (filePath) return fileUrlToLocalPath(filePath)
   const src = String(payload.value?.src || '').trim()
-  if (/^file:/i.test(src)) return fileUrlToLocalPath(src)
+  if (/^(file|asset):/i.test(src) || /^https?:\/\/asset\.localhost/i.test(src)) return fileUrlToLocalPath(src)
   if (src && !/^(https?|asset|blob|data):/i.test(src)) return fileUrlToLocalPath(src)
   return ''
 })
@@ -234,8 +279,7 @@ function resetVideoState() {
   isVideoMuted.value = false
 }
 
-function destroyExcelPreviewer() {
-  excelPreviewToken += 1
+function disposeExcelPreviewer() {
   if (excelPreviewer?.destroy) {
     try {
       excelPreviewer.destroy()
@@ -249,6 +293,11 @@ function destroyExcelPreviewer() {
   }
 }
 
+function destroyExcelPreviewer() {
+  excelPreviewToken += 1
+  disposeExcelPreviewer()
+}
+
 async function setupExcelPreview() {
   const token = ++excelPreviewToken
   const mount = excelPreviewRef.value
@@ -257,30 +306,35 @@ async function setupExcelPreview() {
 
   mount.innerHTML = ''
   const localPath = localFilePath.value
-  let previewSource: ExcelPreviewSource = src
-  let previewSourceKind: 'local-array-buffer' | 'url' = 'url'
+  const previewSourceCandidates = createExcelPreviewSourceCandidates(src, localPath)
+  const previewErrors: Array<{ kind: ExcelPreviewSourceKind; error: unknown }> = []
   try {
-    if ((window as any).__TAURI_INTERNALS__ && localPath) {
-      const files = await invoke<LocalFilePayload[]>('read_local_files', { paths: [localPath] })
-      if (token !== excelPreviewToken) return
-      const dataBase64 = files[0]?.dataBase64 || files[0]?.data_base64 || ''
-      if (!dataBase64) throw new Error('local excel file read returned empty data')
-      previewSource = base64ToArrayBuffer(dataBase64)
-      previewSourceKind = 'local-array-buffer'
-    }
-
     const excelModule = await import('@js-preview/excel') as ExcelPreviewModule
     if (token !== excelPreviewToken) return
     const initPreview = excelModule.init || excelModule.default?.init
     if (!initPreview) throw new Error('excel preview init unavailable')
-    const previewer = initPreview(mount)
-    excelPreviewer = previewer
-    await previewer.preview?.(previewSource)
+
+    for (const candidate of previewSourceCandidates) {
+      try {
+        const previewSource = await candidate.load()
+        if (token !== excelPreviewToken) return
+        disposeExcelPreviewer()
+        const previewer = initPreview(mount)
+        excelPreviewer = previewer
+        await previewer.preview?.(previewSource)
+        if (token !== excelPreviewToken) return
+        return
+      } catch (error) {
+        previewErrors.push({ kind: candidate.kind, error })
+      }
+    }
+
+    throw previewErrors[previewErrors.length - 1]?.error || new Error('excel preview source unavailable')
   } catch (error) {
     if (token !== excelPreviewToken) return
     console.warn('[media-viewer] excel preview failed:', {
       error,
-      previewSourceKind,
+      previewErrors,
       localPath,
       src,
     })
