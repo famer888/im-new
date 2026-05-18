@@ -252,6 +252,11 @@ function isGroupImageMessage(conversationId: string, msgType: number): boolean {
   return String(conversationId || '').startsWith('1_') && Number(msgType) === 1
 }
 
+function isSingleImageMessage(conversationId: string, msgType: number): boolean {
+  const type = Number(msgType)
+  return String(conversationId || '').startsWith('0_') && (type === 1 || type === 9)
+}
+
 function isSingleVideoMessage(conversationId: string, msgType: number): boolean {
   return String(conversationId || '').startsWith('0_') && Number(msgType) === 3
 }
@@ -1103,9 +1108,14 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
 
+    const existingClientPlaceholder = clientMsgId && isSingleImageMessage(conversationId, msgType) && !isFileHelperSend
+      ? getMessages(conversationId).find((m) => m.id === clientMsgId || m.customMsgId === clientMsgId)
+      : undefined
+    const shouldKeepSingleImagePreview = Boolean(existingClientPlaceholder)
+
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
-    // Rust 端 `send_message` 也会返回同结构的一条行，下面 normalizedResult
-    // 用它覆盖占位（会按 customMsgId 精准替换，避免重复）。
+    // 单聊图片在上传前已插入本地占位，这里保留占位，等 send_message 成功后再替换为远端消息，
+    // 避免发送中提前下载/解密远端图片并短暂显示“图片加载失败”。
     const optimisticId = clientMsgId || String(Date.now())
     const optimisticSendTime = Date.now()
     const optimistic: Message = {
@@ -1125,8 +1135,12 @@ export const useMessageStore = defineStore('message', () => {
       deleteSeconds,
       quoteMessage: quoteMsg,
     }
-    appendMessage(conversationId, optimistic)
-    syncConversationSummary(conversationId, optimistic)
+    if (shouldKeepSingleImagePreview) {
+      syncConversationSummary(conversationId, existingClientPlaceholder as Message)
+    } else {
+      appendMessage(conversationId, optimistic)
+      syncConversationSummary(conversationId, optimistic)
+    }
     if (isSingleVideo) {
       singleVideoLog('optimistic appended', {
         optimisticId,
@@ -1636,7 +1650,11 @@ export const useMessageStore = defineStore('message', () => {
       for (const msg of msgs) {
         appendMessage(convId, msg)
       }
-      const latest = msgs[msgs.length - 1]
+      const latest = [...msgs].reverse().find((item) =>
+        !isHiddenMessageType(item.msgType)
+        && !isPendingGroupReqChatMessage(item)
+        && !isRejectedGroupInviteNoticeForNotification(convId, item),
+      )
       if (latest) {
         syncConversationSummary(convId, latest)
       }

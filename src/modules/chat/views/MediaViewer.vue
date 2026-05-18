@@ -40,11 +40,20 @@ let imageOverwriteResolver: ((value: boolean) => void) | null = null
 let excelPreviewer: { destroy?: () => void } | null = null
 let excelPreviewToken = 0
 
+type ExcelPreviewSource = string | ArrayBuffer
+
 type ExcelPreviewModule = {
-  init?: (el: HTMLElement) => { preview?: (src: string) => Promise<void> | void; destroy?: () => void }
+  init?: (el: HTMLElement) => { preview?: (src: ExcelPreviewSource) => Promise<void> | void; destroy?: () => void }
   default?: {
-    init?: (el: HTMLElement) => { preview?: (src: string) => Promise<void> | void; destroy?: () => void }
+    init?: (el: HTMLElement) => { preview?: (src: ExcelPreviewSource) => Promise<void> | void; destroy?: () => void }
   }
+}
+
+interface LocalFilePayload {
+  name?: string
+  mime?: string
+  dataBase64?: string
+  data_base64?: string
 }
 
 function ensureMediaSrc(src: string): string {
@@ -90,6 +99,15 @@ function imageExtFromDataUrl(src: string): string {
   if (mime === 'avif') return '.avif'
   if (mime === 'svg+xml') return '.svg'
   return '.png'
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes.buffer
 }
 
 const imageSrc = computed(() => {
@@ -238,17 +256,34 @@ async function setupExcelPreview() {
   if (!mount || !src || !isExcelFile.value) return
 
   mount.innerHTML = ''
+  const localPath = localFilePath.value
+  let previewSource: ExcelPreviewSource = src
+  let previewSourceKind: 'local-array-buffer' | 'url' = 'url'
   try {
+    if ((window as any).__TAURI_INTERNALS__ && localPath) {
+      const files = await invoke<LocalFilePayload[]>('read_local_files', { paths: [localPath] })
+      if (token !== excelPreviewToken) return
+      const dataBase64 = files[0]?.dataBase64 || files[0]?.data_base64 || ''
+      if (!dataBase64) throw new Error('local excel file read returned empty data')
+      previewSource = base64ToArrayBuffer(dataBase64)
+      previewSourceKind = 'local-array-buffer'
+    }
+
     const excelModule = await import('@js-preview/excel') as ExcelPreviewModule
     if (token !== excelPreviewToken) return
     const initPreview = excelModule.init || excelModule.default?.init
     if (!initPreview) throw new Error('excel preview init unavailable')
     const previewer = initPreview(mount)
     excelPreviewer = previewer
-    await previewer.preview?.(src)
+    await previewer.preview?.(previewSource)
   } catch (error) {
     if (token !== excelPreviewToken) return
-    console.warn('[media-viewer] excel preview failed:', error)
+    console.warn('[media-viewer] excel preview failed:', {
+      error,
+      previewSourceKind,
+      localPath,
+      src,
+    })
     showToast('文件预览失败，请使用默认应用打开', 'error')
   }
 }
@@ -570,6 +605,21 @@ async function openWithDefaultApp() {
   const filePath = String(payload.value?.filePath || '').trim()
   const src = String(payload.value?.src || '').trim()
   let target = filePath || fileUrlToLocalPath(src)
+  if (isFile.value) {
+    target = localFilePath.value
+    if (!target) {
+      showToast('文件路径为空，请重新下载后再试', 'error')
+      return
+    }
+    try {
+      await invoke('open_file', { path: target })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error || '未知错误')
+      console.warn('[media-viewer] open file failed:', error)
+      showToast(`打开文件失败：${detail}`, 'error')
+    }
+    return
+  }
   if (!isVideo.value && filePath && /\.img$/i.test(filePath)) {
     if (/^data:image\//i.test(src)) {
       try {
@@ -871,6 +921,7 @@ onUnmounted(() => {
       <button
         v-if="canOpenWithDefaultApp"
         class="action-btn-text"
+        :class="{ 'action-btn-text-on-light-doc': isFile }"
         type="button"
         @click="openWithDefaultApp"
       >
@@ -1449,22 +1500,21 @@ onUnmounted(() => {
   }
 }
 
-.media-viewer.is-file-mode .action-btn-text {
-  min-height: 32px;
-  padding: 7px 13px;
-  border-radius: 8px;
-  background: #4b5565;
-  color: #fff;
-  font-size: 13px;
-  box-shadow: 0 6px 18px rgba(22, 30, 42, 0.18);
+.action-btn-text.action-btn-text-on-light-doc {
+  background: rgba(35, 51, 73, 0.72);
+  color: #e7eef8;
 
   svg {
-    fill: #fff;
+    fill: #e7eef8;
   }
 
   &:hover {
-    background: #3f4856;
+    background: rgba(35, 51, 73, 0.86);
     color: #fff;
+  }
+
+  &:hover svg {
+    fill: #fff;
   }
 }
 </style>

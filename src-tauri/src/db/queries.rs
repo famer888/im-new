@@ -6,6 +6,10 @@ use super::DbError;
 /// 与前端单聊会话 id 规则一致：`0_{targetId}`；与旧 im/文档「文件传输助手」占位用户 id 对齐
 pub const FILE_HELPER_TARGET_ID: &str = "9901";
 
+pub fn is_hidden_message_type(msg_type: i32) -> bool {
+    matches!(msg_type, 10 | 13 | 14 | 15)
+}
+
 /// 保证本地存在「文件传输助手」会话行（服务端未必下发）
 pub fn ensure_file_helper_conversation(conn: &Connection) -> Result<(), DbError> {
     let now = chrono::Utc::now().timestamp_millis();
@@ -32,32 +36,76 @@ pub fn get_conversations(
                 c.id,
                 c.type,
                 c.target_id,
-                c.last_msg_id,
-                COALESCE(
-                    NULLIF(c.last_msg_time, 0),
-                    (SELECT m.send_time
-                     FROM messages m
-                     WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                     ORDER BY m.send_time DESC
-                     LIMIT 1),
-                    0
-                ) AS last_msg_time,
-                COALESCE(
-                    NULLIF(c.last_msg_digest, ''),
-                    (SELECT m.content
-                     FROM messages m
-                     WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                     ORDER BY m.send_time DESC
-                     LIMIT 1)
-                ) AS last_msg_digest,
+                CASE
+                    WHEN lm.id IS NOT NULL THEN lm.id
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN c.last_msg_id
+                    ELSE NULL
+                END AS last_msg_id,
+                CASE
+                    WHEN lm.id IS NOT NULL THEN lm.send_time
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN COALESCE(NULLIF(c.last_msg_time, 0), 0)
+                    ELSE 0
+                END AS last_msg_time,
+                CASE
+                    WHEN lm.id IS NOT NULL AND (c.last_msg_id = lm.id OR c.last_msg_time = lm.send_time) THEN
+                        COALESCE(NULLIF(c.last_msg_digest, ''), CASE lm.msg_type
+                            WHEN 1 THEN '[图片]'
+                            WHEN 9 THEN '[动画表情]'
+                            WHEN 2 THEN '[语音]'
+                            WHEN 3 THEN '[视频]'
+                            WHEN 5 THEN '[名片]'
+                            WHEN 7 THEN '[文件]'
+                            WHEN 12 THEN '[骰子]'
+                            WHEN 18 THEN '[扑克牌]'
+                            ELSE substr(trim(COALESCE(lm.content, '')), 1, 200)
+                        END)
+                    WHEN lm.id IS NOT NULL THEN CASE lm.msg_type
+                        WHEN 1 THEN '[图片]'
+                        WHEN 9 THEN '[动画表情]'
+                        WHEN 2 THEN '[语音]'
+                        WHEN 3 THEN '[视频]'
+                        WHEN 5 THEN '[名片]'
+                        WHEN 7 THEN '[文件]'
+                        WHEN 12 THEN '[骰子]'
+                        WHEN 18 THEN '[扑克牌]'
+                        ELSE substr(trim(COALESCE(lm.content, '')), 1, 200)
+                    END
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN NULLIF(c.last_msg_digest, '')
+                    ELSE NULL
+                END AS last_msg_digest,
                 c.unread_count,
                 c.is_pinned,
                 c.is_muted,
                 c.is_archived,
                 c.draft,
-                c.updated_at
+                CASE
+                    WHEN lm.id IS NOT NULL THEN lm.send_time
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN c.updated_at
+                    ELSE 0
+                END AS updated_at
              FROM conversations c
-             ORDER BY c.is_pinned DESC, c.updated_at DESC
+             LEFT JOIN messages lm ON lm.rowid = (
+                 SELECT m.rowid
+                 FROM messages m
+                 WHERE m.conversation_id = c.id
+                   AND m.is_deleted = 0
+                   AND m.msg_type NOT IN (10, 13, 14, 15)
+                 ORDER BY m.send_time DESC
+                 LIMIT 1
+             )
+             ORDER BY c.is_pinned DESC, updated_at DESC
              LIMIT ?1 OFFSET ?2",
         )
         .map_err(|e| DbError::SqliteError(e.to_string()))?;
@@ -94,31 +142,75 @@ pub fn get_conversation_by_id(
                 c.id,
                 c.type,
                 c.target_id,
-                c.last_msg_id,
-                COALESCE(
-                    NULLIF(c.last_msg_time, 0),
-                    (SELECT m.send_time
-                     FROM messages m
-                     WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                     ORDER BY m.send_time DESC
-                     LIMIT 1),
-                    0
-                ) AS last_msg_time,
-                COALESCE(
-                    NULLIF(c.last_msg_digest, ''),
-                    (SELECT m.content
-                     FROM messages m
-                     WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                     ORDER BY m.send_time DESC
-                     LIMIT 1)
-                ) AS last_msg_digest,
+                CASE
+                    WHEN lm.id IS NOT NULL THEN lm.id
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN c.last_msg_id
+                    ELSE NULL
+                END AS last_msg_id,
+                CASE
+                    WHEN lm.id IS NOT NULL THEN lm.send_time
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN COALESCE(NULLIF(c.last_msg_time, 0), 0)
+                    ELSE 0
+                END AS last_msg_time,
+                CASE
+                    WHEN lm.id IS NOT NULL AND (c.last_msg_id = lm.id OR c.last_msg_time = lm.send_time) THEN
+                        COALESCE(NULLIF(c.last_msg_digest, ''), CASE lm.msg_type
+                            WHEN 1 THEN '[图片]'
+                            WHEN 9 THEN '[动画表情]'
+                            WHEN 2 THEN '[语音]'
+                            WHEN 3 THEN '[视频]'
+                            WHEN 5 THEN '[名片]'
+                            WHEN 7 THEN '[文件]'
+                            WHEN 12 THEN '[骰子]'
+                            WHEN 18 THEN '[扑克牌]'
+                            ELSE substr(trim(COALESCE(lm.content, '')), 1, 200)
+                        END)
+                    WHEN lm.id IS NOT NULL THEN CASE lm.msg_type
+                        WHEN 1 THEN '[图片]'
+                        WHEN 9 THEN '[动画表情]'
+                        WHEN 2 THEN '[语音]'
+                        WHEN 3 THEN '[视频]'
+                        WHEN 5 THEN '[名片]'
+                        WHEN 7 THEN '[文件]'
+                        WHEN 12 THEN '[骰子]'
+                        WHEN 18 THEN '[扑克牌]'
+                        ELSE substr(trim(COALESCE(lm.content, '')), 1, 200)
+                    END
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN NULLIF(c.last_msg_digest, '')
+                    ELSE NULL
+                END AS last_msg_digest,
                 c.unread_count,
                 c.is_pinned,
                 c.is_muted,
                 c.is_archived,
                 c.draft,
-                c.updated_at
+                CASE
+                    WHEN lm.id IS NOT NULL THEN lm.send_time
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
+                    ) THEN c.updated_at
+                    ELSE 0
+                END AS updated_at
              FROM conversations c
+             LEFT JOIN messages lm ON lm.rowid = (
+                 SELECT m.rowid
+                 FROM messages m
+                 WHERE m.conversation_id = c.id
+                   AND m.is_deleted = 0
+                   AND m.msg_type NOT IN (10, 13, 14, 15)
+                 ORDER BY m.send_time DESC
+                 LIMIT 1
+             )
              WHERE c.id = ?1";
 
     let conv = conn.query_row(sql, params![id], |row| {
@@ -269,37 +361,55 @@ pub fn refresh_conversation_summary(
     conn: &Connection,
     conversation_id: &str,
 ) -> Result<(), DbError> {
-    // 会话摘要始终跟随“最后一条未删除消息”，避免左侧列表残留已销毁内容。
+    // 会话摘要始终跟随“最后一条可见未删除消息”，避免左侧列表被红包/转账等隐藏消息推进。
     conn.execute(
         "UPDATE conversations
          SET last_msg_id = (
                  SELECT m.id
                  FROM messages m
-                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 WHERE m.conversation_id = ?1
+                   AND m.is_deleted = 0
+                   AND m.msg_type NOT IN (10, 13, 14, 15)
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ),
              last_msg_time = COALESCE((
                  SELECT m.send_time
                  FROM messages m
-                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 WHERE m.conversation_id = ?1
+                   AND m.is_deleted = 0
+                   AND m.msg_type NOT IN (10, 13, 14, 15)
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ), 0),
              last_msg_digest = (
-                 SELECT m.content
+                 SELECT CASE m.msg_type
+                     WHEN 1 THEN '[图片]'
+                     WHEN 9 THEN '[动画表情]'
+                     WHEN 2 THEN '[语音]'
+                     WHEN 3 THEN '[视频]'
+                     WHEN 5 THEN '[名片]'
+                     WHEN 7 THEN '[文件]'
+                     WHEN 12 THEN '[骰子]'
+                     WHEN 18 THEN '[扑克牌]'
+                     ELSE substr(trim(COALESCE(m.content, '')), 1, 200)
+                 END
                  FROM messages m
-                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 WHERE m.conversation_id = ?1
+                   AND m.is_deleted = 0
+                   AND m.msg_type NOT IN (10, 13, 14, 15)
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ),
              updated_at = COALESCE((
                  SELECT m.send_time
                  FROM messages m
-                 WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+                 WHERE m.conversation_id = ?1
+                   AND m.is_deleted = 0
+                   AND m.msg_type NOT IN (10, 13, 14, 15)
                  ORDER BY m.send_time DESC
                  LIMIT 1
-             ), updated_at)
+             ), 0)
          WHERE id = ?1",
         params![conversation_id],
     )

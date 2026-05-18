@@ -146,6 +146,10 @@ struct ReadCandidate {
 }
 
 fn message_digest(msg_type: i32, content: Option<&str>) -> String {
+    if queries::is_hidden_message_type(msg_type) {
+        return String::new();
+    }
+
     match msg_type {
         1 => "[图片]".to_string(),
         9 => "[动画表情]".to_string(),
@@ -155,7 +159,6 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
         7 => "[文件]".to_string(),
         12 => "[骰子]".to_string(),
         18 => "[扑克牌]".to_string(),
-        10 | 13 | 14 | 15 => "暂不支持该消息类型".to_string(),
         _ => content
             .unwrap_or_default()
             .trim()
@@ -275,6 +278,9 @@ pub async fn upsert_incoming_messages(
                     )
                     .optional()
                     .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                if queries::is_hidden_message_type(msg.msg_type) {
+                    continue;
+                }
                 if msg.conversation_id == "1_invitation" && msg.msg_type == 8 {
                     if existing_send_time
                         .map(|time| msg.send_time > time)
@@ -301,6 +307,9 @@ pub async fn upsert_incoming_messages(
             queries::batch_insert_messages(conn, &rows)?;
 
             for msg in &rows {
+                if queries::is_hidden_message_type(msg.msg_type) {
+                    continue;
+                }
                 let (conv_type, target_id) =
                     parse_conversation_id(&msg.conversation_id).unwrap_or((0, String::new()));
                 conn.execute(
@@ -348,6 +357,9 @@ pub async fn upsert_incoming_messages(
             let mut seen_conv = HashSet::<String>::new();
             let mut conv_ids_to_emit = Vec::<String>::new();
             for msg in &rows {
+                if queries::is_hidden_message_type(msg.msg_type) {
+                    continue;
+                }
                 if seen_conv.insert(msg.conversation_id.clone()) {
                     conv_ids_to_emit.push(msg.conversation_id.clone());
                 }
@@ -460,7 +472,7 @@ fn normalize_external_timestamp(ts: i64, fallback: i64) -> i64 {
 fn should_count_as_unread(msg: &models::Message, uid: &str) -> bool {
     // 对齐旧 im：阅后即焚配置变更等通知消息是 chatType=51，不进入
     // “未读正文”计数；新项目用 msgType=6/8 承载这类系统提示。
-    msg.sender_id != uid && !matches!(msg.msg_type, 6 | 8)
+    msg.sender_id != uid && !matches!(msg.msg_type, 6 | 8) && !queries::is_hidden_message_type(msg.msg_type)
 }
 
 fn dedupe_incoming_group_notification_rows(rows: Vec<models::Message>) -> Vec<models::Message> {
@@ -772,28 +784,30 @@ pub async fn send_message(
     };
     db.with_connection(&uid, |conn| {
         queries::insert_message(conn, &message)?;
-        conn.execute(
-            "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![&request.conversation_id, conv_type, &target_id, now],
-        )
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        conn.execute(
-            "UPDATE conversations
-             SET last_msg_id = ?1,
-                 last_msg_time = ?2,
-                 last_msg_digest = ?3,
-                 updated_at = ?2
-             WHERE id = ?4
-               AND (last_msg_time IS NULL OR last_msg_time <= ?2)",
-            rusqlite::params![
-                &msg_id,
-                now,
-                message_digest(request.msg_type, Some(&request.content)),
-                &request.conversation_id,
-            ],
-        )
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        if !queries::is_hidden_message_type(request.msg_type) {
+            conn.execute(
+                "INSERT OR IGNORE INTO conversations (id, type, target_id, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![&request.conversation_id, conv_type, &target_id, now],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            conn.execute(
+                "UPDATE conversations
+                 SET last_msg_id = ?1,
+                     last_msg_time = ?2,
+                     last_msg_digest = ?3,
+                     updated_at = ?2
+                 WHERE id = ?4
+                   AND (last_msg_time IS NULL OR last_msg_time <= ?2)",
+                rusqlite::params![
+                    &msg_id,
+                    now,
+                    message_digest(request.msg_type, Some(&request.content)),
+                    &request.conversation_id,
+                ],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        }
         Ok(())
     })
     .map_err(|e| e.to_string())?;
@@ -1929,31 +1943,33 @@ pub async fn mark_message_sent(
             );
         }
 
-        // 同步会话摘要 → 服务端 id / 服务端时间，避免左侧列表继续显示发送前旧摘要。
-        let digest = message_digest(local_msg_type, merged_content.as_deref());
-        conn.execute(
-            "UPDATE conversations
-             SET last_msg_id = ?1,
-                 last_msg_time = CASE WHEN ?2 > 0 THEN ?2 ELSE last_msg_time END,
-                 last_msg_digest = CASE WHEN ?3 <> '' THEN ?3 ELSE last_msg_digest END,
-                 updated_at = CASE WHEN ?2 > 0 THEN ?2 ELSE updated_at END
-             WHERE id = ?4
-               AND (
-                    last_msg_id = ?5
-                    OR last_msg_id = ?1
-                    OR last_msg_time IS NULL
-                    OR ?2 <= 0
-                    OR last_msg_time <= ?2
-               )",
-            rusqlite::params![
-                server_id,
-                next_sent_time,
-                digest,
-                request.conversation_id,
-                request.custom_msg_id,
-            ],
-        )
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        if !queries::is_hidden_message_type(local_msg_type) {
+            // 同步会话摘要 → 服务端 id / 服务端时间，避免左侧列表继续显示发送前旧摘要。
+            let digest = message_digest(local_msg_type, merged_content.as_deref());
+            conn.execute(
+                "UPDATE conversations
+                 SET last_msg_id = ?1,
+                     last_msg_time = CASE WHEN ?2 > 0 THEN ?2 ELSE last_msg_time END,
+                     last_msg_digest = CASE WHEN ?3 <> '' THEN ?3 ELSE last_msg_digest END,
+                     updated_at = CASE WHEN ?2 > 0 THEN ?2 ELSE updated_at END
+                 WHERE id = ?4
+                   AND (
+                        last_msg_id = ?5
+                        OR last_msg_id = ?1
+                        OR last_msg_time IS NULL
+                        OR ?2 <= 0
+                        OR last_msg_time <= ?2
+                   )",
+                rusqlite::params![
+                    server_id,
+                    next_sent_time,
+                    digest,
+                    request.conversation_id,
+                    request.custom_msg_id,
+                ],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        }
         Ok(())
     })
     .map_err(|e| e.to_string())
@@ -2002,7 +2018,7 @@ pub async fn mark_private_message_decrypted(
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-        if changed > 0 {
+        if changed > 0 && !queries::is_hidden_message_type(msg_type) {
             conn.execute(
                 "UPDATE conversations
                  SET last_msg_digest = ?1,
