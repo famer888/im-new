@@ -16,6 +16,20 @@ fn media_window_restore_bounds() -> &'static Mutex<Option<MediaWindowBounds>> {
     MEDIA_WINDOW_RESTORE_BOUNDS.get_or_init(|| Mutex::new(None))
 }
 
+fn media_window_open_position(
+    app: &AppHandle,
+    x: Option<i32>,
+    y: Option<i32>,
+) -> Option<Position> {
+    if let (Some(next_x), Some(next_y)) = (x, y) {
+        return Some(Position::Physical(PhysicalPosition::new(next_x, next_y)));
+    }
+
+    app.get_webview_window("main")
+        .and_then(|window| window.outer_position().ok())
+        .map(Position::Physical)
+}
+
 #[tauri::command]
 pub async fn open_media_window(
     app: AppHandle,
@@ -31,17 +45,19 @@ pub async fn open_media_window(
     let next_height = height.unwrap_or(600).max(1);
     let window_size = Size::Logical(LogicalSize::new(next_width as f64, next_height as f64));
     let min_size = Size::Logical(LogicalSize::new(600.0, 500.0));
+    let next_position = media_window_open_position(&app, x, y);
 
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.set_title(&next_title);
         let _ = window.set_min_size(Some(min_size));
         let _ = window.set_size(window_size);
-        if let (Some(next_x), Some(next_y)) = (x, y) {
-            let _ = window.set_position(Position::Physical(PhysicalPosition::new(next_x, next_y)));
+        if let Some(position) = next_position {
+            let _ = window.set_position(position);
         }
         if let Ok(mut restore_bounds) = media_window_restore_bounds().lock() {
             *restore_bounds = None;
         }
+        let _ = window.set_always_on_top(true);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -54,19 +70,22 @@ pub async fn open_media_window(
         .min_inner_size(600.0, 500.0)
         .decorations(false)
         .transparent(true)
+        .always_on_top(true)
         .visible(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;
     let _ = window.set_size(window_size);
-    if let (Some(next_x), Some(next_y)) = (x, y) {
-        let _ = window.set_position(Position::Physical(PhysicalPosition::new(next_x, next_y)));
+    if let Some(position) = next_position {
+        let _ = window.set_position(position);
     } else {
         let _ = window.center();
     }
     if let Ok(mut restore_bounds) = media_window_restore_bounds().lock() {
         *restore_bounds = None;
     }
+    let _ = window.set_always_on_top(true);
     let _ = window.show();
+    let _ = window.unminimize();
     let _ = window.set_focus();
 
     Ok(())

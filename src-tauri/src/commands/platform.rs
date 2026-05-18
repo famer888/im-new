@@ -1,7 +1,9 @@
 use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
-use std::time::{Duration, Instant};
 use tauri::Emitter;
+
+#[cfg(target_os = "windows")]
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -16,6 +18,7 @@ fn hidden_windows_command(program: &str) -> std::process::Command {
     command
 }
 
+#[cfg(target_os = "windows")]
 fn command_status_with_timeout(
     command: &mut std::process::Command,
     timeout: Duration,
@@ -968,33 +971,16 @@ fn mime_from_path(path: &std::path::Path) -> String {
 
 #[cfg(target_os = "macos")]
 fn write_clipboard_image_macos(bytes: &[u8]) -> Result<(), String> {
-    let path =
-        std::env::temp_dir().join(format!("ocs_clipboard_write_{}.png", uuid::Uuid::new_v4()));
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG};
+    use objc2_foundation::NSData;
 
-    let path_text = path
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    let script = format!(
-        r#"
-set imageFile to POSIX file "{}"
-set the clipboard to (read imageFile as «class PNGf»)
-"#,
-        path_text
-    );
-
-    let mut command = std::process::Command::new("osascript");
-    command.arg("-e").arg(script);
-    let status = command_status_with_timeout(&mut command, Duration::from_secs(6));
-
-    let _ = std::fs::remove_file(&path);
-
-    let status = status?;
-    if status.success() {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let data = NSData::with_bytes(bytes);
+    if pasteboard.setData_forType(Some(&data), unsafe { NSPasteboardTypePNG }) {
         Ok(())
     } else {
-        Err(format!("osascript failed with status: {}", status))
+        Err("failed to write PNG data to pasteboard".to_string())
     }
 }
 

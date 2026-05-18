@@ -6,6 +6,7 @@ import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
+import { mediaViewerState } from '@/utils/mediaViewerState'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
 import fileImageIcon from '@/assets/images/message/file-image.png'
 import fileVideoIcon from '@/assets/images/message/file-video.png'
@@ -97,6 +98,7 @@ const fileExt = computed(() => {
   const ext = String(fileData.value.ext || fileName.value.split('.').pop() || '').toLowerCase()
   return ext.replace(/^\./, '')
 })
+const isExcelPreviewFile = computed(() => ['xls', 'xlsx'].includes(fileExt.value))
 // 与老 im 的文件气泡保持一致：危险扩展名在消息内直接展示“高危文件”标签。
 const isDangerousFile = computed(() => {
   const explicitFlag = fileData.value.isDangerous ?? fileData.value.is_dangerous ?? extraData.value.isDangerous ?? extraData.value.is_dangerous
@@ -430,6 +432,23 @@ function logFileOpen(
   void payload
 }
 
+async function openExcelPreviewWindow(target: string) {
+  const { invoke } = await import('@tauri-apps/api/core')
+  mediaViewerState.send({
+    title: fileName.value,
+    mediaType: 'file',
+    fileKind: 'excel',
+    src: target,
+    filePath: target,
+    size: Number(fileData.value.size || fileData.value.fileSize || 0) || 0,
+  })
+  await invoke('open_media_window', {
+    title: fileName.value,
+    width: 900,
+    height: 600,
+  })
+}
+
 async function handleOpenInBrowser() {
   if (isOpening.value) return
   if (!(window as any).__TAURI_INTERNALS__) return
@@ -514,6 +533,21 @@ async function handleOpenInBrowser() {
         eventBus.emit('show-toast', { message: '高危文件已隔离，不支持直接打开', type: 'error' })
         return
       }
+    }
+
+    if (isExcelPreviewFile.value) {
+      logFileOpen('warn', 'invoke excel media preview', {
+        target,
+        targetInfo: describeBrowserTarget(target),
+        source: targetMatch?.label || null,
+      })
+      await openExcelPreviewWindow(target)
+      logFileOpen('info', 'excel media preview success', {
+        target,
+        targetInfo: describeBrowserTarget(target),
+        source: targetMatch?.label || null,
+      })
+      return
     }
 
     logFileOpen('warn', 'invoke open_in_browser', {
