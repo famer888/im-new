@@ -40,26 +40,27 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       :class="['channel-item', { active: chatStore.currentConversation?.type === 2 && chatStore.currentConversation?.targetId === ch.id }]"
       @click="handleSelect(ch)"
     >
-      <TextAvatar
-        v-if="!ch.avatar"
-        class="textAvatar"
-        :id="ch.channelId || ch.id"
-        :name="ch.channelName || ch.name || ch.id"
-        avatar-type="text"
-        :color="ch.logoColor || undefined"
-        :size="35"
-        rounded
-      />
-      <TextAvatar
-        v-else
-        :id="ch.channelId || ch.id"
-        :name="ch.channelName || ch.name || ch.id"
-        :src="ch.avatar"
-        avatar-type="channel"
-        :color="ch.logoColor || undefined"
-        :size="35"
-        rounded
-      />
+      <div class="channel-avatar">
+        <TextAvatar
+          v-if="!ch.avatar"
+          :id="ch.channelId || ch.id"
+          :name="ch.channelName || ch.name || ch.id"
+          avatar-type="text"
+          :color="ch.logoColor || undefined"
+          :size="35"
+          rounded
+        />
+        <TextAvatar
+          v-else
+          :id="ch.channelId || ch.id"
+          :name="ch.channelName || ch.name || ch.id"
+          :src="ch.avatar"
+          avatar-type="channel"
+          :color="ch.logoColor || undefined"
+          :size="35"
+          rounded
+        />
+      </div>
       <h3 class="channel-name">{{ (ch.channelName || ch.name || ch.id || '').replaceAll('🪵', '?') }}</h3>
     </div>
   </div>
@@ -96,8 +97,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   position: relative;
   padding: 0 16px 0 63px;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: center;
   width: 100%;
   background-color: #fcfcfc;
   height: 59px;
@@ -108,11 +108,16 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   &.active { background: #efefef; }
 }
 
-.textAvatar {
+.channel-avatar {
   position: absolute;
   left: 16px;
   top: 50%;
   transform: translateY(-50%);
+  width: 35px;
+  height: 35px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .channel-name {
