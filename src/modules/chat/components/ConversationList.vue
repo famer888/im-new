@@ -30,6 +30,7 @@ import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 import channelNotificationIcon from '@/assets/images/logo/channel-notice.webp'
+import channelFeatureIcon from '@/assets/images/channel/feature.png'
 
 const { t, locale } = useI18n()
 const chatStore = useChatStore()
@@ -851,7 +852,15 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 
         <div class="conv-body">
           <div class="conv-row-top">
-            <h3 class="conv-name">{{ getName(conv) }}</h3>
+            <h3 class="conv-name">
+              <img
+                v-if="conv.type === ConversationType.Channel"
+                class="channel-feature"
+                :src="channelFeatureIcon"
+                alt=""
+              />
+              <span class="conv-name-text">{{ getName(conv) }}</span>
+            </h3>
             <span class="conv-time">{{ formatTime(conv.lastMsgTime) }}</span>
           </div>
           <div class="conv-row-bottom">
@@ -1061,6 +1070,8 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 }
 
 .conv-name {
+  display: flex;
+  align-items: center;
   font-size: 14px;
   color: #333;
   font-weight: normal;
@@ -1071,6 +1082,20 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   min-width: 0;
   max-width: 120px;
   line-height: 18px;
+}
+
+.conv-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-feature {
+  width: 14px;
+  height: 16px;
+  margin-right: 4px;
+  flex-shrink: 0;
 }
 
 .conv-time {
