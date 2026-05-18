@@ -1,3 +1,4 @@
+use md5::{Digest, Md5};
 use prost::Message as _;
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager};
@@ -82,6 +83,33 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Ok(obj) => obj.content,
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
+    }
+}
+
+fn content_md5_matches(plain: &[u8], expected: &str) -> bool {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return true;
+    }
+    let mut hasher = Md5::new();
+    hasher.update(plain);
+    format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected)
+}
+
+fn validate_plain_content(msg_type: i32, plain: &[u8], content_md5: &str) -> bool {
+    if !content_md5_matches(plain, content_md5) {
+        return false;
+    }
+    match msg_type {
+        1 => imweb::ImageObj::decode(plain).is_ok(),
+        2 => imweb::AudioObj::decode(plain).is_ok(),
+        3 => imweb::VideoObj::decode(plain).is_ok(),
+        5 => imweb::NameCardObj::decode(plain).is_ok(),
+        7 => imweb::FileObj::decode(plain).is_ok(),
+        9 => imweb::DynamicImageObj::decode(plain).is_ok(),
+        12 => imweb::SetImageObj::decode(plain).is_ok(),
+        18 => imweb::AnimatedGameObj::decode(plain).is_ok(),
+        _ => imweb::TextObj::decode(plain).is_ok(),
     }
 }
 
@@ -206,6 +234,42 @@ fn has_dice_result_message(messages: &[DecodedMessage]) -> bool {
         (msg.msg_type == 12 && dice_result_from_content(&msg.content).is_some())
             || (msg.msg_type == 18 && !msg.content.trim().is_empty())
     })
+}
+
+#[cfg(test)]
+mod private_decode_tests {
+    use super::*;
+
+    fn md5_hex(bytes: &[u8]) -> String {
+        let mut hasher = Md5::new();
+        hasher.update(bytes);
+        format!("{:x}", hasher.finalize())
+    }
+
+    #[test]
+    fn private_text_plain_requires_text_obj() {
+        let plain = imweb::TextObj {
+            content: "hello".to_string(),
+            r#ref: None,
+        }
+        .encode_to_vec();
+        assert!(validate_plain_content(0, &plain, &md5_hex(&plain)));
+        assert!(!validate_plain_content(0, b"hello", &md5_hex(b"hello")));
+    }
+
+    #[test]
+    fn private_plain_rejects_md5_mismatch() {
+        let plain = imweb::TextObj {
+            content: "hello".to_string(),
+            r#ref: None,
+        }
+        .encode_to_vec();
+        assert!(!validate_plain_content(
+            0,
+            &plain,
+            "00000000000000000000000000000000"
+        ));
+    }
 }
 
 fn decrypt_group_attachment_key(
@@ -1165,20 +1229,14 @@ impl MessageBatcher {
         let conversation_id = format!("0_{}", peer_id);
         let ver = i64::from(om.version);
 
-        let candidate_ids = if is_self {
-            vec![sender_id.clone(), receiver_id.clone()]
-        } else if sender_id == receiver_id {
-            vec![sender_id.clone()]
-        } else {
-            vec![sender_id.clone(), receiver_id.clone()]
-        };
+        let candidate_ids = vec![sender_id.clone()];
         let mut ciphertexts_to_try = Vec::new();
         let sender_source = if om.source == 1 { "web" } else { "app" };
         // 老 im 接收私聊时，解密 key 使用顶层 `version + source`（发送端密钥），
         // 不是 MessageContent.version（接收端对应设备的 keyVersion）。
         // content block 选择也必须按老 im 顺序，避免 AES/PKCS7 误命中后展示乱码。
         macro_rules! push_content {
-            ($content:expr, $source:expr) => {{
+            ($content:expr) => {{
                 let content = $content;
                 let attachment_key = if content.attachment_key.trim().is_empty() {
                     om.attachment_key.as_str()
@@ -1191,27 +1249,17 @@ impl MessageBatcher {
                     content.content.as_slice(),
                     attachment_key,
                 ));
-                ciphertexts_to_try.push((
-                    content.version as i64,
-                    $source,
-                    content.content.as_slice(),
-                    attachment_key,
-                ));
             }};
         }
         if is_self {
-            if let Some(mapp) = &om.myself_app_content {
-                push_content!(mapp, "app");
-            }
             if let Some(mweb) = &om.myself_web_content {
-                push_content!(mweb, "web");
+                push_content!(mweb);
+            } else if let Some(mapp) = &om.myself_app_content {
+                push_content!(mapp);
             }
         } else {
             if let Some(web) = &om.web_content {
-                push_content!(web, "web");
-            }
-            if let Some(app) = &om.app_content {
-                push_content!(app, "app");
+                push_content!(web);
             }
         }
         // Fallback for old/unencrypted messages that might still use `content`
@@ -1219,18 +1267,6 @@ impl MessageBatcher {
             ciphertexts_to_try.push((
                 ver,
                 sender_source,
-                om.content.as_slice(),
-                om.attachment_key.as_str(),
-            ));
-            ciphertexts_to_try.push((
-                ver,
-                "web",
-                om.content.as_slice(),
-                om.attachment_key.as_str(),
-            ));
-            ciphertexts_to_try.push((
-                ver,
-                "app",
                 om.content.as_slice(),
                 om.attachment_key.as_str(),
             ));
@@ -1326,16 +1362,15 @@ impl MessageBatcher {
                     continue;
                 }
 
-                decrypted = crypto
-                    .decrypt_friend_message(fid, *v, source, cipher)
-                    .or_else(|_| {
-                        let k = crypto
-                            .get_latest_friend_key(fid, source)
-                            .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-                        crate::crypto::aes::decrypt_message(cipher, &k)
-                    });
+                decrypted = crypto.decrypt_friend_message(fid, *v, source, cipher);
 
-                if decrypted.is_ok() {
+                if let Ok(plain) = &decrypted {
+                    if !validate_plain_content(om.msg_type, plain, &om.content_md5) {
+                        decrypted = Err(crate::crypto::CryptoError::AesError(
+                            "decrypted private content failed validation".to_string(),
+                        ));
+                        continue;
+                    }
                     selected_attachment_key = (*attachment_key).to_string();
                     selected_file_key =
                         decrypt_friend_attachment_key(&crypto, fid, *v, source, attachment_key)
@@ -1364,8 +1399,16 @@ impl MessageBatcher {
                     .first()
                     .map(|(_, _, c, _)| *c)
                     .unwrap_or(om.content.as_slice());
+                let allow_plain_fallback = ver == 0 || ciphertexts_to_try.is_empty();
 
-                if om.msg_type == 1 {
+                if !allow_plain_fallback {
+                    decrypt_pending = true;
+                    warn!(
+                        "PRIVATE_MSG_RECEIVED encrypted decrypt failed sender_uid={} msg_id={} err={}",
+                        om.send_uid, om.msg_id, e
+                    );
+                    "[加密消息，等待密钥同步]".to_string()
+                } else if om.msg_type == 1 {
                     match imweb::ImageObj::decode(fallback_cipher) {
                         Ok(obj) => {
                             warn!(
@@ -1515,12 +1558,6 @@ impl MessageBatcher {
                         om.send_uid, om.msg_id, e
                     );
                     obj.content
-                } else if let Ok(s) = String::from_utf8(fallback_cipher.to_vec()) {
-                    warn!(
-                        "PRIVATE_MSG_RECEIVED decrypt failed but raw UTF-8 parsed sender_uid={} msg_id={} err={}",
-                        om.send_uid, om.msg_id, e
-                    );
-                    s
                 } else {
                     decrypt_pending = true;
                     warn!(
@@ -1557,6 +1594,7 @@ impl MessageBatcher {
                 "friendIdCandidates": candidate_ids,
                 "cipherHex": primary_cipher_hex,
                 "cipherCandidates": cipher_candidates,
+                "contentMd5": om.content_md5,
                 "attachmentKey": om.attachment_key,
                 "fileKey": selected_file_key.unwrap_or_default(),
                 "messageContentAttachmentKey": selected_attachment_key,

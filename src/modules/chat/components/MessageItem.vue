@@ -6,7 +6,7 @@ import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
-import { ConversationType, MessageType } from '@/types'
+import { ConversationType, MessageType, isHiddenMessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
@@ -41,6 +41,7 @@ const searchStore = useSearchStore()
 const itemRef = ref<HTMLElement | null>(null)
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isSelected = computed(() => uiStore.selectedMessageIds.has(props.message.id))
+const shouldRenderMessage = computed(() => !isHiddenMessageType(props.message.msgType))
 /** 与 im `getCurrentMsgClass` 里 `active`（搜索定位高亮）一致 */
 const isSearchHighlighted = computed(
   () => searchStore.highlightSearchMessageId === props.message.id,
@@ -247,6 +248,7 @@ onMounted(() => {
 
 <template>
   <div
+    v-if="shouldRenderMessage"
     ref="itemRef"
     v-memo="[
       message.id,

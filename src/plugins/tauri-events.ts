@@ -988,14 +988,6 @@ export async function setupTauriListeners() {
                         Number(candidate.version || 0),
                         String(candidate.source || ''),
                       )
-                      if (senderId === uid && peerId && peerId !== uid) {
-                        await ensureFriendRelKeyForVersion(
-                          uid,
-                          peerId,
-                          Number(candidate.version || 0),
-                          String(candidate.source || ''),
-                        )
-                      }
                     } catch (keyErr) {
                       console.warn('[e2ee] ensureFriendRelKeyForVersion failed', {
                         msgId,
@@ -1013,6 +1005,7 @@ export async function setupTauriListeners() {
                       source: String(candidate.source || ''),
                       ciphertextHex: String(candidate.cipherHex || ''),
                       msgType,
+                      contentMd5: String(extra?.contentMd5 || extra?.content_md5 || ''),
                     })
                     m.content = plain
                     if (m.extra && typeof m.extra === 'object') {
