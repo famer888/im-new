@@ -141,6 +141,8 @@ pub fn run() {
             commands::chat::derive_group_rel_key,
             commands::chat::derive_channel_rel_key,
             commands::chat::derive_friend_rel_key,
+            commands::chat::save_own_curve_key,
+            commands::chat::load_own_curve_key,
             commands::chat::decrypt_private_incoming,
             commands::chat::decrypt_group_incoming,
             commands::chat::decrypt_channel_incoming,

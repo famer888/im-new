@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use md5::{Digest, Md5};
 use prost::Message as _;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -1178,6 +1179,107 @@ pub fn derive_friend_rel_key(
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredOwnCurveKey {
+    pub private_key: String,
+    pub public_key: String,
+    pub key_version: i64,
+}
+
+#[tauri::command]
+pub fn save_own_curve_key(
+    db: State<'_, DbManager>,
+    uid: String,
+    private_key: String,
+    public_key: String,
+    key_version: i64,
+) -> Result<(), String> {
+    if uid.trim().is_empty() {
+        return Err("empty uid".to_string());
+    }
+    if private_key.trim().is_empty() || public_key.trim().is_empty() || key_version <= 0 {
+        return Err("invalid curve key payload".to_string());
+    }
+    db.get_or_create(&uid).map_err(|e| e.to_string())?;
+    db.with_connection(&uid, |conn| {
+        conn.execute(
+            "INSERT INTO key_pairs (target_id, type, public_key, private_key, shared_key, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(target_id) DO UPDATE SET
+                type = excluded.type,
+                public_key = excluded.public_key,
+                private_key = excluded.private_key,
+                shared_key = excluded.shared_key,
+                updated_at = excluded.updated_at",
+            rusqlite::params![
+                "__own_curve_key__",
+                key_version,
+                public_key.trim().to_uppercase(),
+                private_key.trim().to_uppercase(),
+                "",
+                chrono::Utc::now().timestamp_millis(),
+            ],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn load_own_curve_key(
+    db: State<'_, DbManager>,
+    uid: String,
+) -> Result<Option<StoredOwnCurveKey>, String> {
+    if uid.trim().is_empty() {
+        return Ok(None);
+    }
+    db.get_or_create(&uid).map_err(|e| e.to_string())?;
+    db.with_connection(&uid, |conn| {
+        conn.query_row(
+            "SELECT private_key, public_key, type FROM key_pairs WHERE target_id = ?1",
+            rusqlite::params!["__own_curve_key__"],
+            |row| {
+                Ok(StoredOwnCurveKey {
+                    private_key: row.get::<_, String>(0)?.to_uppercase(),
+                    public_key: row.get::<_, String>(1)?.to_uppercase(),
+                    key_version: row.get::<_, i64>(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn content_md5_matches(plain: &[u8], expected: Option<&str>) -> bool {
+    let Some(expected) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let mut hasher = Md5::new();
+    hasher.update(plain);
+    format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected)
+}
+
+fn validate_plain_content(msg_type: i32, plain: &[u8], expected_md5: Option<&str>) -> bool {
+    if !content_md5_matches(plain, expected_md5) {
+        return false;
+    }
+    match msg_type {
+        1 => crate::proto::imweb::ImageObj::decode(plain).is_ok(),
+        2 => crate::proto::imweb::AudioObj::decode(plain).is_ok(),
+        3 => crate::proto::imweb::VideoObj::decode(plain).is_ok(),
+        5 => crate::proto::imweb::NameCardObj::decode(plain).is_ok(),
+        7 => crate::proto::imweb::FileObj::decode(plain).is_ok(),
+        9 => crate::proto::imweb::DynamicImageObj::decode(plain).is_ok(),
+        12 => crate::proto::imweb::SetImageObj::decode(plain).is_ok(),
+        18 => crate::proto::imweb::AnimatedGameObj::decode(plain).is_ok(),
+        _ => crate::proto::imweb::TextObj::decode(plain).is_ok(),
+    }
+}
+
 #[tauri::command]
 pub fn decrypt_private_incoming(
     crypto: State<'_, CryptoEngine>,
@@ -1187,16 +1289,13 @@ pub fn decrypt_private_incoming(
     source: Option<String>,
     ciphertext_hex: String,
     msg_type: Option<i32>,
+    content_md5: Option<String>,
 ) -> Result<String, String> {
     let data =
         hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let ver = version.unwrap_or(1);
-    let mut candidates = vec![sender_id];
-    if let Some(pid) = peer_id {
-        if !pid.is_empty() && !candidates.iter().any(|x| x == &pid) {
-            candidates.push(pid);
-        }
-    }
+    let candidates = vec![sender_id];
+    let _ = peer_id;
     let mut plain: Option<Vec<u8>> = None;
     let mut last_err: Option<String> = None;
     let preferred_source = source
@@ -1204,8 +1303,7 @@ pub fn decrypt_private_incoming(
         .map(str::trim)
         .filter(|s| *s == "web" || *s == "app");
     let source_orders: Vec<Vec<&str>> = if let Some(src) = preferred_source {
-        let alternate = if src == "web" { "app" } else { "web" };
-        vec![vec![src], vec![src, alternate]]
+        vec![vec![src]]
     } else {
         vec![vec!["web", "app"]]
     };
@@ -1213,16 +1311,15 @@ pub fn decrypt_private_incoming(
         for source_order in &source_orders {
             let mut decrypted = Err(crate::crypto::CryptoError::KeyNotFound);
             for src in source_order {
-                decrypted = crypto
-                    .decrypt_friend_message(friend_id, ver, src, &data)
-                    .or_else(|_| {
-                        let key = crypto
-                            .get_latest_friend_key(friend_id, src)
-                            .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-                        crate::crypto::aes::decrypt_message(&data, &key)
-                    });
-                if decrypted.is_ok() {
-                    break;
+                decrypted = crypto.decrypt_friend_message(friend_id, ver, src, &data);
+                if let Ok(bytes) = &decrypted {
+                    if validate_plain_content(msg_type.unwrap_or(0), bytes, content_md5.as_deref())
+                    {
+                        break;
+                    }
+                    decrypted = Err(crate::crypto::CryptoError::AesError(
+                        "decrypted private content failed validation".to_string(),
+                    ));
                 }
             }
             match decrypted {
@@ -1345,7 +1442,8 @@ pub fn decrypt_group_incoming(
                     }
                 }
                 9 => {
-                    if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice()) {
+                    if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice())
+                    {
                         return Ok(serde_json::json!({
                             "url": obj.url,
                             "gif": obj.url,
@@ -1497,7 +1595,8 @@ pub fn decrypt_channel_incoming(
                     }
                 }
                 9 => {
-                    if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice()) {
+                    if let Ok(obj) = crate::proto::imweb::DynamicImageObj::decode(plain.as_slice())
+                    {
                         return Ok(serde_json::json!({
                             "url": obj.url,
                             "gif": obj.url,

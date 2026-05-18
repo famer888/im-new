@@ -60,6 +60,37 @@ function saveOwnKey(uid: string | number, kp: OwnKeyPair) {
   localStorage.setItem(ownKeyStorageKey(uid), JSON.stringify(kp))
 }
 
+async function loadOwnKeyFromStableStore(uid: string | number): Promise<OwnKeyPair | null> {
+  if (!isTauri()) return null
+  try {
+    const kp = await tauriInvoke<OwnKeyPair | null>('load_own_curve_key', { uid: String(uid) })
+    if (!kp?.privateKey || !kp?.publicKey || !kp?.keyVersion) return null
+    return {
+      privateKey: String(kp.privateKey).toUpperCase(),
+      publicKey: String(kp.publicKey).toUpperCase(),
+      keyVersion: Number(kp.keyVersion),
+    }
+  } catch (err) {
+    console.warn('[e2ee] load_own_curve_key failed, fallback localStorage:', err)
+    return null
+  }
+}
+
+async function persistOwnKey(uid: string | number, kp: OwnKeyPair): Promise<void> {
+  saveOwnKey(uid, kp)
+  if (!isTauri()) return
+  try {
+    await tauriInvoke<void>('save_own_curve_key', {
+      uid: String(uid),
+      privateKey: kp.privateKey,
+      publicKey: kp.publicKey,
+      keyVersion: Number(kp.keyVersion || 0),
+    })
+  } catch (err) {
+    console.warn('[e2ee] save_own_curve_key failed:', err)
+  }
+}
+
 /**
  * 确保当前账号自己的 curve25519 keypair 可用，并已经注入 Rust。
  *
@@ -79,8 +110,15 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
   if (!isTauri()) {
     throw new Error('ensureOwnKeyPair: Tauri only')
   }
-  const cached = loadOwnKey(uid)
+  const stableCached = await loadOwnKeyFromStableStore(uid)
+  const localCached = loadOwnKey(uid)
+  const cached = stableCached || localCached
   if (cached) {
+    if (stableCached && !localCached) {
+      saveOwnKey(uid, cached)
+    } else if (!stableCached && localCached) {
+      await persistOwnKey(uid, localCached)
+    }
     e2eeDebugLog('[e2ee] ensureOwnKeyPair: cache hit', {
       uid,
       publicKeyHead: cached.publicKey.slice(0, 16),
@@ -120,7 +158,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           publicKey: fresh.publicKeyHex,
           keyVersion,
         }
-        saveOwnKey(uid, kp)
+        await persistOwnKey(uid, kp)
         await tauriInvoke<void>('set_curve_private_key_hex', {
           privateKeyHex: kp.privateKey,
         })
@@ -229,7 +267,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       publicKey: fresh.publicKeyHex,
       keyVersion,
     }
-    saveOwnKey(uid, kp)
+    await persistOwnKey(uid, kp)
 
     await tauriInvoke<void>('set_curve_private_key_hex', {
       privateKeyHex: kp.privateKey,
@@ -479,15 +517,7 @@ export async function ensureFriendRelKey(
   const fid = String(friendId)
   e2eeDebugLog('[e2ee] ensureFriendRelKey: start', { uid, fid })
   await ensureOwnKeyPair(uid)
-  const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', {
-    friendId: fid,
-    version: 1,
-    source: 'web',
-  })
-  if (cacheHit && !forceRefresh) {
-    e2eeDebugLog('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
-    return ''
-  }
+  void forceRefresh
 
   const existing = pendingFriendKeys.get(fid)
   if (existing) return existing
@@ -542,6 +572,18 @@ export async function ensureFriendRelKey(
         source: 'app',
       })
       e2eeDebugLog('[e2ee] derive_friend_rel_key OK(app)', { fid, len: last.length })
+    }
+
+    const own = loadOwnKey(uid) || await loadOwnKeyFromStableStore(uid)
+    if (own?.publicKey && own?.keyVersion) {
+      last = await tauriInvoke<string>('derive_friend_rel_key', {
+        friendId: String(uid),
+        publicKeyHex: own.publicKey,
+        encryptedMsgKeyHex: '',
+        version: Number(own.keyVersion || 1),
+        source: 'web',
+      })
+      e2eeDebugLog('[e2ee] derive self web rel_key OK(send warmup)', { uid, len: last.length })
     }
     return last
   })().finally(() => {

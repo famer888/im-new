@@ -864,14 +864,6 @@ export const useMessageStore = defineStore('message', () => {
               Number(candidate.version || 0),
               String(candidate.source || ''),
             )
-            if (senderId === uid && peerId && peerId !== uid) {
-              await ensureFriendRelKeyForVersion(
-                uid,
-                peerId,
-                Number(candidate.version || 0),
-                String(candidate.source || ''),
-              )
-            }
           } catch (keyError) {
             console.warn('[e2ee] ensureFriendRelKeyForVersion on loadMessages failed', {
               messageId: message.id,
@@ -890,6 +882,7 @@ export const useMessageStore = defineStore('message', () => {
             source: String(candidate.source || ''),
             ciphertextHex: String(candidate.cipherHex || ''),
             msgType: Number(message.msgType || 0),
+            contentMd5: String(extra.contentMd5 || extra.content_md5 || ''),
           })
 
           const nextExtra = {
