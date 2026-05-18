@@ -1726,6 +1726,15 @@ pub struct MarkMessageSentRequest {
     pub sent_over_time: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkPrivateMessageDecryptedRequest {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub content: String,
+    pub extra: Option<serde_json::Value>,
+}
+
 fn summarize_log_content(content: Option<&str>) -> (usize, String, bool) {
     let raw = content.unwrap_or("");
     let mut head: String = raw.chars().take(120).collect();
@@ -1945,6 +1954,71 @@ pub async fn mark_message_sent(
             ],
         )
         .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn mark_private_message_decrypted(
+    db: State<'_, DbManager>,
+    uid: String,
+    request: MarkPrivateMessageDecryptedRequest,
+) -> Result<(), String> {
+    if uid.trim().is_empty()
+        || request.message_id.trim().is_empty()
+        || request.conversation_id.trim().is_empty()
+    {
+        return Err("invalid decrypted message request".to_string());
+    }
+
+    db.with_connection(&uid, |conn| {
+        let row = conn
+            .query_row(
+                "SELECT msg_type, send_time FROM messages WHERE id = ?1 AND conversation_id = ?2",
+                rusqlite::params![request.message_id, request.conversation_id],
+                |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        let Some((msg_type, send_time)) = row else {
+            return Ok(());
+        };
+
+        let extra_text = request.extra.as_ref().map(serde_json::Value::to_string);
+        let changed = conn
+            .execute(
+                "UPDATE messages
+                 SET content = ?1,
+                     extra = COALESCE(?2, extra)
+                 WHERE id = ?3 AND conversation_id = ?4",
+                rusqlite::params![
+                    request.content,
+                    extra_text.as_deref(),
+                    request.message_id,
+                    request.conversation_id,
+                ],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        if changed > 0 {
+            conn.execute(
+                "UPDATE conversations
+                 SET last_msg_digest = ?1,
+                     updated_at = CASE WHEN last_msg_id = ?2 THEN MAX(updated_at, ?3) ELSE updated_at END
+                 WHERE id = ?4
+                   AND (last_msg_id = ?2 OR last_msg_time IS NULL OR last_msg_time <= ?3)",
+                rusqlite::params![
+                    message_digest(msg_type, Some(&request.content)),
+                    request.message_id,
+                    send_time,
+                    request.conversation_id,
+                ],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        }
+
         Ok(())
     })
     .map_err(|e| e.to_string())

@@ -896,6 +896,21 @@ export const useMessageStore = defineStore('message', () => {
 
           message.content = plain
           message.extra = stringifyExtra(nextExtra)
+          await tauriInvoke('mark_private_message_decrypted', {
+            uid,
+            request: {
+              messageId: message.id,
+              conversationId,
+              content: plain,
+              extra: nextExtra,
+            },
+          }).catch((persistError) => {
+            console.warn('[e2ee] persist decrypted private message failed', {
+              messageId: message.id,
+              conversationId,
+              err: String(persistError),
+            })
+          })
           break
         } catch (error) {
           console.warn('[e2ee] retry decrypt_private on loadMessages failed', {
@@ -912,6 +927,34 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     return messages
+  }
+
+  async function retryDecryptPendingPrivateConversations(uid: string, conversationIds?: string[]) {
+    if (!isTauri() || !uid) return
+    const targets = (conversationIds && conversationIds.length > 0
+      ? conversationIds
+      : Array.from(messageMap.value.keys()))
+      .map((id) => String(id || ''))
+      .filter((id, index, list) => id.startsWith('0_') && list.indexOf(id) === index)
+
+    for (const conversationId of targets) {
+      const current = messageMap.value.get(conversationId)
+      if (!current || current.length === 0) continue
+      const hasPending = current.some((message) => {
+        const extra = parseExtraObject(message.extra)
+        return Boolean(extra?.decryptPending)
+      })
+      if (!hasPending) continue
+
+      const before = current.map((message) => `${message.id}:${message.content}:${message.extra}`).join('\n')
+      await retryDecryptPendingPrivateMessages(uid, current)
+      const after = current.map((message) => `${message.id}:${message.content}:${message.extra}`).join('\n')
+      if (after !== before) {
+        messageMap.value.set(conversationId, [...current])
+        const latest = current[current.length - 1]
+        if (latest) syncConversationSummary(conversationId, latest)
+      }
+    }
   }
 
   async function loadMessages(uid: string, conversationId: string, force = false) {
@@ -1997,6 +2040,7 @@ export const useMessageStore = defineStore('message', () => {
     hasMore,
     loadMessages,
     loadOlderMessages,
+    retryDecryptPendingPrivateConversations,
     sendMessage,
     resendMessage,
     appendMessage,
