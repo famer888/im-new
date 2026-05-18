@@ -7,6 +7,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 import jtIcon from '@/assets/images/headNav/jt-icon.png'
+import channelFeatureIcon from '@/assets/images/channel/feature.png'
 
 const { t } = useI18n()
 const channelStore = useChannelStore()
@@ -61,7 +62,12 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
           rounded
         />
       </div>
-      <h3 class="channel-name">{{ (ch.channelName || ch.name || ch.id || '').replaceAll('🪵', '?') }}</h3>
+      <h3 class="channel-name">
+        <img class="channel-feature" :src="channelFeatureIcon" alt="" />
+        <span class="channel-name-text">
+          {{ (ch.channelName || ch.name || ch.id || '').replaceAll('🪵', '?') }}
+        </span>
+      </h3>
     </div>
   </div>
 </template>
@@ -121,14 +127,27 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
 }
 
 .channel-name {
+  display: flex;
+  align-items: center;
   margin: 0;
   width: 140px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
   font-size: 14px;
   color: #333;
   font-weight: normal;
   line-height: 18px;
+}
+
+.channel-feature {
+  width: 14px;
+  height: 16px;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.channel-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
