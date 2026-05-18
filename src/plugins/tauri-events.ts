@@ -1015,6 +1015,21 @@ export async function setupTauriListeners() {
                         m.extra.fileKey = candidate.attachmentKey
                       }
                     }
+                    await invoke('mark_private_message_decrypted', {
+                      uid,
+                      request: {
+                        messageId: msgId,
+                        conversationId: convId,
+                        content: plain,
+                        extra: m.extra && typeof m.extra === 'object' ? m.extra : null,
+                      },
+                    }).catch((persistErr) => {
+                      console.warn('[e2ee] persist realtime decrypted private failed', {
+                        msgId,
+                        convId,
+                        err: String(persistErr),
+                      })
+                    })
                     privateDecrypted = true
                     break
                   } catch (err) {
@@ -1339,6 +1354,14 @@ export async function setupTauriListeners() {
       const newIncomingMessages = getRealtimeIncomingMessages(appendableNormalized, currentUid)
       const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
       messageStore.batchAppendMessages(appendableNormalized as Message[])
+      const privateConversationIds = Array.from(new Set(
+        appendableNormalized
+          .map((m: any) => String(m?.conversationId ?? m?.conversation_id ?? ''))
+          .filter((convId: string) => convId.startsWith('0_')),
+      ))
+      if (privateConversationIds.length > 0 && authStore.uid) {
+        await messageStore.retryDecryptPendingPrivateConversations(String(authStore.uid), privateConversationIds)
+      }
       if (
         hasGroupNotificationMessages
         || groupEventMessages.some((m: any) => {

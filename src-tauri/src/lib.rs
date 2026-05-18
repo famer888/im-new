@@ -149,6 +149,7 @@ pub fn run() {
             commands::chat::set_curve_private_key_hex,
             commands::chat::generate_curve25519_keypair,
             commands::chat::mark_message_sent,
+            commands::chat::mark_private_message_decrypted,
             commands::chat::upsert_incoming_messages,
             commands::chat::send_group_event_receipt,
             commands::contacts::get_contacts,
