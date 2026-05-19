@@ -93,10 +93,18 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   }
 }
 
+function isConversationMuted(conv: Conversation): boolean {
+  if (conv.isMuted) return true
+  if (conv.type !== ConversationType.Channel) return false
+  const channel = channelStore.getChannel(conv.targetId)
+    || channelStore.channels.find((item) => item.id === conv.targetId || item.channelId === conv.targetId)
+  return Boolean(channel?.isDisturb)
+}
+
 const visibleChatUnread = computed(() =>
   chatStore.conversations
     .filter((conv) =>
-      !conv.isMuted
+      !isConversationMuted(conv)
       && !conv.isArchived
       && !isFileHelperTargetId(conv.targetId)
       && isConversationInCurrentRelations(conv),

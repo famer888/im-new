@@ -2298,28 +2298,10 @@ impl MessageBatcher {
                 .collect(),
         };
 
-        info!(
-            "[channel-read] 4206 decoded channel_id={} receipt_count={} receipts={:?}",
-            evt.channel_id,
-            evt.read_channel_messages.len(),
-            evt.read_channel_messages
-        );
-
         if evt.channel_id > 0 && !evt.read_channel_messages.is_empty() {
             self.app_handle
                 .emit("msg:channel-read-receipt", &evt)
                 .map_err(|e| format!("emit msg:channel-read-receipt: {}", e))?;
-            info!(
-                "[channel-read] 4206 emitted channel_id={} receipt_count={}",
-                evt.channel_id,
-                evt.read_channel_messages.len()
-            );
-        } else {
-            warn!(
-                "[channel-read] 4206 ignored channel_id={} receipt_count={}",
-                evt.channel_id,
-                evt.read_channel_messages.len()
-            );
         }
         Ok(())
     }

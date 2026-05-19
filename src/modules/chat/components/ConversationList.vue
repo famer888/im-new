@@ -784,6 +784,14 @@ function getDigestSegments(conv: Conversation): DigestSegment[] {
   return splitDigestSegments(getDigest(conv))
 }
 
+function isConversationMuted(conv: Conversation): boolean {
+  if (conv.isMuted) return true
+  if (conv.type !== ConversationType.Channel) return false
+  const channel = channelStore.getChannel(conv.targetId)
+    || channelStore.channels.find((item) => item.id === conv.targetId || item.channelId === conv.targetId)
+  return Boolean(channel?.isDisturb)
+}
+
 function handleSelect(conv: Conversation) {
   if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
     chatStore.setCurrentConversation(conv.id)
@@ -814,7 +822,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
     type: 'conversation',
     conversationId: conv.id,
     isPinned: conv.isPinned,
-    isMuted: conv.isMuted,
+    isMuted: isConversationMuted(conv),
     isArchived: conv.isArchived,
   })
 }
@@ -848,7 +856,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           active: conv.id === chatStore.currentConversationId,
           pinned: conv.isPinned && !conv.isArchived,
           'friend-online': showFriendOnlineDot(conv),
-          'has-unread': conv.unreadCount > 0,
+          'has-unread': conv.unreadCount > 0 && !isConversationMuted(conv),
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -893,16 +901,16 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
                 <span v-else>{{ segment.text }}</span>
               </template>
             </span>
-            <span v-if="conv.isMuted" class="muted-icon">
+            <span v-if="isConversationMuted(conv)" class="muted-icon">
               <img :src="mdrIcon" alt="" />
             </span>
           </div>
         </div>
 
-        <span v-if="conv.unreadCount > 0 && !conv.isMuted" class="badge">
+        <span v-if="conv.unreadCount > 0 && !isConversationMuted(conv)" class="badge">
           {{ conv.unreadCount > 99 ? '99+' : conv.unreadCount }}
         </span>
-        <span v-else-if="conv.unreadCount > 0 && conv.isMuted" class="muted-dot" />
+        <span v-else-if="conv.unreadCount > 0 && isConversationMuted(conv)" class="muted-dot" />
 
         <div class="conv-divider" />
       </div>
