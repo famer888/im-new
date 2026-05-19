@@ -102,7 +102,7 @@ const inviteUrlWithChannelId = computed(() => {
 })
 const alias = computed(() => String(detail.value.alias || ''))
 const description = computed(() =>
-  String(detail.value.channelDesc || detail.value.remark || channel.value?.description || ''),
+  String(detail.value.remark ?? detail.value.channelDesc ?? channel.value?.remark ?? channel.value?.description ?? ''),
 )
 const adminPrivacy = computed(() => Number(detail.value.adminPrivacy ?? channel.value?.adminPrivacy ?? 0))
 const channelDisturbed = computed(() =>
@@ -341,14 +341,16 @@ async function handleOk() {
     })
     if (!responseOk(resp)) throw new Error(resp?.msg || 'update channel description failed')
 
-    detail.value = { ...detail.value, channelDesc: editDescDraft.value }
+    detail.value = { ...detail.value, remark: editDescDraft.value, channelDesc: editDescDraft.value }
     writeCache(detailCacheKey(channelId.value), detail.value)
-    channelStore.patchChannel(channelId.value, { description: editDescDraft.value })
+    channelStore.patchChannel(channelId.value, { remark: editDescDraft.value, description: editDescDraft.value })
     editDescDraftCopy.value = editDescDraft.value
     isEditDesc.value = false
     handleClose()
+    showQrToast(t('修改成功'))
   } catch (error) {
     console.warn('[ChannelInfoPanel] save channel description failed:', error)
+    showQrToast(t('修改失败'), 'error')
   }
 }
 
@@ -587,7 +589,7 @@ onBeforeUnmount(() => {
         <h4>{{ t('频道简介') }}</h4>
         <span class="arrow">›</span>
       </div>
-      <p>{{ description || channelName }}</p>
+      <p>{{ description || t('无简介') }}</p>
     </section>
 
     <!-- 编辑频道简介对话框 -->
@@ -944,7 +946,7 @@ onBeforeUnmount(() => {
   right: 0;
   top: 0;
   bottom: 0;
-  z-index: 10;
+  z-index: 10000;
   background: rgba(0, 0, 0, 0.2);
 
   .content {

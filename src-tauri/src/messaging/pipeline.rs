@@ -128,6 +128,53 @@ pub fn send_group_text(
     )
 }
 
+/// 发送一条群简介消息。
+pub fn send_group_notice_message(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    group_id_str: &str,
+    sender_uid_str: &str,
+    content: &str,
+    notice_id: i64,
+    show_notify: bool,
+    send_time: i64,
+    flag: i64,
+) -> Result<(), SendError> {
+    let group_id: i64 = group_id_str
+        .parse()
+        .map_err(|_| SendError::InvalidId(format!("group_id '{}' not numeric", group_id_str)))?;
+    let sender_uid: i64 = sender_uid_str.parse().map_err(|_| {
+        SendError::InvalidId(format!("sender_uid '{}' not numeric", sender_uid_str))
+    })?;
+    let rel_key = crypto
+        .get_group_key(group_id_str)
+        .ok_or_else(|| SendError::MissingGroupKey(group_id_str.to_string()))?;
+
+    let content_plain = super::encode_group_notice_obj(content, notice_id, show_notify);
+    let payload = super::build_send_group_message_req(
+        group_id,
+        sender_uid,
+        8,
+        &content_plain,
+        &rel_key,
+        send_time,
+        flag,
+        Vec::new(),
+        None,
+    )?;
+
+    ws.send_packet(SEND_GROUP_MSG, flag, &payload)?;
+    info!(
+        "sent SEND_GROUP_NOTICE_MSG group_id={} flag={} notice_id={} show_notify={} bytes={}",
+        group_id,
+        flag,
+        notice_id,
+        show_notify,
+        payload.len()
+    );
+    Ok(())
+}
+
 /// 发送一条频道消息（4101）。
 pub fn send_channel_message(
     ws: &WsManager,

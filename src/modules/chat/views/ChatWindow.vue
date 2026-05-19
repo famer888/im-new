@@ -3,16 +3,23 @@ import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useMessageStore } from '@/stores/useMessageStore'
+import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
+import {
+  getGroupIntroNoticePayload,
+  isGroupIntroNoticeMessage,
+  type GroupIntroNoticePayload,
+} from '@/utils/groupIntroNotice'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
+import GroupNoticeDialog from '../components/panels/GroupNoticeDialog.vue'
 import lockIcon from '@/assets/images/message/lock.png'
 import dropFileIcon from '@/assets/images/file/file-icon.png'
+import arrowIcon from '@/assets/images/arrow.svg'
 import { eventBus } from '@/utils/eventBus'
 
 const route = useRoute()
@@ -39,6 +46,15 @@ const friendConversationTargetId = computed(() => currentFriendContact.value?.id
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
 const showReadBurnBackground = computed(() => currentFriendContact.value?.bfReadCancel === true)
+const currentGroupId = computed(() => {
+  const conv = conversation.value
+  if (conv?.type === ConversationType.Group) return conv.targetId
+  return conversationId.value.startsWith('1_') ? conversationId.value.slice(2) : ''
+})
+const isGroupConversation = computed(() => Boolean(currentGroupId.value))
+const groupNoticeDialogVisible = ref(false)
+const groupNoticeDialogHistory = ref<{ notice: string; editorId: string; groupId: string } | null>(null)
+const dismissedGroupNoticeKey = ref('')
 
 /** 进入会话时的未读条数快照，供「未读消息」分隔条（markAsRead 后列表里会变成 0，故单独存） */
 const sessionInitialUnread = ref(0)
@@ -59,6 +75,79 @@ const dropAreaStyle = computed(() => {
   }
 })
 
+const latestGroupIntroNoticeMessage = computed(() => {
+  if (!isGroupConversation.value) return null
+  return messages.value.reduce<Message | null>((latest, message) => {
+    if (!isGroupIntroNoticeMessage(message)) return latest
+    if (!latest || message.sendTime >= latest.sendTime) return message
+    return latest
+  }, null)
+})
+
+const latestGroupIntroNotice = computed<GroupIntroNoticePayload | null>(() => {
+  const message = latestGroupIntroNoticeMessage.value
+  if (!message) return null
+  const payload = getGroupIntroNoticePayload(message)
+  if (!payload.groupId || !payload.notice) return null
+  return payload
+})
+
+const topGroupNoticeVisible = computed(() =>
+  Boolean(
+    isGroupConversation.value
+    && latestGroupIntroNotice.value
+    && latestGroupIntroNotice.value.key !== dismissedGroupNoticeKey.value,
+  ),
+)
+
+function getGroupNoticeAckStorageKey(uid: string, groupId: string): string {
+  return `group-intro-notice-ack:${uid}:${groupId}`
+}
+
+function loadDismissedGroupNoticeKey() {
+  const uid = String(authStore.uid || '')
+  const groupId = currentGroupId.value
+  if (!uid || !groupId) {
+    dismissedGroupNoticeKey.value = ''
+    return
+  }
+  dismissedGroupNoticeKey.value = localStorage.getItem(getGroupNoticeAckStorageKey(uid, groupId)) || ''
+}
+
+function handleCloseTopGroupNotice() {
+  const uid = String(authStore.uid || '')
+  const groupId = currentGroupId.value
+  const payload = latestGroupIntroNotice.value
+  if (!uid || !groupId || !payload) return
+  localStorage.setItem(getGroupNoticeAckStorageKey(uid, groupId), payload.key)
+  dismissedGroupNoticeKey.value = payload.key
+}
+
+function openGroupNotice(payload: GroupIntroNoticePayload) {
+  if (!payload.groupId) return
+  groupNoticeDialogHistory.value = {
+    groupId: payload.groupId,
+    notice: payload.notice,
+    editorId: payload.editorId,
+  }
+  groupNoticeDialogVisible.value = true
+}
+
+function handleOpenTopGroupNotice() {
+  const payload = latestGroupIntroNotice.value
+  if (!payload) return
+  openGroupNotice(payload)
+}
+
+function handleOpenGroupNoticeFromMessage(payload: { message: Message }) {
+  openGroupNotice(getGroupIntroNoticePayload(payload.message))
+}
+
+function handleCloseGroupNoticeDialog() {
+  groupNoticeDialogVisible.value = false
+  groupNoticeDialogHistory.value = null
+}
+
 function captureUnreadSnapshot(convId: string) {
   const conv = chatStore.conversations.find((c) => c.id === convId)
   const n = conv?.unreadCount ?? 0
@@ -78,6 +167,14 @@ watch(
     captureUnreadSnapshot(id)
   },
   { deep: true, immediate: true },
+)
+
+watch(
+  [() => authStore.uid, currentGroupId],
+  () => {
+    loadDismissedGroupNoticeKey()
+  },
+  { immediate: true },
 )
 
 function loadGroupMembersIfNeeded(convId: string) {
@@ -324,6 +421,20 @@ onBeforeUnmount(() => {
         <span class="e2e-text">{{ t('此对话中的信息和通话已经进行端对端加密') }}</span>
       </div>
     </div>
+    <div v-if="topGroupNoticeVisible && latestGroupIntroNotice" class="group-top-notice-dialog">
+      <h2
+        role="button"
+        tabindex="0"
+        @click="handleOpenTopGroupNotice"
+        @keydown.enter.prevent="handleOpenTopGroupNotice"
+        @keydown.space.prevent="handleOpenTopGroupNotice"
+      >
+        <span>{{ t('群简介') }}</span>
+        <img :src="arrowIcon" alt="" />
+      </h2>
+      <p>{{ latestGroupIntroNotice.notice }}</p>
+      <button type="button" @click.stop="handleCloseTopGroupNotice">{{ t('知道了') }}</button>
+    </div>
     <MessageList
       :conversation-id="conversationId"
       :messages="messages"
@@ -333,6 +444,7 @@ onBeforeUnmount(() => {
       :show-read-burn-background="showReadBurnBackground"
       align-top
       @load-more="handleLoadMore"
+      @open-group-notice="handleOpenGroupNoticeFromMessage"
     />
     <MessageInput @send="handleSend" />
     <div
@@ -349,6 +461,14 @@ onBeforeUnmount(() => {
         <span>{{ t('拖入您要发送的文件') }}</span>
       </p>
     </div>
+    <GroupNoticeDialog
+      v-if="groupNoticeDialogVisible && currentGroupId"
+      :visible="groupNoticeDialogVisible"
+      :group-id="groupNoticeDialogHistory?.groupId || currentGroupId"
+      :history-notice="groupNoticeDialogHistory"
+      @close="handleCloseGroupNoticeDialog"
+      @published="handleCloseGroupNoticeDialog"
+    />
   </div>
 </template>
 
@@ -426,5 +546,67 @@ onBeforeUnmount(() => {
 
 .e2e-text {
   text-align: center;
+}
+
+.group-top-notice-dialog {
+  padding: 15px 15px 30px;
+  box-sizing: border-box;
+  position: absolute;
+  width: 95%;
+  top: 85px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #fff;
+  border-radius: 10px;
+  z-index: 10;
+  box-shadow: 0 0 10px #eee;
+
+  > h2 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    margin: 0;
+    font-size: 14px;
+    cursor: pointer;
+    outline: none;
+
+    > img {
+      display: block;
+      height: 12px;
+      width: 12px;
+      transform: rotate(-90deg);
+      cursor: pointer;
+    }
+  }
+
+  > p {
+    margin: 5px 0 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    line-height: 20px;
+    max-height: 190px;
+    color: #666;
+    font-size: 12px;
+  }
+
+  > button {
+    color: #3369fe;
+    position: absolute;
+    right: 15px;
+    font-size: 12px;
+    bottom: 8px;
+    cursor: pointer;
+    user-select: none;
+    border: 0;
+    background: transparent;
+    padding: 0;
+
+    &:hover {
+      opacity: 0.8;
+    }
+  }
 }
 </style>

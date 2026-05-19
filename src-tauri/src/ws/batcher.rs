@@ -52,6 +52,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Ok(obj) => name_card_obj_to_legacy_content(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
+        8 => match imweb::GroupNoticeObj::decode(plain) {
+            Ok(obj) => obj.content,
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
         12 => match imweb::SetImageObj::decode(plain) {
             Ok(obj) => {
                 let content = set_image_obj_to_legacy_content(obj);
@@ -106,11 +110,21 @@ fn validate_plain_content(msg_type: i32, plain: &[u8], content_md5: &str) -> boo
         3 => imweb::VideoObj::decode(plain).is_ok(),
         5 => imweb::NameCardObj::decode(plain).is_ok(),
         7 => imweb::FileObj::decode(plain).is_ok(),
+        8 => imweb::GroupNoticeObj::decode(plain).is_ok(),
         9 => imweb::DynamicImageObj::decode(plain).is_ok(),
         12 => imweb::SetImageObj::decode(plain).is_ok(),
         18 => imweb::AnimatedGameObj::decode(plain).is_ok(),
         _ => imweb::TextObj::decode(plain).is_ok(),
     }
+}
+
+fn group_notice_meta_from_plain(msg_type: i32, plain: &[u8]) -> Option<(i64, bool)> {
+    if msg_type != 8 {
+        return None;
+    }
+    imweb::GroupNoticeObj::decode(plain)
+        .ok()
+        .map(|obj| (obj.notice_id, obj.show_notify))
 }
 
 fn image_obj_to_json(obj: imweb::ImageObj) -> String {
@@ -852,10 +866,14 @@ impl MessageBatcher {
             // 再走一次 `decrypt_group_incoming` 重试，从而彻底消除"表情/文本首
             // 条消息在 key warmup 之前到达时被永久卡住在 [加密消息，等待密钥
             // 同步]"的现象。
-            let (content, decrypt_pending) = match crypto
+            let (content, decrypt_pending, group_notice_meta) = match crypto
                 .decrypt_group_message(&group_id_s, &gm.content)
             {
-                Ok(plain) => (decode_content_obj(gm.msg_type, plain.as_slice()), false),
+                Ok(plain) => (
+                    decode_content_obj(gm.msg_type, plain.as_slice()),
+                    false,
+                    group_notice_meta_from_plain(gm.msg_type, plain.as_slice()),
+                ),
                 Err(e) => {
                     // 兼容老客户端发来的明文消息（例如版本=0 或骰子/扑克等未加密类型）
                     if gm.msg_type == 7 && imweb::FileObj::decode(gm.content.as_slice()).is_ok() {
@@ -866,13 +884,26 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
+                        )
+                    } else if gm.msg_type == 8
+                        && imweb::GroupNoticeObj::decode(gm.content.as_slice()).is_ok()
+                    {
+                        warn!(
+                                "GROUP_MSG_RECEIVED decrypt failed but raw GroupNoticeObj parsed group_id={} msg_id={} msg_type={} err={}",
+                                group_id, gm.msg_id, gm.msg_type, e
+                            );
+                        (
+                            decode_content_obj(gm.msg_type, gm.content.as_slice()),
+                            false,
+                            group_notice_meta_from_plain(gm.msg_type, gm.content.as_slice()),
                         )
                     } else if let Ok(obj) = imweb::TextObj::decode(gm.content.as_slice()) {
                         warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw TextObj parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                        (obj.content, false)
+                        (obj.content, false, None)
                     } else if gm.msg_type == 1
                         && imweb::ImageObj::decode(gm.content.as_slice()).is_ok()
                     {
@@ -883,6 +914,7 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if gm.msg_type == 9
                         && imweb::DynamicImageObj::decode(gm.content.as_slice()).is_ok()
@@ -894,6 +926,7 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if gm.msg_type == 2
                         && imweb::AudioObj::decode(gm.content.as_slice()).is_ok()
@@ -905,6 +938,7 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if gm.msg_type == 3
                         && imweb::VideoObj::decode(gm.content.as_slice()).is_ok()
@@ -916,6 +950,7 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if gm.msg_type == 5
                         && imweb::NameCardObj::decode(gm.content.as_slice()).is_ok()
@@ -927,6 +962,7 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if gm.msg_type == 12
                         && imweb::SetImageObj::decode(gm.content.as_slice()).is_ok()
@@ -938,6 +974,7 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if gm.msg_type == 18
                         && imweb::AnimatedGameObj::decode(gm.content.as_slice()).is_ok()
@@ -949,13 +986,14 @@ impl MessageBatcher {
                         (
                             decode_content_obj(gm.msg_type, gm.content.as_slice()),
                             false,
+                            None,
                         )
                     } else if let Ok(s) = String::from_utf8(gm.content.clone()) {
                         warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed but raw UTF-8 parsed group_id={} msg_id={} msg_type={} err={}",
                                 group_id, gm.msg_id, gm.msg_type, e
                             );
-                        (s, false)
+                        (s, false, None)
                     } else {
                         warn!(
                                 "GROUP_MSG_RECEIVED decrypt failed group_id={} msg_id={} msg_type={} cipher_len={} version={} key_cached={} err={}",
@@ -967,7 +1005,7 @@ impl MessageBatcher {
                                 key_cached,
                                 e
                             );
-                        ("[加密消息，等待密钥同步]".to_string(), true)
+                        ("[加密消息，等待密钥同步]".to_string(), true, None)
                     }
                 }
             };
@@ -994,6 +1032,26 @@ impl MessageBatcher {
                     gm.attachment_key.chars().take(24).collect::<String>(),
                 );
             }
+            let mut extra = serde_json::json!({
+                "groupId": group_id,
+                "version": gm.version,
+                "contentMd5": gm.content_md5,
+                "snapchatTime": gm.snapchat_time,
+                "deleteSeconds": if gm.snapchat_time > 0 { i64::from(gm.snapchat_time) * 1000 } else { 0 },
+                "decryptPending": decrypt_pending,
+                "cipherHex": hex::encode(&gm.content),
+                "attachmentKey": gm.attachment_key,
+                "fileKey": file_key,
+            });
+            if let Some((notice_id, show_notify)) = group_notice_meta {
+                if let Some(map) = extra.as_object_mut() {
+                    map.insert("noticeId".to_string(), serde_json::Value::from(notice_id));
+                    map.insert("showNotify".to_string(), serde_json::Value::from(show_notify));
+                    map.insert("bfAll".to_string(), serde_json::Value::from(show_notify));
+                    map.insert("isHide".to_string(), serde_json::Value::from(!show_notify));
+                }
+            }
+
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_MSG_RECEIVED,
                 msg_id: gm.msg_id.to_string(),
@@ -1004,17 +1062,7 @@ impl MessageBatcher {
                 send_time: gm.send_time,
                 status: 1,
                 read_status: 0,
-                extra: serde_json::json!({
-                    "groupId": group_id,
-                    "version": gm.version,
-                    "contentMd5": gm.content_md5,
-                    "snapchatTime": gm.snapchat_time,
-                    "deleteSeconds": if gm.snapchat_time > 0 { i64::from(gm.snapchat_time) * 1000 } else { 0 },
-                    "decryptPending": decrypt_pending,
-                    "cipherHex": hex::encode(&gm.content),
-                    "attachmentKey": gm.attachment_key,
-                    "fileKey": file_key,
-                }),
+                extra,
             });
         }
         Ok(out)

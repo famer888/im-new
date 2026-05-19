@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
 import { parseGroupNoticeExtraObject } from '@/utils/groupNoticeDisplay'
+import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import { isHiddenMessageType } from '@/types'
 import MessageItem from './MessageItem.vue'
 import readBurnBackUrl from '@/assets/images/chat/read-burn-back.png'
@@ -27,6 +28,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'load-more'): void
+  (e: 'open-group-notice', payload: { message: Message }): void
 }>()
 
 const { t, locale } = useI18n()
@@ -71,6 +73,13 @@ function isSelfLeaveGroupSystemMessage(conversationId: string | undefined, messa
   })
 }
 
+/** 群简介未勾选「通知所有成员」时，旧 im 会更新简介但不在聊天时间线展示。 */
+function isHiddenGroupNoticeMessage(message: Message): boolean {
+  if (!isGroupIntroNoticeMessage(message)) return false
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  return Boolean(extra?.isHide)
+}
+
 const containerRef = ref<HTMLElement | null>(null)
 const floatDateRef = ref<HTMLElement | null>(null)
 
@@ -80,6 +89,7 @@ const sortedMessages = computed(() =>
     .filter((message) => !isHiddenMessageType(message.msgType))
     .filter((message) => !isLegacyGroupInviteRejectionInGroupChat(props.conversationId, message))
     .filter((message) => !isSelfLeaveGroupSystemMessage(props.conversationId, message))
+    .filter((message) => !isHiddenGroupNoticeMessage(message))
     .slice()
     .sort((a, b) => a.sendTime - b.sendTime),
 )
@@ -607,6 +617,7 @@ function onUnreadBannerClick() {
               :message="row.entry.message"
               :date-banner-text="row.entry.showTime ? row.entry.showTimeDay : null"
               @resize="(h: number) => handleItemResize(row.entry.message.id, h)"
+              @open-group-notice="emit('open-group-notice', $event)"
             />
           </div>
         </template>

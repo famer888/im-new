@@ -168,6 +168,29 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
     }
 }
 
+fn json_i64(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        })
+    })
+}
+
+fn json_bool(value: &serde_json::Value, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|v| {
+            v.as_bool().or_else(|| {
+                v.as_str().and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                })
+            })
+        })
+    })
+}
+
 fn dice_result_from_content(content: Option<&str>) -> Option<i32> {
     let raw = content?.trim();
     if raw.is_empty() {
@@ -763,6 +786,9 @@ pub async fn send_message(
             .or_insert(serde_json::Value::from(i64::from(snapchat_time) * 1000));
         extra_value = serde_json::Value::Object(map);
     }
+    let group_notice_id = json_i64(&extra_value, &["noticeId", "notice_id"]).unwrap_or_default();
+    let group_notice_show_notify =
+        json_bool(&extra_value, &["showNotify", "show_notify", "bfAll"]).unwrap_or(false);
     let extra_json = match extra_value {
         serde_json::Value::Null => None,
         value => Some(value.to_string()),
@@ -903,6 +929,34 @@ pub async fn send_message(
                     request.conversation_id, e
                 );
                 return mark_failed_and_return(e.to_string());
+            }
+        }
+        (1, 8) => {
+            if let Err(e) = pipeline::send_group_notice_message(
+                &ws_mgr,
+                &crypto,
+                &target_id,
+                &uid,
+                &request.content,
+                group_notice_id,
+                group_notice_show_notify,
+                now,
+                client_flag,
+            ) {
+                error!(
+                    "send_group_notice_message failed conversation={} err={}",
+                    request.conversation_id, e
+                );
+                let failed_id = msg_id.clone();
+                let _ = db.with_connection(&uid, |conn| {
+                    conn.execute(
+                        "UPDATE messages SET status = -1 WHERE id = ?1",
+                        rusqlite::params![failed_id],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    Ok(())
+                });
+                return Err(e.to_string());
             }
         }
         (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 9) | (1, 12) | (1, 18) => {
@@ -1319,6 +1373,7 @@ fn validate_plain_content(msg_type: i32, plain: &[u8], expected_md5: Option<&str
         3 => crate::proto::imweb::VideoObj::decode(plain).is_ok(),
         5 => crate::proto::imweb::NameCardObj::decode(plain).is_ok(),
         7 => crate::proto::imweb::FileObj::decode(plain).is_ok(),
+        8 => crate::proto::imweb::GroupNoticeObj::decode(plain).is_ok(),
         9 => crate::proto::imweb::DynamicImageObj::decode(plain).is_ok(),
         12 => crate::proto::imweb::SetImageObj::decode(plain).is_ok(),
         18 => crate::proto::imweb::AnimatedGameObj::decode(plain).is_ok(),
@@ -1578,6 +1633,12 @@ pub fn decrypt_group_incoming(
                 5 => {
                     if let Ok(obj) = crate::proto::imweb::NameCardObj::decode(plain.as_slice()) {
                         return Ok(name_card_obj_to_legacy_content(obj));
+                    }
+                }
+                8 => {
+                    if let Ok(obj) = crate::proto::imweb::GroupNoticeObj::decode(plain.as_slice())
+                    {
+                        return Ok(obj.content);
                     }
                 }
                 _ => {}

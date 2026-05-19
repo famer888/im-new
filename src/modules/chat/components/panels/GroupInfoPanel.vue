@@ -297,6 +297,14 @@ function openGroupNotice() {
   noticeVisible.value = true
 }
 
+function handleNoticePublished(payload: { groupId: string; notice: string }) {
+  if (!conv.value || payload.groupId !== conv.value.targetId) return
+  notice.value = payload.notice
+  if (group.value) {
+    group.value.notice = payload.notice
+  }
+}
+
 async function togglePin() {
   if (!conv.value) return
   await chatStore.pinConversation(authStore.uid, conv.value.id, !conv.value.isPinned)
@@ -682,6 +690,7 @@ function handleOnlineTime(member: any) {
       :visible="noticeVisible"
       :group-id="conv.targetId"
       @close="noticeVisible = false"
+      @published="handleNoticePublished"
     />
     
     <RemoveMemberDialog

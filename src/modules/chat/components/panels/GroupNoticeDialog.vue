@@ -1,35 +1,41 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useMessageStore } from '@/stores/useMessageStore'
 import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
 import AppSwitch from '@/components/AppSwitch.vue'
 import Toast from '@/components/Toast.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import { getGroupDetail } from '@/api/imBase'
+import { getGroupDetail, groupUpdate } from '@/api/imBase'
 
 const { t: $t } = useI18n()
 const chatStore = useChatStore()
 const groupStore = useGroupStore()
 const authStore = useAuthStore()
+const messageStore = useMessageStore()
 
 const props = defineProps<{
   visible: boolean
   groupId: string
+  historyNotice?: { notice: string; editorId?: string | number; groupId?: string } | null
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'published', payload: { groupId: string; notice: string; noticeId: string; bfAll: boolean }): void
 }>()
 
 const conv = computed(() => chatStore.currentConversation)
 const group = computed(() => props.groupId ? groupStore.getGroup(props.groupId) : undefined)
 
 const noticeText = ref('')
+const loadedLatestNotice = ref('')
 const isEdit = ref(false)
 const bfAll = ref(false)
+const submitting = ref(false)
 const loginIsHost = ref(false)
 const editUser = ref<any>(null)
 const memberType = ref(-1)
@@ -42,6 +48,7 @@ const confirmVisible = ref(false)
 const confirmTitle = ref('')
 const confirmContent = ref('')
 const confirmAction = ref<(() => void) | null>(null)
+let loadSeq = 0
 
 function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = msg
@@ -70,13 +77,34 @@ const displayUserLabel = computed(() => {
   if (displayUserType.value === 1) return '管理员'
   return ''
 })
+const isHistoryView = computed(() => Boolean(props.historyNotice))
 
-onMounted(async () => {
-  if (!props.groupId) return
+function findMemberById(userId: string) {
+  if (!userId) return null
+  return groupStore.getMembers(props.groupId).find(m => String(m.userId) === userId) ?? null
+}
+
+function applyHistoryNoticeEditor() {
+  const editorId = String(props.historyNotice?.editorId || '').trim()
+  const member = findMemberById(editorId)
+  if (member) {
+    editUser.value = member
+    return
+  }
+  if (editorId) {
+    editUser.value = { userId: editorId, nickname: editorId, role: -1 }
+  }
+}
+
+async function loadNoticeDetail() {
+  if (!props.groupId || !props.visible) return
+  const seq = ++loadSeq
   try {
     const detail = await getGroupDetail({ groupId: props.groupId })
+    if (seq !== loadSeq) return
     memberType.value = detail.memberType ?? 2
-    noticeText.value = detail.groupNotice?.notice || ''
+    loadedLatestNotice.value = detail.groupNotice?.notice ?? ''
+    noticeText.value = props.historyNotice?.notice ?? loadedLatestNotice.value
     
     // 判断是否有编辑权限 (群主或管理员)
     loginIsHost.value = memberType.value === 0 || memberType.value === 1
@@ -95,10 +123,23 @@ onMounted(async () => {
         editUser.value = owner
       }
     }
+    if (props.historyNotice) {
+      applyHistoryNoticeEditor()
+    }
+    isEdit.value = false
+    bfAll.value = false
   } catch (e) {
     console.error('get group detail failed:', e)
   }
-})
+}
+
+watch(
+  () => [props.visible, props.groupId, props.historyNotice?.notice, props.historyNotice?.editorId],
+  () => {
+    void loadNoticeDetail()
+  },
+  { immediate: true },
+)
 
 function handleActivateEdit() {
   isEdit.value = true
@@ -114,10 +155,8 @@ function handleActivateEdit() {
 
 function handleCancel() {
   isEdit.value = false
-  // 恢复原公告
-  if (group.value) {
-    noticeText.value = group.value.notice || ''
-  }
+  // 恢复打开弹窗时正在查看的简介
+  noticeText.value = props.historyNotice?.notice ?? loadedLatestNotice.value ?? group.value?.notice ?? ''
 }
 
 function handleOk() {
@@ -140,20 +179,55 @@ function handleOk() {
 }
 
 async function handleSendNotice(notifyAll: boolean) {
+  if (submitting.value) return
+  const uid = authStore.uid
+  const nextNotice = noticeText.value.trim()
+  if (!uid || !props.groupId || !nextNotice) return
+
+  submitting.value = true
   try {
-    // TODO: 调用设置群公告接口
-    // await eventGroup.fnNoticeSet({ id: props.groupId, notice: noticeText.value, bfAll: notifyAll })
+    const res = await groupUpdate({
+      op: 12,
+      groupParam: {
+        groupId: props.groupId,
+        notice: nextNotice,
+        bfAll: notifyAll,
+      },
+    })
+    const noticeId = String((res as any)?.noticeId || '')
+
+    await messageStore.sendMessage(
+      String(uid),
+      `1_${props.groupId}`,
+      8,
+      nextNotice,
+      {
+        groupId: props.groupId,
+        noticeId,
+        showNotify: notifyAll,
+        bfAll: notifyAll,
+        isHide: !notifyAll,
+      },
+    )
     
     if (group.value) {
-      group.value.notice = noticeText.value
+      group.value.notice = nextNotice
     }
     
+    emit('published', {
+      groupId: props.groupId,
+      notice: nextNotice,
+      noticeId,
+      bfAll: notifyAll,
+    })
     showToast($t('发布成功'))
     isEdit.value = false
     emit('close')
   } catch (e) {
     console.error('set notice failed:', e)
     showToast($t('发布失败'), 'error')
+  } finally {
+    submitting.value = false
   }
 }
 </script>
@@ -184,7 +258,7 @@ async function handleSendNotice(notifyAll: boolean) {
       </div>
       <section>
         <textarea
-          v-if="loginIsHost && isEdit"
+          v-if="loginIsHost && !isHistoryView && isEdit"
           v-model="noticeText"
           maxlength="800"
           :placeholder="$t('请输入内容')"
@@ -193,10 +267,10 @@ async function handleSendNotice(notifyAll: boolean) {
           <div v-if="noticeText" class="content">{{ noticeText }}</div>
           <div v-else class="empty">{{ $t('无简介') }}</div>
         </div>
-        <span v-if="loginIsHost && isEdit">{{ 800 - noticeText.length }}</span>
+        <span v-if="loginIsHost && !isHistoryView && isEdit">{{ 800 - noticeText.length }}</span>
       </section>
       
-      <template v-if="loginIsHost">
+      <template v-if="loginIsHost && !isHistoryView">
         <div v-if="!isEdit" class="bottom">
           <span @click.stop="handleActivateEdit">{{ $t('发布新简介') }}</span>
         </div>
