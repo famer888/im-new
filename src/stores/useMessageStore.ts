@@ -26,6 +26,7 @@ import {
   getGroupNoticeActorId,
   getGroupNoticeGroupId,
 } from '@/utils/groupNoticeDisplay'
+import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -172,12 +173,17 @@ export interface Message {
 const MAX_CACHED_MESSAGES = 500
 const PAGE_SIZE = 50
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
+const groupIntroMessageTraceCache = new Set<string>()
 
 function getLogoutClearedHistoryAt(uid: string): number {
   if (!uid) return 0
   const raw = localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${uid}`)
   const value = Number(raw || 0)
   return Number.isFinite(value) ? value : 0
+}
+
+function getCurrentUidForUnread(): string {
+  return String(useAuthStore().uid || localStorage.getItem('current-uid') || '').trim()
 }
 
 function parseExtraObject(rawExtra: unknown): Record<string, unknown> | null {
@@ -330,6 +336,45 @@ function groupInviteDebug(message: string, data?: Record<string, unknown>) {
 
 function groupNotificationUnreadLog(message: string, data?: Record<string, unknown>) {
   console.warn(`[group-notification-unread] ${message}`, data || {})
+}
+
+function groupIntroMessageTrace(
+  stage: string,
+  conversationId: string,
+  message: Message,
+  data: Record<string, unknown> = {},
+) {
+  if (message.msgType !== 8 || !conversationId.startsWith('1_')) return
+  const extra = parseExtraObject(message.extra)
+  const key = [
+    stage,
+    conversationId,
+    message.id || '',
+    message.customMsgId || '',
+    message.sendTime || 0,
+    message.content || '',
+    message.extra || '',
+    JSON.stringify(data),
+  ].join('|')
+  if (groupIntroMessageTraceCache.has(key)) return
+  groupIntroMessageTraceCache.add(key)
+  if (groupIntroMessageTraceCache.size > 200) {
+    groupIntroMessageTraceCache.clear()
+  }
+  console.info('[message-store] group intro summary trace', {
+    stage,
+    conversationId,
+    messageId: message.id || '',
+    customMsgId: message.customMsgId || '',
+    senderId: message.senderId || '',
+    msgType: message.msgType,
+    content: message.content || '',
+    sendTime: message.sendTime || 0,
+    readStatus: message.readStatus ?? null,
+    extra,
+    isGroupIntro: isGroupIntroNoticeMessage(message),
+    ...data,
+  })
 }
 
 function isPendingGroupReqChatMessage(message: Message): boolean {
@@ -599,6 +644,14 @@ export const useMessageStore = defineStore('message', () => {
     return (content || '').trim().replace(/\s+/g, ' ').slice(0, 200)
   }
 
+  function formatGroupIntroDigest(msg: Message, digest: string): string {
+    if (!isGroupIntroNoticeMessage(msg)) return digest
+    const normalized = digest.trim().replace(/\s+/g, ' ')
+    if (!normalized) return '[群简介]'
+    if (normalized.startsWith('[群简介]')) return normalized.slice(0, 200)
+    return `[群简介] ${normalized}`.slice(0, 200)
+  }
+
   function getGroupReqUserName(user: unknown, fallbackId?: unknown): string {
     const raw = user && typeof user === 'object' ? user as Record<string, unknown> : null
     const relation = raw?.friendRelation && typeof raw.friendRelation === 'object'
@@ -667,6 +720,7 @@ export const useMessageStore = defineStore('message', () => {
         resolveUidPlaceholder: resolveUidNick,
       }).slice(0, 200)
     }
+    digest = formatGroupIntroDigest(msg, digest)
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
     if (isRejectedGroupInviteNoticeForNotification(conversationId, msg)) {
       const noticeMessage = cloneGroupNoticeToNotificationMessage(conversationId, msg)
@@ -740,7 +794,7 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
     if (existing) {
-      const currentUid = String(useAuthStore().uid || '')
+      const currentUid = getCurrentUidForUnread()
       const currentConversationId = String(chatStore.currentConversationId || '')
       const isIncomingUnread = Boolean(
         currentUid
@@ -752,6 +806,16 @@ export const useMessageStore = defineStore('message', () => {
       const nextUnreadCount = isIncomingUnread
         ? Math.max(0, Number(existing.unreadCount || 0)) + 1
         : existing.unreadCount
+      groupIntroMessageTrace('syncConversationSummary', conversationId, msg, {
+        digest,
+        currentUid,
+        currentConversationId,
+        isIncomingUnread,
+        nextUnreadCount,
+        existingUnreadCount: existing.unreadCount ?? null,
+        existingLastMsgDigest: existing.lastMsgDigest || '',
+        existingLastMsgId: existing.lastMsgId || '',
+      })
       chatStore.addOrUpdateConversation({
         ...existing,
         lastMsgId: msg.id || existing.lastMsgId,
@@ -764,7 +828,7 @@ export const useMessageStore = defineStore('message', () => {
     }
     const [typeRaw, targetId = ''] = conversationId.split('_')
     const conv = chatStore.ensureConversation(Number(typeRaw || 0), targetId)
-    const currentUid = String(useAuthStore().uid || '')
+    const currentUid = getCurrentUidForUnread()
     const currentConversationId = String(chatStore.currentConversationId || '')
     const isIncomingUnread = Boolean(
       currentUid
@@ -774,6 +838,16 @@ export const useMessageStore = defineStore('message', () => {
       && Number(msg.readStatus || 0) === 0
     )
     const nextUnreadCount = isIncomingUnread ? Math.max(1, Number(conv.unreadCount || 0) + 1) : conv.unreadCount
+    groupIntroMessageTrace('syncConversationSummary:newConversation', conversationId, msg, {
+      digest,
+      currentUid,
+      currentConversationId,
+      isIncomingUnread,
+      nextUnreadCount,
+      existingUnreadCount: conv.unreadCount ?? null,
+      existingLastMsgDigest: conv.lastMsgDigest || '',
+      existingLastMsgId: conv.lastMsgId || '',
+    })
     chatStore.addOrUpdateConversation({
       ...conv,
       lastMsgId: msg.id || conv.lastMsgId,
@@ -796,7 +870,7 @@ export const useMessageStore = defineStore('message', () => {
       && !isPendingGroupReqChatMessage(item)
       && !isRejectedGroupInviteNoticeForNotification(conversationId, item),
     ) ?? null
-    const digest = latest ? getDigestByMessage(latest.msgType, latest.content) : null
+    const digest = latest ? formatGroupIntroDigest(latest, getDigestByMessage(latest.msgType, latest.content)) : null
 
     chatStore.addOrUpdateConversation({
       ...existing,
@@ -1663,6 +1737,11 @@ export const useMessageStore = defineStore('message', () => {
       if (isPendingGroupReqChatMessage(msg)) continue
       const convId = String(msg.conversationId || '')
       if (convId.startsWith('1_') && msg.msgType === 8) {
+        groupIntroMessageTrace('batchAppendMessages', convId, msg, {
+          rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),
+          rawCustomMsgId: String((raw as any)?.customMsgId ?? (raw as any)?.custom_msg_id ?? ''),
+          rawExtra: stringifyExtra((raw as any)?.extra),
+        })
         groupInviteDebug('batchAppendMessages normalized group notice', {
           rawId: String((raw as any)?.id ?? (raw as any)?.msgId ?? (raw as any)?.msg_id ?? ''),
           conversationId: convId,
