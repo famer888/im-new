@@ -19,6 +19,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { ConversationType } from '@/types'
+import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import SearchInput from '@/components/SearchInput.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import ConversationList from './ConversationList.vue'
@@ -44,6 +45,7 @@ const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const settingStore = useSettingStore()
 const chatStore = useChatStore()
+const messageStore = useMessageStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
@@ -101,6 +103,19 @@ function isConversationMuted(conv: Conversation): boolean {
   return Boolean(channel?.isDisturb)
 }
 
+function getConversationDisplayUnreadCount(conv: Conversation): number {
+  const unreadCount = Math.max(0, Number(conv.unreadCount || 0))
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return unreadCount
+  }
+  if (conv.id === chatStore.currentConversationId) return unreadCount
+  const unreadIntroCount = messageStore.getMessages(conv.id).filter((message) =>
+    isGroupIntroNoticeMessage(message)
+    && Number(message.readStatus || 0) === 0,
+  ).length
+  return Math.max(unreadCount, unreadIntroCount)
+}
+
 const visibleChatUnread = computed(() =>
   chatStore.conversations
     .filter((conv) =>
@@ -109,7 +124,7 @@ const visibleChatUnread = computed(() =>
       && !isFileHelperTargetId(conv.targetId)
       && isConversationInCurrentRelations(conv),
     )
-    .reduce((sum, conv) => sum + Math.max(0, Number(conv.unreadCount || 0)), 0),
+    .reduce((sum, conv) => sum + getConversationDisplayUnreadCount(conv), 0),
 )
 const visibleContactUnread = computed(() => Math.max(0, Number(contactStore.newFriendReqTotal || 0)))
 

@@ -25,6 +25,7 @@ import {
   replaceGroupNoticeUidPlaceholders,
 } from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
+import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
@@ -46,15 +47,33 @@ const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
 const repairingGroupDigestIds = new Set<string>()
 const repairingChannelNameIds = new Set<string>()
+const groupIntroTagTraceCache = new Map<string, string>()
 
 type DigestSegment =
   | { type: 'text'; text: string }
   | { type: 'emoji'; text: string; src: string }
+  | { type: 'group-intro-unread'; text: string }
+  | { type: 'sender'; text: string }
 
 function groupNoticeDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
   const enabled = localStorage.getItem('debug:conversation-list') === '1'
   if (!enabled) return
   console[level](`[conversation-list] ${message}`, data || {})
+}
+
+function groupIntroTagTrace(conv: Conversation, data: Record<string, unknown>) {
+  const key = [
+    conv.id,
+    conv.unreadCount,
+    conv.lastMsgId || '',
+    conv.lastMsgTime || 0,
+    conv.lastMsgDigest || '',
+    data.reason || '',
+    data.showTag ? '1' : '0',
+  ].join('|')
+  if (groupIntroTagTraceCache.get(conv.id) === key) return
+  groupIntroTagTraceCache.set(conv.id, key)
+  console.info('[conversation-list] group intro unread tag decision', data)
 }
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
@@ -533,7 +552,13 @@ function getMessageDigest(message: Message): string {
     const normalized = extra && formatted.includes('邀请') && formatted.includes('加入群聊')
       ? formatted.replace(PURE_UID_RE, (uid) => resolveUidNick(uid, groupId, extra))
       : formatted
-    return normalized ? formatDigestText(normalized) : ''
+    const digest = normalized ? formatDigestText(normalized) : ''
+    if (isGroupIntroNoticeMessage(message)) {
+      if (!digest) return `[${t('群简介')}]`
+      if (digest.startsWith(`[${t('群简介')}]`) || digest.startsWith('[群简介]')) return digest
+      return `[${t('群简介')}] ${digest}`
+    }
+    return digest
   }
   return raw ? formatDigestText(raw) : ''
 }
@@ -710,6 +735,135 @@ function getDigest(conv: Conversation): string {
   return ''
 }
 
+function isGroupIntroDigestText(digest: string): boolean {
+  const raw = digest.trim()
+  if (!raw) return false
+  return raw.includes(`[${t('群简介')}]`) || raw.includes('[群简介]')
+}
+
+function isLatestLoadedMessageForConversation(conv: Conversation, message: Message): boolean {
+  const lastMsgId = String(conv.lastMsgId || '')
+  if (lastMsgId && (String(message.id || '') === lastMsgId || String(message.customMsgId || '') === lastMsgId)) {
+    return true
+  }
+  return Number(message.sendTime || 0) >= Number(conv.lastMsgTime || 0)
+}
+
+function isUnreadLoadedGroupIntroMessage(conv: Conversation, message: Message | null): boolean {
+  if (!message) return false
+  if (conv.id === chatStore.currentConversationId) return false
+  return isLatestLoadedMessageForConversation(conv, message)
+    && isGroupIntroNoticeMessage(message)
+    && Number(message.readStatus || 0) === 0
+}
+
+function getUnreadLoadedGroupIntroCount(conv: Conversation): number {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return 0
+  if (conv.id === chatStore.currentConversationId) return 0
+  return messageStore.getMessages(conv.id).filter((message) =>
+    isGroupIntroNoticeMessage(message)
+    && Number(message.readStatus || 0) === 0,
+  ).length
+}
+
+function shouldShowUnreadGroupIntroTag(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  const latest = getLoadedLatestVisibleMessage(conv)
+  const latestUnreadIntro = isUnreadLoadedGroupIntroMessage(conv, latest)
+  if (shouldShowDraft(conv)) {
+    if (Number(conv.unreadCount || 0) > 0 || latestUnreadIntro) {
+      groupIntroTagTrace(conv, {
+        reason: 'draft-visible',
+        showTag: false,
+        conversationId: conv.id,
+        targetId: conv.targetId,
+        unreadCount: conv.unreadCount,
+        lastMsgId: conv.lastMsgId || '',
+        lastMsgDigest: conv.lastMsgDigest || '',
+        digest: getDigest(conv),
+        latestReadStatus: latest?.readStatus ?? null,
+        latestUnreadIntro,
+      })
+    }
+    return false
+  }
+  if (Number(conv.unreadCount || 0) <= 0) {
+    if (latestUnreadIntro) {
+      groupIntroTagTrace(conv, {
+        reason: 'latest-message-unread',
+        showTag: true,
+        conversationId: conv.id,
+        targetId: conv.targetId,
+        unreadCount: conv.unreadCount,
+        lastMsgId: conv.lastMsgId || '',
+        lastMsgTime: conv.lastMsgTime || 0,
+        lastMsgDigest: conv.lastMsgDigest || '',
+        digest: getDigest(conv),
+        latestId: latest?.id || '',
+        latestCustomMsgId: latest?.customMsgId || '',
+        latestMsgType: latest?.msgType ?? null,
+        latestReadStatus: latest?.readStatus ?? null,
+        latestSendTime: latest?.sendTime || 0,
+        latestExtra: latest?.extra || null,
+        latestUnreadIntro,
+      })
+      return true
+    }
+    if (isGroupIntroDigestText(String(conv.lastMsgDigest || ''))) {
+      groupIntroTagTrace(conv, {
+        reason: 'no-unread',
+        showTag: false,
+        conversationId: conv.id,
+        targetId: conv.targetId,
+        unreadCount: conv.unreadCount,
+        lastMsgId: conv.lastMsgId || '',
+        lastMsgDigest: conv.lastMsgDigest || '',
+        digest: getDigest(conv),
+        latestReadStatus: latest?.readStatus ?? null,
+        latestUnreadIntro,
+      })
+    }
+    return false
+  }
+  const digest = getDigest(conv)
+  const latestMatches = latest ? isLatestLoadedMessageForConversation(conv, latest) : false
+  const latestIsIntro = latest ? isGroupIntroNoticeMessage(latest) : false
+  const digestIsIntro = isGroupIntroDigestText(digest)
+  const showTag = Boolean(latestUnreadIntro || (latest && latestMatches && latestIsIntro) || digestIsIntro)
+  groupIntroTagTrace(conv, {
+    reason: showTag ? 'matched' : 'not-group-intro',
+    showTag,
+    conversationId: conv.id,
+    targetId: conv.targetId,
+    unreadCount: conv.unreadCount,
+    lastMsgId: conv.lastMsgId || '',
+    lastMsgTime: conv.lastMsgTime || 0,
+    lastMsgDigest: conv.lastMsgDigest || '',
+    digest,
+    latestId: latest?.id || '',
+    latestCustomMsgId: latest?.customMsgId || '',
+    latestMsgType: latest?.msgType ?? null,
+    latestReadStatus: latest?.readStatus ?? null,
+    latestSendTime: latest?.sendTime || 0,
+    latestExtra: latest?.extra || null,
+    latestMatches,
+    latestIsIntro,
+    latestUnreadIntro,
+    digestIsIntro,
+  })
+  return showTag
+}
+
+function getDisplayUnreadCount(conv: Conversation): number {
+  const unreadCount = Math.max(0, Number(conv.unreadCount || 0))
+  const unreadIntroCount = getUnreadLoadedGroupIntroCount(conv)
+  return Math.max(unreadCount, unreadIntroCount)
+}
+
+function hasDisplayUnread(conv: Conversation): boolean {
+  return getDisplayUnreadCount(conv) > 0
+}
+
 watch(
   () => [
     String(authStore.uid || ''),
@@ -781,7 +935,14 @@ function splitDigestSegments(text: string): DigestSegment[] {
 }
 
 function getDigestSegments(conv: Conversation): DigestSegment[] {
-  return splitDigestSegments(getDigest(conv))
+  const segments: DigestSegment[] = []
+  if (shouldShowUnreadGroupIntroTag(conv)) {
+    segments.push({ type: 'group-intro-unread', text: `[${t('有新群简介')}]` })
+  }
+  if (conv.senderName && !shouldShowDraft(conv)) {
+    segments.push({ type: 'sender', text: `${conv.senderName}:` })
+  }
+  return segments.concat(splitDigestSegments(getDigest(conv)))
 }
 
 function isConversationMuted(conv: Conversation): boolean {
@@ -856,7 +1017,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           active: conv.id === chatStore.currentConversationId,
           pinned: conv.isPinned && !conv.isArchived,
           'friend-online': showFriendOnlineDot(conv),
-          'has-unread': conv.unreadCount > 0 && !isConversationMuted(conv),
+          'has-unread': hasDisplayUnread(conv) && !isConversationMuted(conv),
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -889,7 +1050,6 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           <div class="conv-row-bottom">
             <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[{{ t('有人@我') }}]</span>
             <span v-if="shouldShowDraft(conv)" class="draft-tag">[{{ t('草稿') }}]</span>
-            <span v-if="conv.senderName && !shouldShowDraft(conv)" class="sender-name">{{ conv.senderName }}:</span>
             <span class="conv-digest">
               <template v-for="(segment, index) in getDigestSegments(conv)" :key="`${conv.id}-digest-${index}`">
                 <img
@@ -898,6 +1058,10 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
                   :src="segment.src"
                   :alt="segment.text"
                 />
+                <span v-else-if="segment.type === 'group-intro-unread'" class="group-intro-unread-tag">
+                  {{ segment.text }}
+                </span>
+                <span v-else-if="segment.type === 'sender'" class="sender-name">{{ segment.text }}</span>
                 <span v-else>{{ segment.text }}</span>
               </template>
             </span>
@@ -907,10 +1071,10 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           </div>
         </div>
 
-        <span v-if="conv.unreadCount > 0 && !isConversationMuted(conv)" class="badge">
-          {{ conv.unreadCount > 99 ? '99+' : conv.unreadCount }}
+        <span v-if="hasDisplayUnread(conv) && !isConversationMuted(conv)" class="badge">
+          {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
         </span>
-        <span v-else-if="conv.unreadCount > 0 && isConversationMuted(conv)" class="muted-dot" />
+        <span v-else-if="hasDisplayUnread(conv) && isConversationMuted(conv)" class="muted-dot" />
 
         <div class="conv-divider" />
       </div>
@@ -1149,6 +1313,12 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 }
 
 .draft-tag {
+  color: #ff0000;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.group-intro-unread-tag {
   color: #ff0000;
   font-size: 12px;
   flex-shrink: 0;
