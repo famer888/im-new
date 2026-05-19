@@ -517,7 +517,15 @@ export async function ensureFriendRelKey(
   const fid = String(friendId)
   e2eeDebugLog('[e2ee] ensureFriendRelKey: start', { uid, fid })
   await ensureOwnKeyPair(uid)
-  void forceRefresh
+
+  if (forceRefresh) {
+    pendingFriendKeys.delete(fid)
+    try {
+      await tauriInvoke<void>('clear_friend_rel_key', { friendId: fid })
+    } catch (err) {
+      console.warn('[e2ee] clear_friend_rel_key failed', { fid, err: String(err) })
+    }
+  }
 
   const existing = pendingFriendKeys.get(fid)
   if (existing) return existing
@@ -605,6 +613,7 @@ export async function ensureFriendRelKeyForVersion(
   friendId: string | number,
   version: number,
   source?: string,
+  forceRefresh = false,
 ): Promise<string> {
   if (!isTauri()) {
     throw new Error('ensureFriendRelKeyForVersion: Tauri only')
@@ -625,7 +634,26 @@ export async function ensureFriendRelKeyForVersion(
     }
   }
 
-  if (src === 'web' || src === 'app') {
+  const pendingKey = `${fid}:${ver}:${src || 'any'}`
+  if (forceRefresh) {
+    pendingFriendVersionKeys.delete(pendingKey)
+    try {
+      await tauriInvoke<void>('clear_friend_rel_key', {
+        friendId: fid,
+        version: ver,
+        source: src || undefined,
+      })
+    } catch (err) {
+      console.warn('[e2ee] clear_friend_rel_key(version) failed', {
+        fid,
+        ver,
+        source: src,
+        err: String(err),
+      })
+    }
+  }
+
+  if (!forceRefresh && (src === 'web' || src === 'app')) {
     const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', {
       friendId: fid,
       version: ver,
@@ -634,7 +662,6 @@ export async function ensureFriendRelKeyForVersion(
     if (cacheHit) return ''
   }
 
-  const pendingKey = `${fid}:${ver}:${src || 'any'}`
   const existing = pendingFriendVersionKeys.get(pendingKey)
   if (existing) return existing
 

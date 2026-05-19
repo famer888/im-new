@@ -860,6 +860,38 @@ export const useMessageStore = defineStore('message', () => {
       const senderId = String(message.senderId || '')
       if (!senderId) continue
 
+      const applyDecryptedPlain = async (
+        plain: string,
+        candidate: { cipherHex: string; attachmentKey?: string },
+      ) => {
+        const nextExtra = {
+          ...extra,
+          decryptPending: false,
+          cipherHex: candidate.cipherHex,
+        } as Record<string, unknown>
+        if (candidate.attachmentKey && !nextExtra.fileKey) {
+          nextExtra.fileKey = candidate.attachmentKey
+        }
+
+        message.content = plain
+        message.extra = stringifyExtra(nextExtra)
+        await tauriInvoke('mark_private_message_decrypted', {
+          uid,
+          request: {
+            messageId: message.id,
+            conversationId,
+            content: plain,
+            extra: nextExtra,
+          },
+        }).catch((persistError) => {
+          console.warn('[e2ee] persist decrypted private message failed', {
+            messageId: message.id,
+            conversationId,
+            err: String(persistError),
+          })
+        })
+      }
+
       for (const candidate of cipherCandidates) {
         try {
           try {
@@ -890,50 +922,46 @@ export const useMessageStore = defineStore('message', () => {
             contentMd5: String(extra.contentMd5 || extra.content_md5 || ''),
           })
 
-          const nextExtra = {
-            ...extra,
-            decryptPending: false,
-            cipherHex: candidate.cipherHex,
-          } as Record<string, unknown>
-          if (candidate.attachmentKey && !nextExtra.fileKey) {
-            nextExtra.fileKey = candidate.attachmentKey
-          }
-
-          message.content = plain
-          message.extra = stringifyExtra(nextExtra)
-          await tauriInvoke('mark_private_message_decrypted', {
-            uid,
-            request: {
-              messageId: message.id,
-              conversationId,
-              content: plain,
-              extra: nextExtra,
-            },
-          }).catch((persistError) => {
-            console.warn('[e2ee] persist decrypted private message failed', {
-              messageId: message.id,
-              conversationId,
-              err: String(persistError),
-            })
-          })
+          await applyDecryptedPlain(plain, candidate)
           break
         } catch (error) {
-          console.warn('[e2ee] retry decrypt_private on loadMessages failed', {
-            messageId: message.id,
-            conversationId,
-            senderId,
-            peerId,
-            version: candidate.version,
-            source: candidate.source,
-            err: String(error),
-          })
+          try {
+            await ensureFriendRelKeyForVersion(
+              uid,
+              senderId,
+              Number(candidate.version || 0),
+              String(candidate.source || ''),
+              true,
+            )
+            const plain = await tauriInvoke<string>('decrypt_private_incoming', {
+              senderId,
+              peerId,
+              version: Number(candidate.version || 1),
+              source: String(candidate.source || ''),
+              ciphertextHex: String(candidate.cipherHex || ''),
+              msgType: Number(message.msgType || 0),
+              contentMd5: String(extra.contentMd5 || extra.content_md5 || ''),
+            })
+            await applyDecryptedPlain(plain, candidate)
+            break
+          } catch (refreshError) {
+            console.warn('[e2ee] retry decrypt_private on loadMessages failed', {
+              messageId: message.id,
+              conversationId,
+              senderId,
+              peerId,
+              version: candidate.version,
+              source: candidate.source,
+              err: String(refreshError),
+              firstErr: String(error),
+            })
+          }
         }
       }
     }
 
     return messages
   }
-
   async function retryDecryptPendingPrivateConversations(uid: string, conversationIds?: string[]) {
     if (!isTauri() || !uid) return
     const targets = (conversationIds && conversationIds.length > 0
