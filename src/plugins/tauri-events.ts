@@ -1022,6 +1022,31 @@ export async function setupTauriListeners() {
               if (!senderId) continue
               let privateDecrypted = false
               let lastErr: unknown = null
+              const applyRealtimePrivatePlain = async (plain: string, candidate: any) => {
+                m.content = plain
+                if (m.extra && typeof m.extra === 'object') {
+                  m.extra.decryptPending = false
+                  m.extra.cipherHex = candidate.cipherHex
+                  if (candidate.attachmentKey && !m.extra.fileKey) {
+                    m.extra.fileKey = candidate.attachmentKey
+                  }
+                }
+                await invoke('mark_private_message_decrypted', {
+                  uid,
+                  request: {
+                    messageId: msgId,
+                    conversationId: convId,
+                    content: plain,
+                    extra: m.extra && typeof m.extra === 'object' ? m.extra : null,
+                  },
+                }).catch((persistErr) => {
+                  console.warn('[e2ee] persist realtime decrypted private failed', {
+                    msgId,
+                    convId,
+                    err: String(persistErr),
+                  })
+                })
+              }
               try {
                 for (const candidate of cipherCandidates) {
                   try {
@@ -1051,33 +1076,42 @@ export async function setupTauriListeners() {
                       msgType,
                       contentMd5: String(extra?.contentMd5 || extra?.content_md5 || ''),
                     })
-                    m.content = plain
-                    if (m.extra && typeof m.extra === 'object') {
-                      m.extra.decryptPending = false
-                      m.extra.cipherHex = candidate.cipherHex
-                      if (candidate.attachmentKey && !m.extra.fileKey) {
-                        m.extra.fileKey = candidate.attachmentKey
-                      }
-                    }
-                    await invoke('mark_private_message_decrypted', {
-                      uid,
-                      request: {
-                        messageId: msgId,
-                        conversationId: convId,
-                        content: plain,
-                        extra: m.extra && typeof m.extra === 'object' ? m.extra : null,
-                      },
-                    }).catch((persistErr) => {
-                      console.warn('[e2ee] persist realtime decrypted private failed', {
-                        msgId,
-                        convId,
-                        err: String(persistErr),
-                      })
-                    })
+                    await applyRealtimePrivatePlain(plain, candidate)
                     privateDecrypted = true
                     break
                   } catch (err) {
-                    lastErr = err
+                    try {
+                      await ensureFriendRelKeyForVersion(
+                        uid,
+                        senderId,
+                        Number(candidate.version || 0),
+                        String(candidate.source || ''),
+                        true,
+                      )
+                      const plain = await invoke<string>('decrypt_private_incoming', {
+                        senderId,
+                        peerId,
+                        version: Number(candidate.version || 1),
+                        source: String(candidate.source || ''),
+                        ciphertextHex: String(candidate.cipherHex || ''),
+                        msgType,
+                        contentMd5: String(extra?.contentMd5 || extra?.content_md5 || ''),
+                      })
+                      await applyRealtimePrivatePlain(plain, candidate)
+                      privateDecrypted = true
+                      break
+                    } catch (refreshErr) {
+                      lastErr = refreshErr
+                      console.warn('[e2ee] retry decrypt_private refresh failed', {
+                        msgId,
+                        senderId,
+                        peerId,
+                        version: candidate.version,
+                        source: candidate.source,
+                        err: String(refreshErr),
+                        firstErr: String(err),
+                      })
+                    }
                   }
                 }
                 if (privateDecrypted) continue
