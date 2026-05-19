@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { convertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { eventBus } from '@/utils/eventBus'
@@ -164,7 +164,7 @@ const extraData = computed((): Record<string, any> => {
 })
 
 const fileKey = computed(() =>
-  String(
+  normalizeResolvedFileKey(
     videoData.value.fileKey ||
     extraData.value.fileKey ||
     extraData.value.file_key ||
@@ -198,6 +198,26 @@ const groupId = computed(() => {
   if (extraGroupId) return extraGroupId
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
+})
+const privateAttachmentCandidates = computed(() => {
+  const extra = extraData.value
+  const candidates = Array.isArray(extra.cipherCandidates)
+    ? extra.cipherCandidates
+        .map((candidate: any) => ({
+          version: Number(candidate?.version || extra.version || 1),
+          source: String(candidate?.source || extra.source || ''),
+          attachmentKey: String(candidate?.attachmentKey || candidate?.attachment_key || ''),
+        }))
+        .filter((candidate: { attachmentKey: string }) => !!candidate.attachmentKey)
+    : []
+  if (attachmentKey.value && candidates.length === 0) {
+    candidates.push({
+      version: Number(extra.version || 1),
+      source: String(extra.source || ''),
+      attachmentKey: attachmentKey.value,
+    })
+  }
+  return candidates
 })
 const localVideoSourcePath = computed(() => {
   if (extraLocalVideoPath.value) return fileUrlToLocalPath(extraLocalVideoPath.value)
@@ -358,6 +378,22 @@ async function resolveFileKey(): Promise<string> {
   if (fileKey.value) return fileKey.value
   const plainAttachmentKey = fallbackPlainFileKey(attachmentKey.value)
   if (plainAttachmentKey) return plainAttachmentKey
+
+  const conversationId = String(props.message.conversationId || '')
+  if (conversationId.startsWith('0_')) {
+    const senderId = String(props.message.senderId || '').trim()
+    for (const candidate of privateAttachmentCandidates.value) {
+      const resolved = await resolvePrivateAttachmentFileKey({
+        uid: authStore.uid,
+        senderId,
+        version: candidate.version,
+        source: candidate.source,
+        attachmentKey: candidate.attachmentKey,
+      })
+      if (resolved) return resolved
+    }
+  }
+
   if (!attachmentKey.value || !groupId.value) return ''
 
   try {
@@ -579,6 +615,21 @@ function requestInlinePreviewFullscreen() {
   }
 }
 
+function getMediaViewerCoverSrc(): string {
+  const renderedThumb = thumbElRef.value
+  if (renderedThumb && isLoaded.value && !loadError.value) {
+    const renderedSrc = String(renderedThumb.currentSrc || renderedThumb.src || '').trim()
+    if (renderedSrc) return renderedSrc
+  }
+
+  const fallback = String(localThumbSrc.value || activeThumbSrc.value || '').trim()
+  if (!fallback) return ''
+  if (/^https?:\/\//i.test(fallback) && isRemoteThumb.value && (fileKey.value || attachmentKey.value)) {
+    return ''
+  }
+  return fallback
+}
+
 async function openMediaWindow(pathOrUrl: string) {
   const target = String(pathOrUrl || '').trim()
   if (!target) return
@@ -618,7 +669,7 @@ async function openMediaWindow(pathOrUrl: string) {
     width: videoData.value.width || undefined,
     height: videoData.value.height || undefined,
     duration: videoData.value.duration || undefined,
-    cover: activeThumbSrc.value || videoData.value.thumbUrl || '',
+    cover: getMediaViewerCoverSrc(),
     size: videoData.value.size || undefined,
   })
 

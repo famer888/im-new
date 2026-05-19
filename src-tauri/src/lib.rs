@@ -145,6 +145,7 @@ pub fn run() {
             commands::chat::save_own_curve_key,
             commands::chat::load_own_curve_key,
             commands::chat::decrypt_private_incoming,
+            commands::chat::decrypt_private_attachment_key,
             commands::chat::decrypt_group_incoming,
             commands::chat::decrypt_channel_incoming,
             commands::chat::set_curve_private_key_hex,
