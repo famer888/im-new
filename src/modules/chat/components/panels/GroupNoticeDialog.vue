@@ -56,6 +56,11 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
+function resetToast() {
+  toastVisible.value = false
+  toastMessage.value = ''
+}
+
 function showConfirm(title: string, content: string, action: () => void) {
   confirmTitle.value = title
   confirmContent.value = content
@@ -135,7 +140,9 @@ async function loadNoticeDetail() {
 
 watch(
   () => [props.visible, props.groupId, props.historyNotice?.notice, props.historyNotice?.editorId],
-  () => {
+  ([visible]) => {
+    resetToast()
+    if (!visible) return
     void loadNoticeDetail()
   },
   { immediate: true },
