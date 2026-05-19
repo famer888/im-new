@@ -173,6 +173,8 @@ pub fn run() {
             commands::file::download_file,
             commands::file::create_video_stream_url,
             commands::file::create_local_video_stream_url,
+            commands::file::probe_video_format,
+            commands::file::convert_video_to_compatible_mp4,
             commands::file::play_audio_file,
             commands::file::stop_audio_file,
             commands::file::get_download_progress,

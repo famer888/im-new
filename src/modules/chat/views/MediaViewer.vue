@@ -28,6 +28,12 @@ const videoVolume = ref(1)
 const isVideoMuted = ref(false)
 const isVideoFullscreen = ref(false)
 const isVideoFrameReady = ref(false)
+const videoPreparingOnOpen = ref(false)
+const videoPlaybackRequested = ref(false)
+const videoProbeLoading = ref(false)
+const videoConverting = ref(false)
+const videoAutoTranscodeTried = ref(false)
+const videoProbe = ref<VideoFormatProbe | null>(null)
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
@@ -40,6 +46,10 @@ const imageOverwriteDirectoryName = ref('')
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
 let excelPreviewer: { destroy?: () => void } | null = null
 let excelPreviewToken = 0
+let videoPrepareTimer = 0
+let videoPlayWatchTimer = 0
+let videoProbeToken = 0
+let videoAutoTranscodeSource = ''
 
 type ExcelPreviewSource = string | ArrayBuffer
 type ExcelPreviewSourceKind = 'url' | 'local-array-buffer'
@@ -61,6 +71,21 @@ interface LocalFilePayload {
   mime?: string
   dataBase64?: string
   data_base64?: string
+}
+
+interface VideoFormatProbe {
+  container: string
+  brand: string
+  videoCodec: string
+  videoCodecTag: string
+  audioCodec: string
+  audioCodecTag: string
+  size: number
+  isHevc: boolean
+  isH264: boolean
+  needsTranscode: boolean
+  webviewLikelySupported: boolean
+  summary: string
 }
 
 function ensureMediaSrc(src: string): string {
@@ -185,6 +210,18 @@ const videoProgressPercent = computed(() => {
   if (!videoDuration.value) return 0
   return Math.min(100, Math.max(0, (videoCurrentTime.value / videoDuration.value) * 100))
 })
+const isVideoBuffering = computed(() =>
+  isVideo.value && (
+    videoConverting.value ||
+    (!isVideoFrameReady.value && (videoPlaybackRequested.value || (videoPreparingOnOpen.value && !videoDuration.value)))
+  ),
+)
+const isVideoControlPlaying = computed(() => isVideoPlaying.value && isVideoFrameReady.value)
+const videoTimeText = computed(() => {
+  if (videoConverting.value) return '转换中'
+  if (isVideoBuffering.value) return '加载中'
+  return `${formatVideoTime(videoCurrentTime.value)} / ${formatVideoTime(videoDuration.value)}`
+})
 const videoVolumePercent = computed(() => isVideoMuted.value ? 0 : Math.round(videoVolume.value * 100))
 const canOpenWithDefaultApp = computed(() =>
   Boolean(String(payload.value?.filePath || payload.value?.src || '').trim()),
@@ -247,6 +284,10 @@ const mediaViewerPageClass = 'media-viewer-page'
 let unsubscribe: (() => void) | null = null
 let unlistenWindowEvents: Array<() => void> = []
 
+function isWindowsPlatform(): boolean {
+  return /win|windows/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`)
+}
+
 function currentMediaWindow() {
   if (!(window as any).__TAURI_INTERNALS__) return null
   return getCurrentWindow()
@@ -267,10 +308,17 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
   }
   void nextTick(() => {
     void setupExcelPreview()
+    if (nextPayload?.mediaType === 'video') {
+      startVideoPreparingOnOpen()
+      void probeCurrentVideoFormat()
+    }
   })
 }
 
 function resetVideoState(options: { clearSource?: boolean } = {}) {
+  window.clearTimeout(videoPrepareTimer)
+  window.clearTimeout(videoPlayWatchTimer)
+  videoProbeToken += 1
   const video = videoRef.value
   if (video) {
     video.pause()
@@ -280,11 +328,74 @@ function resetVideoState(options: { clearSource?: boolean } = {}) {
     }
   }
   isVideoFrameReady.value = false
+  videoPreparingOnOpen.value = false
+  videoPlaybackRequested.value = false
+  videoProbeLoading.value = false
+  videoConverting.value = false
+  videoAutoTranscodeTried.value = false
+  videoAutoTranscodeSource = ''
+  videoProbe.value = null
   isVideoPlaying.value = false
   videoCurrentTime.value = 0
   videoDuration.value = 0
   videoVolume.value = 1
   isVideoMuted.value = false
+}
+
+function startVideoPreparingOnOpen() {
+  const video = videoRef.value
+  if (!video || !videoSrc.value) return
+  videoPreparingOnOpen.value = true
+  window.clearTimeout(videoPrepareTimer)
+  videoPrepareTimer = window.setTimeout(() => {
+    videoPreparingOnOpen.value = false
+  }, 1200)
+  try {
+    video.preload = 'auto'
+    video.load()
+  } catch {
+    // Loading is opportunistic; playback click can still retry.
+  }
+}
+
+function stopVideoPreparing() {
+  window.clearTimeout(videoPrepareTimer)
+  videoPreparingOnOpen.value = false
+}
+
+function videoErrorMessage(error?: unknown): string {
+  const video = videoRef.value
+  const code = video?.error?.code || 0
+  const detail = error instanceof Error ? error.message : String(error || '')
+  if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || /not supported|format|codec/i.test(detail)) {
+    return '当前系统不支持该视频格式，请使用默认应用打开'
+  }
+  return '视频播放失败，请使用默认应用打开'
+}
+
+async function probeCurrentVideoFormat(sourceOverride = '') {
+  if (!isVideo.value) return
+  const source = String(sourceOverride || localVideoPath.value || videoSrc.value || '').trim()
+  if (!source) return
+  const token = ++videoProbeToken
+  videoProbeLoading.value = true
+  try {
+    const probe = await invoke<VideoFormatProbe>('probe_video_format', {
+      source,
+      size: Number(payload.value?.size || 0) || null,
+    })
+    if (token !== videoProbeToken) return
+    videoProbe.value = probe
+    console.info('[media-viewer] video format:', probe)
+    void maybeAutoConvertVideoForWindows(probe, source)
+  } catch (error) {
+    if (token !== videoProbeToken) return
+    console.warn('[media-viewer] video format probe failed:', error)
+  } finally {
+    if (token === videoProbeToken) {
+      videoProbeLoading.value = false
+    }
+  }
 }
 
 function disposeExcelPreviewer() {
@@ -368,6 +479,7 @@ function syncVideoState() {
 }
 
 function handleVideoLoadedMetadata() {
+  stopVideoPreparing()
   syncVideoState()
 }
 
@@ -380,6 +492,8 @@ function markVideoFrameReady() {
   if (typeof requestVideoFrameCallback === 'function') {
     requestVideoFrameCallback.call(video, () => {
       isVideoFrameReady.value = true
+      stopVideoPreparing()
+      videoPlaybackRequested.value = false
       syncVideoState()
     })
     return
@@ -387,6 +501,8 @@ function markVideoFrameReady() {
   requestAnimationFrame(() => {
     if (videoRef.value !== video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
     isVideoFrameReady.value = true
+    stopVideoPreparing()
+    videoPlaybackRequested.value = false
     syncVideoState()
   })
 }
@@ -402,15 +518,39 @@ function handleVideoLoadedData() {
 }
 
 function handleVideoPlay() {
+  videoPlaybackRequested.value = true
+  syncVideoState()
+}
+
+function handleVideoPlaying() {
+  window.clearTimeout(videoPlayWatchTimer)
+  stopVideoPreparing()
+  videoPlaybackRequested.value = false
+  markVideoFrameReady()
+  syncVideoState()
+}
+
+function handleVideoWaiting() {
+  const video = videoRef.value
+  if (!isVideoFrameReady.value && video && !video.paused) {
+    videoPlaybackRequested.value = true
+  }
   syncVideoState()
 }
 
 function handleVideoPause() {
+  window.clearTimeout(videoPlayWatchTimer)
+  stopVideoPreparing()
+  videoPlaybackRequested.value = false
   syncVideoState()
 }
 
 function handleVideoError() {
   isVideoFrameReady.value = false
+  window.clearTimeout(videoPlayWatchTimer)
+  stopVideoPreparing()
+  videoPlaybackRequested.value = false
+  showToast(videoErrorMessage(), 'error')
   syncVideoState()
 }
 
@@ -418,12 +558,26 @@ async function toggleVideoPlayback() {
   const video = videoRef.value
   if (!video) return
   if (video.paused || video.ended) {
+    videoPlaybackRequested.value = true
     try {
       await video.play()
+      window.clearTimeout(videoPlayWatchTimer)
+      videoPlayWatchTimer = window.setTimeout(() => {
+        if (videoRef.value !== video || video.paused || video.ended) return
+        if (video.currentTime > 0 || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return
+        videoPlaybackRequested.value = false
+        showToast('视频正在准备中，如长时间无响应请使用默认应用打开', 'error')
+        syncVideoState()
+      }, 2500)
     } catch (error) {
+      window.clearTimeout(videoPlayWatchTimer)
+      videoPlaybackRequested.value = false
       console.warn('[media-viewer] video play failed:', error)
+      showToast(videoErrorMessage(error), 'error')
     }
   } else {
+    window.clearTimeout(videoPlayWatchTimer)
+    videoPlaybackRequested.value = false
     video.pause()
   }
   syncVideoState()
@@ -492,6 +646,24 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
 function pathBaseName(filePath: string): string {
   const segments = filePath.split(/[\\/]/).filter(Boolean)
   return segments[segments.length - 1] || filePath
+}
+
+function safeFileName(name: string, fallback = 'video.mp4'): string {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\0/g, '')
+    .trim() || fallback
+}
+
+function videoExt(source: string): string {
+  const matched = String(source || '').split('?')[0].match(/\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i)
+  return matched?.[0]?.toLowerCase() || '.mp4'
+}
+
+function ensureVideoFileName(fileName: string, source = ''): string {
+  const name = safeFileName(fileName, 'video')
+  if (/\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i.test(name)) return name
+  return `${name}${videoExt(source)}`
 }
 
 function pathDirectoryName(filePath: string): string {
@@ -694,6 +866,17 @@ async function openWithDefaultApp() {
   const filePath = String(payload.value?.filePath || '').trim()
   const src = String(payload.value?.src || '').trim()
   let target = filePath || fileUrlToLocalPath(src)
+  if (isVideo.value) {
+    if (target && !/^https?:/i.test(target)) {
+      await invoke('open_file', { path: fileUrlToLocalPath(target) })
+      return
+    }
+    const localVideo = await downloadVideoForDefaultApp()
+    if (localVideo) {
+      await invoke('open_file', { path: localVideo })
+    }
+    return
+  }
   if (isFile.value) {
     target = localFilePath.value
     if (!target) {
@@ -729,6 +912,167 @@ async function openWithDefaultApp() {
   } catch (error) {
     console.warn('[media-viewer] openWithDefaultApp failed:', error)
   }
+}
+
+function defaultVideoFileName(): string {
+  const explicit = String(payload.value?.fileName || '').trim()
+  if (explicit) return ensureVideoFileName(explicit, payload.value?.originalUrl || payload.value?.src || '')
+  const source = String(payload.value?.originalUrl || payload.value?.src || '').split('?')[0]
+  let fromUrl = ''
+  try {
+    fromUrl = pathBaseName(decodeURIComponent(new URL(source).pathname))
+  } catch {
+    fromUrl = pathBaseName(source)
+  }
+  return ensureVideoFileName(fromUrl, source)
+}
+
+async function downloadVideoForDefaultApp(): Promise<string> {
+  const url = String(payload.value?.originalUrl || '').trim()
+  const key = String(payload.value?.fileKey || '').trim()
+  if (!url) {
+    showToast('视频文件还没有本地缓存', 'error')
+    return ''
+  }
+
+  showToast('正在准备视频文件...')
+  const [{ appDataDir, join }, { listen }] = await Promise.all([
+    import('@tauri-apps/api/path'),
+    import('@tauri-apps/api/event'),
+  ])
+  const baseDir = await appDataDir()
+  const id = `media-viewer-video-${Date.now()}`
+  const savePath = await join(baseDir, 'video-cache', 'default-open', id, defaultVideoFileName())
+  const doneEvent = `file:done:${id}`
+  const errorEvent = `file:error:${id}`
+
+  return new Promise(async (resolve) => {
+    let settled = false
+    let timeout = 0
+    const cleanup = (listeners: Array<() => void>) => {
+      window.clearTimeout(timeout)
+      listeners.forEach((stop) => stop())
+    }
+    const listeners: Array<() => void> = []
+    timeout = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      cleanup(listeners)
+      showToast('视频准备超时，请稍后重试', 'error')
+      resolve('')
+    }, 30000)
+    listeners.push(await listen(doneEvent, () => {
+      if (settled) return
+      settled = true
+      cleanup(listeners)
+      showToast('视频准备完成，正在打开')
+      resolve(savePath)
+    }))
+    listeners.push(await listen<{ error?: string }>(errorEvent, (event) => {
+      if (settled) return
+      settled = true
+      cleanup(listeners)
+      showToast(`视频准备失败：${event.payload?.error || '未知错误'}`, 'error')
+      resolve('')
+    }))
+
+    try {
+      await invoke('download_file', {
+        url,
+        fileKey: key,
+        savePath,
+        msgId: id,
+        logTag: 'video-default-open',
+        emitDataUrl: false,
+      })
+    } catch (error) {
+      if (settled) return
+      settled = true
+      cleanup(listeners)
+      const detail = error instanceof Error ? error.message : String(error || '未知错误')
+      showToast(`视频准备失败：${detail}`, 'error')
+      resolve('')
+    }
+  })
+}
+
+async function ensureLocalVideoForVideoAction(): Promise<string> {
+  if (localVideoPath.value) return localVideoPath.value
+  return downloadVideoForDefaultApp()
+}
+
+async function convertedVideoPath(inputPath: string): Promise<string> {
+  const [{ appDataDir, join }] = await Promise.all([
+    import('@tauri-apps/api/path'),
+  ])
+  const baseDir = await appDataDir()
+  const rawName = pathBaseName(inputPath).replace(/\.[^.]+$/, '') || 'video'
+  const name = `${safeFileName(rawName, 'video')}_compatible.mp4`
+  return join(baseDir, 'video-cache', 'converted', `${Date.now()}`, name)
+}
+
+async function convertCurrentVideoToMp4(options: { auto?: boolean } = {}) {
+  if (videoConverting.value) return
+  videoConverting.value = true
+  let localPath = ''
+  try {
+    localPath = await ensureLocalVideoForVideoAction()
+    if (!localPath) return
+    showToast(options.auto ? 'Windows 正在自动转为兼容 MP4...' : '正在转为兼容 MP4...')
+    const outputPath = await convertedVideoPath(localPath)
+    const convertedPath = await invoke<string>('convert_video_to_compatible_mp4', {
+      inputPath: localPath,
+      outputPath,
+    })
+    const result = await invoke<{ url: string }>('create_local_video_stream_url', {
+      request: {
+        path: convertedPath,
+        mimeType: 'video/mp4',
+        name: pathBaseName(convertedPath),
+      },
+    })
+    if (!payload.value) return
+    payload.value = {
+      ...payload.value,
+      src: result.url,
+      filePath: convertedPath,
+      originalUrl: '',
+      fileKey: '',
+      fileName: pathBaseName(convertedPath),
+      mimeType: 'video/mp4',
+    }
+    resetVideoState({ clearSource: false })
+    videoAutoTranscodeTried.value = true
+    await nextTick()
+    startVideoPreparingOnOpen()
+    await probeCurrentVideoFormat(convertedPath)
+    showToast(options.auto ? '已自动转为兼容 MP4' : '已转为兼容 MP4')
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error || '未知错误')
+    if (options.auto && /ffmpeg/i.test(detail) && localPath) {
+      try {
+        await invoke('open_file', { path: localPath })
+        showToast('未检测到转码组件，已尝试用系统播放器打开')
+        return
+      } catch {
+        // Fall through to the original error message.
+      }
+    }
+    showToast(`${options.auto ? '自动转换失败' : '转换失败'}：${detail}`, 'error')
+  } finally {
+    videoConverting.value = false
+  }
+}
+
+async function maybeAutoConvertVideoForWindows(probe: VideoFormatProbe, source: string) {
+  if (!isWindowsPlatform()) return
+  if (!probe.needsTranscode) return
+  if (videoConverting.value || videoAutoTranscodeTried.value) return
+  const key = `${source}\n${probe.videoCodecTag}\n${probe.audioCodecTag}\n${probe.size}`
+  if (videoAutoTranscodeSource === key) return
+  videoAutoTranscodeSource = key
+  videoAutoTranscodeTried.value = true
+  await convertCurrentVideoToMp4({ auto: true })
 }
 
 function rotateImage() {
@@ -891,7 +1235,7 @@ onUnmounted(() => {
           draggable="false"
         />
         <div
-          v-else-if="!isVideoFrameReady"
+          v-else-if="isVideoBuffering"
           class="media-video-waiting"
           aria-hidden="true"
         >
@@ -903,7 +1247,7 @@ onUnmounted(() => {
           :src="videoSrc"
           :poster="videoCoverSrc"
           playsinline
-          preload="metadata"
+          preload="auto"
           @click.stop="toggleVideoPlayback"
           @loadedmetadata="handleVideoLoadedMetadata"
           @loadeddata="handleVideoLoadedData"
@@ -911,13 +1255,16 @@ onUnmounted(() => {
           @durationchange="syncVideoState"
           @timeupdate="syncVideoState"
           @play="handleVideoPlay"
+          @playing="handleVideoPlaying"
+          @waiting="handleVideoWaiting"
+          @stalled="handleVideoWaiting"
           @pause="handleVideoPause"
           @ended="syncVideoState"
           @volumechange="syncVideoState"
           @error="handleVideoError"
         ></video>
         <button
-          v-if="!isVideoPlaying"
+          v-if="!isVideoPlaying && !videoConverting"
           class="video-overlaid-play"
           type="button"
           aria-label="Play"
@@ -934,11 +1281,13 @@ onUnmounted(() => {
       >
         <button
           class="video-control-btn video-play-btn"
+          :class="{ loading: isVideoBuffering }"
           type="button"
-          :aria-label="isVideoPlaying ? 'Pause' : 'Play'"
+          :aria-label="isVideoControlPlaying ? 'Pause' : 'Play'"
           @click="toggleVideoPlayback"
         >
-          <span v-if="isVideoPlaying" class="pause-glyph">
+          <span v-if="isVideoBuffering" class="video-loading-glyph"></span>
+          <span v-else-if="isVideoControlPlaying" class="pause-glyph">
             <i></i>
             <i></i>
           </span>
@@ -955,7 +1304,7 @@ onUnmounted(() => {
           aria-label="Progress"
           @input="handleVideoSeek"
         />
-        <span class="video-time">{{ formatVideoTime(videoCurrentTime) }} / {{ formatVideoTime(videoDuration) }}</span>
+        <span class="video-time" :class="{ loading: isVideoBuffering }">{{ videoTimeText }}</span>
         <button
           class="video-control-btn video-volume-btn"
           type="button"
@@ -1476,6 +1825,10 @@ onUnmounted(() => {
   }
 }
 
+.video-control-btn.loading {
+  cursor: wait;
+}
+
 .video-fullscreen-btn svg {
   fill: currentColor;
   stroke: none;
@@ -1501,6 +1854,15 @@ onUnmounted(() => {
     border-radius: 1px;
     background: #fff;
   }
+}
+
+.video-loading-glyph {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-top-color: #fff;
+  animation: media-video-loading-spin 0.9s linear infinite;
 }
 
 .video-range {
@@ -1568,11 +1930,16 @@ onUnmounted(() => {
 
 .video-time {
   flex: 0 0 auto;
+  min-width: 82px;
   color: #fff;
   font-size: 14px;
   line-height: 1;
   white-space: nowrap;
   user-select: none;
+}
+
+.video-time.loading {
+  opacity: 0.86;
 }
 
 .bottom-actions {

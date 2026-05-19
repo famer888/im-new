@@ -14,6 +14,10 @@ export interface MediaViewerPayload {
   duration?: number
   cover?: string
   size?: number
+  originalUrl?: string
+  fileKey?: string
+  fileName?: string
+  mimeType?: string
   timestamp: number
 }
 
