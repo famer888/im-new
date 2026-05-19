@@ -1567,6 +1567,12 @@ export async function setupTauriListeners() {
       serverMsgId: payload.msgId,
       sentOverTime: payload.sentOverTime,
     })
+    if (String(payload.conversationId || '').startsWith('2_')) {
+      console.info('[channel-read] msg:sent channel receipt', {
+        payload,
+        receiptApplied,
+      })
+    }
 
     if (!authStore.uid) return
     try {
@@ -1580,6 +1586,13 @@ export async function setupTauriListeners() {
           sentOverTime: Number(payload.sentOverTime) || null,
         },
       })
+      if (String(payload.conversationId || '').startsWith('2_')) {
+        console.info('[channel-read] mark_message_sent done', {
+          conversationId: payload.conversationId,
+          flag: String(payload.flag),
+          serverMsgId: Number(payload.msgId),
+        })
+      }
       if (!receiptApplied && String(payload.conversationId || '').startsWith('1_')) {
         await messageStore.loadMessages(authStore.uid, payload.conversationId, true)
       }
@@ -1804,6 +1817,67 @@ export async function setupTauriListeners() {
       }
     } catch (err) {
       console.warn('[group-read] apply_group_read_receipts failed:', err)
+    }
+  })
+
+  listen<{
+    channelId: number
+    readChannelMessages: Array<{
+      msgId: number
+      total: number
+    }>
+  }>('msg:channel-read-receipt', async (event) => {
+    const authStore = useAuthStore()
+    const uid = String(authStore.uid || '')
+    if (!uid) return
+
+    const channelId = Number(event.payload?.channelId || 0)
+    const receipts = Array.isArray(event.payload?.readChannelMessages)
+      ? event.payload.readChannelMessages
+      : []
+    console.info('[channel-read] frontend event', {
+      uid,
+      payload: event.payload,
+      channelId,
+      receipts,
+    })
+    if (channelId <= 0 || receipts.length === 0) return
+
+    const conversationId = `2_${channelId}`
+    const messageStore = useMessageStore()
+    const localPatches = receipts.map((item) => ({
+      conversationId,
+      messageId: String(item.msgId || ''),
+      readTotal: Number(item.total || 0),
+    }))
+    const localResult = messageStore.applyChannelReadReceiptPatches(localPatches)
+    console.info('[channel-read] local apply result', {
+      conversationId,
+      localPatches,
+      localResult,
+    })
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const patches = await invoke<Array<{
+        conversationId: string
+        messageId: string
+        readTotal: number
+        extra?: string | null
+      }>>('apply_channel_read_receipts', {
+        uid,
+        channelId,
+        receipts,
+      })
+      const dbPatches = Array.isArray(patches) ? patches : []
+      const dbResult = messageStore.applyChannelReadReceiptPatches(dbPatches)
+      console.info('[channel-read] db apply result', {
+        conversationId,
+        dbPatches,
+        dbResult,
+      })
+    } catch (err) {
+      console.warn('[channel-read] apply_channel_read_receipts failed:', err)
     }
   })
 

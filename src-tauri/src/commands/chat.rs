@@ -5,7 +5,7 @@ use prost::Message as _;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::crypto::CryptoEngine;
 use crate::db::{models, queries, DbManager};
@@ -125,6 +125,22 @@ pub struct GroupReadReceiptUpdate {
     pub conversation_id: String,
     pub message_id: String,
     pub read_status: i32,
+    pub extra: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelReadReceiptSyncPayload {
+    pub msg_id: i64,
+    pub total: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelReadReceiptUpdate {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub read_total: i32,
     pub extra: Option<String>,
 }
 
@@ -2183,7 +2199,7 @@ pub async fn mark_as_read(
     let (conv_type, target_id) = parse_conversation_id(&conversation_id)?;
     let now = chrono::Utc::now().timestamp_millis();
 
-    let (result, receipts) = db
+    let (result, receipts, channel_read_msg_ids) = db
         .with_connection(&uid, |conn| {
             let mut stmt = conn
                 .prepare_cached(
@@ -2312,6 +2328,28 @@ pub async fn mark_as_read(
                 }
             }
 
+            let channel_read_msg_ids = if conv_type == 2 {
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT id
+                         FROM messages
+                         WHERE conversation_id = ?1
+                           AND sender_id != ?2
+                           AND is_deleted = 0
+                         ORDER BY send_time ASC",
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                let rows = stmt
+                    .query_map(rusqlite::params![conversation_id, uid], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                rows.filter_map(|row| row.ok()?.parse::<i64>().ok())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+
             let receipts = if conv_type == 0 && target_id != queries::FILE_HELPER_TARGET_ID {
                 let target_uid = target_id.parse::<i64>().ok();
                 candidates
@@ -2375,6 +2413,7 @@ pub async fn mark_as_read(
                     conversation_read_updates: Vec::new(),
                 },
                 receipts,
+                channel_read_msg_ids,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -2391,6 +2430,38 @@ pub async fn mark_as_read(
                 "mark_as_read send 10106 failed conversation={} err={}",
                 conversation_id, err
             );
+        }
+    }
+
+    if conv_type == 2 && !channel_read_msg_ids.is_empty() {
+        match target_id.parse::<i64>() {
+            Ok(channel_id) if channel_id > 0 => {
+                let req = imweb::SendReadChannelMessage {
+                    channel_id,
+                    msg_id: channel_read_msg_ids.clone(),
+                };
+                let payload = req.encode_to_vec();
+                warn!(
+                    "[channel-read] mark_as_read send 4103 channel_id={} msg_ids={:?}",
+                    channel_id, channel_read_msg_ids
+                );
+                if let Err(err) = ws_mgr.send_packet(
+                    ws_cmds::READ_CHANNEL_MSG,
+                    ws_cmds::READ_CHANNEL_MSG as i64,
+                    &payload,
+                ) {
+                    warn!(
+                        "[channel-read] mark_as_read send 4103 failed conversation={} channel_id={} err={}",
+                        conversation_id, channel_id, err
+                    );
+                }
+            }
+            _ => {
+                warn!(
+                    "[channel-read] mark_as_read skip 4103 invalid channel target_id={} conversation={}",
+                    target_id, conversation_id
+                );
+            }
         }
     }
 
@@ -2772,6 +2843,92 @@ pub async fn apply_group_read_receipts(
             group_read_updates: updates,
             conversation_read_updates,
         })
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_channel_read_receipts(
+    db: State<'_, DbManager>,
+    uid: String,
+    channel_id: i64,
+    receipts: Vec<ChannelReadReceiptSyncPayload>,
+) -> Result<Vec<ChannelReadReceiptUpdate>, String> {
+    db.with_connection(&uid, |conn| {
+        let conversation_id = format!("2_{}", channel_id);
+        let mut updates = Vec::<ChannelReadReceiptUpdate>::new();
+
+        info!(
+            "[channel-read] apply_channel_read_receipts start uid={} channel_id={} conversation_id={} receipt_count={} receipts={:?}",
+            uid,
+            channel_id,
+            conversation_id,
+            receipts.len(),
+            receipts
+        );
+
+        for receipt in receipts {
+            if channel_id <= 0 || receipt.msg_id <= 0 || receipt.total <= 0 {
+                warn!(
+                    "[channel-read] apply skip invalid channel_id={} msg_id={} total={}",
+                    channel_id, receipt.msg_id, receipt.total
+                );
+                continue;
+            }
+
+            let extra = conn
+                .query_row(
+                    "SELECT COALESCE(extra, '')
+                     FROM messages
+                     WHERE conversation_id = ?1
+                       AND id = ?2
+                       AND is_deleted = 0
+                     LIMIT 1",
+                    rusqlite::params![conversation_id, receipt.msg_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            let Some(extra) = extra else {
+                warn!(
+                    "[channel-read] apply no local message conversation_id={} msg_id={} total={}",
+                    conversation_id, receipt.msg_id, receipt.total
+                );
+                continue;
+            };
+
+            let mut extra_map = parse_extra_map(Some(extra.as_str()));
+            extra_map.insert(
+                "readTotal".to_string(),
+                serde_json::Value::from(receipt.total),
+            );
+            let next_extra = serde_json::Value::Object(extra_map).to_string();
+
+            conn.execute(
+                "UPDATE messages
+                 SET extra = ?1
+                 WHERE conversation_id = ?2 AND id = ?3",
+                rusqlite::params![next_extra, conversation_id, receipt.msg_id.to_string()],
+            )
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+            updates.push(ChannelReadReceiptUpdate {
+                conversation_id: conversation_id.clone(),
+                message_id: receipt.msg_id.to_string(),
+                read_total: receipt.total,
+                extra: Some(next_extra),
+            });
+        }
+
+        info!(
+            "[channel-read] apply_channel_read_receipts done conversation_id={} update_count={} updates={:?}",
+            conversation_id,
+            updates.len(),
+            updates
+        );
+
+        Ok(updates)
     })
     .map_err(|e| e.to_string())
 }

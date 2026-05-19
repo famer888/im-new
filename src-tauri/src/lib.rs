@@ -122,6 +122,7 @@ pub fn run() {
             commands::chat::mark_as_read,
             commands::chat::apply_friend_read_receipts,
             commands::chat::apply_group_read_receipts,
+            commands::chat::apply_channel_read_receipts,
             commands::chat::delete_message,
             commands::chat::pin_conversation,
             commands::chat::mute_conversation,

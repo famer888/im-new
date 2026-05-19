@@ -1792,6 +1792,89 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function applyChannelReadReceiptPatches(patches: Array<{
+    conversationId: string
+    messageId: string
+    readTotal: number
+    extra?: string | null
+  }>) {
+    const result = {
+      applied: 0,
+      invalid: 0,
+      noList: 0,
+      noMatch: 0,
+    }
+    if (!Array.isArray(patches) || patches.length === 0) return result
+
+    for (const patch of patches) {
+      const convId = String(patch.conversationId || '')
+      const messageId = String(patch.messageId || '')
+      const readTotal = Math.max(0, Number(patch.readTotal || 0))
+      if (!convId || !messageId || readTotal <= 0) {
+        result.invalid += 1
+        console.info('[channel-read-store] skip invalid patch', { patch, convId, messageId, readTotal })
+        continue
+      }
+
+      const list = messageMap.value.get(convId)
+      if (!list) {
+        result.noList += 1
+        console.info('[channel-read-store] skip missing conversation list', { convId, messageId, readTotal })
+        continue
+      }
+
+      const idx = list.findIndex((m) => m.id === messageId || m.customMsgId === messageId)
+      if (idx < 0) {
+        result.noMatch += 1
+        console.info('[channel-read-store] skip no message match', {
+          convId,
+          messageId,
+          readTotal,
+          listSize: list.length,
+          recentMessages: list.slice(-8).map((m) => ({
+            id: m.id,
+            customMsgId: m.customMsgId,
+            sendTime: m.sendTime,
+            content: String(m.content || '').slice(0, 40),
+            extra: m.extra,
+          })),
+        })
+        continue
+      }
+
+      let nextExtra = patch.extra ?? null
+      if (!nextExtra) {
+        let extraObj: Record<string, unknown> = {}
+        try {
+          const parsed = JSON.parse(list[idx].extra || '{}')
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            extraObj = parsed as Record<string, unknown>
+          }
+        } catch {
+          extraObj = {}
+        }
+        extraObj.readTotal = readTotal
+        nextExtra = JSON.stringify(extraObj)
+      }
+
+      const next = [...list]
+      next[idx] = {
+        ...next[idx],
+        extra: nextExtra,
+      }
+      messageMap.value.set(convId, next)
+      result.applied += 1
+      console.info('[channel-read-store] applied patch', {
+        convId,
+        messageId,
+        readTotal,
+        oldExtra: list[idx].extra,
+        nextExtra,
+      })
+    }
+    return result
+  }
+
   function applySendFailed(params: {
     flag: number | string
     conversationId?: string
@@ -2105,6 +2188,7 @@ export const useMessageStore = defineStore('message', () => {
     updateMessage,
     markMessagesRead,
     applyGroupReadReceiptPatches,
+    applyChannelReadReceiptPatches,
     applySendReceipt,
     applySendFailed,
     deleteMessage,
