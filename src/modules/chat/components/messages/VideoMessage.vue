@@ -33,6 +33,9 @@ let downloadToken = 0
 let videoOpenToken = 0
 let coverToken = 0
 let pendingVideoLocalFilePromise: Promise<string> | null = null
+let pendingEncryptedVideoStreamPromise: Promise<string> | null = null
+let cachedEncryptedVideoStreamKey = ''
+let cachedEncryptedVideoStreamUrl = ''
 let stopDownloadEvents: Array<() => void> = []
 let stopVideoDownloadEvents: Array<() => void> = []
 let nativeDragStartPoint: { x: number; y: number } | null = null
@@ -630,7 +633,7 @@ function getMediaViewerCoverSrc(): string {
   return fallback
 }
 
-async function openMediaWindow(pathOrUrl: string) {
+async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: string; fileKey?: string }) {
   const target = String(pathOrUrl || '').trim()
   if (!target) return
   if (!(window as any).__TAURI_INTERNALS__) {
@@ -671,6 +674,10 @@ async function openMediaWindow(pathOrUrl: string) {
     duration: videoData.value.duration || undefined,
     cover: getMediaViewerCoverSrc(),
     size: videoData.value.size || undefined,
+    originalUrl: options?.originalUrl || (/^https?:\/\//i.test(videoData.value.url) ? videoData.value.url : ''),
+    fileKey: options?.fileKey || fileKey.value || '',
+    fileName: getVideoFileName(videoData.value.url || target, videoData.value.name, localVideoSourcePath.value),
+    mimeType: videoData.value.mimeType || '',
   })
 
   await invoke('open_media_window', {
@@ -754,6 +761,51 @@ async function createEncryptedVideoStreamUrl(url: string, key: string): Promise<
   })
   void probeEncryptedVideoStreamUrl(result.url)
   return result.url
+}
+
+function encryptedVideoStreamCacheKey(url: string, key: string): string {
+  return [
+    String(url || '').trim(),
+    String(key || '').trim(),
+    String(videoData.value.size || 0),
+    getVideoFileName(url, videoData.value.name),
+  ].join('\n')
+}
+
+async function getEncryptedVideoStreamUrl(url: string, key: string): Promise<string> {
+  const cacheKey = encryptedVideoStreamCacheKey(url, key)
+  if (cachedEncryptedVideoStreamUrl && cachedEncryptedVideoStreamKey === cacheKey) {
+    return cachedEncryptedVideoStreamUrl
+  }
+  if (pendingEncryptedVideoStreamPromise && cachedEncryptedVideoStreamKey === cacheKey) {
+    return pendingEncryptedVideoStreamPromise
+  }
+
+  cachedEncryptedVideoStreamKey = cacheKey
+  pendingEncryptedVideoStreamPromise = createEncryptedVideoStreamUrl(url, key)
+    .then((streamUrl) => {
+      cachedEncryptedVideoStreamUrl = streamUrl
+      return streamUrl
+    })
+    .finally(() => {
+      pendingEncryptedVideoStreamPromise = null
+    })
+  return pendingEncryptedVideoStreamPromise
+}
+
+function preloadEncryptedVideoStream() {
+  if (!(window as any).__TAURI_INTERNALS__) return
+  const url = videoData.value.url
+  if (!/^https?:\/\//i.test(url) || videoData.value.size <= 0) return
+
+  void resolveFileKey()
+    .then((key) => {
+      if (!key) return
+      return getEncryptedVideoStreamUrl(url, key)
+    })
+    .catch((error) => {
+      console.warn('[video] preload stream failed:', error)
+    })
 }
 
 function getVideoUrlCandidates(url: string, name = ''): string[] {
@@ -1097,6 +1149,7 @@ function handleNativeDragMouseUp() {
 
 function handleNativeDragMouseDown(event: MouseEvent) {
   if (event.button !== 0) return
+  preloadEncryptedVideoStream()
 
   if (!(window as any).__TAURI_INTERNALS__) return
 
@@ -1147,8 +1200,8 @@ async function handleOpenVideo() {
     const isEncryptedRemote = /^https?:\/\//i.test(url) && Boolean(key)
     if ((window as any).__TAURI_INTERNALS__ && isEncryptedRemote) {
       if (videoData.value.size > 0) {
-        const streamUrl = await createEncryptedVideoStreamUrl(url, key)
-        await openMediaWindow(streamUrl)
+        const streamUrl = await getEncryptedVideoStreamUrl(url, key)
+        await openMediaWindow(streamUrl, { originalUrl: url, fileKey: key })
         return
       }
       const path = await downloadVideoToLocal(url, key)
@@ -1170,6 +1223,9 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, lo
   coverToken += 1
   const token = coverToken
   pendingVideoLocalFilePromise = null
+  pendingEncryptedVideoStreamPromise = null
+  cachedEncryptedVideoStreamKey = ''
+  cachedEncryptedVideoStreamUrl = ''
   cleanupDownloadEvents()
   cleanupVideoDownloadEvents()
   isLoaded.value = false
@@ -1219,6 +1275,8 @@ onBeforeUnmount(() => {
     :title="dragFileName"
     @click.stop="handleVideoClick"
     @mousedown.left="handleNativeDragMouseDown"
+    @mouseenter="preloadEncryptedVideoStream"
+    @focusin="preloadEncryptedVideoStream"
   >
     <div class="video-content" :style="videoBoxStyle">
       <div class="video-frame" :class="{ 'no-cover': !isLoaded || loadError || showLoading }">

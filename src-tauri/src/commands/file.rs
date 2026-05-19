@@ -80,6 +80,23 @@ pub struct CreateVideoStreamUrlResponse {
     pub url: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoFormatProbe {
+    pub container: String,
+    pub brand: String,
+    pub video_codec: String,
+    pub video_codec_tag: String,
+    pub audio_codec: String,
+    pub audio_codec_tag: String,
+    pub size: u64,
+    pub is_hevc: bool,
+    pub is_h264: bool,
+    pub needs_transcode: bool,
+    pub webview_likely_supported: bool,
+    pub summary: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateLocalVideoStreamUrlRequest {
@@ -236,6 +253,226 @@ fn video_mime_from_name(name: &str, explicit: &str) -> String {
     } else {
         "video/mp4".to_string()
     }
+}
+
+fn source_to_local_path(source: &str) -> PathBuf {
+    let raw = source.trim();
+    if raw.to_ascii_lowercase().starts_with("file:") {
+        if let Ok(url) = url::Url::parse(raw) {
+            if let Ok(path) = url.to_file_path() {
+                return path;
+            }
+        }
+    }
+    PathBuf::from(raw)
+}
+
+fn contains_fourcc(bytes: &[u8], tag: &[u8; 4]) -> bool {
+    bytes.windows(4).any(|window| window == tag)
+}
+
+fn first_fourcc(bytes: &[u8], tags: &[&[u8; 4]]) -> String {
+    for tag in tags {
+        if contains_fourcc(bytes, tag) {
+            return String::from_utf8_lossy(&tag[..]).to_string();
+        }
+    }
+    String::new()
+}
+
+fn fallback_video_fourcc(bytes: &[u8]) -> String {
+    if contains_fourcc(bytes, b"avcC") {
+        return "avc1".to_string();
+    }
+    if contains_fourcc(bytes, b"hvcC") {
+        return "hvc1".to_string();
+    }
+    if contains_fourcc(bytes, b"vpcC") {
+        return "vp09".to_string();
+    }
+    if contains_fourcc(bytes, b"av1C") {
+        return "av01".to_string();
+    }
+    String::new()
+}
+
+fn fallback_audio_fourcc(bytes: &[u8]) -> String {
+    if contains_fourcc(bytes, b"esds") {
+        return "mp4a".to_string();
+    }
+    if contains_fourcc(bytes, b"dOps") {
+        return "Opus".to_string();
+    }
+    String::new()
+}
+
+fn parse_mp4_brand(bytes: &[u8]) -> String {
+    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+        return String::new();
+    }
+    String::from_utf8_lossy(&bytes[8..12]).trim().to_string()
+}
+
+fn container_from_brand(brand: &str, source: &str) -> String {
+    let lower_brand = brand.to_ascii_lowercase();
+    let lower_source = source.to_ascii_lowercase();
+    if lower_brand == "qt" || lower_source.ends_with(".mov") {
+        return "MOV/QuickTime".to_string();
+    }
+    if lower_source.ends_with(".webm") {
+        return "WebM".to_string();
+    }
+    if lower_source.ends_with(".ogg") || lower_source.ends_with(".ogv") {
+        return "Ogg".to_string();
+    }
+    if !brand.is_empty() || lower_source.ends_with(".mp4") || lower_source.ends_with(".m4v") {
+        return "MP4".to_string();
+    }
+    "未知容器".to_string()
+}
+
+fn codec_name_from_tag(tag: &str) -> String {
+    match tag {
+        "hvc1" | "hev1" => "HEVC/H.265".to_string(),
+        "avc1" | "avc3" => "H.264/AVC".to_string(),
+        "mp4v" => "MPEG-4 Visual".to_string(),
+        "vp09" => "VP9".to_string(),
+        "av01" => "AV1".to_string(),
+        "mp4a" => "AAC".to_string(),
+        "ac-3" => "AC-3".to_string(),
+        "ec-3" => "E-AC-3".to_string(),
+        "Opus" => "Opus".to_string(),
+        "alac" => "ALAC".to_string(),
+        _ => String::new(),
+    }
+}
+
+fn probe_video_bytes(source: &str, size: u64, bytes: &[u8]) -> VideoFormatProbe {
+    let brand = parse_mp4_brand(bytes);
+    let container = container_from_brand(&brand, source);
+    let mut video_codec_tag = first_fourcc(bytes, &[b"hvc1", b"hev1", b"avc1", b"avc3", b"mp4v", b"vp09", b"av01"]);
+    if video_codec_tag.is_empty() {
+        video_codec_tag = fallback_video_fourcc(bytes);
+    }
+    let mut audio_codec_tag = first_fourcc(bytes, &[b"mp4a", b"ac-3", b"ec-3", b"Opus", b"alac"]);
+    if audio_codec_tag.is_empty() {
+        audio_codec_tag = fallback_audio_fourcc(bytes);
+    }
+    let video_codec = codec_name_from_tag(&video_codec_tag);
+    let audio_codec = codec_name_from_tag(&audio_codec_tag);
+    let is_hevc = video_codec_tag == "hvc1" || video_codec_tag == "hev1";
+    let is_h264 = video_codec_tag == "avc1" || video_codec_tag == "avc3";
+    let is_mp4_like = container == "MP4" || container == "MOV/QuickTime";
+    let webview_likely_supported = is_mp4_like && is_h264 && (audio_codec_tag.is_empty() || audio_codec_tag == "mp4a");
+    let needs_transcode = !webview_likely_supported;
+    let summary = format!(
+        "{}{} · 视频：{}{} · 音频：{}{}",
+        container,
+        if brand.is_empty() { String::new() } else { format!("({})", brand) },
+        if video_codec.is_empty() { "未知".to_string() } else { video_codec.clone() },
+        if video_codec_tag.is_empty() { String::new() } else { format!(" [{}]", video_codec_tag) },
+        if audio_codec.is_empty() { "未知".to_string() } else { audio_codec.clone() },
+        if audio_codec_tag.is_empty() { String::new() } else { format!(" [{}]", audio_codec_tag) },
+    );
+
+    VideoFormatProbe {
+        container,
+        brand,
+        video_codec,
+        video_codec_tag,
+        audio_codec,
+        audio_codec_tag,
+        size,
+        is_hevc,
+        is_h264,
+        needs_transcode,
+        webview_likely_supported,
+        summary,
+    }
+}
+
+async fn read_file_probe_bytes(path: &Path) -> Result<(u64, Vec<u8>), String> {
+    const PROBE_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("open video for probe failed: {}", e))?;
+    let size = file
+        .metadata()
+        .await
+        .map_err(|e| format!("stat video for probe failed: {}", e))?
+        .len();
+    let head_len = (size as usize).min(PROBE_CHUNK_SIZE);
+    let mut bytes = vec![0; head_len];
+    if head_len > 0 {
+        file.read_exact(&mut bytes)
+            .await
+            .map_err(|e| format!("read video head failed: {}", e))?;
+    }
+    if size > PROBE_CHUNK_SIZE as u64 {
+        let tail_len = (size as usize).min(PROBE_CHUNK_SIZE);
+        file.seek(SeekFrom::Start(size.saturating_sub(tail_len as u64)))
+            .await
+            .map_err(|e| format!("seek video tail failed: {}", e))?;
+        let start = bytes.len();
+        bytes.resize(start + tail_len, 0);
+        file.read_exact(&mut bytes[start..])
+            .await
+            .map_err(|e| format!("read video tail failed: {}", e))?;
+    }
+    Ok((size, bytes))
+}
+
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    let total = value.rsplit('/').next()?.trim();
+    if total == "*" {
+        return None;
+    }
+    total.parse::<u64>().ok()
+}
+
+async fn fetch_probe_range(
+    client: &reqwest::Client,
+    source: &str,
+    start: u64,
+    end: u64,
+) -> Result<(Vec<u8>, Option<u64>), String> {
+    let response = client
+        .get(source)
+        .header(reqwest::header::RANGE, format!("bytes={}-{}", start, end))
+        .send()
+        .await
+        .map_err(|e| format!("fetch video probe range failed: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("fetch video probe range failed: HTTP {}", response.status()));
+    }
+    let range_total = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range_total);
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("read video probe range failed: {}", e))?;
+    Ok((bytes.to_vec(), range_total))
+}
+
+async fn read_url_probe_bytes(source: &str, size: Option<u64>) -> Result<(u64, Vec<u8>), String> {
+    const PROBE_CHUNK_SIZE: u64 = 8 * 1024 * 1024;
+    let client = reqwest::Client::new();
+    let head_end = size
+        .map(|value| value.saturating_sub(1).min(PROBE_CHUNK_SIZE.saturating_sub(1)))
+        .unwrap_or_else(|| PROBE_CHUNK_SIZE.saturating_sub(1));
+    let (mut bytes, range_total) = fetch_probe_range(&client, source, 0, head_end).await?;
+    let known_size = size.or(range_total).unwrap_or(bytes.len() as u64);
+    if known_size > PROBE_CHUNK_SIZE {
+        let tail_start = known_size.saturating_sub(PROBE_CHUNK_SIZE);
+        if tail_start > head_end {
+            let (tail, _) = fetch_probe_range(&client, source, tail_start, known_size.saturating_sub(1)).await?;
+            bytes.extend_from_slice(&tail);
+        }
+    }
+    Ok((known_size, bytes))
 }
 
 fn encrypted_chunk_len(plain_len: u64) -> u64 {
@@ -1033,24 +1270,23 @@ pub async fn create_video_stream_url(
         url_head = %url.chars().take(120).collect::<String>(),
         "create video stream url"
     );
+    let stream_source = VideoStreamSource {
+        stream_id: token.clone(),
+        urls,
+        file_key,
+        mime_type,
+        plain_size: request.size,
+    };
     {
         let mut streams = video_streams()
             .lock()
             .map_err(|_| "video stream lock poisoned".to_string())?;
-        streams.insert(
-            token.clone(),
-            VideoStreamSource {
-                stream_id: token.clone(),
-                urls,
-                file_key,
-                mime_type,
-                plain_size: request.size,
-            },
-        );
+        streams.insert(token.clone(), stream_source.clone());
     }
+    tokio::spawn(prefetch_video_stream_chunks(stream_source));
 
     Ok(CreateVideoStreamUrlResponse {
-        url: format!("http://localhost:{}/video/{}/{}", port, token, name),
+        url: format!("http://127.0.0.1:{}/video/{}/{}", port, token, name),
     })
 }
 
@@ -1095,8 +1331,26 @@ pub async fn create_local_video_stream_url(
     }
 
     Ok(CreateVideoStreamUrlResponse {
-        url: format!("http://localhost:{}/video/{}/{}", port, token, name),
+        url: format!("http://127.0.0.1:{}/video/{}/{}", port, token, name),
     })
+}
+
+#[tauri::command]
+pub async fn probe_video_format(source: String, size: Option<u64>) -> Result<VideoFormatProbe, String> {
+    let source = source.trim().to_string();
+    if source.is_empty() {
+        return Err("video probe source is empty".to_string());
+    }
+
+    let (actual_size, bytes) = if source.to_ascii_lowercase().starts_with("http://")
+        || source.to_ascii_lowercase().starts_with("https://")
+    {
+        read_url_probe_bytes(&source, size).await?
+    } else {
+        read_file_probe_bytes(&source_to_local_path(&source)).await?
+    };
+
+    Ok(probe_video_bytes(&source, actual_size, &bytes))
 }
 
 fn stop_audio_children(players: &mut HashMap<String, Child>, keep_id: Option<&str>) {
@@ -1981,6 +2235,104 @@ pub async fn copy_file_overwrite(source_path: String, target_path: String) -> Re
 #[tauri::command]
 pub async fn file_exists(path: String) -> Result<bool, String> {
     Ok(tokio::fs::metadata(PathBuf::from(path)).await.is_ok())
+}
+
+fn ffmpeg_program_candidates() -> Vec<PathBuf> {
+    let binary_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(binary_name));
+            candidates.push(dir.join("bin").join(binary_name));
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("Resources").join(binary_name));
+            }
+        }
+    }
+    candidates
+}
+
+fn ffmpeg_command() -> Command {
+    for candidate in ffmpeg_program_candidates() {
+        if candidate.is_file() {
+            return Command::new(candidate);
+        }
+    }
+    Command::new("ffmpeg")
+}
+
+#[tauri::command]
+pub async fn convert_video_to_compatible_mp4(input_path: String, output_path: String) -> Result<String, String> {
+    let input = source_to_local_path(&input_path);
+    if !input.is_file() {
+        return Err(format!("video file not found: {}", input_path));
+    }
+
+    let output = PathBuf::from(output_path.trim());
+    if output.as_os_str().is_empty() {
+        return Err("output path is empty".to_string());
+    }
+    if let Some(parent) = output.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create converted video dir failed: {}", e))?;
+    }
+
+    let output_clone = output.clone();
+    let status = tokio::task::spawn_blocking(move || {
+        let mut command = ffmpeg_command();
+        #[cfg(target_os = "windows")]
+        {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        command
+            .arg("-y")
+            .arg("-i")
+            .arg(&input)
+            .arg("-map")
+            .arg("0:v:0")
+            .arg("-map")
+            .arg("0:a?")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-preset")
+            .arg("veryfast")
+            .arg("-crf")
+            .arg("23")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg("-c:a")
+            .arg("aac")
+            .arg("-movflags")
+            .arg("+faststart")
+            .arg(&output_clone)
+            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .output()
+    })
+    .await
+    .map_err(|e| format!("video convert task failed: {}", e))?
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "未检测到 ffmpeg，无法在本机转为兼容 MP4".to_string()
+        } else {
+            format!("start ffmpeg failed: {}", e)
+        }
+    })?;
+
+    if !status.status.success() {
+        let detail = String::from_utf8_lossy(&status.stderr)
+            .chars()
+            .rev()
+            .take(1200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        return Err(format!("ffmpeg convert failed: {}", detail));
+    }
+
+    Ok(output.to_string_lossy().to_string())
 }
 
 #[tauri::command]
