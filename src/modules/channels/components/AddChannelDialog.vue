@@ -7,7 +7,6 @@ import { useChannelStore } from '@/stores/useChannelStore'
 import { subscribeChannel } from '@/api/imChannel'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
-import closeIcon from '@/assets/images/common/close-icon.png'
 
 const props = withDefaults(defineProps<{
   visible?: boolean
@@ -31,6 +30,7 @@ const tipType = ref<'success' | 'error'>('success')
 const target = computed(() => uiStore.addChannelTarget)
 const displayName = computed(() => target.value?.channelName || target.value?.name || target.value?.id || '')
 const memberCount = computed(() => Number(target.value?.memberCount || 0))
+const subscriberText = computed(() => t('订阅者数量', { count: memberCount.value }))
 const remark = computed(() => target.value?.remark || '')
 const joinedChannel = computed(() => {
   const id = target.value?.id || target.value?.channelId || ''
@@ -120,19 +120,19 @@ async function handleJoinChannel() {
 <template>
   <div v-if="visible" class="add-channel-dialog" @click.self="closeDialog">
     <div class="dialog-card">
-      <button type="button" class="dialog-close" @click="closeDialog">
-        <img :src="closeIcon" alt="" />
-      </button>
-
       <div v-if="target" class="dialog-inner">
         <TextAvatar
+          class="channel-avatar"
+          :id="target.channelId || target.id"
           :name="displayName"
           :src="target.avatar || target.icon"
-          :size="62"
+          :color="target.logoColor || undefined"
+          :size="80"
+          avatar-type="channel"
           rounded
         />
         <div class="channel-name">{{ displayName }}</div>
-        <div class="subscriber-count">{{ t('{value}位订阅者', { value: memberCount }) }}</div>
+        <div class="subscriber-count">{{ subscriberText }}</div>
         <p v-if="remark" class="channel-remark">{{ remark }}</p>
         <div class="button-row">
           <button type="button" class="cancel-btn" @click="closeDialog">{{ t('取消') }}</button>
@@ -159,23 +159,28 @@ async function handleJoinChannel() {
 
 .dialog-card {
   position: relative;
-  width: min(420px, calc(100vw - 40px));
-  min-height: 264px;
+  width: min(300px, calc(100vw - 40px));
   box-sizing: border-box;
   border-radius: 8px;
   background: #fff;
 }
 
 .dialog-inner {
-  padding: 26px 28px 30px;
+  padding: 26px 20px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   box-sizing: border-box;
 }
 
+.channel-avatar {
+  :deep(.avatar-text) {
+    font-size: 24px;
+  }
+}
+
 .channel-name {
-  max-width: 340px;
+  max-width: 260px;
   margin-top: 10px;
   font-size: 16px;
   line-height: 22px;
@@ -187,35 +192,37 @@ async function handleJoinChannel() {
 }
 
 .subscriber-count {
-  margin-top: 8px;
-  color: #999;
+  margin-top: 6px;
+  color: #666;
   font-size: 12px;
-  line-height: 17px;
+  line-height: 18px;
 }
 
 .channel-remark {
   width: 100%;
-  max-height: 66px;
-  margin: 16px 0 0;
-  color: #666;
-  font-size: 13px;
-  line-height: 22px;
+  max-height: 100px;
+  margin: 10px 0 0;
+  color: rgba(45, 45, 45);
+  // font-family: "Times New Roman", serif;
+  font-size: 14px;
+  line-height: 18px;
+  font-weight: 900;
   text-align: left;
   overflow: hidden;
-  word-break: break-word;
+  word-break: break-all;
 }
 
 .button-row {
   width: 100%;
   display: flex;
-  gap: 12px;
-  margin-top: 28px;
+  gap: 10px;
+  margin-top: 20px;
 }
 
 .cancel-btn,
 .join-btn {
   flex: 1;
-  height: 32px;
+  height: 40px;
   border: 0;
   border-radius: 4px;
   font-size: 14px;
@@ -223,12 +230,12 @@ async function handleJoinChannel() {
 }
 
 .cancel-btn {
-  background: #f2f3f5;
-  color: #333;
+  background: #9197ad;
+  color: #fff;
 }
 
 .join-btn {
-  background: #3369fe;
+  background: #178aff;
   color: #fff;
 
   &:disabled {
@@ -238,7 +245,7 @@ async function handleJoinChannel() {
 }
 
 .join-tip {
-  max-width: 340px;
+  max-width: 260px;
   margin-top: 10px;
   font-size: 12px;
   line-height: 18px;
@@ -253,21 +260,4 @@ async function handleJoinChannel() {
   color: #f56c6c;
 }
 
-.dialog-close {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 30px;
-  height: 30px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &:hover {
-    opacity: 0.8;
-  }
-}
 </style>
