@@ -471,9 +471,7 @@ async function openChannelInviteLink(href: string, showInvalidToast: boolean): P
   const channelLink = await resolveChannelLinkTarget(href)
   if (channelLink?.data) {
     if (canOpenChannelDirectly(channelLink.data)) {
-      if (openChannelConversation(channelLink.data)) {
-        eventBus.emit('show-toast', { message: t('已打开频道'), type: 'success' })
-      }
+      openChannelConversation(channelLink.data)
     } else {
       openAddChannelDialog(channelLink.data)
     }
@@ -590,9 +588,7 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
     uiStore.setRightPanel('none')
     uiStore.openAddGroupDialog()
   } else if (target.type === 'channel') {
-    if (openChannelConversation(target.channel)) {
-      eventBus.emit('show-toast', { message: t('已打开频道'), type: 'success' })
-    }
+    openChannelConversation(target.channel)
   } else if (target.type === 'private-channel') {
     openAddChannelDialog(target.channel)
   } else {

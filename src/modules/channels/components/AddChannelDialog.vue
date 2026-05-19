@@ -53,10 +53,11 @@ function closeDialog() {
   emit('close')
 }
 
-function upsertAndOpenChannel() {
+function upsertAndOpenChannel(joined = false) {
   const current = target.value
   const id = current?.id || current?.channelId || ''
   if (!current || !id) return
+  const currentMemberType = Number(current.memberType || 0)
 
   channelStore.patchChannel(id, {
     ...current,
@@ -66,7 +67,7 @@ function upsertAndOpenChannel() {
     channelName: current.channelName || current.name || id,
     avatar: current.avatar || current.icon || null,
     icon: current.icon || current.avatar || null,
-    memberType: current.memberType ?? 1,
+    memberType: joined ? 3 : (currentMemberType > 0 ? current.memberType : joinedChannel.value?.memberType ?? 1),
     updatedAt: Date.now(),
   }, { allowRemoved: true })
 
@@ -106,7 +107,7 @@ async function handleJoinChannel() {
     }
 
     showTip(resp?.msg || t('加入频道成功'), 'success')
-    upsertAndOpenChannel()
+    upsertAndOpenChannel(true)
   } catch (error) {
     console.error('[AddChannelDialog] join failed:', error)
     showTip(t('加入频道失败'), 'error')

@@ -27,6 +27,7 @@ export interface Channel {
   memberType: number | null
   alias: string | null
   remark: string | null
+  link: string | null
   linkType: number | null
   ownerId: string | null
   description: string | null
@@ -184,6 +185,7 @@ export const useChannelStore = defineStore('channel', () => {
         : Number(item.memberType),
       alias: item.alias ?? null,
       remark: item.remark ?? null,
+      link: item.link ?? null,
       linkType: item.linkType === undefined || item.linkType === null ? null : Number(item.linkType),
       ownerId: item.ownerId ?? item.owner_id ?? null,
       description: item.description ?? item.channelDesc ?? null,

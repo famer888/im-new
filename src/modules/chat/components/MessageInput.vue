@@ -15,7 +15,7 @@ import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import { DEFAULT_READ_BURN_SECONDS, getReadBurnTimeText } from '@/utils/readBurn'
 import { emojiObj } from '@/utils/emoji'
 import { getUploadToken, getUploadUrl, updateContacts } from '@/api/imBase'
-import { updateMember } from '@/api/imChannel'
+import { subscribeChannel, updateMember } from '@/api/imChannel'
 import { proto } from '@/api/request'
 import { aesEncrypt } from '@/utils/crypto'
 import { getOssUploadCandidates, reportOssUploadCandidateFailure } from '@/utils/ossUploadDomains'
@@ -79,6 +79,7 @@ const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const updatingChannelDisturb = ref(false)
+const joiningChannel = ref(false)
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
@@ -112,6 +113,13 @@ const showChannelDisabledTip = computed(() => {
   if (!conv || conv.type !== ConversationType.Channel || !channel) return false
   return Boolean(channel.isDisable || Number(channel.status ?? 0) === 3)
 })
+const showChannelJoinButton = computed(() => {
+  const conv = chatStore.currentConversation
+  const channel = currentChannel.value
+  if (!conv || conv.type !== ConversationType.Channel || !channel) return false
+  if (showChannelDisabledTip.value) return false
+  return Number(channel.memberType ?? -1) === 0
+})
 const hasChannelPublishAuthority = computed(() => {
   const channel = currentChannel.value
   if (!channel) return true
@@ -122,6 +130,7 @@ const showChannelNotifyToggle = computed(() => {
   const conv = chatStore.currentConversation
   if (!conv || conv.type !== ConversationType.Channel || !currentChannel.value) return false
   if (showChannelDisabledTip.value) return false
+  if (showChannelJoinButton.value) return false
   return !hasChannelPublishAuthority.value
 })
 const channelNotifyText = computed(() =>
@@ -135,7 +144,7 @@ const inputPlaceholder = computed(() =>
     : t('Enter发送'),
 )
 const showInputNoticeOnly = computed(() =>
-  showChannelDisabledTip.value || showChannelNotifyToggle.value || showShutupTip.value,
+  showChannelDisabledTip.value || showChannelJoinButton.value || showChannelNotifyToggle.value || showShutupTip.value,
 )
 const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
@@ -298,6 +307,31 @@ async function toggleChannelDisturb() {
     showToast(t('操作失败'), 'error')
   } finally {
     updatingChannelDisturb.value = false
+  }
+}
+
+async function handleJoinChannel() {
+  const conv = chatStore.currentConversation
+  const channel = currentChannel.value
+  if (!conv || conv.type !== ConversationType.Channel || !channel || joiningChannel.value) return
+
+  joiningChannel.value = true
+  try {
+    const resp = await subscribeChannel({
+      channelId: channel.channelId || conv.targetId,
+      link: channel.link || undefined,
+    })
+    if (!responseOk(resp)) throw new Error(resp?.msg || 'subscribe channel failed')
+
+    channelStore.patchChannel(channel.channelId || conv.targetId, {
+      memberType: 3,
+      updatedAt: Date.now(),
+    }, { allowRemoved: true })
+  } catch (error) {
+    console.warn('[MessageInput] join channel failed:', error)
+    showToast(t('加入频道失败'), 'error')
+  } finally {
+    joiningChannel.value = false
   }
 }
 
@@ -3112,6 +3146,15 @@ onBeforeUnmount(() => {
     <div v-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
       {{ t('该频道已禁用') }}
     </div>
+    <button
+      v-else-if="showChannelJoinButton"
+      class="channel-notify-toggle"
+      type="button"
+      :disabled="joiningChannel"
+      @click="handleJoinChannel"
+    >
+      {{ joiningChannel ? t('加入中...') : t('加入频道') }}
+    </button>
     <button
       v-else-if="showChannelNotifyToggle"
       class="channel-notify-toggle"
