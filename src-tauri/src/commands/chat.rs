@@ -1071,6 +1071,38 @@ pub fn has_friend_rel_key(
     crypto.has_any_friend_key(&friend_id)
 }
 
+#[tauri::command]
+pub fn clear_friend_rel_key(
+    crypto: State<'_, CryptoEngine>,
+    friend_id: String,
+    version: Option<i64>,
+    source: Option<String>,
+) -> Result<(), String> {
+    let fid = friend_id.trim();
+    if fid.is_empty() {
+        return Err("empty friend_id".to_string());
+    }
+    let src = source
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_lowercase)
+        .filter(|s| s == "web" || s == "app");
+    if let (Some(ver), Some(src)) = (version, src.as_deref()) {
+        crypto.remove_friend_key(fid, ver, src);
+        tracing::info!(
+            target: "e2ee",
+            "clear_friend_rel_key friend_id={} version={} source={}",
+            fid,
+            ver,
+            src
+        );
+    } else {
+        crypto.remove_friend_keys(fid);
+        tracing::info!(target: "e2ee", "clear_friend_rel_key friend_id={} all", fid);
+    }
+    Ok(())
+}
+
 /// 把服务端下发的群消息 publicKey/msgKey（hex 字符串）与本地 curve25519
 /// 私钥做 Diffie-Hellman，派生 relKey 并缓存到 `CryptoEngine`。
 ///

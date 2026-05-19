@@ -9,7 +9,7 @@ use crate::crypto;
 use crate::proto::{im, imweb};
 use crate::ws::commands as cmds;
 
-const FLUSH_INTERVAL_MS: u64 = 100;
+pub const FLUSH_INTERVAL_MS: u64 = 100;
 const MAX_BATCH_SIZE: usize = 50;
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -413,6 +413,10 @@ struct ForceLogoutEvent {
 }
 
 impl MessageBatcher {
+    pub fn flush_interval() -> Duration {
+        Duration::from_millis(FLUSH_INTERVAL_MS)
+    }
+
     pub fn new(app_handle: AppHandle, aes_key: String, uid: String) -> Self {
         Self {
             buffer: Vec::with_capacity(MAX_BATCH_SIZE),
@@ -772,6 +776,12 @@ impl MessageBatcher {
         if self.buffer.len() >= MAX_BATCH_SIZE
             || self.last_flush.elapsed() >= Duration::from_millis(FLUSH_INTERVAL_MS)
         {
+            self.flush().await;
+        }
+    }
+
+    pub async fn flush_if_due(&mut self) {
+        if !self.buffer.is_empty() {
             self.flush().await;
         }
     }
@@ -1232,34 +1242,58 @@ impl MessageBatcher {
         let candidate_ids = vec![sender_id.clone()];
         let mut ciphertexts_to_try = Vec::new();
         let sender_source = if om.source == 1 { "web" } else { "app" };
-        // 老 im 接收私聊时，解密 key 使用顶层 `version + source`（发送端密钥），
-        // 不是 MessageContent.version（接收端对应设备的 keyVersion）。
-        // content block 选择也必须按老 im 顺序，避免 AES/PKCS7 误命中后展示乱码。
-        macro_rules! push_content {
-            ($content:expr) => {{
+        // 好友消息使用顶层 `version + source`；自己多端同步的
+        // myself*Content 在旧 im 里按同账号 APP key 语义解密。
+        // 同时保留顶层版本/source 作为兼容回退，覆盖已由旧包发出的消息。
+        macro_rules! push_content_with {
+            ($content:expr, $version:expr, $source:expr) => {{
                 let content = $content;
+                let version = $version;
+                let source = $source;
                 let attachment_key = if content.attachment_key.trim().is_empty() {
                     om.attachment_key.as_str()
                 } else {
                     content.attachment_key.as_str()
                 };
-                ciphertexts_to_try.push((
-                    ver,
-                    sender_source,
-                    content.content.as_slice(),
-                    attachment_key,
-                ));
+                if !ciphertexts_to_try.iter().any(
+                    |(v, s, cipher, _): &(i64, &str, &[u8], &str)| {
+                        *v == version && *s == source && *cipher == content.content.as_slice()
+                    },
+                ) {
+                    ciphertexts_to_try.push((
+                        version,
+                        source,
+                        content.content.as_slice(),
+                        attachment_key,
+                    ));
+                }
             }};
         }
         if is_self {
             if let Some(mweb) = &om.myself_web_content {
-                push_content!(mweb);
-            } else if let Some(mapp) = &om.myself_app_content {
-                push_content!(mapp);
+                let content_ver = if mweb.version > 0 {
+                    i64::from(mweb.version)
+                } else {
+                    ver
+                };
+                push_content_with!(mweb, content_ver, "app");
+                push_content_with!(mweb, ver, sender_source);
+            }
+            if let Some(mapp) = &om.myself_app_content {
+                let content_ver = if mapp.version > 0 {
+                    i64::from(mapp.version)
+                } else {
+                    ver
+                };
+                push_content_with!(mapp, content_ver, "app");
+                push_content_with!(mapp, ver, sender_source);
             }
         } else {
             if let Some(web) = &om.web_content {
-                push_content!(web);
+                push_content_with!(web, ver, sender_source);
+                if web.version > 0 {
+                    push_content_with!(web, i64::from(web.version), "web");
+                }
             }
         }
         // Fallback for old/unencrypted messages that might still use `content`
