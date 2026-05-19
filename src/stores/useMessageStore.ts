@@ -740,22 +740,46 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
     if (existing) {
+      const currentUid = String(useAuthStore().uid || '')
+      const currentConversationId = String(chatStore.currentConversationId || '')
+      const isIncomingUnread = Boolean(
+        currentUid
+        && msg.senderId
+        && String(msg.senderId) !== currentUid
+        && currentConversationId !== conversationId
+        && Number(msg.readStatus || 0) === 0
+      )
+      const nextUnreadCount = isIncomingUnread
+        ? Math.max(0, Number(existing.unreadCount || 0)) + 1
+        : existing.unreadCount
       chatStore.addOrUpdateConversation({
         ...existing,
         lastMsgId: msg.id || existing.lastMsgId,
         lastMsgTime: msg.sendTime || Date.now(),
         lastMsgDigest: digest || existing.lastMsgDigest,
+        unreadCount: nextUnreadCount,
         updatedAt: msg.sendTime || Date.now(),
       })
       return
     }
     const [typeRaw, targetId = ''] = conversationId.split('_')
     const conv = chatStore.ensureConversation(Number(typeRaw || 0), targetId)
+    const currentUid = String(useAuthStore().uid || '')
+    const currentConversationId = String(chatStore.currentConversationId || '')
+    const isIncomingUnread = Boolean(
+      currentUid
+      && msg.senderId
+      && String(msg.senderId) !== currentUid
+      && currentConversationId !== conversationId
+      && Number(msg.readStatus || 0) === 0
+    )
+    const nextUnreadCount = isIncomingUnread ? Math.max(1, Number(conv.unreadCount || 0) + 1) : conv.unreadCount
     chatStore.addOrUpdateConversation({
       ...conv,
       lastMsgId: msg.id || conv.lastMsgId,
       lastMsgTime: msg.sendTime || Date.now(),
       lastMsgDigest: digest || conv.lastMsgDigest,
+      unreadCount: nextUnreadCount,
       updatedAt: msg.sendTime || Date.now(),
     })
   }
@@ -1812,33 +1836,18 @@ export const useMessageStore = defineStore('message', () => {
       const readTotal = Math.max(0, Number(patch.readTotal || 0))
       if (!convId || !messageId || readTotal <= 0) {
         result.invalid += 1
-        console.info('[channel-read-store] skip invalid patch', { patch, convId, messageId, readTotal })
         continue
       }
 
       const list = messageMap.value.get(convId)
       if (!list) {
         result.noList += 1
-        console.info('[channel-read-store] skip missing conversation list', { convId, messageId, readTotal })
         continue
       }
 
       const idx = list.findIndex((m) => m.id === messageId || m.customMsgId === messageId)
       if (idx < 0) {
         result.noMatch += 1
-        console.info('[channel-read-store] skip no message match', {
-          convId,
-          messageId,
-          readTotal,
-          listSize: list.length,
-          recentMessages: list.slice(-8).map((m) => ({
-            id: m.id,
-            customMsgId: m.customMsgId,
-            sendTime: m.sendTime,
-            content: String(m.content || '').slice(0, 40),
-            extra: m.extra,
-          })),
-        })
         continue
       }
 
@@ -1864,13 +1873,6 @@ export const useMessageStore = defineStore('message', () => {
       }
       messageMap.value.set(convId, next)
       result.applied += 1
-      console.info('[channel-read-store] applied patch', {
-        convId,
-        messageId,
-        readTotal,
-        oldExtra: list[idx].extra,
-        nextExtra,
-      })
     }
     return result
   }

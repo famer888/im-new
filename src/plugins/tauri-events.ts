@@ -387,6 +387,7 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
   if (!settingStore.settings.notificationSound) return false
 
   const chatStore = useChatStore()
+  const channelStore = useChannelStore()
   return messages.some((item) => {
     const convId = String(item?.conversationId ?? item?.conversation_id ?? '')
     const senderId = String(item?.senderId ?? item?.sender_id ?? '')
@@ -395,6 +396,12 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
 
     const conv = chatStore.conversations.find((row) => row.id === convId)
     if (conv?.isMuted) return false
+    if (convId.startsWith('2_')) {
+      const channelId = conv?.targetId || convId.split('_')[1] || ''
+      const channel = channelStore.getChannel(channelId)
+        || channelStore.channels.find((row) => row.id === channelId || row.channelId === channelId)
+      if (channel?.isDisturb) return false
+    }
 
     return true
   })
@@ -1567,12 +1574,6 @@ export async function setupTauriListeners() {
       serverMsgId: payload.msgId,
       sentOverTime: payload.sentOverTime,
     })
-    if (String(payload.conversationId || '').startsWith('2_')) {
-      console.info('[channel-read] msg:sent channel receipt', {
-        payload,
-        receiptApplied,
-      })
-    }
 
     if (!authStore.uid) return
     try {
@@ -1586,13 +1587,6 @@ export async function setupTauriListeners() {
           sentOverTime: Number(payload.sentOverTime) || null,
         },
       })
-      if (String(payload.conversationId || '').startsWith('2_')) {
-        console.info('[channel-read] mark_message_sent done', {
-          conversationId: payload.conversationId,
-          flag: String(payload.flag),
-          serverMsgId: Number(payload.msgId),
-        })
-      }
       if (!receiptApplied && String(payload.conversationId || '').startsWith('1_')) {
         await messageStore.loadMessages(authStore.uid, payload.conversationId, true)
       }
@@ -1835,12 +1829,6 @@ export async function setupTauriListeners() {
     const receipts = Array.isArray(event.payload?.readChannelMessages)
       ? event.payload.readChannelMessages
       : []
-    console.info('[channel-read] frontend event', {
-      uid,
-      payload: event.payload,
-      channelId,
-      receipts,
-    })
     if (channelId <= 0 || receipts.length === 0) return
 
     const conversationId = `2_${channelId}`
@@ -1850,12 +1838,7 @@ export async function setupTauriListeners() {
       messageId: String(item.msgId || ''),
       readTotal: Number(item.total || 0),
     }))
-    const localResult = messageStore.applyChannelReadReceiptPatches(localPatches)
-    console.info('[channel-read] local apply result', {
-      conversationId,
-      localPatches,
-      localResult,
-    })
+    messageStore.applyChannelReadReceiptPatches(localPatches)
 
     try {
       const { invoke } = await import('@tauri-apps/api/core')
@@ -1870,14 +1853,9 @@ export async function setupTauriListeners() {
         receipts,
       })
       const dbPatches = Array.isArray(patches) ? patches : []
-      const dbResult = messageStore.applyChannelReadReceiptPatches(dbPatches)
-      console.info('[channel-read] db apply result', {
-        conversationId,
-        dbPatches,
-        dbResult,
-      })
+      messageStore.applyChannelReadReceiptPatches(dbPatches)
     } catch (err) {
-      console.warn('[channel-read] apply_channel_read_receipts failed:', err)
+      console.warn('[channel] apply_channel_read_receipts failed:', err)
     }
   })
 

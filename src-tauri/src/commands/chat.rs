@@ -5,7 +5,7 @@ use prost::Message as _;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use crate::crypto::CryptoEngine;
 use crate::db::{models, queries, DbManager};
@@ -2441,24 +2441,20 @@ pub async fn mark_as_read(
                     msg_id: channel_read_msg_ids.clone(),
                 };
                 let payload = req.encode_to_vec();
-                warn!(
-                    "[channel-read] mark_as_read send 4103 channel_id={} msg_ids={:?}",
-                    channel_id, channel_read_msg_ids
-                );
                 if let Err(err) = ws_mgr.send_packet(
                     ws_cmds::READ_CHANNEL_MSG,
                     ws_cmds::READ_CHANNEL_MSG as i64,
                     &payload,
                 ) {
                     warn!(
-                        "[channel-read] mark_as_read send 4103 failed conversation={} channel_id={} err={}",
+                        "mark_as_read send 4103 failed conversation={} channel_id={} err={}",
                         conversation_id, channel_id, err
                     );
                 }
             }
             _ => {
                 warn!(
-                    "[channel-read] mark_as_read skip 4103 invalid channel target_id={} conversation={}",
+                    "mark_as_read skip 4103 invalid channel target_id={} conversation={}",
                     target_id, conversation_id
                 );
             }
@@ -2858,21 +2854,8 @@ pub async fn apply_channel_read_receipts(
         let conversation_id = format!("2_{}", channel_id);
         let mut updates = Vec::<ChannelReadReceiptUpdate>::new();
 
-        info!(
-            "[channel-read] apply_channel_read_receipts start uid={} channel_id={} conversation_id={} receipt_count={} receipts={:?}",
-            uid,
-            channel_id,
-            conversation_id,
-            receipts.len(),
-            receipts
-        );
-
         for receipt in receipts {
             if channel_id <= 0 || receipt.msg_id <= 0 || receipt.total <= 0 {
-                warn!(
-                    "[channel-read] apply skip invalid channel_id={} msg_id={} total={}",
-                    channel_id, receipt.msg_id, receipt.total
-                );
                 continue;
             }
 
@@ -2891,10 +2874,6 @@ pub async fn apply_channel_read_receipts(
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
             let Some(extra) = extra else {
-                warn!(
-                    "[channel-read] apply no local message conversation_id={} msg_id={} total={}",
-                    conversation_id, receipt.msg_id, receipt.total
-                );
                 continue;
             };
 
@@ -2920,13 +2899,6 @@ pub async fn apply_channel_read_receipts(
                 extra: Some(next_extra),
             });
         }
-
-        info!(
-            "[channel-read] apply_channel_read_receipts done conversation_id={} update_count={} updates={:?}",
-            conversation_id,
-            updates.len(),
-            updates
-        );
 
         Ok(updates)
     })
