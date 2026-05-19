@@ -1444,6 +1444,46 @@ pub fn decrypt_private_incoming(
 }
 
 #[tauri::command]
+pub fn decrypt_private_attachment_key(
+    crypto: State<'_, CryptoEngine>,
+    sender_id: String,
+    version: Option<i64>,
+    source: Option<String>,
+    ciphertext_hex: String,
+) -> Result<String, String> {
+    let raw = ciphertext_hex.trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+
+    let data = hex::decode(raw).map_err(|e| format!("invalid attachment key hex: {}", e))?;
+    let ver = version.unwrap_or(1);
+    let preferred_source = source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| *s == "web" || *s == "app");
+    let source_orders: Vec<&str> = if let Some(src) = preferred_source {
+        vec![src]
+    } else {
+        vec!["web", "app"]
+    };
+
+    let mut last_err: Option<String> = None;
+    for src in source_orders {
+        match crypto.decrypt_friend_message(&sender_id, ver, src, &data) {
+            Ok(plain) => {
+                return String::from_utf8(plain)
+                    .map(|value| value.trim().to_string())
+                    .map_err(|e| format!("utf8 decode failed: {}", e));
+            }
+            Err(err) => last_err = Some(err.to_string()),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| "decrypt attachment key failed".to_string()))
+}
+
+#[tauri::command]
 pub fn decrypt_group_incoming(
     crypto: State<'_, CryptoEngine>,
     group_id: String,

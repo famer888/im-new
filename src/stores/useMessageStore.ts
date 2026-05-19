@@ -15,6 +15,8 @@ import {
   ensureFriendRelKeyForVersion,
   ensureGroupRelKey,
   ensureOwnKeyPair,
+  normalizeResolvedFileKey,
+  resolvePrivateAttachmentFileKey,
 } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { isHiddenMessageType } from '@/types'
@@ -862,15 +864,22 @@ export const useMessageStore = defineStore('message', () => {
 
       const applyDecryptedPlain = async (
         plain: string,
-        candidate: { cipherHex: string; attachmentKey?: string },
+        candidate: { cipherHex: string; attachmentKey?: string; version?: number; source?: string },
       ) => {
+        const resolvedFileKey = await resolvePrivateAttachmentFileKey({
+          uid,
+          senderId,
+          version: Number(candidate.version || 0),
+          source: String(candidate.source || ''),
+          attachmentKey: String(candidate.attachmentKey || ''),
+        })
         const nextExtra = {
           ...extra,
           decryptPending: false,
           cipherHex: candidate.cipherHex,
         } as Record<string, unknown>
-        if (candidate.attachmentKey && !nextExtra.fileKey) {
-          nextExtra.fileKey = candidate.attachmentKey
+        if (resolvedFileKey && !normalizeResolvedFileKey(nextExtra.fileKey)) {
+          nextExtra.fileKey = resolvedFileKey
         }
 
         message.content = plain

@@ -717,3 +717,59 @@ export async function ensureFriendRelKeyForVersion(
   pendingFriendVersionKeys.set(pendingKey, task)
   return task
 }
+
+function fallbackPlainFileKey(attachmentKey: string): string {
+  const raw = String(attachmentKey || '').trim()
+  if (!raw) return ''
+  if (raw.length <= 32 || !/^[0-9a-f]+$/i.test(raw)) return raw
+  return ''
+}
+
+export function normalizeResolvedFileKey(value: unknown): string {
+  return fallbackPlainFileKey(String(value || ''))
+}
+
+export async function resolvePrivateAttachmentFileKey(params: {
+  uid: string | number
+  senderId: string | number
+  version: number
+  source?: string
+  attachmentKey: string
+}): Promise<string> {
+  const attachmentKey = String(params.attachmentKey || '').trim()
+  const plain = fallbackPlainFileKey(attachmentKey)
+  if (plain) return plain
+  if (!isTauri() || !attachmentKey || !params.senderId || !params.version) return ''
+
+  const decrypt = async (forceRefresh: boolean) => {
+    await ensureFriendRelKeyForVersion(
+      params.uid,
+      params.senderId,
+      Number(params.version || 0),
+      String(params.source || ''),
+      forceRefresh,
+    )
+    return tauriInvoke<string>('decrypt_private_attachment_key', {
+      senderId: String(params.senderId),
+      version: Number(params.version || 1),
+      source: String(params.source || ''),
+      ciphertextHex: attachmentKey,
+    })
+  }
+
+  try {
+    return (await decrypt(false)).trim()
+  } catch {
+    try {
+      return (await decrypt(true)).trim()
+    } catch (err) {
+      console.warn('[e2ee] resolve private attachment fileKey failed', {
+        senderId: String(params.senderId),
+        version: params.version,
+        source: params.source,
+        err: String(err),
+      })
+      return ''
+    }
+  }
+}

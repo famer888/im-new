@@ -25,7 +25,9 @@ import {
   ensureFriendRelKey,
   ensureFriendRelKeyForVersion,
   ensureGroupRelKey,
+  normalizeResolvedFileKey,
   refreshGroupRelKey,
+  resolvePrivateAttachmentFileKey,
 } from '@/utils/e2ee'
 import { isHiddenMessageType } from '@/types'
 
@@ -1023,12 +1025,19 @@ export async function setupTauriListeners() {
               let privateDecrypted = false
               let lastErr: unknown = null
               const applyRealtimePrivatePlain = async (plain: string, candidate: any) => {
+                const resolvedFileKey = await resolvePrivateAttachmentFileKey({
+                  uid,
+                  senderId,
+                  version: Number(candidate.version || 0),
+                  source: String(candidate.source || ''),
+                  attachmentKey: String(candidate.attachmentKey || ''),
+                })
                 m.content = plain
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
                   m.extra.cipherHex = candidate.cipherHex
-                  if (candidate.attachmentKey && !m.extra.fileKey) {
-                    m.extra.fileKey = candidate.attachmentKey
+                  if (resolvedFileKey && !normalizeResolvedFileKey(m.extra.fileKey)) {
+                    m.extra.fileKey = resolvedFileKey
                   }
                 }
                 await invoke('mark_private_message_decrypted', {

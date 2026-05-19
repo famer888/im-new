@@ -27,6 +27,7 @@ const videoDuration = ref(0)
 const videoVolume = ref(1)
 const isVideoMuted = ref(false)
 const isVideoFullscreen = ref(false)
+const isVideoFrameReady = ref(false)
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
@@ -163,6 +164,10 @@ const videoSrc = computed(() => {
   if (payload.value?.mediaType !== 'video') return ''
   return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
 })
+const videoCoverSrc = computed(() => {
+  if (payload.value?.mediaType !== 'video') return ''
+  return ensureMediaSrc(payload.value?.cover || '')
+})
 const isVideo = computed(() => payload.value?.mediaType === 'video')
 const isFile = computed(() => payload.value?.mediaType === 'file')
 const isExcelFile = computed(() => isFile.value && payload.value?.fileKind === 'excel')
@@ -248,7 +253,7 @@ function currentMediaWindow() {
 }
 
 function applyPayload(nextPayload: MediaViewerPayload | null) {
-  resetVideoState()
+  resetVideoState({ clearSource: !nextPayload || nextPayload.mediaType !== 'video' })
   destroyExcelPreviewer()
   payload.value = nextPayload
   rotation.value = 0
@@ -265,13 +270,16 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
   })
 }
 
-function resetVideoState() {
+function resetVideoState(options: { clearSource?: boolean } = {}) {
   const video = videoRef.value
   if (video) {
     video.pause()
-    video.removeAttribute('src')
-    video.load()
+    if (options.clearSource !== false) {
+      video.removeAttribute('src')
+      video.load()
+    }
   }
+  isVideoFrameReady.value = false
   isVideoPlaying.value = false
   videoCurrentTime.value = 0
   videoDuration.value = 0
@@ -363,7 +371,33 @@ function handleVideoLoadedMetadata() {
   syncVideoState()
 }
 
+function markVideoFrameReady() {
+  const video = videoRef.value
+  if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
+  const requestVideoFrameCallback = (video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (callback: () => void) => number
+  }).requestVideoFrameCallback
+  if (typeof requestVideoFrameCallback === 'function') {
+    requestVideoFrameCallback.call(video, () => {
+      isVideoFrameReady.value = true
+      syncVideoState()
+    })
+    return
+  }
+  requestAnimationFrame(() => {
+    if (videoRef.value !== video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
+    isVideoFrameReady.value = true
+    syncVideoState()
+  })
+}
+
 function handleVideoCanPlay() {
+  markVideoFrameReady()
+  syncVideoState()
+}
+
+function handleVideoLoadedData() {
+  markVideoFrameReady()
   syncVideoState()
 }
 
@@ -376,6 +410,7 @@ function handleVideoPause() {
 }
 
 function handleVideoError() {
+  isVideoFrameReady.value = false
   syncVideoState()
 }
 
@@ -842,17 +877,36 @@ onUnmounted(() => {
       <div
         v-if="videoSrc"
         class="media-video-shell"
-        :class="{ 'is-landscape-video': isVideo && !isPortraitVideo }"
+        :class="{
+          'is-landscape-video': isVideo && !isPortraitVideo,
+          'is-video-ready': isVideoFrameReady,
+          'has-video-cover': Boolean(videoCoverSrc),
+        }"
       >
+        <img
+          v-if="videoCoverSrc && !isVideoFrameReady"
+          class="media-video-cover"
+          :src="videoCoverSrc"
+          alt=""
+          draggable="false"
+        />
+        <div
+          v-else-if="!isVideoFrameReady"
+          class="media-video-waiting"
+          aria-hidden="true"
+        >
+          <span></span>
+        </div>
         <video
           ref="videoRef"
           class="media-video"
           :src="videoSrc"
-          :poster="payload?.cover"
+          :poster="videoCoverSrc"
           playsinline
           preload="metadata"
           @click.stop="toggleVideoPlayback"
           @loadedmetadata="handleVideoLoadedMetadata"
+          @loadeddata="handleVideoLoadedData"
           @canplay="handleVideoCanPlay"
           @durationchange="syncVideoState"
           @timeupdate="syncVideoState"
@@ -1214,7 +1268,7 @@ onUnmounted(() => {
 }
 
 .media-viewer.is-video-mode:not(.is-desktop-fullscreen) .media-video-shell {
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
 }
 
@@ -1270,12 +1324,56 @@ onUnmounted(() => {
   flex: 0 1 auto;
   max-width: 100%;
   max-height: 100%;
-  width: auto;
-  height: auto;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   object-fit: contain;
   outline: none;
+}
+
+.media-video-shell.has-video-cover:not(.is-video-ready) .media-video {
+  opacity: 0;
+}
+
+.media-video-shell:not(.is-video-ready):not(.has-video-cover) .media-video {
+  opacity: 0;
+}
+
+.media-video-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.media-video-waiting {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #202124;
+
+  span {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.22);
+    border-top-color: rgba(255, 255, 255, 0.82);
+    animation: media-video-loading-spin 0.9s linear infinite;
+  }
+}
+
+@keyframes media-video-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .video-overlaid-play {
