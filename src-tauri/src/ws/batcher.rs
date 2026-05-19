@@ -410,6 +410,20 @@ pub struct GroupMsgReadReceiptEvent {
     pub read_time: i64,
 }
 
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelReadReceiptEvent {
+    pub msg_id: i64,
+    pub total: i32,
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelReadReceiptPushEvent {
+    pub channel_id: i64,
+    pub read_channel_messages: Vec<ChannelReadReceiptEvent>,
+}
+
 pub struct MessageBatcher {
     buffer: Vec<DecodedMessage>,
     last_flush: Instant,
@@ -461,7 +475,10 @@ impl MessageBatcher {
         let payload = &frame[payload_start..];
         if matches!(
             cmd,
-            cmds::CHANNEL_MSG_SENT | cmds::CHANNEL_MSG_RECEIVED | cmds::CHANNEL_EVENT_PUSH
+            cmds::CHANNEL_MSG_SENT
+                | cmds::CHANNEL_MSG_RECEIVED
+                | cmds::CHANNEL_EVENT_PUSH
+                | cmds::CHANNEL_READ_PUSH
         ) {
             info!(
                 "[channel] WS frame received cmd={} encrypted={} payload_len={}",
@@ -527,6 +544,12 @@ impl MessageBatcher {
             cmds::GROUP_READ_RECEIPT_PUSH => {
                 if let Err(e) = self.emit_group_read_receipt_push(&decoded_payload) {
                     error!("20403 decode/emit failed: {}", e);
+                }
+                return;
+            }
+            cmds::CHANNEL_READ_PUSH => {
+                if let Err(e) = self.emit_channel_read_push(&decoded_payload) {
+                    error!("[channel] 4206 decode/emit failed: {}", e);
                 }
                 return;
             }
@@ -2256,6 +2279,47 @@ impl MessageBatcher {
             self.app_handle
                 .emit("msg:group-read-receipt", &events)
                 .map_err(|e| format!("emit msg:group-read-receipt: {}", e))?;
+        }
+        Ok(())
+    }
+
+    fn emit_channel_read_push(&self, payload: &[u8]) -> Result<(), String> {
+        let resp = imweb::PushReadChannelMessage::decode(payload)
+            .map_err(|e| format!("decode PushReadChannelMessage: {}", e))?;
+        let evt = ChannelReadReceiptPushEvent {
+            channel_id: resp.channel_id,
+            read_channel_messages: resp
+                .read_channel_messages
+                .into_iter()
+                .map(|item| ChannelReadReceiptEvent {
+                    msg_id: item.msg_id,
+                    total: item.total,
+                })
+                .collect(),
+        };
+
+        info!(
+            "[channel-read] 4206 decoded channel_id={} receipt_count={} receipts={:?}",
+            evt.channel_id,
+            evt.read_channel_messages.len(),
+            evt.read_channel_messages
+        );
+
+        if evt.channel_id > 0 && !evt.read_channel_messages.is_empty() {
+            self.app_handle
+                .emit("msg:channel-read-receipt", &evt)
+                .map_err(|e| format!("emit msg:channel-read-receipt: {}", e))?;
+            info!(
+                "[channel-read] 4206 emitted channel_id={} receipt_count={}",
+                evt.channel_id,
+                evt.read_channel_messages.len()
+            );
+        } else {
+            warn!(
+                "[channel-read] 4206 ignored channel_id={} receipt_count={}",
+                evt.channel_id,
+                evt.read_channel_messages.len()
+            );
         }
         Ok(())
     }

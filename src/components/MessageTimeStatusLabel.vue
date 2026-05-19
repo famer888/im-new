@@ -24,6 +24,7 @@ const props = defineProps<{
 const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const messageStore = useMessageStore()
+const channelReadLabelLogKeys = new Set<string>()
 
 const timeText = computed(() => {
   void locale.value
@@ -46,7 +47,31 @@ const channelReadTotal = computed(() => {
   if (!isChannelMessage.value) return 0
   const extra = parseExtra(props.message.extra)
   const total = Number(extra.readTotal ?? extra.read_total ?? 0)
-  return Number.isFinite(total) && total > 0 ? total : 1
+  const serverReadTotal = Number.isFinite(total) && total > 0 ? total : 0
+  const displayTotal = serverReadTotal + 1
+  const logKey = [
+    props.message.conversationId,
+    props.message.id,
+    props.message.customMsgId,
+    props.message.extra,
+    displayTotal,
+  ].join('|')
+  if (!channelReadLabelLogKeys.has(logKey)) {
+    channelReadLabelLogKeys.add(logKey)
+    if (channelReadLabelLogKeys.size > 200) channelReadLabelLogKeys.clear()
+    console.info('[channel-read-label]', {
+      conversationId: props.message.conversationId,
+      messageId: props.message.id,
+      customMsgId: props.message.customMsgId,
+      content: String(props.message.content || '').slice(0, 60),
+      rawExtra: props.message.extra,
+      parsedExtra: extra,
+      parsedReadTotal: total,
+      serverReadTotal,
+      displayTotal,
+    })
+  }
+  return displayTotal
 })
 
 const showLoading = computed(
