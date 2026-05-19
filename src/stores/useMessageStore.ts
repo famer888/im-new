@@ -54,7 +54,7 @@ function recordSendDiagnosticTrace(message: string, data?: Record<string, unknow
 }
 
 function messageUsesWsSend(convType: number, msgType: number): boolean {
-  const wsTypes = [0, 1, 2, 3, 7, 9, 12, 18]
+  const wsTypes = [0, 1, 2, 3, 7, 8, 9, 12, 18]
   if (![0, 1, 2].includes(convType)) return false
   return wsTypes.includes(msgType) || (convType === 0 && msgType === 5)
 }

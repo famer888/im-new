@@ -7,6 +7,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { ConversationType, MessageType, isHiddenMessageType } from '@/types'
+import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
@@ -25,13 +26,17 @@ const RedPacketMessage = defineAsyncComponent(() => import('./messages/RedPacket
 const TransferMessage = defineAsyncComponent(() => import('./messages/TransferMessage.vue'))
 const LocationMessage = defineAsyncComponent(() => import('./messages/LocationMessage.vue'))
 const SystemNotification = defineAsyncComponent(() => import('./messages/SystemNotification.vue'))
+const GroupIntroNoticeMessage = defineAsyncComponent(() => import('./messages/GroupIntroNoticeMessage.vue'))
 
 const props = defineProps<{
   message: Message
   /** 与旧 im `n.showTime` + `showTimeDay`：本条为「新一天」首条时居中显示日期条 */
   dateBannerText?: string | null
 }>()
-const emit = defineEmits<{ (e: 'resize', height: number): void }>()
+const emit = defineEmits<{
+  (e: 'resize', height: number): void
+  (e: 'open-group-notice', payload: { message: Message }): void
+}>()
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
@@ -46,6 +51,7 @@ const shouldRenderMessage = computed(() => !isHiddenMessageType(props.message.ms
 const isSearchHighlighted = computed(
   () => searchStore.highlightSearchMessageId === props.message.id,
 )
+const isGroupIntroNotice = computed(() => isGroupIntroNoticeMessage(props.message))
 
 const senderName = computed(() => {
   if (isSelf.value) return '我'
@@ -72,14 +78,16 @@ const messageComponent = computed(() => {
     case MessageType.ChatTransfer:
     case MessageType.ChatTransferResult: return TransferMessage
     case MessageType.System:
-    case MessageType.Notice: return SystemNotification
+      return SystemNotification
+    case MessageType.Notice:
+      return isGroupIntroNotice.value ? GroupIntroNoticeMessage : SystemNotification
     default: return TextMessage
   }
 })
 
 const isSystemMsg = computed(() =>
   props.message.msgType === MessageType.System ||
-  props.message.msgType === MessageType.Notice,
+  (props.message.msgType === MessageType.Notice && !isGroupIntroNotice.value),
 )
 
 /** 与 `messageComponent` 一致：仅「非纯文本气泡」在外层叠加时间条，其余走 TextMessage 内嵌（含 default 分支） */
@@ -96,10 +104,17 @@ const useOuterTimeOverlay = computed(() => {
     case MessageType.AnimatedGame:
     case MessageType.Html2:
       return true
+    case MessageType.Notice:
+      return isGroupIntroNotice.value
     default:
       return false
   }
 })
+
+function handleOpenGroupNotice() {
+  if (!isGroupIntroNotice.value) return
+  emit('open-group-notice', { message: props.message })
+}
 
 const isImageLikeBubble = computed(() =>
   props.message.msgType === MessageType.Image ||
@@ -308,6 +323,7 @@ onMounted(() => {
             v-if="!useOuterTimeOverlay"
             :is="messageComponent"
             :message="message"
+            @open="handleOpenGroupNotice"
           />
           <div
             v-else
@@ -320,7 +336,7 @@ onMounted(() => {
               },
             ]"
           >
-            <component :is="messageComponent" :message="message" />
+            <component :is="messageComponent" :message="message" @open="handleOpenGroupNotice" />
             <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
           </div>
           <img v-if="showReadBurnFire" class="read-burn-fire" :src="readDeleteFireUrl" alt="" />

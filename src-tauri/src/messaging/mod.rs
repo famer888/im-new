@@ -384,6 +384,16 @@ pub fn encode_name_card_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+/// 将群简介内容编码为旧 im 使用的 GroupNoticeObj protobuf。
+pub fn encode_group_notice_obj(content: &str, notice_id: i64, show_notify: bool) -> Vec<u8> {
+    let obj = imweb::GroupNoticeObj {
+        content: content.to_string(),
+        notice_id,
+        show_notify,
+    };
+    obj.encode_to_vec()
+}
+
 fn json_i64(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
     keys.iter().find_map(|key| {
         value.get(*key).and_then(|v| {
@@ -477,6 +487,7 @@ pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
         3 => encode_video_obj(content),
         5 => encode_name_card_obj(content),
         7 => encode_file_obj(content),
+        8 => encode_group_notice_obj(content, 0, false),
         12 => encode_set_image_obj(content),
         18 => encode_animated_game_obj(content),
         _ => encode_text_obj(content),
@@ -814,6 +825,35 @@ mod tests {
         assert_eq!(gm.version, 0);
         assert_eq!(gm.attachment_key, "");
         assert_eq!(gm.content, plain);
+    }
+
+    #[test]
+    fn group_notice_is_sent_as_encrypted_group_notice_obj() {
+        let rel_key = "0123456789abcdef";
+        let plain = encode_group_notice_obj("新的群简介", 12345, true);
+        let req_bytes = build_send_group_message_req(
+            10086,
+            88,
+            8,
+            &plain,
+            rel_key,
+            1_700_000_000_000,
+            42,
+            vec![],
+            None,
+        )
+        .unwrap();
+
+        let decoded = imweb::SendGroupMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let gm = decoded.group_msg.unwrap();
+        assert_eq!(gm.msg_type, 8);
+        assert_eq!(gm.version, 1);
+
+        let decrypted = crypto::aes::decrypt_message(&gm.content, rel_key).unwrap();
+        let notice = imweb::GroupNoticeObj::decode(decrypted.as_slice()).unwrap();
+        assert_eq!(notice.content, "新的群简介");
+        assert_eq!(notice.notice_id, 12345);
+        assert!(notice.show_notify);
     }
 
     #[test]
