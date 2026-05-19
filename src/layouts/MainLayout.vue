@@ -1138,6 +1138,10 @@ function isMacOS(): boolean {
   return /mac/i.test(navigator.platform || '')
 }
 
+function isWindowsOS(): boolean {
+  return /win/i.test(navigator.platform || '')
+}
+
 function ensureVideoSaveExtension(filePath: string, extension: string): string {
   const ext = extension.startsWith('.') ? extension : `.${extension}`
   return filePath.toLowerCase().endsWith(ext.toLowerCase()) ? filePath : `${filePath}${ext}`
@@ -1653,7 +1657,20 @@ async function copyImageToClipboard(src: string) {
     mime = 'image/png'
   }
 
+  let triedWebClipboard = false
+  let triedNativeClipboard = false
+  if ((window as any).__TAURI_INTERNALS__ && isWindowsOS()) {
+    triedWebClipboard = true
+    try {
+      await writeImageBlobWithWebClipboard(blob, mime)
+      return
+    } catch (error) {
+      console.warn('[clipboard] web image write failed, fallback to native:', error)
+    }
+  }
+
   if ((window as any).__TAURI_INTERNALS__) {
+    triedNativeClipboard = true
     try {
       await writeImageBlobWithNativeClipboard(blob)
       return
@@ -1662,17 +1679,19 @@ async function copyImageToClipboard(src: string) {
     }
   }
 
-  try {
-    await writeImageBlobWithWebClipboard(blob, mime)
-    return
-  } catch (error) {
-    if (!(window as any).__TAURI_INTERNALS__) {
-      throw error
+  if (!triedWebClipboard) {
+    try {
+      await writeImageBlobWithWebClipboard(blob, mime)
+      return
+    } catch (error) {
+      if (!(window as any).__TAURI_INTERNALS__) {
+        throw error
+      }
+      console.warn('[clipboard] web image write failed, fallback to native:', error)
     }
-    console.warn('[clipboard] web image write failed, fallback to native:', error)
   }
 
-  if ((window as any).__TAURI_INTERNALS__) {
+  if ((window as any).__TAURI_INTERNALS__ && !triedNativeClipboard) {
     await writeImageBlobWithNativeClipboard(blob)
     return
   }

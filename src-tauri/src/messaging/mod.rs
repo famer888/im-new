@@ -703,7 +703,10 @@ pub fn build_send_private_message_req(
     let app_content = encrypt_content(friend_app_key)?;
     let web_content = encrypt_content(friend_web_key)?;
     let myself_app_content = encrypt_content(own_app_key)?;
-    let myself_web_content = encrypt_content(own_web_key.clone())?;
+    // 对齐老 im：同账号多端同步内容使用自己的 APP 端 key 加密。
+    // 服务端回推到 PC 时可能落在 myselfWebContent 字段，但内容语义仍是
+    // “自己的其它端可解”的 appOwn key，而不是当前 PC web key。
+    let myself_web_content = myself_app_content.clone();
     let own_web_version = own_web_key.as_ref().map(|(v, _)| *v).unwrap_or(1);
 
     let one_to_one = imweb::OneToOneMessage {

@@ -149,6 +149,11 @@ impl CryptoEngine {
         self.friend_keys.retain(|k, _| !k.starts_with(&prefix));
     }
 
+    pub fn remove_friend_key(&self, friend_id: &str, version: i64, source: &str) {
+        let k = Self::friend_cache_key(friend_id, version, source);
+        self.friend_keys.remove(&k);
+    }
+
     // -----------------------------------------------------------------------
     // Group key management  (per group_id)
     // -----------------------------------------------------------------------

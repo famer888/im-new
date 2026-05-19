@@ -11,6 +11,7 @@ use prost::Message as _;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
@@ -164,11 +165,16 @@ async fn connect_and_run(
     );
 
     let mut batcher = MessageBatcher::new(app_handle.clone(), aes_key.to_string(), uid.to_string());
+    let mut flush_interval = tokio::time::interval(MessageBatcher::flush_interval());
+    flush_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     let mut unexpected_disconnect: Option<String> = None;
 
     loop {
         tokio::select! {
+            _ = flush_interval.tick() => {
+                batcher.flush_if_due().await;
+            }
             msg = ws_stream_reader.next() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
@@ -283,6 +289,11 @@ fn build_login_packet(
     session_id: &str,
     install_code: &str,
 ) -> Result<Vec<u8>, WsError> {
+    let sys_model = if cfg!(target_os = "macos") {
+        "MAC"
+    } else {
+        "WINDOWS"
+    };
     let req = imweb::LoginReq {
         client_info: Some(imweb::ClientInfo {
             session_id: session_id.to_string(),
@@ -291,7 +302,7 @@ fn build_login_packet(
             plat: 4, // Platform::WIN（与老 im 保持一致）
             language: 2,
             sys_mac: String::new(),
-            sys_model: "MAC".to_string(),
+            sys_model: sys_model.to_string(),
         }),
         install_code: install_code.to_string(),
     };
