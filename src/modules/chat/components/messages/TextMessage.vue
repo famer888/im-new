@@ -395,7 +395,22 @@ function openGroupConversation(target: AddGroupTarget) {
 }
 
 function normalizeChannelId(raw: any): string {
-  return String(raw?.channelId ?? raw?.id ?? '').trim()
+  return String(raw?.channelId ?? raw?.channel_id ?? raw?.cid ?? raw?.id ?? '').trim()
+}
+
+function parseChannelRemark(raw: any): string {
+  const value = raw?.remark
+    ?? raw?.channelDesc
+    ?? raw?.channel_desc
+    ?? raw?.description
+    ?? raw?.describe
+    ?? raw?.channelRemark
+    ?? raw?.channel_remark
+    ?? raw?.intro
+    ?? ''
+  const text = String(value || '').trim()
+  if (text) return text
+  return Number(raw?.linkType || raw?.link_type || 0) ? '私密频道' : ''
 }
 
 function openChannelConversation(raw: any) {
@@ -437,10 +452,10 @@ function parseChannelTarget(raw: any): AddChannelTarget | null {
     icon: String(raw?.icon ?? raw?.avatar ?? ''),
     logoColor: raw?.logoColor ?? null,
     memberCount: Number(raw?.memberCount ?? raw?.member_count ?? 0),
-    remark: String(raw?.remark ?? raw?.channelDesc ?? raw?.description ?? ''),
+    remark: parseChannelRemark(raw),
     link: String(raw?.link ?? ''),
-    linkType: raw?.linkType === undefined || raw?.linkType === null ? null : Number(raw.linkType),
-    memberType: raw?.memberType === undefined || raw?.memberType === null ? null : Number(raw.memberType),
+    linkType: raw?.linkType === undefined && raw?.link_type === undefined ? null : Number(raw.linkType ?? raw.link_type),
+    memberType: raw?.memberType === undefined && raw?.member_type === undefined ? null : Number(raw.memberType ?? raw.member_type),
   }
 }
 
