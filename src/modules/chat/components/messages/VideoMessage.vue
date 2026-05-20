@@ -29,11 +29,14 @@ const videoOpening = ref(false)
 const videoPreparingForDrag = ref(false)
 const localVideoPath = ref('')
 const thumbElRef = ref<HTMLImageElement | null>(null)
+const videoMessageRef = ref<HTMLElement | null>(null)
 let downloadToken = 0
 let videoOpenToken = 0
 let coverToken = 0
 let pendingVideoLocalFilePromise: Promise<string> | null = null
 let pendingEncryptedVideoStreamPromise: Promise<string> | null = null
+let pendingEncryptedVideoWarmPromise: Promise<void> | null = null
+let warmedEncryptedVideoStreamUrl = ''
 let cachedEncryptedVideoStreamKey = ''
 let cachedEncryptedVideoStreamUrl = ''
 let stopDownloadEvents: Array<() => void> = []
@@ -41,8 +44,11 @@ let stopVideoDownloadEvents: Array<() => void> = []
 let nativeDragStartPoint: { x: number; y: number } | null = null
 let nativeDragStarted = false
 let suppressNextClick = false
+let preloadObserver: IntersectionObserver | null = null
+let playbackPreloadStarted = false
 const NATIVE_DRAG_THRESHOLD = 4
 const MAX_CACHED_VIDEO_COVER_DATA_URL_BYTES = 512 * 1024
+const MAX_AUTO_PRELOAD_VIDEO_BYTES = 50 * 1024 * 1024
 
 function videoMessageIdForCache(): string {
   return safeName(props.message.id || props.message.customMsgId || `${props.message.conversationId || 'video'}-${props.message.sendTime || ''}`)
@@ -636,6 +642,22 @@ function getMediaViewerCoverSrc(): string {
 async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: string; fileKey?: string }) {
   const target = String(pathOrUrl || '').trim()
   if (!target) return
+  videoStreamLog('open media window start', {
+    targetKind: /^https?:\/\/127\.0\.0\.1:/i.test(target)
+      ? 'local-http-stream'
+      : /^https?:/i.test(target)
+        ? 'remote-http'
+        : /^(blob|data):/i.test(target)
+          ? 'inline'
+          : 'local-file',
+    targetHead: target.slice(0, 160),
+    hasOriginalUrl: Boolean(options?.originalUrl),
+    fileKeyLen: String(options?.fileKey || fileKey.value || '').length,
+    size: videoData.value.size || 0,
+    duration: videoData.value.duration || 0,
+    localVideoPath: localVideoPath.value,
+    localVideoSourcePath: localVideoSourcePath.value,
+  })
   if (!(window as any).__TAURI_INTERNALS__) {
     openInlinePreview(target)
     return
@@ -662,6 +684,11 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
       },
     })
     mediaSrc = result.url
+    videoStreamLog('local video stream created', {
+      targetHead: target.slice(0, 160),
+      streamUrl: result.url,
+      mimeType: videoData.value.mimeType || '',
+    })
   }
 
   mediaViewerState.send({
@@ -684,6 +711,10 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
     title: '视频',
     ...bounds,
   })
+  videoStreamLog('open media window invoked', {
+    mediaSrcHead: mediaSrc.slice(0, 160),
+    mediaFilePath,
+  })
 }
 
 function downloadVideoToLocal(url: string, key: string): Promise<string> {
@@ -702,16 +733,31 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
       const savePath = await join(baseDir, 'video-cache', id, getVideoFileName(url, videoData.value.name))
       const doneEvent = `file:done:${id}`
       const errorEvent = `file:error:${id}`
+      videoStreamLog('download video to local start', {
+        id,
+        urlHead: url.slice(0, 160),
+        keyLen: key.length,
+        savePath,
+        size: videoData.value.size || 0,
+      })
 
       const unlistenDone = await listen(doneEvent, () => {
         if (token !== videoOpenToken) return
         cleanupVideoDownloadEvents()
         localVideoPath.value = savePath
+        videoStreamLog('download video to local done', {
+          id,
+          savePath,
+        })
         resolve(savePath)
       })
       const unlistenError = await listen<{ error?: string }>(errorEvent, (event) => {
         if (token !== videoOpenToken) return
         cleanupVideoDownloadEvents()
+        videoStreamLog('download video to local error', {
+          id,
+          error: event.payload?.error || '视频下载失败',
+        }, 'error')
         reject(new Error(event.payload?.error || '视频下载失败'))
       })
       stopVideoDownloadEvents = [unlistenDone, unlistenError]
@@ -727,6 +773,9 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
     } catch (error) {
       if (token !== videoOpenToken) return
       cleanupVideoDownloadEvents()
+      videoStreamLog('download video to local catch', {
+        message: error instanceof Error ? error.message : String(error || ''),
+      }, 'error')
       reject(error)
     }
   })
@@ -793,19 +842,151 @@ async function getEncryptedVideoStreamUrl(url: string, key: string): Promise<str
   return pendingEncryptedVideoStreamPromise
 }
 
+async function fetchVideoStreamRange(streamUrl: string, start: number, end: number, timeoutMs = 5000) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(streamUrl, {
+      headers: { Range: `bytes=${start}-${end}` },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    if (!response.ok && response.status !== 206) {
+      throw new Error(`warm stream failed: HTTP ${response.status}`)
+    }
+    await response.arrayBuffer()
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+async function warmEncryptedVideoStreamUrl(streamUrl: string) {
+  if (!streamUrl || !/^https?:\/\//i.test(streamUrl)) return
+  if (warmedEncryptedVideoStreamUrl === streamUrl) return
+  if (pendingEncryptedVideoWarmPromise) return pendingEncryptedVideoWarmPromise
+
+  warmedEncryptedVideoStreamUrl = streamUrl
+  const size = Math.max(0, Math.floor(Number(videoData.value.size || 0)))
+  videoStreamLog('warm stream start', {
+    streamUrl,
+    size,
+  })
+  const ranges: Array<[number, number]> = [[0, Math.max(0, Math.min(2047, size ? size - 1 : 2047))]]
+  if (size > 4096) {
+    ranges.push([Math.max(0, size - 2048), size - 1])
+  }
+
+  pendingEncryptedVideoWarmPromise = Promise.allSettled(
+    ranges.map(([start, end]) => fetchVideoStreamRange(streamUrl, start, end)),
+  ).then((results) => {
+    const failed = results.find(result => result.status === 'rejected')
+    if (failed) {
+      warmedEncryptedVideoStreamUrl = ''
+      videoStreamLog('warm stream range failed', {
+        streamUrl,
+        size,
+        message: failed.reason instanceof Error ? failed.reason.message : String(failed.reason || ''),
+      }, 'warn')
+      return
+    }
+    videoStreamLog('warm stream done', {
+      streamUrl,
+      size,
+      ranges,
+    })
+  }).finally(() => {
+    pendingEncryptedVideoWarmPromise = null
+  })
+  return pendingEncryptedVideoWarmPromise
+}
+
 function preloadEncryptedVideoStream() {
   if (!(window as any).__TAURI_INTERNALS__) return
   const url = videoData.value.url
   if (!/^https?:\/\//i.test(url) || videoData.value.size <= 0) return
+  videoStreamLog('hover/focus preload stream start', {
+    urlHead: url.slice(0, 160),
+    size: videoData.value.size || 0,
+  })
 
   void resolveFileKey()
     .then((key) => {
       if (!key) return
       return getEncryptedVideoStreamUrl(url, key)
+        .then(streamUrl => warmEncryptedVideoStreamUrl(streamUrl))
     })
     .catch((error) => {
       console.warn('[video] preload stream failed:', error)
     })
+}
+
+function preloadVideoForPlayback() {
+  if (!(window as any).__TAURI_INTERNALS__) return
+  if (playbackPreloadStarted) return
+  playbackPreloadStarted = true
+
+  const url = videoData.value.url
+  const size = Math.max(0, Math.floor(Number(videoData.value.size || 0)))
+  if (!/^https?:\/\//i.test(url)) return
+  videoStreamLog('visible preload playback start', {
+    urlHead: url.slice(0, 160),
+    size,
+    autoLocal: size > 0 && size <= MAX_AUTO_PRELOAD_VIDEO_BYTES,
+    localVideoPath: localVideoPath.value,
+  })
+
+  void resolveFileKey()
+    .then((key) => {
+      if (!key) return
+      videoStreamLog('visible preload key resolved', {
+        keyLen: key.length,
+        size,
+      })
+      if (size > 0 && size <= MAX_AUTO_PRELOAD_VIDEO_BYTES) {
+        if (!pendingVideoLocalFilePromise) {
+          pendingVideoLocalFilePromise = ensureVideoLocalFile()
+            .catch((error) => {
+              console.warn('[video] preload local video failed:', error)
+              return ''
+            })
+            .finally(() => {
+              pendingVideoLocalFilePromise = null
+            })
+        }
+        return pendingVideoLocalFilePromise.then(() => undefined)
+      }
+      return getEncryptedVideoStreamUrl(url, key)
+        .then(streamUrl => warmEncryptedVideoStreamUrl(streamUrl))
+    })
+    .catch((error) => {
+      console.warn('[video] preload playback failed:', error)
+    })
+}
+
+function setupPlaybackPreloadObserver() {
+  preloadObserver?.disconnect()
+  preloadObserver = null
+  if (!(window as any).__TAURI_INTERNALS__) return
+  const el = videoMessageRef.value
+  if (!el) return
+  if (!('IntersectionObserver' in window)) {
+    videoStreamLog('visible preload observer unavailable, start immediately')
+    preloadVideoForPlayback()
+    return
+  }
+  videoStreamLog('visible preload observer installed')
+  preloadObserver = new IntersectionObserver((entries) => {
+    if (!entries.some(entry => entry.isIntersecting)) return
+    preloadObserver?.disconnect()
+    preloadObserver = null
+    videoStreamLog('visible preload observer intersected')
+    preloadVideoForPlayback()
+  }, {
+    root: null,
+    rootMargin: '160px 0px',
+    threshold: 0.01,
+  })
+  preloadObserver.observe(el)
 }
 
 function getVideoUrlCandidates(url: string, name = ''): string[] {
@@ -1173,18 +1354,31 @@ function handleVideoClick(event: MouseEvent) {
 
 async function handleOpenVideo() {
   if (videoOpening.value) {
+    videoStreamLog('open click ignored because opening')
     return
   }
   const url = videoData.value.url
   const localSource = localVideoSourcePath.value
   if (!url && !localSource && !localVideoPath.value) {
+    videoStreamLog('open click ignored because source empty', {}, 'warn')
     return
   }
 
+  videoStreamLog('open click start', {
+    urlHead: url.slice(0, 160),
+    localSource,
+    localVideoPath: localVideoPath.value,
+    size: videoData.value.size || 0,
+    duration: videoData.value.duration || 0,
+    hasFileKey: Boolean(fileKey.value || attachmentKey.value),
+  })
   videoOpening.value = true
   try {
     const localVideoExists = localVideoPath.value ? await localFileExists(localVideoPath.value) : false
     if (localVideoPath.value && localVideoExists) {
+      videoStreamLog('open path selected localVideoPath', {
+        path: localVideoPath.value,
+      })
       await openMediaWindow(localVideoPath.value)
       return
     }
@@ -1192,27 +1386,79 @@ async function handleOpenVideo() {
     const localSourceExists = localSource ? await localFileExists(localSource) : false
     if (localSource && localSourceExists) {
       localVideoPath.value = localSource
+      videoStreamLog('open path selected localSource', {
+        path: localSource,
+      })
       await openMediaWindow(localSource)
       return
     }
 
     const key = await resolveFileKey()
     const isEncryptedRemote = /^https?:\/\//i.test(url) && Boolean(key)
+    videoStreamLog('open key resolved', {
+      keyLen: key.length,
+      isEncryptedRemote,
+      size: videoData.value.size || 0,
+    })
     if ((window as any).__TAURI_INTERNALS__ && isEncryptedRemote) {
+      const shouldPreferLocal = videoData.value.size > 0 && videoData.value.size <= MAX_AUTO_PRELOAD_VIDEO_BYTES
+      if (shouldPreferLocal) {
+        let playablePath = ''
+        if (pendingVideoLocalFilePromise) {
+          videoStreamLog('open waiting pending local preload', {
+            waitMs: 0,
+          })
+          playablePath = await pendingVideoLocalFilePromise.catch((error) => {
+            videoStreamLog('open pending local preload failed', {
+              message: error instanceof Error ? error.message : String(error || ''),
+            }, 'warn')
+            return ''
+          })
+        }
+        if (!playablePath) {
+          videoStreamLog('open downloading local video before play', {
+            size: videoData.value.size || 0,
+          })
+          playablePath = await ensureVideoLocalFile()
+        }
+        const playableExists = playablePath ? await localFileExists(playablePath) : false
+        if (!playablePath || !playableExists) {
+          throw new Error('视频本地缓存未准备好')
+        }
+        localVideoPath.value = playablePath
+        videoStreamLog('open path selected local cache for encrypted video', {
+          path: playablePath,
+        })
+        await openMediaWindow(playablePath)
+        return
+      }
       if (videoData.value.size > 0) {
         const streamUrl = await getEncryptedVideoStreamUrl(url, key)
+        videoStreamLog('open path selected encrypted stream', {
+          streamUrl,
+        })
+        void warmEncryptedVideoStreamUrl(streamUrl)
         await openMediaWindow(streamUrl, { originalUrl: url, fileKey: key })
         return
       }
       const path = await downloadVideoToLocal(url, key)
+      videoStreamLog('open path selected encrypted download', {
+        path,
+      })
       await openMediaWindow(path)
       return
     }
 
+    videoStreamLog('open path selected raw url', {
+      urlHead: url.slice(0, 160),
+    })
     await openMediaWindow(url)
   } catch (error) {
-    console.warn('[video] open failed:', error)
+    videoStreamLog('open failed', {
+      message: error instanceof Error ? error.message : String(error || ''),
+    }, 'error')
   } finally {
+    videoStreamLog('open finished')
     videoOpening.value = false
   }
 }
@@ -1224,6 +1470,9 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, lo
   const token = coverToken
   pendingVideoLocalFilePromise = null
   pendingEncryptedVideoStreamPromise = null
+  pendingEncryptedVideoWarmPromise = null
+  warmedEncryptedVideoStreamUrl = ''
+  playbackPreloadStarted = false
   cachedEncryptedVideoStreamKey = ''
   cachedEncryptedVideoStreamUrl = ''
   cleanupDownloadEvents()
@@ -1233,6 +1482,7 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, lo
   activeThumbSrc.value = ''
   localVideoPath.value = localVideoSourcePath.value
   const hasLocalFallback = useLocalThumbFallback()
+  void nextTick(setupPlaybackPreloadObserver)
   if (!hasLocalFallback && await usePersistedVideoCoverCache('watch-precheck')) return
   if (token !== coverToken) return
   if (!videoData.value.thumbUrl) {
@@ -1262,6 +1512,8 @@ onBeforeUnmount(() => {
   coverToken += 1
   pendingVideoLocalFilePromise = null
   closeInlinePreview()
+  preloadObserver?.disconnect()
+  preloadObserver = null
   cleanupNativeDragListeners()
   cleanupDownloadEvents()
   cleanupVideoDownloadEvents()
@@ -1270,6 +1522,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
+    ref="videoMessageRef"
     class="video-message"
     :class="{ preparing: videoPreparingForDrag }"
     :title="dragFileName"

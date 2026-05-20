@@ -142,7 +142,6 @@ static VIDEO_STREAM_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static VIDEO_DECRYPTED_CHUNK_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
 const VIDEO_STREAM_WINDOW_BYTES: u64 = 2 * 1024 * 1024;
-const VIDEO_STREAM_BATCH_CHUNKS: u64 = 8;
 
 fn audio_players() -> &'static Mutex<HashMap<String, Child>> {
     AUDIO_PLAYERS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -731,7 +730,7 @@ async fn stream_decrypted_video_range(
         }
 
         let batch_start_chunk = chunk_index;
-        let batch_end_chunk = end_chunk.min(batch_start_chunk + VIDEO_STREAM_BATCH_CHUNKS - 1);
+        let batch_end_chunk = batch_start_chunk;
         let (encrypted_start, _) = encrypted_range_for_plain_chunk(batch_start_chunk, source.plain_size)
             .ok_or_else(|| "invalid video stream range".to_string())?;
         let (_, encrypted_end) = encrypted_range_for_plain_chunk(batch_end_chunk, source.plain_size)

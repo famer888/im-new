@@ -49,6 +49,7 @@ let excelPreviewToken = 0
 let videoPrepareTimer = 0
 let videoPlayWatchTimer = 0
 let videoProbeToken = 0
+let videoPlayReloadRetries = 0
 let videoAutoTranscodeSource = ''
 
 type ExcelPreviewSource = string | ArrayBuffer
@@ -196,6 +197,7 @@ const videoCoverSrc = computed(() => {
 const isVideo = computed(() => payload.value?.mediaType === 'video')
 const isFile = computed(() => payload.value?.mediaType === 'file')
 const isExcelFile = computed(() => isFile.value && payload.value?.fileKind === 'excel')
+const payloadVideoDuration = computed(() => normalizeVideoDuration(payload.value?.duration))
 const filePreviewSrc = computed(() => {
   if (!isExcelFile.value) return ''
   return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
@@ -293,10 +295,102 @@ function currentMediaWindow() {
   return getCurrentWindow()
 }
 
+function mediaSourceSummary(src: string): Record<string, unknown> {
+  const raw = String(src || '').trim()
+  return {
+    kind: /^https?:\/\/127\.0\.0\.1:/i.test(raw)
+      ? 'local-http-stream'
+      : /^https?:/i.test(raw)
+        ? 'remote-http'
+        : /^(asset|file):/i.test(raw)
+          ? 'local-file'
+          : raw ? 'other' : 'empty',
+    head: raw.slice(0, 160),
+  }
+}
+
+function videoBufferedRanges(video: HTMLVideoElement): string[] {
+  const ranges: string[] = []
+  try {
+    for (let index = 0; index < video.buffered.length; index += 1) {
+      ranges.push(`${video.buffered.start(index).toFixed(2)}-${video.buffered.end(index).toFixed(2)}`)
+    }
+  } catch {
+    // Buffered ranges can throw while the media element is changing source.
+  }
+  return ranges
+}
+
+function videoElementSnapshot(video = videoRef.value): Record<string, unknown> {
+  if (!video) {
+    return {
+      hasVideo: false,
+      payload: payload.value ? {
+        mediaType: payload.value.mediaType,
+        size: payload.value.size || 0,
+        duration: payload.value.duration || 0,
+        width: payload.value.width || 0,
+        height: payload.value.height || 0,
+        src: mediaSourceSummary(payload.value.src || ''),
+        filePath: String(payload.value.filePath || '').slice(0, 160),
+      } : null,
+    }
+  }
+  return {
+    hasVideo: true,
+    readyState: video.readyState,
+    networkState: video.networkState,
+    paused: video.paused,
+    ended: video.ended,
+    currentTime: Number.isFinite(video.currentTime) ? Number(video.currentTime.toFixed(3)) : 0,
+    duration: Number.isFinite(video.duration) ? Number(video.duration.toFixed(3)) : String(video.duration),
+    buffered: videoBufferedRanges(video),
+    videoWidth: video.videoWidth || 0,
+    videoHeight: video.videoHeight || 0,
+    currentSrc: mediaSourceSummary(video.currentSrc || video.src || videoSrc.value),
+    payloadDuration: payload.value?.duration || 0,
+    payloadSize: payload.value?.size || 0,
+    frameReady: isVideoFrameReady.value,
+    preparingOnOpen: videoPreparingOnOpen.value,
+    playbackRequested: videoPlaybackRequested.value,
+    retryCount: videoPlayReloadRetries,
+  }
+}
+
+function mediaViewerVideoLog(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
+  const snapshot = videoElementSnapshot()
+  const payloadData = { ...(data || {}), snapshot }
+  const logMessage = `[media-viewer-video] ${message}`
+  const logger = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  logger(logMessage, payloadData)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void invoke('image_send_log', {
+    payload: {
+      level,
+      message: logMessage,
+      data: payloadData,
+    },
+  }).catch(() => {})
+}
+
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   resetVideoState({ clearSource: !nextPayload || nextPayload.mediaType !== 'video' })
   destroyExcelPreviewer()
   payload.value = nextPayload
+  if (nextPayload?.mediaType === 'video') {
+    videoDuration.value = payloadVideoDuration.value
+    mediaViewerVideoLog('payload applied', {
+      src: mediaSourceSummary(nextPayload.src || ''),
+      filePath: String(nextPayload.filePath || '').slice(0, 160),
+      originalUrlHead: String(nextPayload.originalUrl || '').slice(0, 160),
+      fileKeyLen: String(nextPayload.fileKey || '').length,
+      size: nextPayload.size || 0,
+      duration: nextPayload.duration || 0,
+      width: nextPayload.width || 0,
+      height: nextPayload.height || 0,
+      mimeType: nextPayload.mimeType || '',
+    })
+  }
   rotation.value = 0
   menuVisible.value = false
   if (nextPayload?.title) {
@@ -333,6 +427,7 @@ function resetVideoState(options: { clearSource?: boolean } = {}) {
   videoProbeLoading.value = false
   videoConverting.value = false
   videoAutoTranscodeTried.value = false
+  videoPlayReloadRetries = 0
   videoAutoTranscodeSource = ''
   videoProbe.value = null
   isVideoPlaying.value = false
@@ -345,15 +440,18 @@ function resetVideoState(options: { clearSource?: boolean } = {}) {
 function startVideoPreparingOnOpen() {
   const video = videoRef.value
   if (!video || !videoSrc.value) return
+  mediaViewerVideoLog('prepare on open start')
   videoPreparingOnOpen.value = true
   window.clearTimeout(videoPrepareTimer)
   videoPrepareTimer = window.setTimeout(() => {
+    mediaViewerVideoLog('prepare on open timeout', {}, 'warn')
     videoPreparingOnOpen.value = false
   }, 1200)
   try {
     video.preload = 'auto'
     video.load()
   } catch {
+    mediaViewerVideoLog('prepare on open load threw', {}, 'warn')
     // Loading is opportunistic; playback click can still retry.
   }
 }
@@ -468,17 +566,27 @@ function formatVideoTime(value: number): string {
   return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
+function normalizeVideoDuration(value: unknown): number {
+  const duration = Number(value || 0)
+  return Number.isFinite(duration) && duration > 0 ? duration : 0
+}
+
+function currentPlayableVideoDuration(video: HTMLVideoElement): number {
+  return normalizeVideoDuration(video.duration) || payloadVideoDuration.value
+}
+
 function syncVideoState() {
   const video = videoRef.value
   if (!video) return
   videoCurrentTime.value = video.currentTime || 0
-  videoDuration.value = Number.isFinite(video.duration) ? video.duration : 0
+  videoDuration.value = currentPlayableVideoDuration(video)
   videoVolume.value = video.volume
   isVideoMuted.value = video.muted
   isVideoPlaying.value = !video.paused && !video.ended
 }
 
 function handleVideoLoadedMetadata() {
+  mediaViewerVideoLog('loadedmetadata')
   stopVideoPreparing()
   syncVideoState()
 }
@@ -495,6 +603,7 @@ function markVideoFrameReady() {
       stopVideoPreparing()
       videoPlaybackRequested.value = false
       syncVideoState()
+      mediaViewerVideoLog('frame ready by requestVideoFrameCallback')
     })
     return
   }
@@ -504,26 +613,42 @@ function markVideoFrameReady() {
     stopVideoPreparing()
     videoPlaybackRequested.value = false
     syncVideoState()
+    mediaViewerVideoLog('frame ready by animation frame')
   })
 }
 
 function handleVideoCanPlay() {
+  mediaViewerVideoLog('canplay')
   markVideoFrameReady()
   syncVideoState()
 }
 
 function handleVideoLoadedData() {
+  mediaViewerVideoLog('loadeddata')
   markVideoFrameReady()
   syncVideoState()
 }
 
+function handleVideoLoadStart() {
+  mediaViewerVideoLog('loadstart')
+}
+
+function handleVideoProgress() {
+  const video = videoRef.value
+  if (!video || video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return
+  mediaViewerVideoLog('progress while not ready')
+}
+
 function handleVideoPlay() {
+  mediaViewerVideoLog('play event')
   videoPlaybackRequested.value = true
   syncVideoState()
 }
 
 function handleVideoPlaying() {
+  mediaViewerVideoLog('playing')
   window.clearTimeout(videoPlayWatchTimer)
+  videoPlayReloadRetries = 0
   stopVideoPreparing()
   videoPlaybackRequested.value = false
   markVideoFrameReady()
@@ -531,6 +656,7 @@ function handleVideoPlaying() {
 }
 
 function handleVideoWaiting() {
+  mediaViewerVideoLog('waiting/stalled', {}, 'warn')
   const video = videoRef.value
   if (!isVideoFrameReady.value && video && !video.paused) {
     videoPlaybackRequested.value = true
@@ -539,6 +665,7 @@ function handleVideoWaiting() {
 }
 
 function handleVideoPause() {
+  mediaViewerVideoLog('pause')
   window.clearTimeout(videoPlayWatchTimer)
   stopVideoPreparing()
   videoPlaybackRequested.value = false
@@ -548,31 +675,62 @@ function handleVideoPause() {
 function handleVideoError() {
   isVideoFrameReady.value = false
   window.clearTimeout(videoPlayWatchTimer)
+  videoPlayReloadRetries = 0
   stopVideoPreparing()
   videoPlaybackRequested.value = false
+  mediaViewerVideoLog('error', {
+    code: videoRef.value?.error?.code || 0,
+    message: videoRef.value?.error?.message || '',
+  }, 'error')
   showToast(videoErrorMessage(), 'error')
+  syncVideoState()
+}
+
+async function recoverStalledVideoPlayback(video: HTMLVideoElement) {
+  mediaViewerVideoLog('stalled watchdog fired', {}, 'warn')
+  if (videoRef.value !== video || video.paused || video.ended) return
+  if (video.currentTime > 0 || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return
+  if (videoPlayReloadRetries < 1) {
+    videoPlayReloadRetries += 1
+    videoPlaybackRequested.value = true
+    try {
+      mediaViewerVideoLog('stalled watchdog reload start', {}, 'warn')
+      video.load()
+      await video.play()
+      syncVideoState()
+      mediaViewerVideoLog('stalled watchdog reload play resolved')
+      return
+    } catch (error) {
+      mediaViewerVideoLog('stalled watchdog reload failed', {
+        message: error instanceof Error ? error.message : String(error || ''),
+      }, 'error')
+    }
+  }
+  videoPlaybackRequested.value = false
+  showToast('视频正在准备中，如长时间无响应请使用默认应用打开', 'error')
   syncVideoState()
 }
 
 async function toggleVideoPlayback() {
   const video = videoRef.value
   if (!video) return
+  mediaViewerVideoLog('toggle playback', {
+    action: video.paused || video.ended ? 'play' : 'pause',
+  })
   if (video.paused || video.ended) {
     videoPlaybackRequested.value = true
     try {
       await video.play()
       window.clearTimeout(videoPlayWatchTimer)
       videoPlayWatchTimer = window.setTimeout(() => {
-        if (videoRef.value !== video || video.paused || video.ended) return
-        if (video.currentTime > 0 || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return
-        videoPlaybackRequested.value = false
-        showToast('视频正在准备中，如长时间无响应请使用默认应用打开', 'error')
-        syncVideoState()
+        void recoverStalledVideoPlayback(video)
       }, 2500)
     } catch (error) {
       window.clearTimeout(videoPlayWatchTimer)
       videoPlaybackRequested.value = false
-      console.warn('[media-viewer] video play failed:', error)
+      mediaViewerVideoLog('play promise failed', {
+        message: error instanceof Error ? error.message : String(error || ''),
+      }, 'error')
       showToast(videoErrorMessage(error), 'error')
     }
   } else {
@@ -585,9 +743,11 @@ async function toggleVideoPlayback() {
 
 function handleVideoSeek(event: Event) {
   const video = videoRef.value
-  if (!video || !videoDuration.value) return
+  if (!video) return
+  const duration = currentPlayableVideoDuration(video)
+  if (!duration) return
   const next = Number((event.target as HTMLInputElement).value)
-  video.currentTime = (Math.min(100, Math.max(0, next)) / 100) * videoDuration.value
+  video.currentTime = (Math.min(100, Math.max(0, next)) / 100) * duration
   syncVideoState()
 }
 
@@ -1249,6 +1409,8 @@ onUnmounted(() => {
           playsinline
           preload="auto"
           @click.stop="toggleVideoPlayback"
+          @loadstart="handleVideoLoadStart"
+          @progress="handleVideoProgress"
           @loadedmetadata="handleVideoLoadedMetadata"
           @loadeddata="handleVideoLoadedData"
           @canplay="handleVideoCanPlay"
