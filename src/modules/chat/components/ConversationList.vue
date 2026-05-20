@@ -1017,7 +1017,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
           active: conv.id === chatStore.currentConversationId,
           pinned: conv.isPinned && !conv.isArchived,
           'friend-online': showFriendOnlineDot(conv),
-          'has-unread': hasDisplayUnread(conv) && !isConversationMuted(conv),
+          'has-unread': hasDisplayUnread(conv),
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -1343,8 +1343,10 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
 }
 
 .muted-icon {
-  flex-shrink: 0;
-  margin-left: 6px;
+  position: absolute;
+  right: 34px;
+  bottom: 14px;
+  z-index: 3;
   display: flex;
   align-items: center;
 
