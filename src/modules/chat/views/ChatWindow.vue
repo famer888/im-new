@@ -19,7 +19,7 @@ import MessageInput from '../components/MessageInput.vue'
 import GroupNoticeDialog from '../components/panels/GroupNoticeDialog.vue'
 import lockIcon from '@/assets/images/message/lock.png'
 import dropFileIcon from '@/assets/images/file/file-icon.png'
-import arrowIcon from '@/assets/images/arrow.svg'
+import topNoticeArrowIcon from '@/assets/images/headNav/jt-icon.png'
 import { eventBus } from '@/utils/eventBus'
 
 const route = useRoute()
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
         @keydown.space.prevent="handleOpenTopGroupNotice"
       >
         <span>{{ t('群简介') }}</span>
-        <img :src="arrowIcon" alt="" />
+        <img :src="topNoticeArrowIcon" alt="" />
       </h2>
       <p>{{ latestGroupIntroNotice.notice }}</p>
       <button type="button" @click.stop="handleCloseTopGroupNotice">{{ t('知道了') }}</button>

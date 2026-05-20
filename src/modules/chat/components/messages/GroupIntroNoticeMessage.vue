@@ -69,6 +69,10 @@ const noticeText = computed(() => String(props.message.content || '').trim())
       height: 18px;
       margin-right: 5px;
     }
+
+    > span {
+      color: #178aff;
+    }
   }
 
   > picture {
