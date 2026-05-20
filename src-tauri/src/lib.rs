@@ -158,6 +158,7 @@ pub fn run() {
             commands::contacts::get_contacts,
             commands::contacts::search_contacts,
             commands::contacts::add_contact,
+            commands::contacts::upsert_contact,
             commands::contacts::delete_contact,
             commands::groups::get_groups,
             commands::groups::get_group_members,

@@ -106,6 +106,14 @@ const description = computed(() =>
   String(detail.value.remark ?? detail.value.channelDesc ?? channel.value?.remark ?? channel.value?.description ?? ''),
 )
 const adminPrivacy = computed(() => Number(detail.value.adminPrivacy ?? channel.value?.adminPrivacy ?? 0))
+const channelMemberType = computed(() => {
+  const value = detail.value.memberType ?? channel.value?.memberType
+  return value === undefined || value === null || value === '' ? null : Number(value)
+})
+const showChannelAliasLink = computed(() => {
+  const memberType = channelMemberType.value
+  return memberType === 1 || memberType === 2
+})
 const channelDisturbed = computed(() =>
   toBool(detail.value.isDisturb ?? channel.value?.isDisturb ?? conv.value?.isMuted ?? false),
 )
@@ -574,7 +582,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="conv" class="channel-info-panel">
-    <section v-if="alias || adminPrivacy" class="channel-link" @click="showQrCode = true">
+    <section v-if="showChannelAliasLink" class="channel-link" @click="showQrCode = true">
       <h4>{{ t('频道别名') }}</h4>
       <div class="channel-link-info">
         <span class="alias" @click.stop="copyAlias">{{ alias ? `@${alias}` : '' }}</span>

@@ -163,15 +163,35 @@ export const useChannelStore = defineStore('channel', () => {
     return Boolean(value)
   }
 
+  function textValue(value: unknown): string {
+    return value === undefined || value === null ? '' : String(value).trim()
+  }
+
+  function meaningfulChannelName(id: string, value: unknown): string | null {
+    const text = textValue(value)
+    if (!text || text === id) return null
+    return text
+  }
+
+  function pickChannelName(id: string, candidates: unknown[]): string | null {
+    for (const candidate of candidates) {
+      const name = meaningfulChannelName(id, candidate)
+      if (name) return name
+    }
+    return null
+  }
+
   // 兼容三种来源：频道接口、Tauri 本地表、频道会话兜底字段。
   function normalizeChannel(item: any): Channel {
-    const id = String(item.id ?? item.channelId ?? '')
+    const id = textValue(item.id ?? item.channelId)
     const status = Number(item.status ?? 0)
+    const name = pickChannelName(id, [item.name, item.channelName])
+    const channelName = pickChannelName(id, [item.channelName, item.name])
     return {
       id,
-      channelId: String(item.channelId ?? item.id ?? ''),
-      name: item.name ?? item.channelName ?? id,
-      channelName: item.channelName ?? item.name ?? id,
+      channelId: textValue(item.channelId ?? item.id),
+      name,
+      channelName,
       avatar: item.avatar ?? item.icon ?? null,
       icon: item.icon ?? item.avatar ?? null,
       logoColor: item.logoColor ?? null,
@@ -204,6 +224,26 @@ export const useChannelStore = defineStore('channel', () => {
     return !displayName || displayName === id
   }
 
+  function mergeChannelRecord(prev: Channel | undefined, next: Channel): Channel {
+    if (!prev) return next
+    const id = String(next.id || next.channelId || prev.id || prev.channelId || '').trim()
+    const merged: Channel = {
+      ...prev,
+      ...next,
+      id,
+      channelId: id,
+      name: pickChannelName(id, [next.name, next.channelName, prev.name, prev.channelName]),
+      channelName: pickChannelName(id, [next.channelName, next.name, prev.channelName, prev.name]),
+      avatar: next.avatar || next.icon || prev.avatar || prev.icon || null,
+      icon: next.icon || next.avatar || prev.icon || prev.avatar || null,
+      logoColor: next.logoColor || prev.logoColor || null,
+    }
+    if (next.memberCount < 0 && prev.memberCount >= 0) {
+      merged.memberCount = prev.memberCount
+    }
+    return merged
+  }
+
   // 对齐老 im：频道列表要把“频道主列表”和“消息/会话里出现过的频道”合在一起，避免某一路为空时整段消失。
   function mergeChannelsById(...lists: Channel[][]): Channel[] {
     const map = new Map<string, Channel>()
@@ -211,7 +251,7 @@ export const useChannelStore = defineStore('channel', () => {
       for (const item of list) {
         const id = String(item.id || item.channelId || '')
         if (!id) continue
-        map.set(id, { ...map.get(id), ...item, id, channelId: id })
+        map.set(id, mergeChannelRecord(map.get(id), { ...item, id, channelId: id }))
       }
     }
     return Array.from(map.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
@@ -454,19 +494,15 @@ export const useChannelStore = defineStore('channel', () => {
     if (isChannelRemoved(id) && !options.allowRemoved) return
     if (options.allowRemoved) unmarkChannelRemoved(activeUid, id)
     const index = channels.value.findIndex((item) => item.id === id)
+    const next = normalizeChannel({
+      ...patch,
+      id,
+      channelId: id,
+    })
     if (index >= 0) {
-      channels.value[index] = normalizeChannel({
-        ...channels.value[index],
-        ...patch,
-        id,
-        channelId: id,
-      })
+      channels.value[index] = mergeChannelRecord(channels.value[index], next)
     } else {
-      channels.value.unshift(normalizeChannel({
-        ...patch,
-        id,
-        channelId: id,
-      }))
+      channels.value.unshift(next)
     }
   }
 

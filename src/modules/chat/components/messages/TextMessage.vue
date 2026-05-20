@@ -408,9 +408,7 @@ function parseChannelRemark(raw: any): string {
     ?? raw?.channel_remark
     ?? raw?.intro
     ?? ''
-  const text = String(value || '').trim()
-  if (text) return text
-  return Number(raw?.linkType || raw?.link_type || 0) ? '私密频道' : ''
+  return String(value || '').trim()
 }
 
 function openChannelConversation(raw: any) {

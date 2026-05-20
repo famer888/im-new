@@ -55,6 +55,39 @@ pub async fn add_contact(uid: String, target_id: String, message: String) -> Res
 }
 
 #[tauri::command]
+pub async fn upsert_contact(
+    db: State<'_, DbManager>,
+    uid: String,
+    contact: models::Contact,
+) -> Result<(), String> {
+    db.with_connection(&uid, |conn| {
+        conn.execute(
+            "INSERT INTO contacts (id, nickname, avatar, pinyin, remark, status, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+               nickname = excluded.nickname,
+               avatar = excluded.avatar,
+               pinyin = excluded.pinyin,
+               remark = excluded.remark,
+               status = excluded.status,
+               updated_at = excluded.updated_at",
+            rusqlite::params![
+                contact.id,
+                contact.nickname,
+                contact.avatar,
+                contact.pinyin,
+                contact.remark,
+                contact.status,
+                contact.updated_at,
+            ],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn delete_contact(
     db: State<'_, DbManager>,
     uid: String,

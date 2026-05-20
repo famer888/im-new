@@ -230,6 +230,69 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
+  async function upsertContact(
+    contact: Partial<Contact> & { id: string },
+    options?: { uid?: string; source?: 'local' | 'remote'; markDetailLoaded?: boolean; persist?: boolean },
+  ) {
+    const id = String(contact.id || '').trim()
+    if (!id) return
+
+    const now = Date.now()
+    const patch: Partial<Contact> = {
+      ...contact,
+      id,
+      status: Number(contact.status ?? 1),
+      updatedAt: Number(contact.updatedAt || now),
+    }
+    const existing = contacts.value.find((c) => c.id === id)
+    if (existing) {
+      patchContact(id, patch, {
+        source: options?.source,
+        markDetailLoaded: options?.markDetailLoaded,
+      })
+    } else {
+      contacts.value.push({
+        id,
+        nickname: patch.nickname ?? null,
+        avatar: patch.avatar ?? null,
+        pinyin: patch.pinyin ?? null,
+        letter: patch.letter ?? null,
+        remark: patch.remark ?? null,
+        depict: patch.depict ?? null,
+        identify: patch.identify ?? null,
+        bfReadCancel: patch.bfReadCancel,
+        bfMyBlack: patch.bfMyBlack,
+        msgCancelTime: patch.msgCancelTime,
+        status: Number(patch.status ?? 1),
+        updatedAt: Number(patch.updatedAt || now),
+        online: patch.online,
+        onlineStatusUpdateTime: patch.onlineStatusUpdateTime,
+        bfShowOnline: patch.bfShowOnline,
+      })
+    }
+
+    const searchTarget = searchResults.value.find((c) => c.id === id)
+    if (searchTarget) Object.assign(searchTarget, patch)
+
+    if (options?.persist === false || !isTauri() || !options?.uid) return
+    try {
+      await tauriInvoke('upsert_contact', {
+        uid: options.uid,
+        contact: {
+          id,
+          nickname: patch.nickname ?? null,
+          avatar: patch.avatar ?? null,
+          pinyin: patch.pinyin ?? null,
+          remark: patch.remark ?? null,
+          status: Number(patch.status ?? 1),
+          updated_at: Number(patch.updatedAt || now),
+        },
+      })
+    } catch (error) {
+      console.warn('[ContactStore] persist upsert contact failed:', id, error)
+    }
+  }
+
   async function ensureContactDetailLoaded(id: string, options?: { force?: boolean }) {
     const targetId = String(id || '')
     if (!targetId || !getContact(targetId)) return
@@ -304,6 +367,7 @@ export const useContactStore = defineStore('contact', () => {
     getContact,
     getDisplayName,
     patchContact,
+    upsertContact,
     ensureContactDetailLoaded,
     removeContact,
     applyOnlineStatusUpdates,

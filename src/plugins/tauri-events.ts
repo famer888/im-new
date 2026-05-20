@@ -1436,7 +1436,13 @@ export async function setupTauriListeners() {
         if (typeof extra.identify === 'string' && extra.identify) patch.identify = extra.identify
         if (typeof extra.remark === 'string') patch.remark = extra.remark || null
         if (Object.keys(patch).length > 0) {
-          contactStore.patchContact(friendId, patch as any, {
+          await contactStore.upsertContact({
+            id: friendId,
+            ...patch,
+            status: 1,
+            updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
+          } as any, {
+            uid: currentUid,
             source: 'remote',
             markDetailLoaded: true,
           })

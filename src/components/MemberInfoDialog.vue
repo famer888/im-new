@@ -65,7 +65,6 @@ const savingDepict = ref(false)
 const addVerifyVisible = ref(false)
 const addVerifyMessage = ref('')
 const sendingAdd = ref(false)
-const addFailed = ref(false)
 const remarkInputRef = ref<HTMLInputElement | null>(null)
 const depictInputRef = ref<HTMLInputElement | null>(null)
 
@@ -78,17 +77,25 @@ watch(visible, (val) => {
     addVerifyVisible.value = false
     addVerifyMessage.value = ''
     sendingAdd.value = false
-    addFailed.value = false
   }
 })
 
 watch(addVerifyMessage, (value) => {
   if (value.length <= 20) return
-  addVerifyMessage.value = value.slice(0, 20)
+  addVerifyMessage.value = truncateVerifyMessage(value)
 })
 
 function close() {
   uiStore.closeMemberInfo()
+}
+
+function truncateVerifyMessage(value: string) {
+  let next = value.slice(0, 20)
+  const lastCode = next.charCodeAt(next.length - 1)
+  if (lastCode >= 0xD800 && lastCode <= 0xDBFF) {
+    next = next.slice(0, -1)
+  }
+  return next
 }
 
 function startEditRemark() {
@@ -249,27 +256,32 @@ function defaultVerifyMessage() {
 
 function showAddVerifyDialog() {
   if (!addToken.value || sendingAdd.value) return
-  addVerifyMessage.value = defaultVerifyMessage()
-  addFailed.value = false
+  addVerifyMessage.value = truncateVerifyMessage(defaultVerifyMessage())
   addVerifyVisible.value = true
 }
 
 function closeAddVerifyDialog() {
   if (sendingAdd.value) return
   addVerifyVisible.value = false
-  addFailed.value = false
+}
+
+function getResponseErrorMessage(resp: unknown, fallback = t('添加失败，请稍后重试')) {
+  const raw = resp as {
+    commonResult?: { errMsg?: string | null }
+    errorDesc?: string | null
+  } | null
+  return raw?.commonResult?.errMsg || raw?.errorDesc || fallback
 }
 
 async function handleConfirmAdd() {
   if (!addToken.value || sendingAdd.value) return
   const targetUid = Number(userId.value)
   if (!Number.isFinite(targetUid)) {
-    addFailed.value = true
+    eventBus.emit('show-toast', { message: t('用户 ID 无效'), type: 'error' })
     return
   }
 
   sendingAdd.value = true
-  addFailed.value = false
   try {
     const resp = await contactsRelation({
       targetUid,
@@ -281,12 +293,13 @@ async function handleConfirmAdd() {
     const errCode = Number((resp as any)?.commonResult?.errCode ?? 0)
     if (errCode === 200 || errCode === 0) {
       addVerifyVisible.value = false
+      eventBus.emit('show-toast', { message: t('已向对方发送添加申请'), type: 'success' })
     } else {
-      addFailed.value = true
+      eventBus.emit('show-toast', { message: getResponseErrorMessage(resp), type: 'error' })
     }
   } catch (error) {
     console.warn('[MemberInfoDialog] add contact failed:', error)
-    addFailed.value = true
+    eventBus.emit('show-toast', { message: t('当前网络异常，请检查网络设置'), type: 'error' })
   } finally {
     sendingAdd.value = false
   }
@@ -351,24 +364,25 @@ async function handleConfirmAdd() {
           <button v-else-if="addToken" class="primaryBtn" @click="showAddVerifyDialog">{{ t('添加') }}</button>
         </div>
 
-        <div v-if="addVerifyVisible" class="inputContent">
-          <h3>{{ t('添加验证') }}：</h3>
-          <div>
+        <div v-if="addVerifyVisible" class="verify-overlay">
+          <div class="verify-dialog" @click.stop>
+            <div class="verify-header">
+              <span class="verify-title">{{ t('添加验证') }}</span>
+              <button type="button" class="verify-close" :disabled="sendingAdd" @click="closeAddVerifyDialog">
+                <img :src="closeIcon" alt="" />
+              </button>
+            </div>
             <textarea
               v-model="addVerifyMessage"
-              :placeholder="t('请输入内容')"
+              class="verify-textarea"
+              rows="3"
               maxlength="20"
               :disabled="sendingAdd"
             />
-            <span>{{ 20 - addVerifyMessage.length }}</span>
+            <button type="button" class="primaryBtn verify-submit" :disabled="sendingAdd" @click="handleConfirmAdd">
+              {{ sendingAdd ? t('发送中...') : t('完成') }}
+            </button>
           </div>
-          <button class="primaryBtn verify-submit" :disabled="sendingAdd" @click="handleConfirmAdd">
-            {{ sendingAdd ? t('发送中...') : t('完成') }}
-          </button>
-          <button class="primaryBtn cancel" :disabled="sendingAdd" @click="closeAddVerifyDialog">
-            {{ t('取消') }}
-          </button>
-          <p v-if="addFailed" class="add-error">{{ t('添加失败，请稍后重试') }}</p>
         </div>
       </div>
     </div>
@@ -502,72 +516,107 @@ async function handleConfirmAdd() {
     &:hover {
       opacity: 0.8;
     }
-  }
-}
 
-.inputContent {
-  margin-top: 4px;
-
-  > h3 {
-    margin: 0;
-    padding: 0;
-    line-height: 30px;
-    font-size: 14px;
-    font-weight: 400;
-  }
-
-  > div {
-    position: relative;
-    height: 80px;
-
-    textarea {
-      width: 100%;
-      height: 100%;
-      padding: 10px;
-      box-sizing: border-box;
-      border: 0;
-      border-radius: 6px;
-      background-color: rgb(245, 245, 245);
-      line-height: 20px;
-      resize: none;
-    }
-
-    span {
-      position: absolute;
-      right: 5px;
-      bottom: 5px;
-      color: #aaa;
-      font-size: 12px;
-    }
-  }
-
-  .primaryBtn {
-    margin-top: 15px;
-    margin-right: 10px;
-    height: 32px;
-    padding: 0 28px;
-    border: 0;
-    border-radius: 4px;
-    background: #3369fe;
-    color: #fff;
-    line-height: 32px;
-    font-size: 12px;
-    cursor: pointer;
-
-    &:hover {
-      opacity: 0.8;
-    }
-
-    &.cancel {
-      background: #999;
+    &:disabled {
+      cursor: default;
+      opacity: 0.65;
     }
   }
 }
 
-.add-error {
-  margin: 8px 0 0;
-  color: #f56c6c;
+.verify-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.verify-dialog {
+  width: 300px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  padding: 16px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+
+.verify-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #787878;
+  font-size: 16px;
+}
+
+.verify-title {
+  font-size: 16px;
+  line-height: 22px;
+  color: #787878;
+}
+
+.verify-close {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+
+  img {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+}
+
+.verify-textarea {
+  width: 100%;
+  height: 100px;
+  margin-top: 26px;
+  padding: 8px;
+  border: none;
+  outline: none;
+  resize: none;
+  box-sizing: border-box;
+  background: #f5f6fa;
+  border-radius: 2px;
+  color: #000;
+  font-size: 13px;
+  line-height: 20px;
+  font-family: inherit;
+}
+
+.verify-submit {
+  width: 100%;
+  height: 32px;
+  margin-top: 32px;
+  padding: 0 28px;
+  border: 1px solid #3369fe;
+  border-radius: 4px;
+  background: #3369fe;
+  color: #fff;
+  line-height: 32px;
   font-size: 12px;
-  line-height: 18px;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.8;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.65;
+  }
 }
+
 </style>
