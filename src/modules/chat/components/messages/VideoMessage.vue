@@ -26,6 +26,7 @@ const previewVideoDuration = ref(0)
 const previewVideoVolume = ref(1)
 const previewVideoMuted = ref(false)
 const videoOpening = ref(false)
+const videoOpenProgress = ref<number | null>(null)
 const videoPreparingForDrag = ref(false)
 const localVideoPath = ref('')
 const thumbElRef = ref<HTMLImageElement | null>(null)
@@ -49,6 +50,7 @@ let playbackPreloadStarted = false
 const NATIVE_DRAG_THRESHOLD = 4
 const MAX_CACHED_VIDEO_COVER_DATA_URL_BYTES = 512 * 1024
 const MAX_AUTO_PRELOAD_VIDEO_BYTES = 50 * 1024 * 1024
+const VIDEO_PROGRESS_CIRCUMFERENCE = 2 * Math.PI * 21
 
 function videoMessageIdForCache(): string {
   return safeName(props.message.id || props.message.customMsgId || `${props.message.conversationId || 'video'}-${props.message.sendTime || ''}`)
@@ -257,6 +259,14 @@ const videoBoxStyle = computed(() => {
     width: `${boxWidth}px`,
   }
 })
+const hasVideoOpenProgress = computed(() => videoOpenProgress.value !== null)
+const videoOpenProgressPercent = computed(() => {
+  if (videoOpenProgress.value === null) return 0
+  return Math.min(100, Math.max(0, videoOpenProgress.value * 100))
+})
+const videoOpenProgressOffset = computed(() =>
+  VIDEO_PROGRESS_CIRCUMFERENCE * (1 - videoOpenProgressPercent.value / 100),
+)
 
 function cleanupDownloadEvents() {
   stopDownloadEvents.forEach(stop => stop())
@@ -266,6 +276,13 @@ function cleanupDownloadEvents() {
 function cleanupVideoDownloadEvents() {
   stopVideoDownloadEvents.forEach(stop => stop())
   stopVideoDownloadEvents = []
+}
+
+function normalizeDownloadProgress(value: unknown): number | null {
+  const progress = Number(value)
+  if (!Number.isFinite(progress)) return null
+  const normalized = progress > 1 ? progress / 100 : progress
+  return Math.min(1, Math.max(0, normalized))
 }
 
 function markLoadedIfImageAlreadyComplete() {
@@ -733,6 +750,8 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
       const savePath = await join(baseDir, 'video-cache', id, getVideoFileName(url, videoData.value.name))
       const doneEvent = `file:done:${id}`
       const errorEvent = `file:error:${id}`
+      const progressEvent = `file:progress:${id}`
+      videoOpenProgress.value = 0
       videoStreamLog('download video to local start', {
         id,
         urlHead: url.slice(0, 160),
@@ -744,6 +763,7 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
       const unlistenDone = await listen(doneEvent, () => {
         if (token !== videoOpenToken) return
         cleanupVideoDownloadEvents()
+        videoOpenProgress.value = 1
         localVideoPath.value = savePath
         videoStreamLog('download video to local done', {
           id,
@@ -754,13 +774,20 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
       const unlistenError = await listen<{ error?: string }>(errorEvent, (event) => {
         if (token !== videoOpenToken) return
         cleanupVideoDownloadEvents()
+        videoOpenProgress.value = null
         videoStreamLog('download video to local error', {
           id,
           error: event.payload?.error || '视频下载失败',
         }, 'error')
         reject(new Error(event.payload?.error || '视频下载失败'))
       })
-      stopVideoDownloadEvents = [unlistenDone, unlistenError]
+      const unlistenProgress = await listen<{ progress?: number }>(progressEvent, (event) => {
+        if (token !== videoOpenToken) return
+        const progress = normalizeDownloadProgress(event.payload?.progress)
+        if (progress === null) return
+        videoOpenProgress.value = progress
+      })
+      stopVideoDownloadEvents = [unlistenDone, unlistenError, unlistenProgress]
 
       await invoke('download_file', {
         url,
@@ -773,6 +800,7 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
     } catch (error) {
       if (token !== videoOpenToken) return
       cleanupVideoDownloadEvents()
+      videoOpenProgress.value = null
       videoStreamLog('download video to local catch', {
         message: error instanceof Error ? error.message : String(error || ''),
       }, 'error')
@@ -1372,6 +1400,7 @@ async function handleOpenVideo() {
     duration: videoData.value.duration || 0,
     hasFileKey: Boolean(fileKey.value || attachmentKey.value),
   })
+  videoOpenProgress.value = null
   videoOpening.value = true
   try {
     const localVideoExists = localVideoPath.value ? await localFileExists(localVideoPath.value) : false
@@ -1460,6 +1489,7 @@ async function handleOpenVideo() {
   } finally {
     videoStreamLog('open finished')
     videoOpening.value = false
+    videoOpenProgress.value = null
   }
 }
 
@@ -1471,6 +1501,7 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, lo
   pendingVideoLocalFilePromise = null
   pendingEncryptedVideoStreamPromise = null
   pendingEncryptedVideoWarmPromise = null
+  videoOpenProgress.value = null
   warmedEncryptedVideoStreamUrl = ''
   playbackPreloadStarted = false
   cachedEncryptedVideoStreamKey = ''
@@ -1511,6 +1542,9 @@ onBeforeUnmount(() => {
   videoOpenToken += 1
   coverToken += 1
   pendingVideoLocalFilePromise = null
+  pendingEncryptedVideoStreamPromise = null
+  pendingEncryptedVideoWarmPromise = null
+  videoOpenProgress.value = null
   closeInlinePreview()
   preloadObserver?.disconnect()
   preloadObserver = null
@@ -1547,16 +1581,39 @@ onBeforeUnmount(() => {
         <div v-if="loadError" class="video-placeholder"></div>
         <div
           class="center-control"
-          :class="{ opening: videoOpening, 'no-cover': !isLoaded || loadError || showLoading }"
+          :class="{ opening: videoOpening, 'has-progress': hasVideoOpenProgress, 'no-cover': !isLoaded || loadError || showLoading }"
           aria-hidden="true"
         >
           <div class="progress-ring">
             <svg viewBox="0 0 48 48" aria-hidden="true">
-              <circle class="ring-bg" cx="24" cy="24" r="21" fill="none" stroke-width="2" />
-              <circle class="ring-progress" cx="24" cy="24" r="21" fill="none" stroke-width="2" />
+              <circle
+                class="ring-bg"
+                cx="24"
+                cy="24"
+                r="21"
+                fill="none"
+                stroke-width="2"
+              />
+              <circle
+                class="ring-progress"
+                cx="24"
+                cy="24"
+                r="21"
+                fill="none"
+                stroke-width="2"
+                :stroke-dasharray="VIDEO_PROGRESS_CIRCUMFERENCE"
+                :stroke-dashoffset="videoOpenProgressOffset"
+              />
             </svg>
           </div>
-          <div class="play-icon"></div>
+          <div v-if="videoOpening" class="pause-icon">
+            <span></span>
+            <span></span>
+          </div>
+          <div v-else class="play-icon"></div>
+        </div>
+        <div v-if="videoOpening && hasVideoOpenProgress" class="video-progress-bar" aria-hidden="true">
+          <div class="video-progress-fill" :style="{ width: `${videoOpenProgressPercent}%` }"></div>
         </div>
       </div> 
     </div>
@@ -1776,7 +1833,9 @@ onBeforeUnmount(() => {
   .progress-ring {
     width: 48px;
     height: 48px;
+  }
 
+  &:not(.has-progress) {
     .ring-progress {
       stroke-dasharray: 132;
       stroke-dashoffset: 0;
@@ -1784,12 +1843,13 @@ onBeforeUnmount(() => {
   }
 
   &.opening {
-    .progress-ring {
+    &:not(.has-progress) .progress-ring {
       animation: video-loading-spin 1.2s linear infinite;
-    }
 
-    .ring-progress {
-      stroke-dasharray: 40 92;
+      .ring-progress {
+        stroke-dasharray: 40 92;
+        stroke-dashoffset: 0;
+      }
     }
   }
 
@@ -1807,6 +1867,21 @@ onBeforeUnmount(() => {
   }
 }
 
+.pause-icon {
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+
+  span {
+    width: 4px;
+    height: 16px;
+    background: #fff;
+    border-radius: 1px;
+  }
+}
+
 .play-icon {
   z-index: 14;
   width: 0;
@@ -1815,6 +1890,24 @@ onBeforeUnmount(() => {
   border-style: solid;
   border-width: 8px 0 8px 14px;
   border-color: transparent transparent transparent #fff;
+}
+
+.video-progress-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 14;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.34);
+  overflow: hidden;
+}
+
+.video-progress-fill {
+  width: 0;
+  height: 100%;
+  background: #fff;
+  transition: width 0.2s ease;
 }
 
 .video-preview {
