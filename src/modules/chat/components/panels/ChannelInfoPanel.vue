@@ -1017,6 +1017,11 @@ onBeforeUnmount(() => {
         &:focus {
           outline: none;
         }
+
+        &::placeholder {
+          color:rgb(48, 48, 48);
+          opacity: 1;
+        }
       }
 
       > span {
