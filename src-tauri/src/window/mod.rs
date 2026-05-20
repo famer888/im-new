@@ -328,6 +328,7 @@ impl WindowManager {
                 .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
                 .resizable(false)
                 .decorations(false)
+                .transparent(true)
                 .always_on_top(true)
                 .build()
                 .map_err(|e| WindowError::TauriError(e.to_string()))?;
