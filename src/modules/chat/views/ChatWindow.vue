@@ -553,7 +553,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   position: absolute;
   width: 95%;
-  top: 85px;
+  top: 53px;
   left: 50%;
   transform: translateX(-50%);
   background-color: #fff;
@@ -588,8 +588,8 @@ onBeforeUnmount(() => {
     white-space: pre-wrap;
     line-height: 20px;
     max-height: 190px;
-    color: #666;
-    font-size: 12px;
+    color: #333;
+    font-size: 14px;
   }
 
   > button {
@@ -597,6 +597,7 @@ onBeforeUnmount(() => {
     position: absolute;
     right: 15px;
     font-size: 12px;
+    font-weight: 600;
     bottom: 8px;
     cursor: pointer;
     user-select: none;
