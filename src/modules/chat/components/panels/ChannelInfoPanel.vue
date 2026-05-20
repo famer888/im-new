@@ -1152,9 +1152,11 @@ onBeforeUnmount(() => {
   background: #fff;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   flex-direction: column;
   position: relative;
+  box-sizing: border-box;
+  padding-top: 15px;
   padding-bottom: 30px;
 
   .qrcode-wrap {
@@ -1224,7 +1226,7 @@ onBeforeUnmount(() => {
     .btn-title {
       font-size: 12px;
       color: #000;
-      font-weight: 300;
+      font-weight: 600;
     }
   }
 }
