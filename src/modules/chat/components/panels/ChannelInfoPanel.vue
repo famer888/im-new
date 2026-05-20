@@ -611,7 +611,7 @@ onBeforeUnmount(() => {
             :disabled="!canClearHistory"
           />
           <div v-else :style="{ height: '203px' }">
-            <p class="notice-view">{{ editDescDraft || t('无简介') }}</p>
+            <p :class="['notice-view', { empty: !editDescDraft }]">{{ editDescDraft || t('无简介') }}</p>
           </div>
           <span v-if="canClearHistory && isEditDesc">{{ 800 - editDescDraft.length }}</span>
         </section>
@@ -1038,9 +1038,14 @@ onBeforeUnmount(() => {
           padding: 0 10px;
           margin: 0;
           font-size: 14px;
-          color: #333;
+          color: #787878;
           line-height: 20px;
+          white-space: pre-wrap;
           word-break: break-word;
+
+          &.empty {
+            color: #d3d1d1;
+          }
         }
       }
     }
@@ -1063,6 +1068,7 @@ onBeforeUnmount(() => {
         height: 32px;
         line-height: 32px;
         font-size: 12px;
+        font-weight: 600;
         border-radius: 4px;
 
         &:hover {
@@ -1073,6 +1079,7 @@ onBeforeUnmount(() => {
           background-color: #fff;
           border: 1px solid #eeeeee;
           color: #666666;
+          font-weight: 400;
           margin-left: 10px;
         }
       }
