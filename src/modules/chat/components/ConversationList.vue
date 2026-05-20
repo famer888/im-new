@@ -1074,7 +1074,9 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
         <span v-if="hasDisplayUnread(conv) && !isConversationMuted(conv)" class="badge">
           {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
         </span>
-        <span v-else-if="hasDisplayUnread(conv) && isConversationMuted(conv)" class="muted-dot" />
+        <span v-else-if="hasDisplayUnread(conv) && isConversationMuted(conv)" class="badge muted-badge">
+          {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
+        </span>
 
         <div class="conv-divider" />
       </div>
@@ -1230,15 +1232,8 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   white-space: nowrap;
 }
 
-.muted-dot {
-  position: absolute;
-  right: 18px;
-  bottom: 16px;
-  z-index: 3;
-  width: 8px;
-  height: 8px;
+.muted-badge {
   background: #ccc;
-  border-radius: 50%;
 }
 
 .conv-body {

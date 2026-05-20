@@ -306,13 +306,14 @@ pub async fn upsert_incoming_messages(
             let mut notification_unread_counts: HashMap<String, i32> = HashMap::new();
             let mut seen_ids_for_unread = HashSet::<String>::new();
             for msg in &rows {
-                if !seen_ids_for_unread.insert(msg.id.clone()) {
+                let unread_identity = format!("{}:{}", msg.conversation_id, msg.id);
+                if !seen_ids_for_unread.insert(unread_identity) {
                     continue;
                 }
                 let existing_send_time = conn
                     .query_row(
-                        "SELECT send_time FROM messages WHERE id = ?1",
-                        rusqlite::params![&msg.id],
+                        "SELECT send_time FROM messages WHERE id = ?1 AND conversation_id = ?2",
+                        rusqlite::params![&msg.id, &msg.conversation_id],
                         |row| row.get::<_, i64>(0),
                     )
                     .optional()
