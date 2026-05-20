@@ -584,6 +584,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-shrink: 0;
   height: 100%;
+  font-family: PingFangSC-Regular, 'PingFang SC', sans-serif;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 
   &.titlebar-nav {
     .nav-bar {
@@ -708,6 +711,7 @@ onBeforeUnmount(() => {
 
 .setting-trigger {
   color: #333;
+  font-weight: normal;
   cursor: pointer;
   user-select: none;
 

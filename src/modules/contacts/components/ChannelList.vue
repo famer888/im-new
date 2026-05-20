@@ -149,5 +149,6 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   text-align: center;
   padding: 10px;
   color: #999;
+  font-weight: normal;
 }
 </style>

@@ -77,6 +77,9 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  font-family: PingFangSC-Regular, 'PingFang SC', sans-serif;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .new-friend {
@@ -97,7 +100,7 @@ onMounted(() => {
 .new-friend-title {
   margin-left: 10px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: normal;
   color: #000;
 }
 

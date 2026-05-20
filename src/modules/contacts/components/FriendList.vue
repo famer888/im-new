@@ -134,6 +134,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
   line-height: 40px;
   font-size: 14px;
   color: #333;
+  font-weight: normal;
   border-top: 1px solid #eee;
 }
 
@@ -217,6 +218,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
   text-align: center;
   font-size: 14px;
   color: #333;
+  font-weight: normal;
   border-top: 1px solid #eee;
   margin-bottom: 50px;
 }
