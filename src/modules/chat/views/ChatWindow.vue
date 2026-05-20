@@ -58,6 +58,8 @@ const dismissedGroupNoticeKey = ref('')
 
 /** 进入会话时的未读条数快照，供「未读消息」分隔条（markAsRead 后列表里会变成 0，故单独存） */
 const sessionInitialUnread = ref(0)
+/** 进入会话时实际已加载到的未读消息 ID；用于把分隔条锚到真实消息，避免只凭未读数误显示 */
+const sessionUnreadMessageIds = ref<string[]>([])
 /** 已为当前会话执行过 markAsRead 后，不再用 store 覆盖快照，避免把已算好的 N 冲掉 */
 const unreadSnapshotLocked = ref(false)
 const dropAreaVisible = ref(false)
@@ -154,6 +156,17 @@ function captureUnreadSnapshot(convId: string) {
   sessionInitialUnread.value = Math.max(sessionInitialUnread.value, n)
 }
 
+function captureUnreadMessageIds(convId: string, uid: string) {
+  const ids = new Set<string>()
+  for (const message of messageStore.getMessages(convId)) {
+    if (String(message.senderId || '') === uid) continue
+    if (Number(message.readStatus || 0) !== 0) continue
+    if (message.id) ids.add(String(message.id))
+    if (message.customMsgId) ids.add(String(message.customMsgId))
+  }
+  sessionUnreadMessageIds.value = [...ids]
+}
+
 /**
  * 会话列表可能晚于路由到达：在 locked 前持续用 store 里的 unread 抬快照，
  * 解决「第一次 capture 为 0、分隔条永远不出现」。
@@ -199,10 +212,12 @@ watch(
   async (newId, oldId) => {
     if (oldId !== undefined && newId !== oldId) {
       sessionInitialUnread.value = 0
+      sessionUnreadMessageIds.value = []
       unreadSnapshotLocked.value = false
     }
     if (!newId) {
       sessionInitialUnread.value = 0
+      sessionUnreadMessageIds.value = []
       unreadSnapshotLocked.value = false
       return
     }
@@ -212,6 +227,7 @@ watch(
     captureUnreadSnapshot(myId)
     await messageStore.loadMessages(authStore.uid, myId)
     if (conversationId.value !== myId) return
+    captureUnreadMessageIds(myId, authStore.uid)
     await chatStore.markAsRead(authStore.uid, myId)
     if (conversationId.value !== myId) return
     unreadSnapshotLocked.value = true
@@ -441,6 +457,7 @@ onBeforeUnmount(() => {
       :loading="isLoading"
       :has-more="messageStore.hasMore(conversationId)"
       :unread-count="sessionInitialUnread"
+      :unread-message-ids="sessionUnreadMessageIds"
       :show-read-burn-background="showReadBurnBackground"
       align-top
       @load-more="handleLoadMore"

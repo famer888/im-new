@@ -50,7 +50,7 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
-import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { convertFileSrc } from '@tauri-apps/api/core'
 
@@ -233,6 +233,17 @@ function setFirstInitProgress(friend: number, chat: number) {
   initChatProgress.value = Math.min(100, Math.max(0, chat))
 }
 
+function refreshInitializedAccountData(uid: string) {
+  window.setTimeout(() => {
+    void Promise.allSettled([
+      contactStore.loadContacts(uid, { forceApi: true }),
+      groupStore.loadGroups(uid, { forceApi: true }),
+      channelStore.loadChannels(uid),
+      settingStore.loadSettings(),
+    ])
+  }, 1000)
+}
+
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return true
   if (conv.type === ConversationType.Friend) return Boolean(contactStore.getContact(conv.targetId))
@@ -302,6 +313,16 @@ onMounted(async () => {
 
         await chatStore.loadConversations(authStore.uid)
         setFirstInitProgress(100, 100)
+      } else if ((window as any).__TAURI_INTERNALS__) {
+        // 对齐老 im：已初始化账号只阻塞本地数据载入，远端联系人/群/频道同步放到后台。
+        await Promise.all([
+          chatStore.loadConversations(authStore.uid),
+          contactStore.loadContacts(authStore.uid, { fallbackToApi: false }),
+          groupStore.loadGroups(authStore.uid, { fallbackToApi: false }),
+          channelStore.loadChannels(authStore.uid, { refreshRemote: false }),
+          settingStore.loadSettings({ syncRemote: false }),
+        ])
+        refreshInitializedAccountData(authStore.uid)
       } else {
         await Promise.all([
           chatStore.loadConversations(authStore.uid),
@@ -346,16 +367,9 @@ onMounted(async () => {
             try {
               setInitText(t('加密检测'))
 
-              // 对齐老 im：先保证自身私钥与联系人 relKey 已就绪，再连 WS，避免首批私聊下行解密失败。
+              // 对齐老 im：启动页只阻塞自身密钥初始化；联系人 relKey 在 WS 连接后由 tauri-events
+              // 后台预热，避免联系人多时长时间停留在“加密检测”。
               await ensureOwnKeyPair(uid)
-              for (const contact of contactStore.contacts) {
-                if (!contact.id || contact.status <= 0) continue
-                try {
-                  await ensureFriendRelKey(uid, contact.id)
-                } catch {
-                  // ignore single-contact key prewarm failure
-                }
-              }
             } catch {
               // key prewarm best effort; do not block WS connect forever
             }
@@ -722,6 +736,23 @@ function parseMessageExtra(data: Record<string, unknown>): Record<string, unknow
   }
 }
 
+function getMessageReadUsers(data: Record<string, unknown>): unknown[] {
+  const extra = parseMessageExtra(data)
+  if (Array.isArray(data.readUsers)) return data.readUsers
+  if (Array.isArray(extra.readUsers)) return extra.readUsers
+  return []
+}
+
+function getMessageReadTotal(data: Record<string, unknown>): number {
+  const extra = parseMessageExtra(data)
+  const directTotal = Number(data.readTotal ?? data.read_total ?? 0)
+  const extraTotal = Number(extra.readTotal ?? extra.read_total ?? 0)
+  return Math.max(
+    Number.isFinite(directTotal) ? directTotal : 0,
+    Number.isFinite(extraTotal) ? extraTotal : 0,
+  )
+}
+
 function normalizeCopyTextContent(rawContent: unknown, extraData: Record<string, unknown>): string {
   let content = String(rawContent || '')
   content = content.replace(/<img[^>]+data-key="(\[.*?\])"[^>]*>/g, '$1')
@@ -787,17 +818,19 @@ async function writeTextClipboard(text: string) {
 }
 
 function getGroupReadTotal(data: Record<string, unknown>): number {
-  const extra = parseMessageExtra(data)
-  const readUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
-  const readTotal = Number(extra.readTotal || 0)
-  const fallbackReadCount =
-    !Boolean(data.isSelf) && Number(data.readStatus || 0) > 0 ? 1 : 0
+  const rawUsers = getMessageReadUsers(data)
+  const readUsers = rawUsers.filter((item) => {
+    if (!item || typeof item !== 'object') return false
+    const user = item as Record<string, unknown>
+    return Number(user.readState ?? user.status ?? 0) === 1
+  })
+  const readTotal = getMessageReadTotal(data)
+  const fallbackReadCount = Number(data.readStatus || 0) === 2 ? 1 : 0
   return Math.max(readUsers.length, readTotal, fallbackReadCount)
 }
 
 function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
-  const extra = parseMessageExtra(data)
-  const rawUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
+  const rawUsers = getMessageReadUsers(data)
   if (!rawUsers.length) {
     if (!Boolean(data.isSelf) && Number(data.readStatus || 0) > 0) {
       const selfName = authStore.nickname || t('你') || authStore.uid || 'User'
@@ -887,7 +920,8 @@ function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
 
 function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
   return chatStore.currentConversation?.type === ConversationType.Group
-    && getGroupReadTotal(data) > 0
+    && Boolean(data.isSelf)
+    && Number(data.readStatus ?? 0) !== -1
 }
 
 function canCopyMessageInfo(): boolean {

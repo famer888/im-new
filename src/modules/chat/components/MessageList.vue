@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<{
   loading: boolean
   hasMore: boolean
   unreadCount?: number
+  unreadMessageIds?: string[]
   /** 对齐旧 im：少量消息从顶部开始排列，不做吸底留白 */
   alignTop?: boolean
   /** 仅在好友开启阅后即焚时显示中间背景图 */
@@ -114,13 +115,21 @@ const effectiveUnreadCount = computed(() => {
   return props.unreadCount ?? 0
 })
 
-/** 首条未读在排序列表中的下标（升序：末尾 N 条为未读区） */
+const unreadMessageIdSet = computed(() => new Set(
+  (props.unreadMessageIds ?? []).map((id) => String(id || '')).filter(Boolean),
+))
+
+/**
+ * 对齐旧 im：未读分隔条必须锚到一条真实消息（旧逻辑用 unreadID/unreadMsgID）。
+ * 只凭 unreadCount 反推位置会在消息未加载/未落库时误显示一条孤立的「未读消息」。
+ */
 const unreadDividerIndex = computed(() => {
-  const n = effectiveUnreadCount.value
-  if (n <= 0) return -1
-  const len = sortedMessages.value.length
-  if (len === 0) return -1
-  return Math.max(0, len - n)
+  if (effectiveUnreadCount.value <= 0) return -1
+  const ids = unreadMessageIdSet.value
+  if (ids.size === 0) return -1
+  return sortedMessages.value.findIndex((message) =>
+    ids.has(String(message.id || '')) || ids.has(String(message.customMsgId || '')),
+  )
 })
 
 /**

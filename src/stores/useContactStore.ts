@@ -96,14 +96,15 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
-  async function loadContacts(uid: string) {
+  async function loadContacts(uid: string, options?: { fallbackToApi?: boolean; forceApi?: boolean }) {
+    const fallbackToApi = options?.fallbackToApi ?? true
     loading.value = true
     try {
-      if (isTauri()) {
+      if (isTauri() && !options?.forceApi) {
         const localContacts = await tauriInvoke<Contact[]>('get_contacts', { uid })
         if (Array.isArray(localContacts) && localContacts.length > 0) {
           contacts.value = localContacts
-        } else {
+        } else if (fallbackToApi) {
           // Fallback to HTTP API when local DB has not been initialized yet.
           await loadContactsViaApi()
         }
@@ -122,6 +123,7 @@ export const useContactStore = defineStore('contact', () => {
     let pageNum = 1
     const pageSize = 200
     let hasMore = true
+    let apiFailed = false
 
     while (hasMore) {
       try {
@@ -160,8 +162,13 @@ export const useContactStore = defineStore('contact', () => {
         pageNum++
       } catch (e) {
         console.error('[ContactStore] API page', pageNum, 'failed:', e)
+        apiFailed = true
         hasMore = false
       }
+    }
+
+    if (apiFailed && allContacts.length === 0) {
+      throw new Error('contacts API load failed')
     }
 
     contacts.value = allContacts

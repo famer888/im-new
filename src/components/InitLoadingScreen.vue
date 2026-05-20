@@ -36,40 +36,42 @@ const { t } = useI18n()
       <div class="init-center">
         <img class="brand-icon" :src="brandIcon" alt="" />
 
-        <div v-if="progressMode && !offline" class="init-progress">
-          <h3>{{ t('首次数据初始化') }}</h3>
-          <ul>
-            <li>
-              <span>{{ t('好友') }} {{ (friendProgress ?? 0).toFixed(1) }}%</span>
-              <p :style="{ width: `${Math.min(100, Math.max(0, friendProgress ?? 0)).toFixed(1)}%` }"></p>
-            </li>
-            <li>
-              <span>{{ t('聊天窗口') }} {{ Math.round(chatProgress ?? 0) }}%</span>
-              <p :style="{ width: `${Math.min(100, Math.max(0, chatProgress ?? 0))}%` }"></p>
-            </li>
-          </ul>
-        </div>
-
-        <template v-else>
-          <div class="loading-dots" aria-hidden="true">
-            <span class="dot dot-1" />
-            <span class="dot dot-2" />
-            <span class="dot dot-3" />
+        <div class="init-body">
+          <div v-if="progressMode && !offline" class="init-progress">
+            <h3>{{ t('首次数据初始化') }}</h3>
+            <ul>
+              <li>
+                <span>{{ t('好友') }} {{ (friendProgress ?? 0).toFixed(1) }}%</span>
+                <p :style="{ width: `${Math.min(100, Math.max(0, friendProgress ?? 0)).toFixed(1)}%` }"></p>
+              </li>
+              <li>
+                <span>{{ t('聊天窗口') }} {{ Math.round(chatProgress ?? 0) }}%</span>
+                <p :style="{ width: `${Math.min(100, Math.max(0, chatProgress ?? 0))}%` }"></p>
+              </li>
+            </ul>
           </div>
 
-          <p class="loading-text" :class="{ 'loading-text--error': offline }">
-            {{ offline ? t('当前网络异常，请检查网络设置') : text || t('加载中') }}
-          </p>
-        </template>
+          <template v-else>
+            <div class="loading-dots" aria-hidden="true">
+              <span class="dot dot-1" />
+              <span class="dot dot-2" />
+              <span class="dot dot-3" />
+            </div>
 
-        <button
-          v-if="showReload"
-          type="button"
-          class="reload-button"
-          @click="emit('reload')"
-        >
-          {{ t('重新加载') }}
-        </button>
+            <p class="loading-text" :class="{ 'loading-text--error': offline }">
+              {{ offline ? t('当前网络异常，请检查网络设置') : text || t('加载中') }}
+            </p>
+          </template>
+
+          <button
+            v-if="showReload"
+            type="button"
+            class="reload-button"
+            @click="emit('reload')"
+          >
+            {{ t('重新加载') }}
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -86,23 +88,26 @@ const { t } = useI18n()
 
 .reset-link {
   position: absolute;
-  top: 28px;
-  right: 22px;
+  top: 30px;
+  right: 10px;
   -webkit-app-region: no-drag;
   border: none;
+  padding: 0;
   background: transparent;
-  color: #b8b8b8;
-  font-size: 15px;
+  color: #666;
+  font-size: 12px;
   line-height: 1;
+  font-weight: 400;
+  opacity: 0.5;
   cursor: pointer;
-  transition: color 0.2s ease;
+  transition: opacity 0.2s ease;
 
   &:hover:not(:disabled) {
-    color: #8b8b8b;
+    opacity: 1;
   }
 
   &:disabled {
-    opacity: 0.7;
+    opacity: 0.5;
     cursor: wait;
   }
 }
@@ -119,16 +124,21 @@ const { t } = useI18n()
 
 .brand-icon {
   display: block;
-  width: 144px;
-  height: 144px;
+  width: 80px;
+  height: auto;
+  margin-bottom: 10px;
   object-fit: contain;
+}
+
+.init-body {
+  height: 150px;
 }
 
 .loading-dots {
   display: flex;
   align-items: center;
-  gap: 24px;
-  margin-top: 18px;
+  justify-content: center;
+  margin-bottom: 10px;
 }
 
 .dot {
@@ -136,39 +146,40 @@ const { t } = useI18n()
   height: 10px;
   border-radius: 50%;
   background: #3369fe;
-  animation: init-dot-bounce 1.2s infinite ease-in-out both;
+  animation: init-dot-grow 1.2s infinite ease-in-out both;
 }
 
 .dot-2 {
-  animation-delay: 0.16s;
+  margin: 0 10px;
+  animation-delay: 0.15555s;
 }
 
 .dot-3 {
-  animation-delay: 0.32s;
+  animation-delay: 0.3s;
 }
 
 .loading-text {
-  margin: 22px 0 0;
+  margin: 0;
   color: #666;
-  font-size: 18px;
-  line-height: 1;
-  font-weight: 600;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 400;
+  text-align: center;
 }
 
 .loading-text--error {
-  color: #f44e5a;
+  color: #f00;
 }
 
 .init-progress {
-  width: 220px;
-  margin-top: 12px;
+  width: 200px;
   text-align: center;
 
   h3 {
-    margin: 0 0 8px;
-    color: #222;
-    font-size: 16px;
-    line-height: 22px;
+    margin: 0 0 5px;
+    color: #000;
+    font-size: 14px;
+    line-height: 20px;
     font-weight: 700;
   }
 
@@ -180,65 +191,68 @@ const { t } = useI18n()
 
   li {
     position: relative;
-    height: 28px;
-    margin-top: 6px;
+    width: 200px;
+    height: 25px;
+    margin-bottom: 5px;
     overflow: hidden;
-    border-radius: 14px;
-    background: #747474;
+    border-radius: 25px;
+    background: #666;
   }
 
   span {
-    position: relative;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 1;
-    display: block;
+    white-space: nowrap;
     color: #fff;
-    font-size: 14px;
-    line-height: 28px;
-    font-weight: 700;
+    font-size: 12px;
+    line-height: 25px;
+    font-weight: 400;
   }
 
   p {
     position: absolute;
     left: 0;
     top: 0;
+    bottom: 0;
     height: 100%;
     margin: 0;
     border-radius: inherit;
-    background: #44c917;
-    transition: width 0.22s ease;
+    background: rgb(82, 196, 26);
+    transition: width 0.5s ease;
   }
 }
 
 .reload-button {
-  margin-top: 18px;
+  display: block;
+  margin: 10px auto;
   -webkit-app-region: no-drag;
-  min-width: 112px;
-  height: 34px;
-  padding: 0 18px;
+  min-width: 88px;
+  height: 30px;
+  padding: 0 16px;
   border: none;
-  border-radius: 17px;
+  border-radius: 15px;
   background: #3369fe;
   color: #fff;
-  font-size: 14px;
-  line-height: 34px;
+  font-size: 12px;
+  line-height: 30px;
   cursor: pointer;
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition: opacity 0.2s ease;
 
   &:hover {
     opacity: 0.92;
-    transform: translateY(-1px);
   }
 }
 
-@keyframes init-dot-bounce {
-  0%, 80%, 100% {
-    transform: scale(0.6);
-    opacity: 0.45;
+@keyframes init-dot-grow {
+  0%,
+  40%,
+  100% {
+    transform: scale(0);
   }
-
   40% {
     transform: scale(1);
-    opacity: 1;
   }
 }
 </style>

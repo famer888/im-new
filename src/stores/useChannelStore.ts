@@ -250,7 +250,8 @@ export const useChannelStore = defineStore('channel', () => {
     }
   }
 
-  async function loadChannels(uid: string) {
+  async function loadChannels(uid: string, options?: { refreshRemote?: boolean }) {
+    const refreshRemote = options?.refreshRemote ?? true
     activeUid = uid
     loading.value = true
     channelDebug('loadChannels start', { uid })
@@ -285,7 +286,13 @@ export const useChannelStore = defineStore('channel', () => {
       })
       if (conversationChannels.length > 0) {
         channels.value = filterRemovedChannels(mergeChannelsById(conversationChannels, localChannels), uid)
-        await hydratePlaceholderChannels(uid)
+        if (refreshRemote) {
+          await hydratePlaceholderChannels(uid)
+        }
+      }
+
+      if (!refreshRemote) {
+        return
       }
 
       // 先让用户看到本地/会话里的频道，再用远端列表补齐名称、头像、禁用状态等完整信息。

@@ -44,6 +44,8 @@ esac
 ICON_SOURCE_DIR="$ROOT_DIR/resources/icons_$BRAND_ID"
 ICON_TARGET_REL=".generated-icons/icons_$BRAND_ID"
 ICON_TARGET_DIR="$ROOT_DIR/src-tauri/$ICON_TARGET_REL"
+BRAND_BACKUP_DIR=""
+BRAND_BACKUP_FILES=()
 
 find_png_size() {
   local path="$1"
@@ -105,18 +107,88 @@ PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.$BRAND_ID.chat}"
 OFFICIAL_URL="${OFFICIAL_URL:-${BRAND_ID}chat.com}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/$PLATFORM/icons_$BRAND_ID}"
 TAURI_CONFIG_FILE="$(mktemp "$ROOT_DIR/.tauri-brand-$BRAND_ID.XXXXXX.json")"
+BRAND_BACKUP_DIR="$(mktemp -d "$ROOT_DIR/.brand-source-backup-$BRAND_ID.XXXXXX")"
 
 cleanup_generated() {
+  restore_branded_sources
   rm -rf "$ICON_TARGET_DIR"
   rm -f "$TAURI_CONFIG_FILE"
+  if [[ -n "$BRAND_BACKUP_DIR" ]]; then
+    rm -rf "$BRAND_BACKUP_DIR"
+  fi
 }
 
 trap cleanup_generated EXIT
+
+backup_source_file() {
+  local target="$1"
+  local rel_path="${target#$ROOT_DIR/}"
+  local backup_path="$BRAND_BACKUP_DIR/$rel_path"
+
+  mkdir -p "$(dirname "$backup_path")"
+  cp -p "$target" "$backup_path"
+  BRAND_BACKUP_FILES+=("$target")
+}
+
+restore_branded_sources() {
+  local target rel_path backup_path
+
+  for target in "${BRAND_BACKUP_FILES[@]:-}"; do
+    rel_path="${target#$ROOT_DIR/}"
+    backup_path="$BRAND_BACKUP_DIR/$rel_path"
+    if [[ -f "$backup_path" ]]; then
+      cp -p "$backup_path" "$target"
+    fi
+  done
+
+  BRAND_BACKUP_FILES=()
+}
+
+apply_branded_sources() {
+  local app_icon_source="$ICON_SOURCE_DIR/icon.png"
+  local tray_icon_source="$ICON_SOURCE_DIR/24x24.png"
+  local target
+  local app_icon_targets=(
+    "$ROOT_DIR/src/assets/images/common/confirm-app-icon.png"
+    "$ROOT_DIR/src/assets/images/common/defalut-icon.png"
+    "$ROOT_DIR/src/assets/images/logo/dock.png"
+    "$ROOT_DIR/src/assets/images/logo/logo.png"
+    "$ROOT_DIR/src/assets/images/login/dock.png"
+  )
+
+  if [[ ! -f "$app_icon_source" ]]; then
+    echo "Missing app icon source: $app_icon_source" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$tray_icon_source" ]]; then
+    tray_icon_source="$ICON_PNG"
+  fi
+
+  for target in "${app_icon_targets[@]}"; do
+    if [[ ! -f "$target" ]]; then
+      echo "Missing branded frontend icon target: $target" >&2
+      exit 1
+    fi
+    backup_source_file "$target"
+    cp -f "$app_icon_source" "$target"
+  done
+
+  target="$ROOT_DIR/src-tauri/icons/tray.png"
+  if [[ ! -f "$target" ]]; then
+    echo "Missing tray icon target: $target" >&2
+    exit 1
+  fi
+  backup_source_file "$target"
+  cp -f "$tray_icon_source" "$target"
+}
 
 rm -rf "$ICON_TARGET_DIR"
 mkdir -p "$ICON_TARGET_DIR"
 
 cd "$ROOT_DIR"
+
+apply_branded_sources
 
 read -r ICON_WIDTH ICON_HEIGHT < <(find_png_size "$ICON_PNG")
 if (( ICON_WIDTH < 512 )); then

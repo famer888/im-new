@@ -119,14 +119,15 @@ export const useGroupStore = defineStore('group', () => {
     }
   }
 
-  async function loadGroups(uid: string) {
+  async function loadGroups(uid: string, options?: { fallbackToApi?: boolean; forceApi?: boolean }) {
+    const fallbackToApi = options?.fallbackToApi ?? true
     loading.value = true
     try {
-      if (isTauri()) {
+      if (isTauri() && !options?.forceApi) {
         const localGroups = await tauriInvoke<Group[]>('get_groups', { uid })
         if (Array.isArray(localGroups) && localGroups.length > 0) {
           groups.value = localGroups.map((g: any) => normalizeGroup(g))
-        } else {
+        } else if (fallbackToApi) {
           await loadGroupsViaApi()
         }
       } else {

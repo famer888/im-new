@@ -461,20 +461,28 @@ function isSameMessageIdentity(a: Message, b: Message): boolean {
   return false
 }
 
-function mergeLoadedMessagesWithLocal(conversationId: string, loaded: Message[], existing: Message[]) {
-  const localGroupImages = existing.filter((message) => (
-    isGroupImageMessage(conversationId, message.msgType)
-    && (message.status === 0 || message.status === -1)
+function shouldPreserveMessageDuringLoad(message: Message, loadStartedAt: number): boolean {
+  const status = Number(message.status || 0)
+  if (status === 0 || status === -1) return true
+
+  const sendTime = Number(message.sendTime || 0)
+  return Boolean(loadStartedAt && sendTime >= loadStartedAt - 1000)
+}
+
+function mergeLoadedMessagesWithLocal(conversationId: string, loaded: Message[], existing: Message[], loadStartedAt = 0) {
+  const preservedLocalMessages = existing.filter((message) => (
+    message.conversationId === conversationId
+    && shouldPreserveMessageDuringLoad(message, loadStartedAt)
     && !loaded.some((item) => isSameMessageIdentity(item, message))
   ))
-  if (localGroupImages.length === 0) {
+  if (preservedLocalMessages.length === 0) {
     return { messages: loaded, preserved: [] as Message[] }
   }
-  const merged = [...loaded, ...localGroupImages].sort((a, b) => a.sendTime - b.sendTime)
+  const merged = [...loaded, ...preservedLocalMessages].sort((a, b) => a.sendTime - b.sendTime)
   if (merged.length > MAX_CACHED_MESSAGES) {
     merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
   }
-  return { messages: merged, preserved: localGroupImages }
+  return { messages: merged, preserved: preservedLocalMessages }
 }
 
 function getDiceResultFromContent(content: string | null | undefined): number {
@@ -1101,6 +1109,7 @@ export const useMessageStore = defineStore('message', () => {
     if (!isTauri()) return
     if (isLoading(conversationId) && !force) return
 
+    const loadStartedAt = Date.now()
     const existingBeforeLoad = getMessages(conversationId)
     const existingGroupImages = existingBeforeLoad.filter((message) => isGroupImageMessage(conversationId, message.msgType))
     if (existingGroupImages.length > 0) {
@@ -1122,7 +1131,13 @@ export const useMessageStore = defineStore('message', () => {
       const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
       const normalized = await retryDecryptPendingPrivateMessages(uid, normalizedBase)
       const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
-      const mergedResult = mergeLoadedMessagesWithLocal(conversationId, filteredResult.messages, existingBeforeLoad)
+      const latestExisting = getMessages(conversationId)
+      const mergedResult = mergeLoadedMessagesWithLocal(
+        conversationId,
+        filteredResult.messages,
+        latestExisting,
+        loadStartedAt,
+      )
       messageMap.value.set(conversationId, mergedResult.messages)
       const latestMessage = mergedResult.messages[mergedResult.messages.length - 1]
       if (latestMessage) {
@@ -1168,7 +1183,8 @@ export const useMessageStore = defineStore('message', () => {
       const normalized = await retryDecryptPendingPrivateMessages(uid, normalizedBase)
       const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
       if (filteredResult.messages.length > 0) {
-        const merged = [...filteredResult.messages, ...existing]
+        const latestExisting = getMessages(conversationId)
+        const merged = [...filteredResult.messages, ...latestExisting]
         if (merged.length > MAX_CACHED_MESSAGES) {
           merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
         }

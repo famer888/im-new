@@ -161,7 +161,8 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
-  async function loadSettings() {
+  async function loadSettings(options?: { syncRemote?: boolean }) {
+    const syncRemote = options?.syncRemote ?? true
     try {
       let nextSettings = { ...defaultSettings }
 
@@ -170,7 +171,9 @@ export const useSettingStore = defineStore('setting', () => {
         nextSettings = fromRustRaw(result)
       }
 
-      nextSettings = await syncFriendVerifyRequired(nextSettings)
+      if (syncRemote) {
+        nextSettings = await syncFriendVerifyRequired(nextSettings)
+      }
       settings.value = nextSettings
       applyTheme(nextSettings.theme)
       applyFontSize(nextSettings.fontSize)

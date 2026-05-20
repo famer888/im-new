@@ -31,6 +31,7 @@ const timeText = computed(() => {
 })
 
 const isChannelMessage = computed(() => String(props.message.conversationId || '').startsWith('2_'))
+const isGroupMessage = computed(() => String(props.message.conversationId || '').startsWith('1_'))
 
 function parseExtra(raw: string | null): Record<string, unknown> {
   if (!raw) return {}
@@ -50,6 +51,20 @@ const channelReadTotal = computed(() => {
   return serverReadTotal + 1
 })
 
+const groupReadTotal = computed(() => {
+  if (!isGroupMessage.value) return 0
+  const extra = parseExtra(props.message.extra)
+  const readUsers = Array.isArray(extra.readUsers) ? extra.readUsers : []
+  const readUserTotal = readUsers.filter((item) => {
+    if (!item || typeof item !== 'object') return false
+    const user = item as Record<string, unknown>
+    return Number(user.readState ?? user.status ?? 0) === 1
+  }).length
+  const total = Number(extra.readTotal ?? extra.read_total ?? 0)
+  const serverReadTotal = Number.isFinite(total) && total > 0 ? total : 0
+  return Math.max(readUserTotal, serverReadTotal)
+})
+
 const showLoading = computed(
   () => props.isSelf && props.message.status === MessageStatus.Sending,
 )
@@ -62,7 +77,9 @@ const showFailed = computed(
 const isRead = computed(
   () =>
     props.isSelf &&
-    (props.message.readStatus === 2 || props.message.status === MessageStatus.Read),
+    (props.message.readStatus === 2 ||
+      props.message.status === MessageStatus.Read ||
+      groupReadTotal.value > 0),
 )
 
 /** 已送达（单勾）：已发送且未显示已读 */

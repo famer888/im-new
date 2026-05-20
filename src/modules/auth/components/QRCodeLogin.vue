@@ -108,13 +108,28 @@ function inferSessionWsUrl(baseUrl: string): string {
   return normalizeWsUrl(base.replace(/webbiz/gi, 'websession'))
 }
 
-function refreshDomainList() {
+function refreshDomainList(): boolean {
+  const previousList = domainList.value
+  const previousCurrent = currentBaseUrl.value
   const base = getBaseUrl()
   const poolDomains = getAllDomains('webBiz').map(d => d.domain).filter(Boolean)
-  domainList.value = [...new Set([base, ...poolDomains.filter(d => d !== base)])]
-  if (urlIndex.value >= domainList.value.length) {
+  const nextList = [...new Set([base, ...poolDomains.filter(d => d !== base)])]
+  const hasNewDomain = nextList.some(url => !previousList.includes(url))
+  domainList.value = nextList
+
+  const currentIndex = domainList.value.indexOf(previousCurrent)
+  if (currentIndex >= 0) {
+    urlIndex.value = currentIndex
+  } else if (urlIndex.value >= domainList.value.length) {
     urlIndex.value = Math.max(0, domainList.value.length - 1)
   }
+
+  return hasNewDomain
+}
+
+function retryAfterDomainRefresh() {
+  if (!qrCodeUrlError.value || loginToken.value || isLoading.value) return
+  retryNextDomain()
 }
 
 function retryNextDomain(): boolean {
@@ -334,10 +349,16 @@ onMounted(async () => {
   handleGetQrCodeUrl()
 
   initDomainPoolFromOss()
-    .then(refreshDomainList)
+    .then(() => {
+      const hasNewDomain = refreshDomainList()
+      if (hasNewDomain) retryAfterDomainRefresh()
+    })
     .catch(() => {})
   initDomainPoolFromApi()
-    .then(refreshDomainList)
+    .then(() => {
+      const hasNewDomain = refreshDomainList()
+      if (hasNewDomain) retryAfterDomainRefresh()
+    })
     .catch(() => {})
 })
 
