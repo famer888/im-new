@@ -1978,6 +1978,7 @@ const contextMenuItems = computed((): MenuItem[] => {
   if (data.type === 'message') {
     const items: MenuItem[] = []
     const readBurnOnlyDelete = isReadBurnMessage(data)
+    const isGroupIntroNoticeMenu = Boolean(data.isGroupIntroNotice)
 
     if (!readBurnOnlyDelete && (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data) || messageSupportsVideoCopy(data))) {
       items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
@@ -2005,15 +2006,17 @@ const contextMenuItems = computed((): MenuItem[] => {
       items.push(
         { key: 'select', label: t('选中'), iconSrc: menuSelect },
         { key: 'reply', label: t('回复'), iconSrc: menuReply },
-        { key: 'forward', label: t('转发'), iconSrc: menuForward },
       )
+      if (!isGroupIntroNoticeMenu) {
+        items.push({ key: 'forward', label: t('转发'), iconSrc: menuForward })
+      }
     }
 
     if (!readBurnOnlyDelete && canCopyMessageInfo()) {
       items.push({ key: 'copy_msg_info', label: t('复制消息信息'), iconSrc: menuCopy })
     }
 
-    if (!readBurnOnlyDelete && messageSupportsGroupReadCount(data)) {
+    if (!readBurnOnlyDelete && !isGroupIntroNoticeMenu && messageSupportsGroupReadCount(data)) {
       items.push({
         key: 'group_read_count',
         label: groupReadCountLabel(data),

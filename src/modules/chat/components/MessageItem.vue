@@ -198,6 +198,7 @@ function handleContextMenu(e: MouseEvent) {
     senderId: props.message.senderId,
     isSelf: isSelf.value,
     msgType: props.message.msgType,
+    isGroupIntroNotice: isGroupIntroNotice.value,
     readStatus: props.message.readStatus,
     content: props.message.content,
     extra: props.message.extra,
