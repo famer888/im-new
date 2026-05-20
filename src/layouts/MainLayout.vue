@@ -917,6 +917,16 @@ function messageSupportsDeleteEverywhere(data: Record<string, unknown>): boolean
   return Boolean(data.isSelf)
 }
 
+function hasCurrentChannelReplyAuthority(): boolean {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel) return true
+  const channel = channelStore.getChannel(conv.targetId)
+  if (!channel) return false
+  if (Number(channel.memberType ?? -1) === 3) return false
+  const adminPrivacy = Number(channel.adminPrivacy ?? 0)
+  return adminPrivacy > 0 && (adminPrivacy & 2) !== 0
+}
+
 function isReadBurnMessage(data: Record<string, unknown>): boolean {
   const directDeleteSeconds = Number(data.deleteSeconds ?? 0)
   const directSnapchatTime = Number(data.snapchatTime ?? data.snapchat_time ?? 0)
@@ -2003,10 +2013,10 @@ const contextMenuItems = computed((): MenuItem[] => {
     items.push({ key: 'delete_local', label: t('从本地删除'), iconSrc: menuDelete })
 
     if (!readBurnOnlyDelete) {
-      items.push(
-        { key: 'select', label: t('选中'), iconSrc: menuSelect },
-        { key: 'reply', label: t('回复'), iconSrc: menuReply },
-      )
+      items.push({ key: 'select', label: t('选中'), iconSrc: menuSelect })
+      if (data.isSelf === true && hasCurrentChannelReplyAuthority()) {
+        items.push({ key: 'reply', label: t('回复'), iconSrc: menuReply })
+      }
       if (!isGroupIntroNoticeMenu) {
         items.push({ key: 'forward', label: t('转发'), iconSrc: menuForward })
       }
