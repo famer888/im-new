@@ -3547,25 +3547,26 @@ onBeforeUnmount(() => {
 
   .toolbar-left {
     display: flex;
-    gap: 4px;
     align-items: center;
-    height: 28px;
+    height: 24px;
   }
 }
 
 .tool-btn {
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   font-size: 14px;
   color: #666;
   position: relative;
+  margin-right: 26px;
+  padding: 0;
 
   &:hover { background: #f0f0f0; }
 
