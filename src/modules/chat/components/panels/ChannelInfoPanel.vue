@@ -621,7 +621,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="bottom" v-else>
             <span @click.stop="handleOk">{{ t('确定') }}</span>
-            <span @click.stop="handleCancel">{{ t('取消') }}</span>
+            <span class="cancel-btn" @click.stop="handleCancel">{{ t('取消') }}</span>
           </div>
         </template>
       </div>
@@ -817,7 +817,8 @@ onBeforeUnmount(() => {
   p {
     margin: 0;
     line-height: 22px;
-    color: #333;
+    color: #787878;
+    font-weight: 600;
     word-break: break-word;
   }
 }
@@ -846,6 +847,10 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   font-size: 14px;
   color: #333;
+
+  > span {
+    font-weight: 600;
+  }
 }
 
 .clear-btn {
@@ -1086,6 +1091,11 @@ onBeforeUnmount(() => {
           color: #666666;
           font-weight: 400;
           margin-left: 10px;
+        }
+
+        &.cancel-btn {
+          color: rgba(91, 91, 91);
+          font-weight: 600;
         }
       }
     }
