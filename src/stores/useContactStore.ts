@@ -106,10 +106,10 @@ export const useContactStore = defineStore('contact', () => {
           contacts.value = localContacts
         } else if (fallbackToApi) {
           // Fallback to HTTP API when local DB has not been initialized yet.
-          await loadContactsViaApi()
+          await loadContactsViaApi(uid)
         }
       } else {
-        await loadContactsViaApi()
+        await loadContactsViaApi(uid)
       }
     } catch (e) {
       console.error('[ContactStore] loadContacts failed:', e)
@@ -118,7 +118,35 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
-  async function loadContactsViaApi() {
+  async function persistContactsToLocal(uid: string | undefined, list: Contact[]) {
+    const rows = list.filter((contact) => String(contact.id || '').trim())
+    if (!uid || !isTauri() || rows.length === 0) return
+
+    try {
+      const results = await Promise.allSettled(
+        rows.map((contact) => tauriInvoke('upsert_contact', {
+          uid,
+          contact: {
+            id: contact.id,
+            nickname: contact.nickname ?? null,
+            avatar: contact.avatar ?? null,
+            pinyin: contact.pinyin ?? null,
+            remark: contact.remark ?? null,
+            status: Number(contact.status ?? 1),
+            updated_at: Number(contact.updatedAt || Date.now()),
+          },
+        })),
+      )
+      const failedCount = results.filter((result) => result.status === 'rejected').length
+      if (failedCount > 0) {
+        console.warn('[ContactStore] persist API contacts partial failed:', failedCount)
+      }
+    } catch (error) {
+      console.warn('[ContactStore] persist API contacts failed:', error)
+    }
+  }
+
+  async function loadContactsViaApi(uid?: string) {
     const allContacts: Contact[] = []
     let pageNum = 1
     const pageSize = 200
@@ -172,6 +200,7 @@ export const useContactStore = defineStore('contact', () => {
     }
 
     contacts.value = allContacts
+    void persistContactsToLocal(uid, allContacts)
   }
 
   async function searchContacts(uid: string, keyword: string) {

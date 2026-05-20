@@ -314,10 +314,10 @@ onMounted(async () => {
         await chatStore.loadConversations(authStore.uid)
         setFirstInitProgress(100, 100)
       } else if ((window as any).__TAURI_INTERNALS__) {
-        // 对齐老 im：已初始化账号只阻塞本地数据载入，远端联系人/群/频道同步放到后台。
+        // 对齐老 im：已初始化账号优先读本地；安装新包后本地联系人库可能为空，联系人需允许远端兜底。
         await Promise.all([
           chatStore.loadConversations(authStore.uid),
-          contactStore.loadContacts(authStore.uid, { fallbackToApi: false }),
+          contactStore.loadContacts(authStore.uid),
           groupStore.loadGroups(authStore.uid, { fallbackToApi: false }),
           channelStore.loadChannels(authStore.uid, { refreshRemote: false }),
           settingStore.loadSettings({ syncRemote: false }),
