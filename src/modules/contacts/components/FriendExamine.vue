@@ -6,6 +6,7 @@ import type { VerifyRecord } from './FriendVerifyDetail.vue'
 import { getContactsApplyList } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
+import noDataIcon from '@/assets/images/common/search-no-data.png'
 
 interface FriendRequest {
   id: string
@@ -27,6 +28,7 @@ const contactStore = useContactStore()
 const requests = ref<FriendRequest[]>([])
 const showDetail = ref(false)
 const selectedRecord = ref<VerifyRecord | null>(null)
+const loadState = ref<0 | 1 | 2 | 3>(1) // 0: 成功，1: 加载中，2: 加载失败，3: 空数据
 
 const pendingRequests = computed(() => requests.value.filter((req) => req.status === 'pending'))
 const recentRequests = computed(() => requests.value.filter((req) => req.status !== 'pending'))
@@ -37,8 +39,15 @@ onMounted(() => {
 })
 
 async function loadApplyList() {
+  loadState.value = 1
   try {
     const resp = await getContactsApplyList({ version: 0 })
+    const errCode = Number((resp as any)?.commonResult?.errCode ?? 200)
+    if (errCode !== 200 && errCode !== 0) {
+      loadState.value = 2
+      return
+    }
+
     const all: FriendRequest[] = []
     const unRecordList = (resp as any).unRecordList || []
     const recordList = (resp as any).recordList || []
@@ -76,7 +85,9 @@ async function loadApplyList() {
       })
     }
     requests.value = all
+    loadState.value = all.length > 0 ? 0 : 3
   } catch (e) {
+    loadState.value = 2
     console.error('[FriendExamine] loadApplyList failed:', e)
   }
 }
@@ -128,7 +139,14 @@ async function handleDetailClose() {
         <span class="title">新的朋友</span>
       </div>
 
-      <div class="examine-content">
+      <div v-if="loadState === 1" class="loading">loading..</div>
+      <div v-else-if="loadState === 2" class="loading">数据获取失败</div>
+      <div v-else-if="loadState === 3" class="loading">
+        <img class="icon-no-data" :src="noDataIcon" alt="" />
+        <div>无数据</div>
+      </div>
+
+      <div v-else class="examine-content">
         <div class="section-title">待处理</div>
         <div class="section-card">
           <template v-if="pendingRequests.length > 0">
@@ -204,6 +222,17 @@ async function handleDetailClose() {
   background: #fff;
   border-radius: 4px;
   padding: 0 10px;
+}
+
+.loading {
+  text-align: center;
+  margin-top: 100px;
+}
+
+.icon-no-data {
+  width: 80px;
+  height: auto;
+  margin-bottom: 8px;
 }
 
 .examine-item {
