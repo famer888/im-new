@@ -16,6 +16,7 @@ import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import codeIcon from '@/assets/images/chat/code.png'
+import arrowRightIcon from '@/assets/images/chat/arrow-rgiht.png'
 
 interface ChannelMember {
   id: string
@@ -577,8 +578,10 @@ onBeforeUnmount(() => {
       <h4>{{ t('频道别名') }}</h4>
       <div class="channel-link-info">
         <span class="alias" @click.stop="copyAlias">{{ alias ? `@${alias}` : '' }}</span>
-        <img class="code-icon" :src="codeIcon" alt="" />
-        <span class="arrow">›</span>
+        <div class="code-entrance">
+          <img class="code-icon" :src="codeIcon" alt="" />
+          <img class="more-icon" :src="arrowRightIcon" alt="" />
+        </div>
       </div>
     </section>
 
@@ -747,6 +750,7 @@ onBeforeUnmount(() => {
 }
 
 .channel-link {
+  width: 100%;
   height: 55px;
   padding: 8px 10px;
   box-sizing: border-box;
@@ -764,15 +768,24 @@ onBeforeUnmount(() => {
 .channel-link-info {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   min-width: 0;
 }
 
 .alias {
-  max-width: 118px;
+  max-width: 200px;
   color: #178aff;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  word-wrap: break-word;
+  font-weight: 600;
+}
+
+.code-entrance {
+  display: flex;
+  align-items: center;
   cursor: pointer;
 }
 
@@ -780,6 +793,10 @@ onBeforeUnmount(() => {
   width: 22px;
   height: 22px;
   margin-left: 8px;
+}
+
+.more-icon {
+  height: 22px;
 }
 
 .arrow {
