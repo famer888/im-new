@@ -36,13 +36,11 @@ function handleSelect(group: typeof groupStore.groups[0]) {
       v-if="expanded"
       v-for="group in groupStore.groups"
       :key="group.id"
-      class="group-item"
+      :class="['group-item', { active: chatStore.currentConversation?.type === 1 && chatStore.currentConversation?.targetId === group.id }]"
       @click="handleSelect(group)"
     >
-      <TextAvatar :name="group.name || group.id" :src="group.avatar" avatar-type="group" :size="36" />
-      <div class="group-info">
-        <span class="group-name">{{ group.name || group.id }}</span>
-      </div>
+      <TextAvatar class="group-avatar" :name="group.name || group.id" :src="group.avatar" avatar-type="group" :size="35" />
+      <h3 class="group-name">{{ (group.name || group.id).replaceAll('🪵', '?') }}</h3>
     </div>
   </div>
 </template>
@@ -62,7 +60,7 @@ function handleSelect(group: typeof groupStore.groups[0]) {
   line-height: 26px;
   font-size: 14px;
   color: #333;
-  font-weight: 600;
+  font-weight: normal;
   cursor: pointer;
 }
 
@@ -75,14 +73,36 @@ function handleSelect(group: typeof groupStore.groups[0]) {
 }
 
 .group-item {
+  position: relative;
+  padding: 0 16px 0 63px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
+  width: 100%;
+  background-color: #fcfcfc;
+  height: 59px;
+  box-sizing: border-box;
   cursor: pointer;
-  &:hover { background: #e0e0e0; }
+
+  &:hover { background: #f9f9f9; }
+  &.active { background: #efefef; }
 }
 
-.group-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.group-name { font-size: 14px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-avatar {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.group-name {
+  margin: 0;
+  width: 120px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  font-size: 14px;
+  color: #333;
+  font-weight: normal;
+  line-height: 18px;
+}
 </style>

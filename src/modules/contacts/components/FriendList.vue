@@ -167,18 +167,16 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
     background: #efefef;
   }
 
-  &.friend-online .friend-avatar-wrap::after {
+  &.friend-online::before {
     content: '';
     position: absolute;
-    width: 8px;
     height: 8px;
+    width: 8px;
     border-radius: 50%;
-    right: -1px;
-    bottom: -1px;
+    left: 43px;
+    bottom: 15px;
     background: #10d561;
-    border: 1px solid #fcfcfc;
-    box-sizing: border-box;
-    z-index: 2;
+    z-index: 1;
   }
 }
 
@@ -193,7 +191,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
 
 .friend-item > h3 {
   margin: 0;
-  width: 140px;
+  width: 120px;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
@@ -207,7 +205,7 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
 .friend-item > p.online-label {
   margin: 0;
   margin-top: 4px;
-  width: 140px;
+  width: 120px;
   font-size: 14px;
   font-weight: 400;
   color: #999;

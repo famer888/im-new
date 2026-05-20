@@ -707,8 +707,6 @@ onBeforeUnmount(() => {
 }
 
 .setting-trigger {
-  font-size: 14px;
-  font-weight: 600;
   color: #333;
   cursor: pointer;
   user-select: none;
@@ -836,16 +834,10 @@ onBeforeUnmount(() => {
 .add-btn {
   width: 24px;
   height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: none;
   border: none;
-  border-radius: 4px;
   cursor: pointer;
   flex-shrink: 0;
-
-  &:hover { background: #e8e8e8; }
 
   > img {
     width: 24px;

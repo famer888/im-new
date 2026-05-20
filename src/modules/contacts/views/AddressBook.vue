@@ -82,7 +82,8 @@ onMounted(() => {
 .new-friend {
   display: flex;
   align-items: center;
-  padding: 10px 20px 14px;
+  padding: 10px 20px !important;
+  box-sizing: border-box;
   cursor: pointer;
   position: relative;
 }
@@ -102,19 +103,20 @@ onMounted(() => {
 
 .new-friend-badge {
   position: absolute;
-  left: 42px;
-  top: 6px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  box-sizing: border-box;
-  border-radius: 8px;
-  background: #ff4d4f;
+  left: 36px;
+  top: 2px;
+  margin-top: 4px;
+  padding: 1px 7px;
+  display: inline-block;
+  font-size: 12px;
+  background: #f44e5a;
+  font-weight: 400;
+  border-radius: 10px;
+  transform: scale(0.86);
   color: #fff;
-  font-size: 11px;
-  line-height: 16px;
   text-align: center;
-  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 2;
 }
 
 .book-content {

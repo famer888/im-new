@@ -67,6 +67,9 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
         </span>
       </h3>
     </div>
+    <div v-if="expanded && !channelStore.loading" class="channel-no-more">
+      没有更多数据了
+    </div>
   </div>
 </template>
 
@@ -85,7 +88,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   line-height: 26px;
   font-size: 14px;
   color: #333;
-  font-weight: 600;
+  font-weight: normal;
   cursor: pointer;
 }
 
@@ -128,7 +131,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   display: flex;
   align-items: center;
   margin: 0;
-  width: 140px;
+  width: 120px;
   font-size: 14px;
   color: #333;
   font-weight: normal;
@@ -140,5 +143,11 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.channel-no-more {
+  text-align: center;
+  padding: 10px;
+  color: #999;
 }
 </style>
