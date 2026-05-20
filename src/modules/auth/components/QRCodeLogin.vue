@@ -392,7 +392,7 @@ onBeforeUnmount(() => {
       </section>
       <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
       <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
-      <button class="btn-primary importBtn" @click="emit('show-import')">
+      <button class="primaryBtn" @click="emit('show-import')">
         {{ t('载入账户设置') }}
       </button>
     </template>
@@ -445,7 +445,6 @@ onBeforeUnmount(() => {
 
   > section {
     position: relative;
-    display: inline-block;
 
     .qrCodeBox {
       position: relative;
@@ -530,11 +529,10 @@ onBeforeUnmount(() => {
     > img {
       display: block;
       margin: 0 auto;
-      max-width: 60px;
-      max-height: 60px;
-      width: auto;
-      height: auto;
-      object-fit: contain;
+      width: 60px;
+      height: 60px;
+      border-radius: 100%;
+      object-fit: cover;
       cursor: pointer;
     }
 
@@ -550,8 +548,22 @@ onBeforeUnmount(() => {
     padding: 0 20px;
   }
 
-  > .importBtn {
-    margin-top: 5px;
+  .primaryBtn {
+    color: #fff;
+    background-color: #3369fe;
+    height: 32px;
+    line-height: 32px;
+    text-align: center;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid #3369fe;
+    cursor: pointer;
+    padding: 0 28px;
+    display: inline-block;
+
+    &:hover {
+      background-color: rgba(51, 105, 254, 0.9);
+    }
   }
 }
 
