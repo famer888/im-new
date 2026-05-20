@@ -95,7 +95,7 @@ const noticeText = computed(() => String(props.message.content || '').trim())
     margin: 0;
     line-height: 22px;
     font-size: 14px;
-    color: #333;
+    color: rgba(53, 53, 52);
     white-space: pre-wrap;
     word-break: break-word;
   }
