@@ -3631,6 +3631,7 @@ onBeforeUnmount(() => {
   &:empty::before {
     content: attr(placeholder);
     color: #999;
+    font-weight: 600;
     font-size: 12px;
     pointer-events: none;
   }
