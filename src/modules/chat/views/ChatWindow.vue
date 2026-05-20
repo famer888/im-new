@@ -533,6 +533,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.4;
   color: #333;
+  font-weight: 600;
   transform: scale(calc(11 / 12));
   transform-origin: center center;
 }
