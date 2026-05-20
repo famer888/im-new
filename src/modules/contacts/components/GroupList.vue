@@ -36,7 +36,7 @@ function handleSelect(group: typeof groupStore.groups[0]) {
       v-if="expanded"
       v-for="group in groupStore.groups"
       :key="group.id"
-      :class="['group-item', { active: chatStore.currentConversation?.type === 1 && chatStore.currentConversation?.targetId === group.id }]"
+      :class="['group-item', { active: uiStore.detailView === 'group-detail' && chatStore.currentConversation?.type === 1 && chatStore.currentConversation?.targetId === group.id }]"
       @click="handleSelect(group)"
     >
       <TextAvatar class="group-avatar" :name="group.name || group.id" :src="group.avatar" avatar-type="group" :size="35" />

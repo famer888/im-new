@@ -64,6 +64,7 @@ const grouped = computed((): GroupedContacts[] => {
 })
 
 const activeFriendId = computed(() => {
+  if (uiStore.detailView !== 'friend-detail') return null
   const current = chatStore.currentConversation
   if (!current || current.type !== 0) return null
   return current.targetId

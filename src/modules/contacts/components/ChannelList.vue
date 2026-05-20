@@ -37,7 +37,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       v-if="expanded"
       v-for="ch in channelStore.channels"
       :key="ch.id"
-      :class="['channel-item', { active: chatStore.currentConversation?.type === 2 && chatStore.currentConversation?.targetId === ch.id }]"
+      class="channel-item"
       @click="handleSelect(ch)"
     >
       <div class="channel-avatar">
@@ -112,7 +112,6 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   cursor: pointer;
 
   &:hover { background: #f9f9f9; }
-  &.active { background: #efefef; }
 }
 
 .channel-avatar {
