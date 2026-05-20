@@ -31,6 +31,7 @@ pub fn run() {
 
             let app_handle = app.handle().clone();
             commands::auth::start_active_login_monitor(app_handle.clone());
+            commands::file::start_windows_ffmpeg_bootstrap(app_handle.clone());
 
             // Init database
             let db_manager = db::DbManager::new(&app_data_dir)?;

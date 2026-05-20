@@ -12,6 +12,7 @@ TAURI_TARGET="${TAURI_TARGET:-x86_64-pc-windows-msvc}"
 TAURI_CONFIG="${TAURI_CONFIG:-}"
 TAURI_BUNDLES="${TAURI_BUNDLES:-nsis}"
 COPY_WINDOWS_BINARY="${COPY_WINDOWS_BINARY:-1}"
+BUNDLE_WINDOWS_FFMPEG="${BUNDLE_WINDOWS_FFMPEG:-0}"
 HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
 
 require_node() {
@@ -63,6 +64,26 @@ cd "$ROOT_DIR"
 mkdir -p "$RELEASE_DIST_DIR"
 mkdir -p "$BUILD_TARGET_DIR"
 
+WINDOWS_FFMPEG_EXE="$ROOT_DIR/resources/ffmpeg/windows/ffmpeg.exe"
+if [[ "$BUNDLE_WINDOWS_FFMPEG" == "1" ]]; then
+  if [[ ! -f "$WINDOWS_FFMPEG_EXE" ]]; then
+    echo "Missing bundled ffmpeg: $WINDOWS_FFMPEG_EXE" >&2
+    echo "Place the Windows ffmpeg.exe at resources/ffmpeg/windows/ffmpeg.exe before building with BUNDLE_WINDOWS_FFMPEG=1." >&2
+    exit 1
+  fi
+
+  WINDOWS_FFMPEG_RESOURCE_DIR="$BUILD_TARGET_DIR/windows-ffmpeg-resource"
+  mkdir -p "$WINDOWS_FFMPEG_RESOURCE_DIR"
+  cp -f "$WINDOWS_FFMPEG_EXE" "$WINDOWS_FFMPEG_RESOURCE_DIR/ffmpeg.exe"
+
+  WINDOWS_FFMPEG_TAURI_CONFIG="$BUILD_TARGET_DIR/tauri.windows-ffmpeg.conf.json"
+  node "$ROOT_DIR/scripts/write-windows-ffmpeg-tauri-config.mjs" \
+    "$WINDOWS_FFMPEG_TAURI_CONFIG" \
+    "$TAURI_CONFIG" \
+    "$WINDOWS_FFMPEG_RESOURCE_DIR/ffmpeg.exe"
+  TAURI_CONFIG="$WINDOWS_FFMPEG_TAURI_CONFIG"
+fi
+
 TAURI_ARGS=(build --bundles "$TAURI_BUNDLES")
 if [[ "$RUNNER_NAME" != "cargo" ]]; then
   TAURI_ARGS+=(--runner "$RUNNER_NAME")
@@ -78,6 +99,9 @@ BUILD_ROOT="$BUILD_TARGET_DIR/$TAURI_TARGET/release"
 
 if [[ "$COPY_WINDOWS_BINARY" == "1" ]]; then
   copy_if_exists "$BUILD_ROOT/ocs-chat.exe"
+  if [[ "$BUNDLE_WINDOWS_FFMPEG" == "1" ]]; then
+    copy_if_exists "$BUILD_ROOT/ffmpeg.exe"
+  fi
 fi
 copy_latest_matching "$BUILD_ROOT/bundle/nsis" "*.exe"
 copy_latest_matching "$BUILD_ROOT/bundle/msi" "*.msi"

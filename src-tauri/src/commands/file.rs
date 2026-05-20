@@ -2,13 +2,15 @@ use base64::{engine::general_purpose, Engine as _};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+#[cfg(target_os = "windows")]
+use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
@@ -142,6 +144,12 @@ static VIDEO_STREAM_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static VIDEO_DECRYPTED_CHUNK_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
 const VIDEO_STREAM_WINDOW_BYTES: u64 = 2 * 1024 * 1024;
+#[cfg(target_os = "windows")]
+const WINDOWS_FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+#[cfg(target_os = "windows")]
+const WINDOWS_FFMPEG_SHA256_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256";
+#[cfg(target_os = "windows")]
+static WINDOWS_FFMPEG_DOWNLOAD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn audio_players() -> &'static Mutex<HashMap<String, Child>> {
     AUDIO_PLAYERS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -2236,9 +2244,275 @@ pub async fn file_exists(path: String) -> Result<bool, String> {
     Ok(tokio::fs::metadata(PathBuf::from(path)).await.is_ok())
 }
 
-fn ffmpeg_program_candidates() -> Vec<PathBuf> {
+fn app_data_ffmpeg_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("ffmpeg").join("ffmpeg.exe"))
+}
+
+#[cfg(target_os = "windows")]
+pub fn start_windows_ffmpeg_bootstrap(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = ensure_windows_ffmpeg_downloaded(app).await {
+            tracing::warn!(target: "ffmpeg-bootstrap", error = %error, "windows ffmpeg bootstrap failed");
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn start_windows_ffmpeg_bootstrap(_app: AppHandle) {}
+
+#[cfg(target_os = "windows")]
+async fn ensure_windows_ffmpeg_downloaded(app: AppHandle) -> Result<(), String> {
+    let ffmpeg_path = app_data_ffmpeg_path(&app)
+        .ok_or_else(|| "resolve app data ffmpeg path failed".to_string())?;
+    if is_existing_windows_ffmpeg_available(&app).await {
+        return Ok(());
+    }
+
+    let _download_guard = WINDOWS_FFMPEG_DOWNLOAD_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    if is_existing_windows_ffmpeg_available(&app).await {
+        return Ok(());
+    }
+
+    let ffmpeg_dir = ffmpeg_path
+        .parent()
+        .ok_or_else(|| "invalid ffmpeg path".to_string())?
+        .to_path_buf();
+    tokio::fs::create_dir_all(&ffmpeg_dir)
+        .await
+        .map_err(|e| format!("create ffmpeg dir failed: {}", e))?;
+
+    let download_dir = ffmpeg_dir.join("download");
+    let extract_dir = ffmpeg_dir.join("extract");
+    let zip_path = download_dir.join("ffmpeg-release-essentials.zip");
+    let tmp_zip_path = download_dir.join("ffmpeg-release-essentials.zip.tmp");
+    let tmp_ffmpeg_path = ffmpeg_dir.join("ffmpeg.exe.tmp");
+
+    let _ = tokio::fs::remove_dir_all(&download_dir).await;
+    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+    let _ = tokio::fs::remove_file(&tmp_ffmpeg_path).await;
+    tokio::fs::create_dir_all(&download_dir)
+        .await
+        .map_err(|e| format!("create ffmpeg download dir failed: {}", e))?;
+
+    tracing::info!(target: "ffmpeg-bootstrap", "download windows ffmpeg start");
+    let expected_sha256 = fetch_windows_ffmpeg_sha256().await?;
+    let actual_sha256 = download_file_sha256(WINDOWS_FFMPEG_URL, &tmp_zip_path).await?;
+    if !expected_sha256.eq_ignore_ascii_case(&actual_sha256) {
+        let _ = tokio::fs::remove_file(&tmp_zip_path).await;
+        return Err(format!(
+            "ffmpeg zip sha256 mismatch expected={} actual={}",
+            expected_sha256, actual_sha256
+        ));
+    }
+    tokio::fs::rename(&tmp_zip_path, &zip_path)
+        .await
+        .map_err(|e| format!("move ffmpeg zip failed: {}", e))?;
+
+    tokio::fs::create_dir_all(&extract_dir)
+        .await
+        .map_err(|e| format!("create ffmpeg extract dir failed: {}", e))?;
+    extract_windows_ffmpeg_zip(&zip_path, &extract_dir).await?;
+
+    let extracted_ffmpeg = tokio::task::spawn_blocking({
+        let extract_dir = extract_dir.clone();
+        move || find_file_named(&extract_dir, "ffmpeg.exe")
+    })
+    .await
+    .map_err(|e| format!("find extracted ffmpeg task failed: {}", e))?
+    .ok_or_else(|| "ffmpeg.exe not found in downloaded package".to_string())?;
+
+    tokio::fs::copy(&extracted_ffmpeg, &tmp_ffmpeg_path)
+        .await
+        .map_err(|e| format!("copy extracted ffmpeg failed: {}", e))?;
+    if !is_usable_ffmpeg_file(&tmp_ffmpeg_path).await {
+        let _ = tokio::fs::remove_file(&tmp_ffmpeg_path).await;
+        return Err("downloaded ffmpeg.exe is invalid".to_string());
+    }
+    let _ = tokio::fs::remove_file(&ffmpeg_path).await;
+    tokio::fs::rename(&tmp_ffmpeg_path, &ffmpeg_path)
+        .await
+        .map_err(|e| format!("install ffmpeg failed: {}", e))?;
+
+    let _ = tokio::fs::remove_dir_all(&download_dir).await;
+    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+    tracing::info!(
+        target: "ffmpeg-bootstrap",
+        path = %ffmpeg_path.to_string_lossy(),
+        "download windows ffmpeg done"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn is_existing_windows_ffmpeg_available(app: &AppHandle) -> bool {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let app_data_ffmpeg = app_data_ffmpeg_path(&app);
+        let mut programs: Vec<PathBuf> = ffmpeg_program_candidates(Some(&app))
+            .into_iter()
+            .filter(|path| path.is_file())
+            .collect();
+        programs.push(PathBuf::from("ffmpeg"));
+
+        for program in programs {
+            if is_ffmpeg_program_available(&program) {
+                return true;
+            }
+
+            if app_data_ffmpeg.as_ref() == Some(&program) {
+                let _ = std::fs::remove_file(&program);
+            }
+        }
+
+        false
+    })
+    .await
+    .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn is_ffmpeg_program_available(program: &Path) -> bool {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+        .arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+async fn is_usable_ffmpeg_file(path: &Path) -> bool {
+    tokio::fs::metadata(path)
+        .await
+        .map(|meta| meta.is_file() && meta.len() > 10 * 1024 * 1024)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+async fn fetch_windows_ffmpeg_sha256() -> Result<String, String> {
+    let response = reqwest::get(WINDOWS_FFMPEG_SHA256_URL)
+        .await
+        .map_err(|e| format!("download ffmpeg sha256 failed: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("download ffmpeg sha256 failed: HTTP {}", response.status()));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("read ffmpeg sha256 failed: {}", e))?;
+    body.split_whitespace()
+        .find(|part| part.len() == 64 && part.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .map(|value| value.to_ascii_lowercase())
+        .ok_or_else(|| "invalid ffmpeg sha256 response".to_string())
+}
+
+#[cfg(target_os = "windows")]
+async fn download_file_sha256(url: &str, path: &Path) -> Result<String, String> {
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| format!("download ffmpeg failed: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("download ffmpeg failed: HTTP {}", response.status()));
+    }
+
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .map_err(|e| format!("create ffmpeg zip failed: {}", e))?;
+    let mut hasher = Sha256::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("read ffmpeg download failed: {}", e))?;
+        hasher.update(&chunk);
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("write ffmpeg zip failed: {}", e))?;
+    }
+    file.flush()
+        .await
+        .map_err(|e| format!("flush ffmpeg zip failed: {}", e))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(target_os = "windows")]
+async fn extract_windows_ffmpeg_zip(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
+    let zip_path = zip_path.to_path_buf();
+    let extract_dir = extract_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let script = format!(
+            "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+            powershell_single_quote(&zip_path.to_string_lossy()),
+            powershell_single_quote(&extract_dir.to_string_lossy()),
+        );
+        hidden_windows_command("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(script)
+            .status()
+            .map_err(|e| format!("start powershell unzip failed: {}", e))
+            .and_then(|status| {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("powershell unzip failed with status: {}", status))
+                }
+            })
+    })
+    .await
+    .map_err(|e| format!("extract ffmpeg task failed: {}", e))?
+}
+
+#[cfg(target_os = "windows")]
+fn powershell_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(target_os = "windows")]
+fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = find_file_named(&path, name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn ffmpeg_program_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
     let binary_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
     let mut candidates = Vec::new();
+    if let Some(app) = app {
+        if let Some(path) = app_data_ffmpeg_path(app) {
+            candidates.push(path);
+        }
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            candidates.push(resource_dir.join(binary_name));
+            candidates.push(resource_dir.join("bin").join(binary_name));
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join(binary_name));
@@ -2253,8 +2527,8 @@ fn ffmpeg_program_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn ffmpeg_command() -> Command {
-    for candidate in ffmpeg_program_candidates() {
+fn ffmpeg_command(app: Option<&AppHandle>) -> Command {
+    for candidate in ffmpeg_program_candidates(app) {
         if candidate.is_file() {
             return Command::new(candidate);
         }
@@ -2263,10 +2537,12 @@ fn ffmpeg_command() -> Command {
 }
 
 #[tauri::command]
-pub async fn convert_video_to_compatible_mp4(input_path: String, output_path: String) -> Result<String, String> {
+pub async fn convert_video_to_compatible_mp4(app: AppHandle, input_path: String, output_path: String) -> Result<String, String> {
     if !cfg!(target_os = "windows") {
         return Err("视频兼容转换仅在 Windows 启用".to_string());
     }
+    #[cfg(target_os = "windows")]
+    ensure_windows_ffmpeg_downloaded(app.clone()).await?;
 
     let input = source_to_local_path(&input_path);
     if !input.is_file() {
@@ -2285,7 +2561,7 @@ pub async fn convert_video_to_compatible_mp4(input_path: String, output_path: St
 
     let output_clone = output.clone();
     let status = tokio::task::spawn_blocking(move || {
-        let mut command = ffmpeg_command();
+        let mut command = ffmpeg_command(Some(&app));
         #[cfg(target_os = "windows")]
         {
             command.creation_flags(CREATE_NO_WINDOW);
