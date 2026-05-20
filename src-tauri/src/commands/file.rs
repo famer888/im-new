@@ -2243,6 +2243,8 @@ fn ffmpeg_program_candidates() -> Vec<PathBuf> {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join(binary_name));
             candidates.push(dir.join("bin").join(binary_name));
+            candidates.push(dir.join("resources").join(binary_name));
+            candidates.push(dir.join("resources").join("bin").join(binary_name));
             if let Some(parent) = dir.parent() {
                 candidates.push(parent.join("Resources").join(binary_name));
             }
@@ -2262,6 +2264,10 @@ fn ffmpeg_command() -> Command {
 
 #[tauri::command]
 pub async fn convert_video_to_compatible_mp4(input_path: String, output_path: String) -> Result<String, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("视频兼容转换仅在 Windows 启用".to_string());
+    }
+
     let input = source_to_local_path(&input_path);
     if !input.is_file() {
         return Err(format!("video file not found: {}", input_path));
@@ -2294,10 +2300,14 @@ pub async fn convert_video_to_compatible_mp4(input_path: String, output_path: St
             .arg("0:a?")
             .arg("-c:v")
             .arg("libx264")
+            .arg("-vf")
+            .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2")
             .arg("-preset")
             .arg("veryfast")
             .arg("-crf")
             .arg("23")
+            .arg("-tag:v")
+            .arg("avc1")
             .arg("-pix_fmt")
             .arg("yuv420p")
             .arg("-c:a")

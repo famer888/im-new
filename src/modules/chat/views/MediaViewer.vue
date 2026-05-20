@@ -471,6 +471,28 @@ function videoErrorMessage(error?: unknown): string {
   return '视频播放失败，请使用默认应用打开'
 }
 
+function isVideoUnsupportedError(error?: unknown): boolean {
+  const video = videoRef.value
+  const code = video?.error?.code || 0
+  const detail = error instanceof Error ? error.message : String(error || '')
+  return code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || /not supported|format|codec/i.test(detail)
+}
+
+function tryAutoConvertVideoForWindows(reason: string, error?: unknown): boolean {
+  if (!isWindowsPlatform()) return false
+  if (!isVideo.value || videoConverting.value || videoAutoTranscodeTried.value) return false
+  if (!isVideoUnsupportedError(error)) return false
+  if (!localVideoPath.value && !String(payload.value?.originalUrl || '').trim()) return false
+
+  videoAutoTranscodeTried.value = true
+  mediaViewerVideoLog('auto convert after playback error', {
+    reason,
+    error: error instanceof Error ? error.message : String(error || ''),
+  }, 'warn')
+  void convertCurrentVideoToMp4({ auto: true })
+  return true
+}
+
 async function probeCurrentVideoFormat(sourceOverride = '') {
   if (!isVideo.value) return
   const source = String(sourceOverride || localVideoPath.value || videoSrc.value || '').trim()
@@ -682,6 +704,14 @@ function handleVideoError() {
     code: videoRef.value?.error?.code || 0,
     message: videoRef.value?.error?.message || '',
   }, 'error')
+  if (tryAutoConvertVideoForWindows('video-error')) {
+    syncVideoState()
+    return
+  }
+  if (isWindowsPlatform() && isVideoUnsupportedError()) {
+    syncVideoState()
+    return
+  }
   showToast(videoErrorMessage(), 'error')
   syncVideoState()
 }
@@ -731,6 +761,14 @@ async function toggleVideoPlayback() {
       mediaViewerVideoLog('play promise failed', {
         message: error instanceof Error ? error.message : String(error || ''),
       }, 'error')
+      if (tryAutoConvertVideoForWindows('play-promise', error)) {
+        syncVideoState()
+        return
+      }
+      if (isWindowsPlatform() && isVideoUnsupportedError(error)) {
+        syncVideoState()
+        return
+      }
       showToast(videoErrorMessage(error), 'error')
     }
   } else {
@@ -1087,15 +1125,15 @@ function defaultVideoFileName(): string {
   return ensureVideoFileName(fromUrl, source)
 }
 
-async function downloadVideoForDefaultApp(): Promise<string> {
+async function downloadVideoForDefaultApp(options: { silent?: boolean } = {}): Promise<string> {
   const url = String(payload.value?.originalUrl || '').trim()
   const key = String(payload.value?.fileKey || '').trim()
   if (!url) {
-    showToast('视频文件还没有本地缓存', 'error')
+    if (!options.silent) showToast('视频文件还没有本地缓存', 'error')
     return ''
   }
 
-  showToast('正在准备视频文件...')
+  if (!options.silent) showToast('正在准备视频文件...')
   const [{ appDataDir, join }, { listen }] = await Promise.all([
     import('@tauri-apps/api/path'),
     import('@tauri-apps/api/event'),
@@ -1118,21 +1156,21 @@ async function downloadVideoForDefaultApp(): Promise<string> {
       if (settled) return
       settled = true
       cleanup(listeners)
-      showToast('视频准备超时，请稍后重试', 'error')
+      if (!options.silent) showToast('视频准备超时，请稍后重试', 'error')
       resolve('')
     }, 30000)
     listeners.push(await listen(doneEvent, () => {
       if (settled) return
       settled = true
       cleanup(listeners)
-      showToast('视频准备完成，正在打开')
+      if (!options.silent) showToast('视频准备完成，正在打开')
       resolve(savePath)
     }))
     listeners.push(await listen<{ error?: string }>(errorEvent, (event) => {
       if (settled) return
       settled = true
       cleanup(listeners)
-      showToast(`视频准备失败：${event.payload?.error || '未知错误'}`, 'error')
+      if (!options.silent) showToast(`视频准备失败：${event.payload?.error || '未知错误'}`, 'error')
       resolve('')
     }))
 
@@ -1150,15 +1188,15 @@ async function downloadVideoForDefaultApp(): Promise<string> {
       settled = true
       cleanup(listeners)
       const detail = error instanceof Error ? error.message : String(error || '未知错误')
-      showToast(`视频准备失败：${detail}`, 'error')
+      if (!options.silent) showToast(`视频准备失败：${detail}`, 'error')
       resolve('')
     }
   })
 }
 
-async function ensureLocalVideoForVideoAction(): Promise<string> {
+async function ensureLocalVideoForVideoAction(options: { silent?: boolean } = {}): Promise<string> {
   if (localVideoPath.value) return localVideoPath.value
-  return downloadVideoForDefaultApp()
+  return downloadVideoForDefaultApp(options)
 }
 
 async function convertedVideoPath(inputPath: string): Promise<string> {
@@ -1172,13 +1210,17 @@ async function convertedVideoPath(inputPath: string): Promise<string> {
 }
 
 async function convertCurrentVideoToMp4(options: { auto?: boolean } = {}) {
+  if (!isWindowsPlatform()) {
+    if (!options.auto) showToast('视频兼容转换仅在 Windows 启用', 'error')
+    return
+  }
   if (videoConverting.value) return
   videoConverting.value = true
   let localPath = ''
   try {
-    localPath = await ensureLocalVideoForVideoAction()
+    localPath = await ensureLocalVideoForVideoAction({ silent: options.auto })
     if (!localPath) return
-    showToast(options.auto ? 'Windows 正在自动转为兼容 MP4...' : '正在转为兼容 MP4...')
+    if (!options.auto) showToast('正在转为兼容 MP4...')
     const outputPath = await convertedVideoPath(localPath)
     const convertedPath = await invoke<string>('convert_video_to_compatible_mp4', {
       inputPath: localPath,
@@ -1206,19 +1248,18 @@ async function convertCurrentVideoToMp4(options: { auto?: boolean } = {}) {
     await nextTick()
     startVideoPreparingOnOpen()
     await probeCurrentVideoFormat(convertedPath)
-    showToast(options.auto ? '已自动转为兼容 MP4' : '已转为兼容 MP4')
+    if (!options.auto) showToast('已转为兼容 MP4')
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error || '未知错误')
     if (options.auto && /ffmpeg/i.test(detail) && localPath) {
       try {
         await invoke('open_file', { path: localPath })
-        showToast('未检测到转码组件，已尝试用系统播放器打开')
         return
       } catch {
         // Fall through to the original error message.
       }
     }
-    showToast(`${options.auto ? '自动转换失败' : '转换失败'}：${detail}`, 'error')
+    if (!options.auto) showToast(`转换失败：${detail}`, 'error')
   } finally {
     videoConverting.value = false
   }
