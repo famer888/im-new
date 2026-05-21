@@ -5,11 +5,11 @@ import { useI18n } from 'vue-i18n'
 import { emit, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import closeIcon from '@/assets/windows_control_icons/close-k-12.png'
+import closeIcon from '@/assets/images/notification-popup/close.png'
 import friendIcon from '@/assets/images/logo/logo-58.png'
-import groupIcon from '@/assets/images/logo/default_group_icon.png'
+import groupIcon from '@/assets/images/notification-popup/default-group-icon.png'
 import channelIcon from '@/assets/images/logo/channel-notice.webp'
-import groupChatIcon from '@/assets/images/logo/group-icon.png'
+import groupChatIcon from '@/assets/images/notification-popup/group-chat-icon.png'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 
@@ -42,13 +42,7 @@ const defaultAvatar = computed(() => {
 })
 const avatarSrc = computed(() => safeImageSrc(data.value?.avatar, defaultAvatar.value))
 const isGroup = computed(() => data.value?.conversationType === 'group')
-const messageText = computed(() => {
-  const count = Math.max(0, Number(data.value?.unreadCount || 0))
-  const body = String(data.value?.body || '')
-  if (count <= 0) return body
-  const summary = `${count}条${t('未读消息')}`
-  return body ? `${summary}：${body}` : summary
-})
+const messageText = computed(() => String(data.value?.body || ''))
 
 // 通知 payload 来自跨窗口 query/event，文本虽由 Vue 转义，仍先收窄长度和控制字符。
 function sanitizeText(value: unknown, maxLength: number): string {
@@ -247,6 +241,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
   border: 1px solid #e5e5e5;
   border-radius: 10px 0 10px 10px;
   box-sizing: border-box;
+  overflow: hidden;
   cursor: default;
 
   &:hover {
@@ -307,7 +302,8 @@ function handleReplyKeydown(event: KeyboardEvent) {
   width: 180px;
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  line-height: 20px;
+  color: #000;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -317,7 +313,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
   width: 210px;
   font-size: 12px;
   line-height: 16px;
-  color: #999;
+  color: #999999;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -339,6 +335,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
   padding: 0;
   border: none;
   background: transparent;
+  appearance: none;
   cursor: pointer;
 
   img {

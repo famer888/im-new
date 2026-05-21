@@ -205,7 +205,9 @@ function getConversationUnreadCount(conversationId: string, messages: any[]): nu
     return convId === conversationId
   }).length
 
-  return storedUnread + incomingCount
+  // 这里调用时机会话未读通常已经在 store 里自增过了；再叠加本批消息数会把单条新消息算成 2 条。
+  // 取两者较大值，兼容“store 已更新”和“store 还未来得及更新”两种时机。
+  return Math.max(storedUnread, incomingCount)
 }
 
 async function shouldShowMinimizedReminder(): Promise<boolean> {
