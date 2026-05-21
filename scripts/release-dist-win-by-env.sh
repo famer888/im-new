@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_MODE="${1:-}"
 BRAND_ID="${2:-}"
-RELEASE_DIST_DIR="$ROOT_DIR/release-dist/windows"
+RELEASE_DIST_DIR="$ROOT_DIR/release-dist-win"
 
 usage() {
   echo "Usage: pnpm release:dist:win:<test|uat> [45|55|97]" >&2

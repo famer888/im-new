@@ -106,6 +106,19 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   }
 }
 
+function isSuspiciousPlaceholderGroupConversation(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  const group = groupStore.getGroup(conv.targetId)
+  if (!group) return false
+
+  const explicitName = String(group.name || '').trim()
+  const hasResolvedName = Boolean(explicitName) && explicitName !== conv.targetId
+  const hasAvatar = Boolean(group.avatar)
+  const lastDigest = String(conv.lastMsgDigest || '').trim()
+
+  return !hasResolvedName && !hasAvatar && !lastDigest
+}
+
 function isConversationMuted(conv: Conversation): boolean {
   if (conv.isMuted) return true
   if (conv.type !== ConversationType.Channel) return false
@@ -141,7 +154,8 @@ const visibleChatUnread = computed(() =>
       !isConversationMuted(conv)
       && !conv.isArchived
       && !isFileHelperTargetId(conv.targetId)
-      && isConversationInCurrentRelations(conv),
+      && isConversationInCurrentRelations(conv)
+      && !isSuspiciousPlaceholderGroupConversation(conv),
     )
     .reduce((sum, conv) => sum + getConversationDisplayUnreadCount(conv), 0),
 )

@@ -7,7 +7,7 @@ import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
-import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss } from '@/utils/domainPool'
+import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss, markDomainError } from '@/utils/domainPool'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { WebLoginStatus } from '@/proto/generated'
 
@@ -42,23 +42,6 @@ const domainList = ref<string[]>([getBaseUrl()])
 const urlIndex = ref(0)
 const activeQrBaseUrl = ref('')
 let qrRequestSeq = 0
-
-// 接收来自 NetworkConfig 检测出的有效域名，合并后切到首个有效域名重新拉取二维码
-watch(() => props.extraDomains, (newDomains) => {
-  if (!newDomains || !newDomains.length) return
-  const existingSet = new Set(domainList.value)
-  const toAdd = newDomains.filter(u => !existingSet.has(u))
-  if (toAdd.length) {
-    domainList.value = [...domainList.value, ...toAdd]
-  }
-  const firstValidIdx = domainList.value.indexOf(newDomains[0])
-  if (firstValidIdx !== -1) urlIndex.value = firstValidIdx
-
-  qrCodeUrlError.value = false
-  isOutTime.value = false
-  clearTimers()
-  setTimeout(() => { handleGetQrCodeUrl() }, 500)
-})
 
 let timerOutTimer: ReturnType<typeof setTimeout> | null = null
 let loginPollingTimer: ReturnType<typeof setTimeout> | null = null
@@ -108,12 +91,31 @@ function inferSessionWsUrl(baseUrl: string): string {
   return normalizeWsUrl(base.replace(/webbiz/gi, 'websession'))
 }
 
-function refreshDomainList(): boolean {
+function buildDomainList(preferredDomains: string[] = []): string[] {
+  const preferred = preferredDomains.map(domain => String(domain || '').trim()).filter(Boolean)
+  const base = getBaseUrl()
+  const poolDomains = getAllDomains('webBiz')
+  const normalPoolDomains = poolDomains
+    .filter(item => item.status !== 'error')
+    .map(item => item.domain)
+    .filter(Boolean)
+  const errorPoolDomains = poolDomains
+    .filter(item => item.status === 'error')
+    .map(item => item.domain)
+    .filter(Boolean)
+
+  return [...new Set([
+    ...preferred,
+    base,
+    ...normalPoolDomains,
+    ...errorPoolDomains,
+  ])]
+}
+
+function refreshDomainList(preferredDomains: string[] = props.extraDomains || []): boolean {
   const previousList = domainList.value
   const previousCurrent = currentBaseUrl.value
-  const base = getBaseUrl()
-  const poolDomains = getAllDomains('webBiz').map(d => d.domain).filter(Boolean)
-  const nextList = [...new Set([base, ...poolDomains.filter(d => d !== base)])]
+  const nextList = buildDomainList(preferredDomains)
   const hasNewDomain = nextList.some(url => !previousList.includes(url))
   domainList.value = nextList
 
@@ -127,12 +129,43 @@ function refreshDomainList(): boolean {
   return hasNewDomain
 }
 
+function applyPreferredDomains(newDomains: string[] | undefined, options: { shouldReload?: boolean } = {}) {
+  if (!newDomains?.length) return
+
+  domainList.value = buildDomainList(newDomains)
+  const firstValidIdx = domainList.value.indexOf(newDomains[0])
+  if (firstValidIdx !== -1) {
+    urlIndex.value = firstValidIdx
+  }
+
+  if (!options.shouldReload) return
+
+  qrCodeUrlError.value = false
+  isOutTime.value = false
+  clearTimers()
+  setTimeout(() => {
+    handleGetQrCodeUrl()
+  }, 500)
+}
+
+// 接收来自 NetworkConfig 检测出的有效域名，合并后切到首个有效域名重新拉取二维码
+watch(
+  () => props.extraDomains,
+  (newDomains) => {
+    applyPreferredDomains(newDomains, {
+      shouldReload: !!newDomains?.length && (hasLoadedFirstQr.value || qrCodeUrlError.value || isOutTime.value),
+    })
+  },
+  { immediate: true },
+)
+
 function retryAfterDomainRefresh() {
   if (!qrCodeUrlError.value || loginToken.value || isLoading.value) return
   retryNextDomain()
 }
 
 function retryNextDomain(): boolean {
+  markDomainError('webBiz', currentBaseUrl.value)
   if (urlIndex.value >= domainList.value.length - 1) return false
   urlIndex.value++
   qrCodeUrlError.value = false
@@ -345,18 +378,18 @@ onMounted(async () => {
   refreshLastLoginAvatar()
 
   // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。
-  refreshDomainList()
+  refreshDomainList(props.extraDomains || [])
   handleGetQrCodeUrl()
 
   initDomainPoolFromOss()
     .then(() => {
-      const hasNewDomain = refreshDomainList()
+      const hasNewDomain = refreshDomainList(props.extraDomains || [])
       if (hasNewDomain) retryAfterDomainRefresh()
     })
     .catch(() => {})
   initDomainPoolFromApi()
     .then(() => {
-      const hasNewDomain = refreshDomainList()
+      const hasNewDomain = refreshDomainList(props.extraDomains || [])
       if (hasNewDomain) retryAfterDomainRefresh()
     })
     .catch(() => {})

@@ -358,7 +358,9 @@ onMounted(async () => {
           channelStore.loadChannels(authStore.uid, { refreshRemote: false }),
           settingStore.loadSettings({ syncRemote: false }),
         ])
-        chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid)
+        chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid).finally(() => {
+          pruneUnknownConversations()
+        })
       } else {
         uiStore.setChatListNamesReady(true)
         await Promise.all([

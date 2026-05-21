@@ -106,7 +106,7 @@ APP_NAME="${APP_NAME:-OCS Chat $BRAND_ID}"
 PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.$BRAND_ID.chat}"
 OFFICIAL_URL="${OFFICIAL_URL:-${BRAND_ID}chat.com}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/$PLATFORM/icons_$BRAND_ID}"
-TAURI_CONFIG_FILE="$(mktemp "$ROOT_DIR/.tauri-brand-$BRAND_ID.XXXXXX.json")"
+TAURI_CONFIG_FILE="$(mktemp "$ROOT_DIR/.tauri-brand-$BRAND_ID.XXXXXX")"
 BRAND_BACKUP_DIR="$(mktemp -d "$ROOT_DIR/.brand-source-backup-$BRAND_ID.XXXXXX")"
 
 cleanup_generated() {

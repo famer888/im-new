@@ -118,12 +118,34 @@ function isPendingInviteConversationPreview(conv: Conversation): boolean {
   return source === 'group-event-req-chat' && status !== 1
 }
 
+/**
+ * Windows 本地库里可能残留仅由群事件撑出来的占位群：
+ * 只有群号、没有头像、也没有可见摘要。旧 im 不会把这类项长期展示在会话列表里。
+ */
+function isSuspiciousPlaceholderGroupConversation(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+
+  const group = groupStore.getGroup(conv.targetId)
+  if (!group) return false
+
+  const explicitName = String(group.name || '').trim()
+  const hasResolvedName = Boolean(explicitName) && explicitName !== conv.targetId
+  const hasAvatar = Boolean(group.avatar)
+  const lastDigest = String(conv.lastMsgDigest || '').trim()
+  const hasVisibleDigest = Boolean(lastDigest)
+    && !isHiddenGroupNoticeDigest(lastDigest)
+    && !isRejectedGroupInviteDigestInGroupChat(conv)
+
+  return !hasResolvedName && !hasAvatar && !hasVisibleDigest
+}
+
 const normalConversations = computed(() =>
   chatStore.conversations.filter(
     c => !c.isArchived
       && isNotFileHelper(c)
       && isConversationInCurrentRelations(c)
-      && !isPendingInviteConversationPreview(c),
+      && !isPendingInviteConversationPreview(c)
+      && !isSuspiciousPlaceholderGroupConversation(c),
   ),
 )
 
@@ -132,7 +154,8 @@ const archivedConversations = computed(() =>
     c => c.isArchived
       && isNotFileHelper(c)
       && isConversationInCurrentRelations(c)
-      && !isPendingInviteConversationPreview(c),
+      && !isPendingInviteConversationPreview(c)
+      && !isSuspiciousPlaceholderGroupConversation(c),
   ),
 )
 
@@ -204,6 +227,43 @@ function getName(conv: Conversation): string {
     default:
       return conv.targetId
   }
+}
+
+function explicitConversationName(conv: Conversation): string {
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+    return t('频道通知')
+  }
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
+    return t('群通知')
+  }
+  switch (conv.type) {
+    case ConversationType.Friend: {
+      const contact = contactStore.getContact(conv.targetId)
+      return String(contact?.remark || contact?.nickname || '').trim()
+    }
+    case ConversationType.Group:
+      return String(groupStore.getGroup(conv.targetId)?.name || '').trim()
+    case ConversationType.Channel: {
+      const channel = channelStore.getChannel(conv.targetId)
+      return String(channel?.channelName || channel?.name || '').trim()
+    }
+    default:
+      return ''
+  }
+}
+
+function shouldShowNamePlaceholder(conv: Conversation): boolean {
+  if (!(window as any).__TAURI_INTERNALS__) return false
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) return false
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  return !explicitConversationName(conv)
+}
+
+function getDisplayNameForAvatar(conv: Conversation): string {
+  if (shouldShowNamePlaceholder(conv)) {
+    return conv.type === ConversationType.Channel ? t('频道') : ''
+  }
+  return explicitConversationName(conv) || getName(conv)
 }
 
 function shouldRepairChannelName(conv: Conversation): boolean {
@@ -1025,7 +1085,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
         <div class="conv-avatar-wrap">
           <TextAvatar
             :id="getAvatarId(conv)"
-            :name="getName(conv)"
+            :name="getDisplayNameForAvatar(conv)"
             :src="getAvatar(conv)"
             :avatar-type="getAvatarType(conv)"
             :color="getAvatarColor(conv)"
@@ -1043,7 +1103,8 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
                 :src="channelFeatureIcon"
                 alt=""
               />
-              <span class="conv-name-text">{{ getName(conv) }}</span>
+              <span v-if="shouldShowNamePlaceholder(conv)" class="conv-name-skeleton" aria-hidden="true" />
+              <span v-else class="conv-name-text">{{ getName(conv) }}</span>
             </h3>
             <span class="conv-time">{{ formatTime(getDisplayTime(conv)) }}</span>
           </div>
@@ -1271,6 +1332,26 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conv-name-skeleton {
+  display: inline-block;
+  width: 112px;
+  max-width: 100%;
+  height: 16px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f2f3f5 25%, #e8ebef 37%, #f2f3f5 63%);
+  background-size: 400% 100%;
+  animation: conv-name-skeleton-shimmer 1.25s ease infinite;
+}
+
+@keyframes conv-name-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .channel-feature {
