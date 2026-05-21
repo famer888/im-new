@@ -12,6 +12,7 @@ TAURI_CONFIG="${TAURI_CONFIG:-}"
 TAURI_BUNDLES="${TAURI_BUNDLES:-app,dmg}"
 COPY_APP_BUNDLE="${COPY_APP_BUNDLE:-1}"
 COPY_DMG="${COPY_DMG:-1}"
+TAURI_BUILD_MODE="${TAURI_BUILD_MODE:-production}"
 
 require_node() {
   local major
@@ -91,7 +92,15 @@ fi
 ARCH_LABEL="${TAURI_TARGET:-$(uname -m)}"
 PKG_STAGE_ROOT="/tmp/ocs-chat-pkg-root"
 PKG_COMPONENT_PLIST="/tmp/ocs-chat-component.plist"
-PKG_OUTPUT_PATH="$RELEASE_DIST_DIR/${APP_NAME}_${VERSION}_${ARCH_LABEL}.pkg"
+PKG_ENV_SUFFIX=""
+
+case "$TAURI_BUILD_MODE" in
+  test|uat)
+    PKG_ENV_SUFFIX="_$TAURI_BUILD_MODE"
+    ;;
+esac
+
+PKG_OUTPUT_PATH="$RELEASE_DIST_DIR/${APP_NAME}${PKG_ENV_SUFFIX}_${VERSION}_${ARCH_LABEL}.pkg"
 
 rm -rf "$PKG_STAGE_ROOT" "$PKG_COMPONENT_PLIST"
 mkdir -p "$PKG_STAGE_ROOT/Applications"
