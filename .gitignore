@@ -29,13 +29,7 @@ Thumbs.db
 Desktop.ini
 
 # Env
-.env
-.env.*
-!.env.example
-!.env.development
-!.env.test
-!.env.uat
-.env.local
+
 
 # Logs
 *.log
