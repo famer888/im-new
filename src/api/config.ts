@@ -16,7 +16,7 @@ function normalizeBrandId(input?: string): '45' | '55' | '97' {
 const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)
 const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID}chat.com`).trim()
 
-/** OpenChat 网关（频道等）签名 packageCode，与 webBiz 的 7100 不同 */
+/** 对齐老 im 55.1.7.0：请求签名与 clientInfo 默认 packageCode 为 5520 */
 export const OPEN_CHAT_PACKAGE_CODE = 5520
 
 function parseOpenChatAppVer(): number | undefined {
@@ -32,10 +32,10 @@ export const API_CONFIG = {
   headAesKey: import.meta.env.VITE_APP_HEAD_AES_KEY || 'f58c15f54e8f7826',
   secretName: import.meta.env.VITE_APP_SECRET_NAME || 'eb2c844e110be53a0b008a9766877aea',
   secretKey: import.meta.env.VITE_APP_SECRET_KEY || '1004969fe92844eb',
-  appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 168),
+  appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 170),
   /** 频道网关单独 appVer，须与 SECRET_* 在服务端登记一致；未配置则与 appVer 相同 */
   openChatAppVer: parseOpenChatAppVer(),
-  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 7100),
+  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 5520),
   openChatPackageCode: OPEN_CHAT_PACKAGE_CODE,
   language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
