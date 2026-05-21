@@ -13,6 +13,7 @@ import {
   isGroupIntroNoticeMessage,
   type GroupIntroNoticePayload,
 } from '@/utils/groupIntroNotice'
+import { isMessageEligibleForUnreadAnchor } from '@/utils/chatUnreadVisibility'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
@@ -156,15 +157,51 @@ function captureUnreadSnapshot(convId: string) {
   sessionInitialUnread.value = Math.max(sessionInitialUnread.value, n)
 }
 
-function captureUnreadMessageIds(convId: string, uid: string) {
+function collectUnreadCandidates(convId: string, uid: string): Message[] {
+  return messageStore.getMessages(convId).filter((message) =>
+    String(message.senderId || '') !== uid
+    && Number(message.readStatus || 0) === 0,
+  )
+}
+
+function collectEligibleUnreadMessageIds(convId: string, uid: string): string[] {
   const ids = new Set<string>()
-  for (const message of messageStore.getMessages(convId)) {
-    if (String(message.senderId || '') === uid) continue
-    if (Number(message.readStatus || 0) !== 0) continue
+  for (const message of collectUnreadCandidates(convId, uid)) {
+    if (!isMessageEligibleForUnreadAnchor(convId, message, uid)) continue
     if (message.id) ids.add(String(message.id))
     if (message.customMsgId) ids.add(String(message.customMsgId))
   }
-  sessionUnreadMessageIds.value = [...ids]
+  return [...ids]
+}
+
+async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
+  const targetUnreadCount = Math.max(0, Number(sessionInitialUnread.value || 0))
+  if (targetUnreadCount <= 0) {
+    sessionUnreadMessageIds.value = []
+    sessionInitialUnread.value = 0
+    return
+  }
+
+  let pageLoads = 0
+  while (conversationId.value === convId) {
+    const eligibleIds = collectEligibleUnreadMessageIds(convId, uid)
+    if (eligibleIds.length > 0) {
+      sessionUnreadMessageIds.value = eligibleIds
+      return
+    }
+
+    const inspectedUnreadCount = collectUnreadCandidates(convId, uid).length
+    const exhaustedHistory = !messageStore.hasMore(convId)
+    if (exhaustedHistory || inspectedUnreadCount >= targetUnreadCount || pageLoads >= 20) {
+      sessionUnreadMessageIds.value = []
+      sessionInitialUnread.value = 0
+      return
+    }
+
+    await messageStore.loadOlderMessages(uid, convId)
+    if (conversationId.value !== convId) return
+    pageLoads += 1
+  }
 }
 
 /**
@@ -227,7 +264,7 @@ watch(
     captureUnreadSnapshot(myId)
     await messageStore.loadMessages(authStore.uid, myId)
     if (conversationId.value !== myId) return
-    captureUnreadMessageIds(myId, authStore.uid)
+    await resolveVisibleUnreadSnapshot(myId, authStore.uid)
     await chatStore.markAsRead(authStore.uid, myId)
     if (conversationId.value !== myId) return
     unreadSnapshotLocked.value = true

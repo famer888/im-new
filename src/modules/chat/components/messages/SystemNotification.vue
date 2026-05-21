@@ -6,11 +6,11 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import {
-  formatGroupNoticeDisplayText,
   getGroupNoticeActorId,
   getGroupNoticeGroupId,
   parseGroupNoticeExtraObject,
 } from '@/utils/groupNoticeDisplay'
+import { formatSystemNotificationText } from '@/utils/chatUnreadVisibility'
 import { translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 
 const props = defineProps<{
@@ -21,8 +21,6 @@ const { t } = useI18n()
 const authStore = useAuthStore()
 const contactStore = useContactStore()
 const groupStore = useGroupStore()
-const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
-const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -105,8 +103,8 @@ const parsedNotice = computed(() => {
     return contactName || id
   }
 
-  let content = formatGroupNoticeDisplayText(props.message.content || '', extra, {
-    currentUid: authStore.uid,
+  let content = formatSystemNotificationText(props.message, {
+    currentUid: String(authStore.uid || ''),
     actorRole,
     contextMembers,
     resolveUidPlaceholder: resolveUidDisplay,
@@ -114,7 +112,7 @@ const parsedNotice = computed(() => {
   if (content.includes('邀请') && content.includes('加入群聊')) {
     content = content.replace(PURE_UID_RE, (uid) => resolveUidDisplay(uid))
   }
-  if (content === HIDDEN_GROUP_NOTICE_TEXT) {
+  if (!content) {
     return { prefix: '', text: '' }
   }
   if (!content.startsWith('!@#')) {

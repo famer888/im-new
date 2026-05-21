@@ -5,9 +5,7 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
-import { parseGroupNoticeExtraObject } from '@/utils/groupNoticeDisplay'
-import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
-import { isHiddenMessageType } from '@/types'
+import { isMessageEligibleForUnreadAnchor, isMessageVisibleInTimeline } from '@/utils/chatUnreadVisibility'
 import MessageItem from './MessageItem.vue'
 import readBurnBackUrl from '@/assets/images/chat/read-burn-back.png'
 
@@ -37,60 +35,17 @@ const messageStore = useMessageStore()
 const authStore = useAuthStore()
 const searchStore = useSearchStore()
 
-/** 服务端曾把「拒绝加入」落到群会话；新版本改入「群通知」后，对已落库的记录不再在群内展示 */
-function isLegacyGroupInviteRejectionInGroupChat(conversationId: string | undefined, message: Message): boolean {
-  if (!conversationId?.startsWith('1_')) return false
-  const target = conversationId.slice(2)
-  if (!target || target === 'invitation') return false
-  if (message.msgType !== 8) return false
-  const extra = parseGroupNoticeExtraObject(message.extra)
-  if (!extra) return false
-  if (String(extra.source ?? '') !== 'group-event') return false
-  return Number(extra.groupReqStatus ?? 0) === 2
-}
-
-/** 已由当前用户自己退出群聊时，不在群时间线展示这条退出系统消息。 */
-function isSelfLeaveGroupSystemMessage(conversationId: string | undefined, message: Message): boolean {
-  if (!conversationId?.startsWith('1_')) return false
-  const target = conversationId.slice(2)
-  if (!target || target === 'invitation') return false
-  if (message.msgType !== 8) return false
-
-  const extra = parseGroupNoticeExtraObject(message.extra)
-  if (!extra) return false
-  if (String(extra.source ?? '') !== 'group-event') return false
-  if (Number(extra.groupReqType ?? 0) !== 7) return false
-
-  const currentUid = String(authStore.uid || '')
-  if (!currentUid) return false
-
-  const receiveUid = String(extra.receiveUid ?? '')
-  if (receiveUid && receiveUid === currentUid) return true
-
-  const members = Array.isArray(extra.members) ? extra.members : []
-  return members.some((member) => {
-    if (!member || typeof member !== 'object') return false
-    return String((member as Record<string, unknown>).userId ?? '') === currentUid
-  })
-}
-
-/** 群简介未勾选「通知所有成员」时，旧 im 会更新简介但不在聊天时间线展示。 */
-function isHiddenGroupNoticeMessage(message: Message): boolean {
-  if (!isGroupIntroNoticeMessage(message)) return false
-  const extra = parseGroupNoticeExtraObject(message.extra)
-  return Boolean(extra?.isHide)
-}
-
 const containerRef = ref<HTMLElement | null>(null)
 const floatDateRef = ref<HTMLElement | null>(null)
 
 /** 与旧 im 列表一致：按发送时间升序，再算「自然日」分隔 */
 const sortedMessages = computed(() =>
   props.messages
-    .filter((message) => !isHiddenMessageType(message.msgType))
-    .filter((message) => !isLegacyGroupInviteRejectionInGroupChat(props.conversationId, message))
-    .filter((message) => !isSelfLeaveGroupSystemMessage(props.conversationId, message))
-    .filter((message) => !isHiddenGroupNoticeMessage(message))
+    .filter((message) => isMessageVisibleInTimeline(
+      props.conversationId,
+      message,
+      String(authStore.uid || ''),
+    ))
     .slice()
     .sort((a, b) => a.sendTime - b.sendTime),
 )
@@ -128,7 +83,8 @@ const unreadDividerIndex = computed(() => {
   const ids = unreadMessageIdSet.value
   if (ids.size === 0) return -1
   return sortedMessages.value.findIndex((message) =>
-    ids.has(String(message.id || '')) || ids.has(String(message.customMsgId || '')),
+    isMessageEligibleForUnreadAnchor(props.conversationId, message, String(authStore.uid || ''))
+    && (ids.has(String(message.id || '')) || ids.has(String(message.customMsgId || ''))),
   )
 })
 

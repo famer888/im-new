@@ -20,6 +20,7 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { ConversationType } from '@/types'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
+import { isMessageEligibleForUnreadAnchor } from '@/utils/chatUnreadVisibility'
 import SearchInput from '@/components/SearchInput.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import ConversationList from './ConversationList.vue'
@@ -114,10 +115,18 @@ function isConversationMuted(conv: Conversation): boolean {
 
 function getConversationDisplayUnreadCount(conv: Conversation): number {
   const unreadCount = Math.max(0, Number(conv.unreadCount || 0))
+  if (conv.id === chatStore.currentConversationId) {
+    const currentUid = String(authStore.uid || '')
+    const loadedMessages = messageStore.getMessages(conv.id)
+    if (loadedMessages.length === 0) return unreadCount
+    const loadedEligibleUnreadCount = loadedMessages.filter((message) =>
+      isMessageEligibleForUnreadAnchor(conv.id, message, currentUid),
+    ).length
+    return loadedEligibleUnreadCount
+  }
   if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
     return unreadCount
   }
-  if (conv.id === chatStore.currentConversationId) return unreadCount
   const unreadIntroCount = messageStore.getMessages(conv.id).filter((message) =>
     isGroupIntroNoticeMessage(message)
     && Number(message.readStatus || 0) === 0,
