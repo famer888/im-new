@@ -16,7 +16,7 @@ function normalizeBrandId(input?: string): '45' | '55' | '97' {
 const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)
 const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID}chat.com`).trim()
 
-/** OpenChat 网关（频道等）签名 packageCode，与 webBiz 的 7100 不同 */
+/** 对齐老 im 55.1.7.0：请求签名与 clientInfo 默认 packageCode 为 5520 */
 export const OPEN_CHAT_PACKAGE_CODE = 5520
 
 function parseOpenChatAppVer(): number | undefined {
