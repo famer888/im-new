@@ -87,6 +87,7 @@ const toastType = ref<'success' | 'error'>('success')
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const ACTIVE_GROUP_MEMBER_SYNC_INTERVAL_MS = 5000
 const ACTIVE_GROUP_MEMBER_SYNC_MIN_GAP_MS = 2500
+const CHAT_LIST_NAME_READY_TIMEOUT_MS = 1800
 const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
@@ -234,14 +235,43 @@ function setFirstInitProgress(friend: number, chat: number) {
 }
 
 function refreshInitializedAccountData(uid: string) {
-  window.setTimeout(() => {
-    void Promise.allSettled([
-      contactStore.loadContacts(uid, { forceApi: true }),
-      groupStore.loadGroups(uid, { forceApi: true }),
-      channelStore.loadChannels(uid),
-      settingStore.loadSettings(),
+  if (!uid) return Promise.resolve([])
+  return Promise.allSettled([
+    contactStore.loadContacts(uid, { forceApi: true }),
+    groupStore.loadGroups(uid, { forceApi: true }),
+    channelStore.loadChannels(uid),
+    settingStore.loadSettings(),
+  ])
+}
+
+async function releaseChatListNameGate(refreshPromise: Promise<unknown> | null) {
+  if (!refreshPromise) {
+    uiStore.setChatListNamesReady(true)
+    return
+  }
+
+  let timeoutId: number | null = null
+  let timedOut = false
+
+  try {
+    await Promise.race([
+      refreshPromise,
+      new Promise<void>((resolve) => {
+        timeoutId = window.setTimeout(() => {
+          timedOut = true
+          resolve()
+        }, CHAT_LIST_NAME_READY_TIMEOUT_MS)
+      }),
     ])
-  }, 1000)
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId)
+    }
+    if (timedOut) {
+      console.warn('[init] chat list name warmup timed out, fallback to current local names')
+    }
+    uiStore.setChatListNamesReady(true)
+  }
 }
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
@@ -271,11 +301,13 @@ onMounted(async () => {
   startInitReloadTimer()
   window.addEventListener('focus', handleWindowFocusRefreshGroupMembers)
   document.addEventListener('visibilitychange', handleVisibilityRefreshGroupMembers)
+  uiStore.setChatListNamesReady(true)
 
   try {
     setInitText(t('加载中'))
     await authStore.initSession()
     if (!authStore.uid) {
+      uiStore.setChatListNamesReady(true)
       isInitialized.value = true
       clearInitReloadTimer()
       if ((window as any).__TAURI_INTERNALS__) {
@@ -288,6 +320,7 @@ onMounted(async () => {
     }
 
     if (authStore.uid) {
+      let chatListNameWarmupPromise: Promise<unknown> | null = null
       firstInitProgressVisible.value = !authStore.isAccountInitialized(authStore.uid)
       setFirstInitProgress(0, 0)
 
@@ -302,6 +335,7 @@ onMounted(async () => {
       )
       setInitText(t('数据载入'))
       if (firstInitProgressVisible.value) {
+        uiStore.setChatListNamesReady(true)
         await contactStore.loadContacts(authStore.uid)
         setFirstInitProgress(100, 0)
 
@@ -315,6 +349,7 @@ onMounted(async () => {
         setFirstInitProgress(100, 100)
       } else if ((window as any).__TAURI_INTERNALS__) {
         // 对齐老 im：已初始化账号优先读本地；安装新包后本地联系人库可能为空，联系人需允许远端兜底。
+        uiStore.setChatListNamesReady(false)
         await Promise.all([
           chatStore.loadConversations(authStore.uid),
           contactStore.loadContacts(authStore.uid),
@@ -322,8 +357,9 @@ onMounted(async () => {
           channelStore.loadChannels(authStore.uid, { refreshRemote: false }),
           settingStore.loadSettings({ syncRemote: false }),
         ])
-        refreshInitializedAccountData(authStore.uid)
+        chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid)
       } else {
+        uiStore.setChatListNamesReady(true)
         await Promise.all([
           chatStore.loadConversations(authStore.uid),
           contactStore.loadContacts(authStore.uid),
@@ -390,6 +426,8 @@ onMounted(async () => {
         console.warn('[ws] connect failed:', err)
       }
 
+      void releaseChatListNameGate(chatListNameWarmupPromise)
+
     }
 
     setInitText(t('完成'))
@@ -400,6 +438,7 @@ onMounted(async () => {
     isInitialized.value = true
     clearInitReloadTimer()
   } catch (err) {
+    uiStore.setChatListNamesReady(true)
     initReloadVisible.value = true
     console.warn('[init] bootstrap failed:', err)
   }
@@ -458,6 +497,7 @@ async function confirmInitReset() {
   groupStore.groups = []
   groupStore.memberMap = new Map()
   channelStore.channels = []
+  uiStore.setChatListNamesReady(true)
   uiStore.setDetailView('none')
   uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')

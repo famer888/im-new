@@ -63,6 +63,8 @@ export const useUIStore = defineStore('ui', () => {
   const sidebarTab = ref<SidebarTab>('chats')
   /** 消息列表「归档会话」内页（对齐旧 im archiveListShow + com/search.vue 布局） */
   const chatArchiveListShow = ref(false)
+  /** 仅用于启动期：会话名称来源未补齐前，侧栏先显示骨架，避免直接回退成纯数字 id。 */
+  const chatListNamesReady = ref(true)
   const rightPanel = ref<RightPanelType>('none')
   const detailView = ref<DetailViewType>('none')
 
@@ -128,6 +130,10 @@ export const useUIStore = defineStore('ui', () => {
 
   function setChatArchiveListShow(show: boolean) {
     chatArchiveListShow.value = show
+  }
+
+  function setChatListNamesReady(ready: boolean) {
+    chatListNamesReady.value = ready
   }
 
   function setRightPanel(panel: RightPanelType) {
@@ -296,6 +302,7 @@ export const useUIStore = defineStore('ui', () => {
   return {
     sidebarTab,
     chatArchiveListShow,
+    chatListNamesReady,
     rightPanel,
     detailView,
     settingsVisible,
@@ -319,6 +326,7 @@ export const useUIStore = defineStore('ui', () => {
     contextMenuData,
     setSidebarTab,
     setChatArchiveListShow,
+    setChatListNamesReady,
     setRightPanel,
     setDetailView,
     openSettings,

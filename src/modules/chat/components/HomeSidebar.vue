@@ -74,12 +74,21 @@ const settingsMenuRef = ref<HTMLElement | null>(null)
 const navBarRef = ref<HTMLElement | null>(null)
 const logoutConfirmVisible = ref(false)
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
+const CHAT_LIST_SKELETON_ROWS = 6
 const searchPlaceholder = computed(() => {
   void locale.value
   return addAction.value && uiStore.sidebarTab === 'contacts'
     ? t('搜索手机号/ID/群别名')
     : t('搜索')
 })
+const showChatListSkeleton = computed(() =>
+  uiStore.sidebarTab === 'chats'
+  && !uiStore.chatListNamesReady
+  && !searchStore.searchSpecifiedChatInfo
+  && !searchKeyword.value.trim(),
+)
+const chatListSkeletonRows = Array.from({ length: CHAT_LIST_SKELETON_ROWS }, (_, index) => index)
+
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   switch (conv.type) {
     case ConversationType.Friend:
@@ -371,6 +380,7 @@ async function confirmLogout() {
   uiStore.setDetailView('none')
   uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')
+  uiStore.setChatListNamesReady(true)
 
   await authStore.logout({ keepHistoryOnLogout })
   if (!(window as any).__TAURI_INTERNALS__) {
@@ -562,6 +572,18 @@ onBeforeUnmount(() => {
         />
         <SearchResults v-else-if="searchKeyword.trim()" :keyword="searchKeyword" />
         <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
+        <div v-else-if="showChatListSkeleton" class="conversation-list-skeleton" aria-hidden="true">
+          <div v-for="row in chatListSkeletonRows" :key="row" class="conversation-skeleton-item">
+            <span class="conversation-skeleton-avatar" />
+            <div class="conversation-skeleton-body">
+              <div class="conversation-skeleton-row conversation-skeleton-row--top">
+                <span class="conversation-skeleton-name" />
+                <span class="conversation-skeleton-time" />
+              </div>
+              <span class="conversation-skeleton-digest" />
+            </div>
+          </div>
+        </div>
         <template v-else>
           <ConversationList v-if="uiStore.sidebarTab === 'chats'" />
           <AddressBook v-else-if="uiStore.sidebarTab === 'contacts'" />
@@ -596,6 +618,15 @@ onBeforeUnmount(() => {
   }
 }
 
+@keyframes sidebar-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
 // OCS Nav bar: 72px wide
 .nav-bar {
   width: 72px;
@@ -605,6 +636,76 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   flex-shrink: 0;
+}
+
+.conversation-list-skeleton {
+  min-height: 100%;
+  background: #fcfcfc;
+}
+
+.conversation-skeleton-item {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  min-height: 59px;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  border-bottom: 1px solid #f1f0f0;
+}
+
+.conversation-skeleton-avatar,
+.conversation-skeleton-name,
+.conversation-skeleton-time,
+.conversation-skeleton-digest {
+  display: block;
+  background: linear-gradient(90deg, #f2f3f5 25%, #e8ebef 37%, #f2f3f5 63%);
+  background-size: 400% 100%;
+  animation: sidebar-skeleton-shimmer 1.25s ease infinite;
+}
+
+.conversation-skeleton-avatar {
+  width: 35px;
+  height: 35px;
+  margin-top: 1px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.conversation-skeleton-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+}
+
+.conversation-skeleton-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.conversation-skeleton-name {
+  width: 112px;
+  max-width: 55%;
+  height: 16px;
+  border-radius: 999px;
+}
+
+.conversation-skeleton-time {
+  width: 40px;
+  height: 12px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.conversation-skeleton-digest {
+  width: 72%;
+  max-width: 220px;
+  height: 12px;
+  border-radius: 999px;
 }
 
 .nav-avatar {
