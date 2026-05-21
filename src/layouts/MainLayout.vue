@@ -348,7 +348,8 @@ onMounted(async () => {
         await chatStore.loadConversations(authStore.uid)
         setFirstInitProgress(100, 100)
       } else if ((window as any).__TAURI_INTERNALS__) {
-        // 对齐老 im：已初始化账号优先读本地；安装新包后本地联系人库可能为空，联系人需允许远端兜底。
+        // 所有 Tauri 桌面端（macOS/Windows）统一走这里：
+        // 已初始化账号优先读本地；安装新包后本地联系人库可能为空，联系人需允许远端兜底。
         uiStore.setChatListNamesReady(false)
         await Promise.all([
           chatStore.loadConversations(authStore.uid),

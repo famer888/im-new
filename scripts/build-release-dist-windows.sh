@@ -13,6 +13,7 @@ TAURI_CONFIG="${TAURI_CONFIG:-}"
 TAURI_BUNDLES="${TAURI_BUNDLES:-nsis}"
 COPY_WINDOWS_BINARY="${COPY_WINDOWS_BINARY:-1}"
 BUNDLE_WINDOWS_FFMPEG="${BUNDLE_WINDOWS_FFMPEG:-0}"
+TAURI_BUILD_MODE="${TAURI_BUILD_MODE:-production}"
 HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
 
 require_node() {
@@ -32,13 +33,13 @@ copy_if_exists() {
   fi
 }
 
-copy_latest_matching() {
+latest_matching() {
   local search_dir="$1"
   local file_pattern="$2"
   local matches=()
 
   if [[ ! -d "$search_dir" ]]; then
-    return 0
+    return 1
   fi
 
   while IFS= read -r -d '' match; do
@@ -46,10 +47,47 @@ copy_latest_matching() {
   done < <(find "$search_dir" -maxdepth 1 -type f -name "$file_pattern" -print0)
 
   if ((${#matches[@]} == 0)); then
-    return 0
+    return 1
   fi
 
-  cp -f "$(ls -t "${matches[@]}" | head -n 1)" "$RELEASE_DIST_DIR/"
+  ls -t "${matches[@]}" | head -n 1
+}
+
+windows_arch_label() {
+  local target="$1"
+  case "$target" in
+    x86_64-*) printf '%s\n' "x64" ;;
+    i686-*) printf '%s\n' "x86" ;;
+    aarch64-*) printf '%s\n' "arm64" ;;
+    *) printf '%s\n' "$target" ;;
+  esac
+}
+
+copy_windows_installer() {
+  local installer_path="$1"
+  local installer_name
+  local version
+  local env_suffix=""
+  local output_name
+
+  installer_name="$(basename "$installer_path")"
+  version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json","utf8")).version')"
+
+  case "$TAURI_BUILD_MODE" in
+    test|uat)
+      env_suffix="_$TAURI_BUILD_MODE"
+      if [[ "$installer_name" == *"_${version}_"* ]]; then
+        output_name="${installer_name/_${version}_/${env_suffix}_${version}_}"
+      else
+        output_name="${installer_name%.exe}${env_suffix}.exe"
+      fi
+      ;;
+    *)
+      output_name="$installer_name"
+      ;;
+  esac
+
+  cp -f "$installer_path" "$RELEASE_DIST_DIR/$output_name"
 }
 
 require_node
@@ -103,8 +141,18 @@ if [[ "$COPY_WINDOWS_BINARY" == "1" ]]; then
     copy_if_exists "$BUILD_ROOT/ffmpeg.exe"
   fi
 fi
-copy_latest_matching "$BUILD_ROOT/bundle/nsis" "*.exe"
-copy_latest_matching "$BUILD_ROOT/bundle/msi" "*.msi"
-copy_latest_matching "$BUILD_ROOT/bundle/portable" "*.zip"
+
+if installer_path="$(latest_matching "$BUILD_ROOT/bundle/nsis" "*.exe")"; then
+  copy_windows_installer "$installer_path"
+fi
+
+if [[ "$TAURI_BUILD_MODE" != "test" && "$TAURI_BUILD_MODE" != "uat" ]]; then
+  if msi_path="$(latest_matching "$BUILD_ROOT/bundle/msi" "*.msi")"; then
+    cp -f "$msi_path" "$RELEASE_DIST_DIR/"
+  fi
+  if portable_path="$(latest_matching "$BUILD_ROOT/bundle/portable" "*.zip")"; then
+    cp -f "$portable_path" "$RELEASE_DIST_DIR/"
+  fi
+fi
 
 echo "Windows artifacts copied to: $RELEASE_DIST_DIR"

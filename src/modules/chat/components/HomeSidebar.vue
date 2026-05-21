@@ -83,7 +83,8 @@ const searchPlaceholder = computed(() => {
     : t('搜索')
 })
 const showChatListSkeleton = computed(() =>
-  uiStore.sidebarTab === 'chats'
+  !!(window as any).__TAURI_INTERNALS__
+  && uiStore.sidebarTab === 'chats'
   && !uiStore.chatListNamesReady
   && !searchStore.searchSpecifiedChatInfo
   && !searchKeyword.value.trim(),

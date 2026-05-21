@@ -5,6 +5,7 @@ node_modules/
 dist/
 dist-ssr/
 release-dist/
+release-dist-win/
 
 # Tauri build output
 src-tauri/target/
