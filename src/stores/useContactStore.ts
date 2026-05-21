@@ -96,16 +96,25 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
-  async function loadContacts(uid: string, options?: { fallbackToApi?: boolean; forceApi?: boolean }) {
+  async function loadContacts(uid: string, options?: { fallbackToApi?: boolean; refreshRemote?: boolean }) {
     const fallbackToApi = options?.fallbackToApi ?? true
+    const refreshRemote = options?.refreshRemote ?? !isTauri()
     loading.value = true
     try {
-      if (isTauri() && !options?.forceApi) {
-        const localContacts = await tauriInvoke<Contact[]>('get_contacts', { uid })
-        if (Array.isArray(localContacts) && localContacts.length > 0) {
-          contacts.value = localContacts
-        } else if (fallbackToApi) {
-          // Fallback to HTTP API when local DB has not been initialized yet.
+      if (isTauri()) {
+        let localContacts: Contact[] = []
+        try {
+          const localRows = await tauriInvoke<Contact[]>('get_contacts', { uid })
+          localContacts = Array.isArray(localRows) ? localRows : []
+          if (localContacts.length > 0) {
+            contacts.value = localContacts
+          }
+        } catch (error) {
+          console.error('[ContactStore] local get_contacts failed:', error)
+        }
+
+        if ((localContacts.length === 0 && fallbackToApi) || refreshRemote) {
+          // 对齐旧 im：桌面端先用本地联系人兜底，再立即用远端全量通讯录回填备注/昵称。
           await loadContactsViaApi(uid)
         }
       } else {

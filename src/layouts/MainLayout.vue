@@ -237,7 +237,7 @@ function setFirstInitProgress(friend: number, chat: number) {
 function refreshInitializedAccountData(uid: string) {
   if (!uid) return Promise.resolve([])
   return Promise.allSettled([
-    contactStore.loadContacts(uid, { forceApi: true }),
+    contactStore.loadContacts(uid, { refreshRemote: true }),
     groupStore.loadGroups(uid, { forceApi: true }),
     channelStore.loadChannels(uid),
     settingStore.loadSettings(),
@@ -349,7 +349,7 @@ onMounted(async () => {
         setFirstInitProgress(100, 100)
       } else if ((window as any).__TAURI_INTERNALS__) {
         // 所有 Tauri 桌面端（macOS/Windows）统一走这里：
-        // 已初始化账号优先读本地；安装新包后本地联系人库可能为空，联系人需允许远端兜底。
+        // 已初始化账号优先读本地；联系人名称对齐旧 im，加载后立即后台强刷远端通讯录。
         uiStore.setChatListNamesReady(false)
         await Promise.all([
           chatStore.loadConversations(authStore.uid),
