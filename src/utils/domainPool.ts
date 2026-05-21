@@ -10,6 +10,77 @@ let pollingTimer: ReturnType<typeof setInterval> | null = null
 
 const STORAGE_KEY = 'domain-pool-cache'
 
+const PROD_PRELOADED_DOMAIN_POOL: Record<string, string[]> = {
+  webBiz: [
+    'https://webbiz.imono.xyz',
+    'https://webbiz-b.imono.xyz',
+  ],
+  webSession: [
+    'wss://webwss.jstoyo.com',
+  ],
+  ossEndpoint: [
+    'https://dymain.lchaizhilian.xyz',
+    'https://dymain.kindem.xyz',
+    'https://dymain.weifa.xyz',
+  ],
+  login_v2: [
+    'https://openchat-loginv2.uorme.xyz',
+    'https://openchat-loginv2.yanzong.top',
+    'https://openchat-loginv2.sjhbf.xyz',
+    'https://openchat-loginv2.jiangfj0516.top',
+    'https://openchat-loginv2.tiankaixin.xyz',
+    'https://openchat-loginv2.dxcsx.top',
+    'https://openchat-loginv2.cssy828.top',
+    'https://openchat-loginv2.ddsvr2022.xyz',
+    'https://openchat-loginv2.spike0101.xyz',
+  ],
+}
+
+const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = {
+  // 保留 im-new 现有 webBiz 直连兜底，同时按老 im 语义补模块归属。
+  webBiz: [
+    'https://blo.yimengwh.xyz',
+    'https://openchat-loginv2.evanth.xyz',
+    'https://a1.uuds.xyz',
+  ],
+  login_v2: [
+    'https://openchat-loginv2.evanth.xyz',
+  ],
+  domain: [
+    'https://a1.uuds.xyz',
+  ],
+}
+
+function isProdEnv(): boolean {
+  const env = String(import.meta.env.VITE_APP_ENV || '').trim().toLowerCase()
+  return env === 'prod' || env === 'production'
+}
+
+function uniqDomains(urls: string[]): string[] {
+  return [...new Set(urls.map(url => String(url || '').trim()).filter(Boolean))]
+}
+
+function mergeDomains(moduleCode: string, urls: string[]) {
+  const nextUrls = uniqDomains(urls)
+  if (!nextUrls.length) return
+
+  const existing = domainCache.get(moduleCode) || []
+  const existingMap = new Map(existing.map(item => [item.domain, item]))
+
+  for (const domain of nextUrls) {
+    if (!existingMap.has(domain)) {
+      existingMap.set(domain, {
+        domain,
+        status: 'normal',
+        moduleCode,
+        lastCheck: Date.now(),
+      })
+    }
+  }
+
+  domainCache.set(moduleCode, Array.from(existingMap.values()))
+}
+
 function loadFromStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -29,6 +100,12 @@ function saveToStorage() {
 
 // 立即从 localStorage 恢复缓存（同步，模块加载时执行）
 loadFromStorage()
+if (isProdEnv()) {
+  for (const [moduleCode, urls] of Object.entries(PROD_PRELOADED_DOMAIN_POOL)) {
+    mergeDomains(moduleCode, urls)
+  }
+  saveToStorage()
+}
 
 export async function initDomainPool() {
   if (!(window as any).__TAURI_INTERNALS__) return
@@ -36,10 +113,7 @@ export async function initDomainPool() {
     const { invoke } = await import('@tauri-apps/api/core')
     const list = await invoke<DomainItem[]>('get_domain_pool')
     for (const item of list) {
-      if (!domainCache.has(item.moduleCode)) {
-        domainCache.set(item.moduleCode, [])
-      }
-      domainCache.get(item.moduleCode)!.push(item)
+      mergeDomains(item.moduleCode, [item.domain])
     }
     saveToStorage()
   } catch { /* empty */ }
@@ -59,11 +133,19 @@ function getOssBizUrls(): string[] {
   ]
 }
 
-const DIRECT_FALLBACK_URLS = [
-  'https://blo.yimengwh.xyz',
-  'https://openchat-loginv2.evanth.xyz',
-  'https://a1.uuds.xyz',
-]
+function getOssDomainUrls(): string[] {
+  const envUrl = import.meta.env.VITE_APP_OSS_HOST_DOMAIN as string | undefined
+  if (envUrl) return [envUrl]
+  return [
+    'https://a1-res2.oss-cn-hongkong.aliyuncs.com/domainapi_url-b2.txt',
+  ]
+}
+
+function getOssSocketUrls(): string[] {
+  return [
+    'https://backup-chat6kyo-res.oss-ap-northeast-1.aliyuncs.com/config/chat_url.txt',
+  ]
+}
 
 function parseDomainListFromOss(data: unknown): string[] {
   if (!data) return []
@@ -99,37 +181,41 @@ async function fetchOssDomains(ossUrl: string): Promise<string[]> {
 
 /**
  * 从阿里云 OSS + 预埋直连域名获取引导域名列表，写入缓存。
- * 与老 im 的 getOssDomain / getPrepareDomainPool 等效。
- * 只追加不覆盖，保留已有缓存。
+ * 与老 im 的 getOssDomain / getPrepareDomainPool / domains.json 预埋兜底保持一致：
+ * - webBiz 走 backup_url
+ * - domain 走 domainapi_url-b2.txt
+ * - webSession 走 chat_url.txt
+ * - 生产环境额外注入 55.1.7.0 的静态 domains.json 兜底
  */
 export async function initDomainPoolFromOss(): Promise<void> {
-  const collected: string[] = [...DIRECT_FALLBACK_URLS]
+  for (const [moduleCode, urls] of Object.entries(DIRECT_FALLBACK_DOMAINS)) {
+    mergeDomains(moduleCode, urls)
+  }
+
+  const ossSeedConfigs = [
+    { moduleCode: 'webBiz', urls: getOssBizUrls() },
+    { moduleCode: 'domain', urls: getOssDomainUrls() },
+    { moduleCode: 'webSession', urls: getOssSocketUrls() },
+  ]
 
   await Promise.allSettled(
-    getOssBizUrls().map(async (url: string) => {
-      const domains = await fetchOssDomains(url)
-      collected.push(...domains)
+    ossSeedConfigs.map(async ({ moduleCode, urls }) => {
+      const collected: string[] = []
+      for (const url of urls) {
+        const domains = await fetchOssDomains(url)
+        collected.push(...domains)
+      }
+      mergeDomains(moduleCode, collected)
     }),
   )
 
-  const unique = [...new Set(collected)].filter(Boolean)
-  if (!unique.length) return
-
-  const existing = domainCache.get('webBiz') || []
-  const existingSet = new Set(existing.map(d => d.domain))
-  const newItems: DomainItem[] = unique
-    .filter(url => !existingSet.has(url))
-    .map(domain => ({
-      domain,
-      status: 'normal' as const,
-      moduleCode: 'webBiz',
-      lastCheck: Date.now(),
-    }))
-
-  if (newItems.length) {
-    domainCache.set('webBiz', [...existing, ...newItems])
-    saveToStorage()
+  if (isProdEnv()) {
+    for (const [moduleCode, urls] of Object.entries(PROD_PRELOADED_DOMAIN_POOL)) {
+      mergeDomains(moduleCode, urls)
+    }
   }
+
+  saveToStorage()
 }
 
 /** 通过后端 API 获取域名列表并写入缓存，不依赖 Tauri */

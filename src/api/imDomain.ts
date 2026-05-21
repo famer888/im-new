@@ -6,6 +6,7 @@
 import CryptoJS from 'crypto-js'
 import { requestProto, proto, getDeviceConfig, getApiMetaHeaders } from './request'
 import { getDomainUrl, getBaseUrl, getRawBaseUrl, API_CONFIG } from './config'
+import { getAllDomains } from '@/utils/domainPool'
 
 /* ------------------------------------------------------------------ */
 /*  AES-128-ECB hex encrypt / decrypt  (mirrors old im's encryptHex / decryptHex)  */
@@ -294,12 +295,18 @@ export async function getListDomainDiagnostic(moduleCode = ''): Promise<{
 export async function collectAllDomainUrls(moduleCode = 'webBiz'): Promise<string[]> {
   const urls: string[] = []
 
+  const cachedDomains = getAllDomains(moduleCode).map(item => item.domain).filter(Boolean)
+  urls.push(...cachedDomains)
+
   const dynamicDomains = await getDynamicDomainList(moduleCode)
   urls.push(...dynamicDomains)
 
-  const base = getRawBaseUrl()
-  if (base && !urls.includes(base)) {
-    urls.push(base)
+  // 只对 webBiz 保留 baseUrl 兜底；webSession/ossEndpoint 回退到 webbiz 会导致协议错位。
+  if (moduleCode === 'webBiz') {
+    const base = getRawBaseUrl()
+    if (base && !urls.includes(base)) {
+      urls.push(base)
+    }
   }
 
   return [...new Set(urls)]
