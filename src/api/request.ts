@@ -83,7 +83,7 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
  * 与老 im fnClientInfoGet 完全对齐：
  * - sysModel 为平台名字符串（"MAC"/"WINDOWS"），不是设备指纹！服务端扫码配对靠它识别 PC 客户端
  * - clientInfo 里 *不含* sysMac 字段（老 im 也没有）；sysMac 只在 IsLoginReq 顶层字段传
- * - appVer / packageCode / language 跟随当前环境配置，默认对齐老 im 55.1.7.0
+ * - 默认保持 im-new 现有登录链路：appVer=168 / packageCode=7100 / language=2
  * - plat 固定 WIN=4（老 im 硬编码 4）
  */
 function getPlatformSysModel(): string {
@@ -167,9 +167,9 @@ function getClientInfo(withSessionId = true): proto.IClientInfo {
   const sessionId = withSessionId ? getSessionIdFromStorage() : ''
   return {
     sessionId,
-    appVer: API_CONFIG.appVer,
-    packageCode: API_CONFIG.packageCode,
-    language: API_CONFIG.language,
+    appVer: 168,
+    packageCode: 7100,
+    language: 2,
     plat: proto.Platform.WIN,
     sysModel: getPlatformSysModel(),
   }

@@ -32,10 +32,10 @@ export const API_CONFIG = {
   headAesKey: import.meta.env.VITE_APP_HEAD_AES_KEY || 'f58c15f54e8f7826',
   secretName: import.meta.env.VITE_APP_SECRET_NAME || 'eb2c844e110be53a0b008a9766877aea',
   secretKey: import.meta.env.VITE_APP_SECRET_KEY || '1004969fe92844eb',
-  appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 170),
+  appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 168),
   /** 频道网关单独 appVer，须与 SECRET_* 在服务端登记一致；未配置则与 appVer 相同 */
   openChatAppVer: parseOpenChatAppVer(),
-  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 5520),
+  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 7100),
   openChatPackageCode: OPEN_CHAT_PACKAGE_CODE,
   language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
