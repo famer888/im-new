@@ -156,6 +156,7 @@ struct ReadCandidate {
     id: String,
     sender_id: String,
     msg_type: i32,
+    read_status: i32,
     delete_delay_ms: i64,
     snapchat_time: i32,
     extra: Option<String>,
@@ -2202,36 +2203,89 @@ pub async fn mark_as_read(
 
     let (result, receipts, channel_read_msg_ids) = db
         .with_connection(&uid, |conn| {
-            let mut stmt = conn
-                .prepare_cached(
-                    "SELECT id, sender_id, msg_type, extra
-                 FROM messages
-                 WHERE conversation_id = ?1
-                   AND sender_id != ?2
-                   AND is_deleted = 0
-                   AND read_status = 0
-                 ORDER BY send_time ASC",
+            let conversation_unread_count = conn
+                .query_row(
+                    "SELECT unread_count FROM conversations WHERE id = ?1",
+                    rusqlite::params![conversation_id],
+                    |row| row.get::<_, i32>(0),
                 )
-                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+                .unwrap_or_default()
+                .max(0);
 
-            let rows = stmt
-                .query_map(rusqlite::params![conversation_id, uid], |row| {
-                    let extra: Option<String> = row.get(3)?;
-                    let (snapchat_time, delete_delay_ms) = extract_read_burn_meta(extra.as_deref());
-                    Ok(ReadCandidate {
-                        id: row.get(0)?,
-                        sender_id: row.get(1)?,
-                        msg_type: row.get(2)?,
-                        delete_delay_ms,
-                        snapchat_time,
-                        extra,
+            let candidates = if conversation_unread_count > 0 {
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT id, sender_id, msg_type, read_status, extra
+                         FROM (
+                             SELECT id, sender_id, msg_type, read_status, extra, send_time
+                             FROM messages
+                             WHERE conversation_id = ?1
+                               AND sender_id != ?2
+                               AND is_deleted = 0
+                             ORDER BY send_time DESC
+                             LIMIT ?3
+                         )
+                         ORDER BY send_time ASC",
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                let rows = stmt
+                    .query_map(
+                        rusqlite::params![conversation_id, uid, conversation_unread_count],
+                        |row| {
+                            let extra: Option<String> = row.get(4)?;
+                            let (snapchat_time, delete_delay_ms) =
+                                extract_read_burn_meta(extra.as_deref());
+                            Ok(ReadCandidate {
+                                id: row.get(0)?,
+                                sender_id: row.get(1)?,
+                                msg_type: row.get(2)?,
+                                read_status: row.get(3)?,
+                                delete_delay_ms,
+                                snapchat_time,
+                                extra,
+                            })
+                        },
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+            } else {
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT id, sender_id, msg_type, read_status, extra
+                         FROM messages
+                         WHERE conversation_id = ?1
+                           AND sender_id != ?2
+                           AND is_deleted = 0
+                           AND read_status = 0
+                         ORDER BY send_time ASC",
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                let rows = stmt
+                    .query_map(rusqlite::params![conversation_id, uid], |row| {
+                        let extra: Option<String> = row.get(4)?;
+                        let (snapchat_time, delete_delay_ms) =
+                            extract_read_burn_meta(extra.as_deref());
+                        Ok(ReadCandidate {
+                            id: row.get(0)?,
+                            sender_id: row.get(1)?,
+                            msg_type: row.get(2)?,
+                            read_status: row.get(3)?,
+                            delete_delay_ms,
+                            snapchat_time,
+                            extra,
+                        })
                     })
-                })
-                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-            let candidates = rows
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+            };
 
             if !candidates.is_empty() {
                 conn.execute(
@@ -2314,7 +2368,7 @@ pub async fn mark_as_read(
 
                     conn.execute(
                         "UPDATE messages
-                     SET extra = ?1, read_status = 1
+                     SET extra = ?1, read_status = MAX(read_status, 1)
                      WHERE conversation_id = ?2 AND id = ?3",
                         rusqlite::params![next_extra, conversation_id, item.id],
                     )
@@ -2323,7 +2377,7 @@ pub async fn mark_as_read(
                     group_read_updates.push(GroupReadReceiptUpdate {
                         conversation_id: conversation_id.clone(),
                         message_id: item.id.clone(),
-                        read_status: 1,
+                        read_status: item.read_status.max(1),
                         extra: Some(next_extra),
                     });
                 }
