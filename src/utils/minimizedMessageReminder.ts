@@ -210,18 +210,11 @@ function getConversationUnreadCount(conversationId: string, messages: any[]): nu
 
 async function shouldShowMinimizedReminder(): Promise<boolean> {
   try {
-    const { Window, getCurrentWindow } = await import('@tauri-apps/api/window')
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
     const currentWindow = getCurrentWindow()
-    const [focusedWindow, minimized, visible] = await Promise.all([
-      Window.getFocusedWindow().catch(() => null),
-      currentWindow.isMinimized().catch(() => false),
-      currentWindow.isVisible().catch(() => true),
-    ])
-
-    if (focusedWindow) return false
-    return document.hidden || minimized || !visible
+    return currentWindow.isMinimized().catch(() => false)
   } catch {
-    return document.hidden
+    return false
   }
 }
 

@@ -1,4 +1,5 @@
 use std::sync::{Mutex, OnceLock};
+use tauri::Manager;
 use tauri::State;
 use tauri::{PhysicalSize, Size};
 
@@ -82,6 +83,14 @@ pub async fn show_notification_window(
     win_mgr: State<'_, WindowManager>,
     data: NotificationData,
 ) -> Result<(), String> {
+    let main_minimized = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_minimized().ok())
+        .unwrap_or(false);
+    if !main_minimized {
+        return Ok(());
+    }
+
     win_mgr
         .show_notification(&app, data)
         .map_err(|e| e.to_string())
