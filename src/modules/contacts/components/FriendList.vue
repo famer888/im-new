@@ -32,35 +32,65 @@ onMounted(() => {
 
 interface GroupedContacts {
   letter: string
-  items: typeof contactStore.contacts
+  items: (typeof contactStore.contacts)
+}
+
+const letterOrder = [
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+  'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '#',
+]
+const letterRank = new Map(letterOrder.map((letter, index) => [letter, index]))
+const contactCollator = new Intl.Collator(['zh-Hans-CN-u-co-pinyin', 'en'], {
+  numeric: true,
+  sensitivity: 'base',
+})
+
+function normalizeLetter(value: string | null | undefined): string {
+  const initial = String(value || '').trim().charAt(0).toUpperCase()
+  return /^[A-Z]$/.test(initial) ? initial : '#'
+}
+
+function getGroupLetter(contact: (typeof contactStore.contacts)[number]): string {
+  const letter = normalizeLetter(contact.letter)
+  if (letter !== '#') return letter
+
+  const pinyinLetter = normalizeLetter(contact.pinyin)
+  if (pinyinLetter !== '#') return pinyinLetter
+
+  return normalizeLetter(getDisplayName(contact))
+}
+
+function getSortKey(contact: (typeof contactStore.contacts)[number]): string {
+  return String(contact.pinyin || '').trim() || getDisplayName(contact).trim()
 }
 
 const grouped = computed((): GroupedContacts[] => {
-  // 对齐旧版 im 的 eventFriend.fnFriendListFormat：按固定字母表分桶，
-  // 每个分桶内保留后端/本地返回顺序，不再做额外排序。
-  const letterOrder = [
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '#',
-  ]
-  const result: GroupedContacts[] = []
-  const list = contactStore.contacts
+  // 对齐旧版分桶顺序，同时兼容本地联系人缺少 letter/pinyin 时的英文昵称首字母。
+  const sorted = [...contactStore.contacts].sort((a, b) => {
+    const groupDiff = (letterRank.get(getGroupLetter(a)) ?? 999) - (letterRank.get(getGroupLetter(b)) ?? 999)
+    if (groupDiff !== 0) return groupDiff
 
-  for (const letter of letterOrder) {
-    const items = list.filter((c) => {
-      const fromLetter = (c as any).letter
-      if (typeof fromLetter === 'string' && fromLetter.trim()) {
-        return fromLetter.toUpperCase() === letter
-      }
-      const initial = (c.pinyin?.[0] ?? '#').toUpperCase()
-      const fallback = /^[A-Z]$/.test(initial) ? initial : '#'
-      return fallback === letter
-    })
-    if (items.length > 0) {
-      result.push({ letter, items })
+    const sortDiff = contactCollator.compare(getSortKey(a), getSortKey(b))
+    if (sortDiff !== 0) return sortDiff
+
+    return contactCollator.compare(getDisplayName(a), getDisplayName(b))
+  })
+
+  const buckets = new Map<string, (typeof contactStore.contacts)>()
+  for (const contact of sorted) {
+    const letter = getGroupLetter(contact)
+    const bucket = buckets.get(letter)
+    if (bucket) {
+      bucket.push(contact)
+    } else {
+      buckets.set(letter, [contact])
     }
   }
 
-  return result
+  return letterOrder.flatMap((letter) => {
+    const items = buckets.get(letter)
+    return items && items.length > 0 ? [{ letter, items }] : []
+  })
 })
 
 const activeFriendId = computed(() => {

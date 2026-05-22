@@ -319,7 +319,11 @@ pub async fn upsert_incoming_messages(
                     )
                     .optional()
                     .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-                if queries::is_hidden_message_type(msg.msg_type) {
+                if queries::is_hidden_conversation_summary_message(
+                    msg.msg_type,
+                    msg.content.as_deref(),
+                    msg.extra.as_deref(),
+                ) {
                     continue;
                 }
                 if msg.conversation_id == "1_invitation" && msg.msg_type == 8 {
@@ -348,7 +352,11 @@ pub async fn upsert_incoming_messages(
             queries::batch_insert_messages(conn, &rows)?;
 
             for msg in &rows {
-                if queries::is_hidden_message_type(msg.msg_type) {
+                if queries::is_hidden_conversation_summary_message(
+                    msg.msg_type,
+                    msg.content.as_deref(),
+                    msg.extra.as_deref(),
+                ) {
                     continue;
                 }
                 let (conv_type, target_id) =
@@ -398,7 +406,11 @@ pub async fn upsert_incoming_messages(
             let mut seen_conv = HashSet::<String>::new();
             let mut conv_ids_to_emit = Vec::<String>::new();
             for msg in &rows {
-                if queries::is_hidden_message_type(msg.msg_type) {
+                if queries::is_hidden_conversation_summary_message(
+                    msg.msg_type,
+                    msg.content.as_deref(),
+                    msg.extra.as_deref(),
+                ) {
                     continue;
                 }
                 if seen_conv.insert(msg.conversation_id.clone()) {

@@ -159,6 +159,14 @@ function isHiddenOnlyGroupEventConversation(conv: Conversation): boolean {
   return String(extra?.source || '') === 'group-event'
 }
 
+function isEmptyGroupConversationPreview(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  if (shouldShowDraft(conv)) return false
+  if (Number(conv.lastMsgTime || 0) > 0) return false
+  if (String(conv.lastMsgDigest || '').trim()) return false
+  return !getLoadedLatestVisibleMessage(conv)
+}
+
 const normalConversations = computed(() =>
   chatStore.conversations.filter(
     c => !c.isArchived
@@ -166,7 +174,8 @@ const normalConversations = computed(() =>
       && isConversationInCurrentRelations(c)
       && !isPendingInviteConversationPreview(c)
       && !isSuspiciousPlaceholderGroupConversation(c)
-      && !isHiddenOnlyGroupEventConversation(c),
+      && !isHiddenOnlyGroupEventConversation(c)
+      && !isEmptyGroupConversationPreview(c),
   ),
 )
 
@@ -177,7 +186,8 @@ const archivedConversations = computed(() =>
       && isConversationInCurrentRelations(c)
       && !isPendingInviteConversationPreview(c)
       && !isSuspiciousPlaceholderGroupConversation(c)
-      && !isHiddenOnlyGroupEventConversation(c),
+      && !isHiddenOnlyGroupEventConversation(c)
+      && !isEmptyGroupConversationPreview(c),
   ),
 )
 
@@ -746,6 +756,13 @@ function getLoadedLatestVisibleMessage(conv: Conversation): Message | null {
   if (loaded.length === 0) return null
   return [...loaded].reverse().find((message) => (
     !isHiddenMessageType(message.msgType)
+    && !(
+      conv.type === ConversationType.Group
+      && conv.targetId !== GROUP_NOTIFICATION_TARGET_ID
+      && message.msgType === 8
+      && String(message.content || '').trim() === HIDDEN_GROUP_NOTICE_TEXT
+      && String(parseGroupNoticeExtraObject(message.extra)?.source || '') === 'group-event'
+    )
     && !isSelfLeaveGroupSystemMessage(conv.id, message)
     && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
   )) ?? null

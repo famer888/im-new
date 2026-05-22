@@ -10,6 +10,23 @@ pub fn is_hidden_message_type(msg_type: i32) -> bool {
     matches!(msg_type, 10 | 13 | 14 | 15)
 }
 
+pub fn is_hidden_conversation_summary_message(
+    msg_type: i32,
+    content: Option<&str>,
+    extra: Option<&str>,
+) -> bool {
+    if is_hidden_message_type(msg_type) {
+        return true;
+    }
+
+    if msg_type != 8 {
+        return false;
+    }
+
+    let raw = content.unwrap_or_default().trim();
+    raw == "群聊事件" && extra.unwrap_or_default().contains("\"source\":\"group-event\"")
+}
+
 /// 保证本地存在「文件传输助手」会话行（服务端未必下发）
 pub fn ensure_file_helper_conversation(conn: &Connection) -> Result<(), DbError> {
     let now = chrono::Utc::now().timestamp_millis();
@@ -102,6 +119,11 @@ pub fn get_conversations(
                  WHERE m.conversation_id = c.id
                    AND m.is_deleted = 0
                    AND m.msg_type NOT IN (10, 13, 14, 15)
+                   AND NOT (
+                       m.msg_type = 8
+                       AND trim(COALESCE(m.content, '')) = '群聊事件'
+                       AND COALESCE(m.extra, '') LIKE '%\"source\":\"group-event\"%'
+                   )
                  ORDER BY m.send_time DESC
                  LIMIT 1
              )
@@ -208,6 +230,11 @@ pub fn get_conversation_by_id(
                  WHERE m.conversation_id = c.id
                    AND m.is_deleted = 0
                    AND m.msg_type NOT IN (10, 13, 14, 15)
+                   AND NOT (
+                       m.msg_type = 8
+                       AND trim(COALESCE(m.content, '')) = '群聊事件'
+                       AND COALESCE(m.extra, '') LIKE '%\"source\":\"group-event\"%'
+                   )
                  ORDER BY m.send_time DESC
                  LIMIT 1
              )
@@ -370,6 +397,11 @@ pub fn refresh_conversation_summary(
                  WHERE m.conversation_id = ?1
                    AND m.is_deleted = 0
                    AND m.msg_type NOT IN (10, 13, 14, 15)
+                   AND NOT (
+                       m.msg_type = 8
+                       AND trim(COALESCE(m.content, '')) = '群聊事件'
+                       AND COALESCE(m.extra, '') LIKE '%\"source\":\"group-event\"%'
+                   )
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ),
@@ -379,6 +411,11 @@ pub fn refresh_conversation_summary(
                  WHERE m.conversation_id = ?1
                    AND m.is_deleted = 0
                    AND m.msg_type NOT IN (10, 13, 14, 15)
+                   AND NOT (
+                       m.msg_type = 8
+                       AND trim(COALESCE(m.content, '')) = '群聊事件'
+                       AND COALESCE(m.extra, '') LIKE '%\"source\":\"group-event\"%'
+                   )
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ), 0),
@@ -398,6 +435,11 @@ pub fn refresh_conversation_summary(
                  WHERE m.conversation_id = ?1
                    AND m.is_deleted = 0
                    AND m.msg_type NOT IN (10, 13, 14, 15)
+                   AND NOT (
+                       m.msg_type = 8
+                       AND trim(COALESCE(m.content, '')) = '群聊事件'
+                       AND COALESCE(m.extra, '') LIKE '%\"source\":\"group-event\"%'
+                   )
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ),
@@ -407,6 +449,11 @@ pub fn refresh_conversation_summary(
                  WHERE m.conversation_id = ?1
                    AND m.is_deleted = 0
                    AND m.msg_type NOT IN (10, 13, 14, 15)
+                   AND NOT (
+                       m.msg_type = 8
+                       AND trim(COALESCE(m.content, '')) = '群聊事件'
+                       AND COALESCE(m.extra, '') LIKE '%\"source\":\"group-event\"%'
+                   )
                  ORDER BY m.send_time DESC
                  LIMIT 1
              ), 0)

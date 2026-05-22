@@ -174,6 +174,7 @@ const MAX_CACHED_MESSAGES = 500
 const PAGE_SIZE = 50
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const groupIntroMessageTraceCache = new Set<string>()
+const HIDDEN_GROUP_EVENT_TEXT = '群聊事件'
 
 function getLogoutClearedHistoryAt(uid: string): number {
   if (!uid) return 0
@@ -397,6 +398,22 @@ function isRejectedGroupInviteNoticeForNotification(conversationId: string, mess
   const reqType = Number(extra.groupReqType ?? 0)
   const content = String(message.content || '')
   return [3, 4, 5].includes(reqType) || content.includes('拒绝')
+}
+
+function isHiddenGroupEventPlaceholderMessage(conversationId: string, message: Message): boolean {
+  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
+  if (message.msgType !== 8) return false
+  if (String(message.content || '').trim() !== HIDDEN_GROUP_EVENT_TEXT) return false
+
+  const extra = parseExtraObject(message.extra)
+  return String(extra?.source || '') === 'group-event'
+}
+
+function shouldUseMessageForConversationSummary(conversationId: string, message: Message): boolean {
+  return !isHiddenMessageType(message.msgType)
+    && !isPendingGroupReqChatMessage(message)
+    && !isRejectedGroupInviteNoticeForNotification(conversationId, message)
+    && !isHiddenGroupEventPlaceholderMessage(conversationId, message)
 }
 
 function cloneGroupNoticeToNotificationMessage(conversationId: string, message: Message): Message {
@@ -711,8 +728,7 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   function syncConversationSummary(conversationId: string, msg: Message) {
-    if (isHiddenMessageType(msg.msgType)) return
-    if (isPendingGroupReqChatMessage(msg)) return
+    if (!shouldUseMessageForConversationSummary(conversationId, msg)) return
     if (!conversationId || !conversationId.includes('_')) {
       console.warn('[msg] skip syncConversationSummary: invalid conversationId', { conversationId, msgId: msg.id })
       return
@@ -873,11 +889,7 @@ export const useMessageStore = defineStore('message', () => {
 
     // 最后一条消息被阅后即焚/本地删除后，左侧会话预览要回退到仍可见的最后一条。
     const list = messages ?? getMessages(conversationId)
-    const latest = [...list].reverse().find((item) =>
-      !isHiddenMessageType(item.msgType)
-      && !isPendingGroupReqChatMessage(item)
-      && !isRejectedGroupInviteNoticeForNotification(conversationId, item),
-    ) ?? null
+    const latest = [...list].reverse().find((item) => shouldUseMessageForConversationSummary(conversationId, item)) ?? null
     const digest = latest ? formatGroupIntroDigest(latest, getDigestByMessage(latest.msgType, latest.content)) : null
 
     chatStore.addOrUpdateConversation({
@@ -885,7 +897,7 @@ export const useMessageStore = defineStore('message', () => {
       lastMsgId: latest?.id || null,
       lastMsgTime: latest?.sendTime || 0,
       lastMsgDigest: digest || null,
-      updatedAt: latest?.sendTime || existing.updatedAt,
+      updatedAt: latest?.sendTime || 0,
     })
   }
 
@@ -1139,10 +1151,7 @@ export const useMessageStore = defineStore('message', () => {
         loadStartedAt,
       )
       messageMap.value.set(conversationId, mergedResult.messages)
-      const latestMessage = mergedResult.messages[mergedResult.messages.length - 1]
-      if (latestMessage) {
-        syncConversationSummary(conversationId, latestMessage)
-      }
+      refreshConversationSummary(conversationId, mergedResult.messages)
       const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
       if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
         groupImageLog('loadMessages done', {
@@ -1806,13 +1815,11 @@ export const useMessageStore = defineStore('message', () => {
       for (const msg of msgs) {
         appendMessage(convId, msg)
       }
-      const latest = [...msgs].reverse().find((item) =>
-        !isHiddenMessageType(item.msgType)
-        && !isPendingGroupReqChatMessage(item)
-        && !isRejectedGroupInviteNoticeForNotification(convId, item),
-      )
+      const latest = [...msgs].reverse().find((item) => shouldUseMessageForConversationSummary(convId, item))
       if (latest) {
         syncConversationSummary(convId, latest)
+      } else {
+        refreshConversationSummary(convId)
       }
     }
   }
