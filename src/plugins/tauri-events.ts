@@ -15,7 +15,7 @@ import { useSettingStore } from '@/stores/useSettingStore'
 import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
-import { showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
+import { isRepeatableGroupInviteReminderMessage, showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
 import { eventBus } from '@/utils/eventBus'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 import { router } from '@/router'
@@ -463,6 +463,30 @@ function getRealtimeIncomingMessages(messages: any[], currentUid: string): any[]
   alertBaselineByUid.set(currentUid, alertBaseline)
   const minSendTime = alertBaseline - ALERT_HISTORY_GRACE_MS
   return getNewIncomingMessages(messages, currentUid).filter((message) => getMessageSendTime(message) >= minSendTime)
+}
+
+/**
+ * 桌面提醒与会话列表去重解耦：
+ * 群邀请类通知按服务端到达事件数提醒，普通消息仍沿用“实时新消息”口径，避免回归现有提醒范围。
+ */
+function getDesktopReminderMessages(
+  visibleMessages: any[],
+  realtimeIncomingMessages: any[],
+  currentUid: string,
+): any[] {
+  const repeatableInvites = visibleMessages.filter((message) => {
+    const { conversationId, senderId } = getMessageIdentity(message)
+    if (!conversationId.includes('_') || !senderId || senderId === currentUid) return false
+    if (Boolean(message?.isDeleted ?? message?.is_deleted ?? false)) return false
+    return isRepeatableGroupInviteReminderMessage(message)
+  })
+
+  if (repeatableInvites.length === 0) return realtimeIncomingMessages
+
+  const regularRealtimeMessages = realtimeIncomingMessages.filter(
+    (message) => !isRepeatableGroupInviteReminderMessage(message),
+  )
+  return [...repeatableInvites, ...regularRealtimeMessages]
 }
 
 function getBatchMsgType(message: any): number {
@@ -1454,6 +1478,11 @@ export async function setupTauriListeners() {
       const visibleAppendableNormalized = appendableNormalized.filter((m: any) => !isHiddenBatchMessage(m))
       rememberHiddenOnlyBatchConversations(appendableNormalized, visibleAppendableNormalized)
       const newIncomingMessages = getRealtimeIncomingMessages(visibleAppendableNormalized, currentUid)
+      const desktopReminderMessages = getDesktopReminderMessages(
+        visibleAppendableNormalized,
+        newIncomingMessages,
+        currentUid,
+      )
       const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
       messageStore.batchAppendMessages(appendableNormalized as Message[])
       const privateConversationIds = Array.from(new Set(
@@ -1508,7 +1537,7 @@ export async function setupTauriListeners() {
       if (shouldPlaySound) {
         void playNotificationSound()
       }
-      void showMinimizedMessageReminder(newIncomingMessages as Message[], currentUid)
+      void showMinimizedMessageReminder(desktopReminderMessages as Message[], currentUid)
       if (hasIncomingMessageForTray) {
         void flashTrayForIncomingMessage(newIncomingMessages.length)
       }

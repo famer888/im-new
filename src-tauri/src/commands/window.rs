@@ -83,11 +83,15 @@ pub async fn show_notification_window(
     win_mgr: State<'_, WindowManager>,
     data: NotificationData,
 ) -> Result<(), String> {
-    let main_minimized = app
+    let should_show = app
         .get_webview_window("main")
-        .and_then(|window| window.is_minimized().ok())
+        .map(|window| {
+            let minimized = window.is_minimized().ok().unwrap_or(false);
+            let visible = window.is_visible().ok().unwrap_or(true);
+            minimized || !visible
+        })
         .unwrap_or(false);
-    if !main_minimized {
+    if !should_show {
         return Ok(());
     }
 

@@ -5,6 +5,8 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import type { Message } from '@/stores/useMessageStore'
+import { formatSystemNotificationPlainText } from '@/utils/systemNotificationDisplay'
+import { parseGroupNoticeExtraObject } from '@/utils/groupNoticeDisplay'
 import ch from '@/locales/ch.json'
 import en from '@/locales/en.json'
 import pt from '@/locales/pt.json'
@@ -21,10 +23,13 @@ const localeMessages: Record<LocaleKey, LocaleMessages> = {
   tw: tw as LocaleMessages,
   vi: vi as LocaleMessages,
 }
+const REPEATABLE_GROUP_INVITE_REQ_TYPES = new Set([1, 2, 15])
 const REMINDER_COOLDOWN_MS = 900
 
 let lastReminderAt = 0
 let directoryPreloadPromise: Promise<void> | null = null
+let processingReminderQueue = false
+const reminderQueue: Array<{ message: Message | any; unreadCount: number }> = []
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -76,6 +81,13 @@ function getMessageDigest(message: any): string {
   if (msgType === 12) return `[${t('骰子')}]`
   if (msgType === 18) return `[${t('扑克牌')}]`
   if ([10, 13, 14, 15].includes(msgType)) return t('暂不支持该消息类型')
+  if (msgType === 8) {
+    const formatted = formatSystemNotificationPlainText(message as Message, {
+      t,
+      currentUid: String(useAuthStore().uid || ''),
+    })
+    return formatted || t('新消息')
+  }
   return stripText(content).slice(0, 120) || t('新消息')
 }
 
@@ -210,11 +222,46 @@ function getConversationUnreadCount(conversationId: string, messages: any[]): nu
   return Math.max(storedUnread, incomingCount)
 }
 
+function getMessageSendTime(message: any): number {
+  const value = Number(message?.sendTime ?? message?.send_time ?? 0)
+  if (!Number.isFinite(value) || value <= 0) return Date.now()
+  return value < 10_000_000_000 ? value * 1000 : value
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+export function isRepeatableGroupInviteReminderMessage(message: Message | any): boolean {
+  const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
+  if (convId !== '1_invitation') return false
+  const msgType = Number(message?.msgType ?? message?.msg_type ?? 0)
+  if (msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(message?.extra)
+  if (!extra) return false
+  const source = String(extra.source ?? '')
+  const reqType = Number(extra.groupReqType ?? 0)
+  const reqStatus = Number(extra.groupReqStatus ?? 0)
+  // 与群邀请页保持一致：被邀请入群的桌面提醒要覆盖链接/二维码等再次邀请场景，
+  // 否则“拒绝后再次邀请”会因为 reqType 变化而漏弹。
+  return source === 'group-event-req'
+    && REPEATABLE_GROUP_INVITE_REQ_TYPES.has(reqType)
+    && (reqStatus === 0 || reqStatus === 1)
+}
+
 async function shouldShowMinimizedReminder(): Promise<boolean> {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
     const currentWindow = getCurrentWindow()
-    return currentWindow.isMinimized().catch(() => false)
+    const [minimized, visible] = await Promise.all([
+      currentWindow.isMinimized().catch(() => false),
+      currentWindow.isVisible().catch(() => true),
+    ])
+    // 对齐桌面端目标行为：主窗口最小化或已隐藏到托盘时，都允许弹出右下角提醒。
+    return minimized || !visible
   } catch {
     return false
   }
@@ -254,6 +301,37 @@ async function showNotificationWindow(message: any, unreadCount: number) {
   }
 }
 
+async function processReminderQueue() {
+  if (processingReminderQueue) return
+  processingReminderQueue = true
+
+  try {
+    while (reminderQueue.length > 0) {
+      if (!(await shouldShowMinimizedReminder())) {
+        reminderQueue.length = 0
+        break
+      }
+
+      const now = Date.now()
+      const waitMs = Math.max(0, REMINDER_COOLDOWN_MS - (now - lastReminderAt))
+      if (waitMs > 0) {
+        await sleep(waitMs)
+        if (!(await shouldShowMinimizedReminder())) {
+          reminderQueue.length = 0
+          break
+        }
+      }
+
+      const task = reminderQueue.shift()
+      if (!task) continue
+      lastReminderAt = Date.now()
+      await showNotificationWindow(task.message, task.unreadCount)
+    }
+  } finally {
+    processingReminderQueue = false
+  }
+}
+
 export async function showMinimizedMessageReminder(rawMessages: Message[] | any[], currentUid?: string) {
   if (!isTauri()) return
 
@@ -265,12 +343,19 @@ export async function showMinimizedMessageReminder(rawMessages: Message[] | any[
 
   const candidates = getReminderCandidates(rawMessages, uid)
   if (candidates.length === 0) return
-
-  const now = Date.now()
-  if (now - lastReminderAt < REMINDER_COOLDOWN_MS) return
   if (!(await shouldShowMinimizedReminder())) return
 
-  lastReminderAt = now
-  const conversationId = String(candidates[0]?.conversationId ?? candidates[0]?.conversation_id ?? '')
-  await showNotificationWindow(candidates[0], getConversationUnreadCount(conversationId, candidates))
+  const repeatableInvites = candidates.filter(isRepeatableGroupInviteReminderMessage)
+  const queueCandidates = repeatableInvites.length > 0
+    ? [...repeatableInvites].sort((a, b) => getMessageSendTime(a) - getMessageSendTime(b))
+    : [candidates[0]]
+
+  for (const candidate of queueCandidates) {
+    const conversationId = String(candidate?.conversationId ?? candidate?.conversation_id ?? '')
+    reminderQueue.push({
+      message: candidate,
+      unreadCount: getConversationUnreadCount(conversationId, candidates),
+    })
+  }
+  await processReminderQueue()
 }
