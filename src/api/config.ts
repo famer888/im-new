@@ -35,7 +35,8 @@ export const API_CONFIG = {
   appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 168),
   /** 频道网关单独 appVer，须与 SECRET_* 在服务端登记一致；未配置则与 appVer 相同 */
   openChatAppVer: parseOpenChatAppVer(),
-  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || 7100),
+  /** 对齐旧 im：默认 packageCode 为 5520，避免登录态与频道网关按不同包号签名。 */
+  packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || OPEN_CHAT_PACKAGE_CODE),
   openChatPackageCode: OPEN_CHAT_PACKAGE_CODE,
   language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),

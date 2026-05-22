@@ -139,13 +139,34 @@ function isSuspiciousPlaceholderGroupConversation(conv: Conversation): boolean {
   return !hasResolvedName && !hasAvatar && !hasVisibleDigest
 }
 
+/**
+ * 某些群事件只会落一条 source=group-event / content=群聊事件 的占位消息。
+ * 旧 im 不会把这类没有任何可见摘要的群长期保留在主会话列表里。
+ * 这里等本地消息加载完成后再隐藏，避免误伤仍可回退到旧消息摘要的正常群。
+ */
+function isHiddenOnlyGroupEventConversation(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  if (!isHiddenGroupNoticeDigest(String(conv.lastMsgDigest || ''))) return false
+
+  const loaded = messageStore.getMessages(conv.id)
+  if (loaded.length === 0) return false
+  if (getLoadedLatestVisibleMessage(conv)) return false
+
+  const latest = [...loaded].reverse().find((message) => !message.isDeleted) ?? null
+  if (!latest || latest.msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(latest.extra)
+  return String(extra?.source || '') === 'group-event'
+}
+
 const normalConversations = computed(() =>
   chatStore.conversations.filter(
     c => !c.isArchived
       && isNotFileHelper(c)
       && isConversationInCurrentRelations(c)
       && !isPendingInviteConversationPreview(c)
-      && !isSuspiciousPlaceholderGroupConversation(c),
+      && !isSuspiciousPlaceholderGroupConversation(c)
+      && !isHiddenOnlyGroupEventConversation(c),
   ),
 )
 
@@ -155,7 +176,8 @@ const archivedConversations = computed(() =>
       && isNotFileHelper(c)
       && isConversationInCurrentRelations(c)
       && !isPendingInviteConversationPreview(c)
-      && !isSuspiciousPlaceholderGroupConversation(c),
+      && !isSuspiciousPlaceholderGroupConversation(c)
+      && !isHiddenOnlyGroupEventConversation(c),
   ),
 )
 

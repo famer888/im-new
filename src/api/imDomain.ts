@@ -4,7 +4,14 @@
  *   - getDomainListApi (JSON + AES-hex) → /api/v4/listDomain
  */
 import CryptoJS from 'crypto-js'
-import { requestProto, proto, getDeviceConfig, getApiMetaHeaders } from './request'
+import {
+  requestProto,
+  proto,
+  getDeviceConfig,
+  getClientInfo,
+  getHeaderClientVersion,
+  getPlatformSysModel,
+} from './request'
 import { getDomainUrl, getBaseUrl, getRawBaseUrl, API_CONFIG } from './config'
 import { getAllDomains } from '@/utils/domainPool'
 
@@ -89,19 +96,45 @@ interface ClientTokenData {
 
 let tokenCache: ClientTokenData | null = null
 
+function buildDomainTokenClientInfo(): proto.IClientInfo {
+  const device = getDeviceConfig()
+  return {
+    ...getClientInfo(true),
+    sysMac: device.sysMac,
+    sysModel: 'PC',
+  }
+}
+
+function buildDomainJsonClientReq() {
+  return {
+    sessionId: buildDomainTokenClientInfo().sessionId || '',
+    appVer: String(API_CONFIG.appVer),
+    version: getHeaderClientVersion(API_CONFIG.appVer),
+    packageCode: API_CONFIG.packageCode,
+    language: API_CONFIG.language,
+    plat: API_CONFIG.plat,
+    sysModel: getPlatformSysModel(),
+  }
+}
+
 async function fetchClientToken(domainBase?: string): Promise<ClientTokenData> {
   const base = domainBase || getBaseUrl()
   const res = await requestProto({
     url: `${base}/domain/clientToken`,
     reqType: proto.ClientTokenReq,
     respType: proto.ClientTokenResp,
-    withSessionId: false,
+    withSessionId: true,
+    includeMetaHeaders: false,
+    clientInfo: buildDomainTokenClientInfo(),
   })
   const data: ClientTokenData = {
     accessToken: res.accessToken || '',
     secretKey: res.secretKey || '',
     mchId: Number(res.mchId) || 0,
     expirationMillis: Number(res.expirationMillis) || 0,
+  }
+  if (!data.accessToken) {
+    throw new Error('clientToken accessToken empty')
   }
   tokenCache = data
   return data
@@ -129,19 +162,8 @@ async function callDomainListApi(
 ): Promise<{ domainDtoList?: DomainDto[] }> {
   const domainApiUrl = getDomainUrl()
 
-  const device = getDeviceConfig()
-  const clientReq = {
-    sessionId: '',
-    appVer: API_CONFIG.appVer,
-    packageCode: API_CONFIG.packageCode,
-    language: API_CONFIG.language,
-    plat: API_CONFIG.plat,
-    sysMac: device.sysMac,
-    sysModel: device.sysModel,
-  }
-
   const body = {
-    clientReq,
+    clientReq: buildDomainJsonClientReq(),
     data: encryptHex(JSON.stringify(payload.datas), payload.secretKey),
   }
 
@@ -150,7 +172,6 @@ async function callDomainListApi(
     headers: {
       'Content-Type': 'application/json',
       accessToken: payload.headers.accessToken,
-      ...getApiMetaHeaders(),
     },
     body: JSON.stringify(body),
   })
@@ -173,18 +194,8 @@ async function callDomainReportApi(
   payload: { secretKey: string; datas: Record<string, unknown>; headers: Record<string, string> },
 ): Promise<void> {
   const domainApiUrl = getDomainUrl()
-  const device = getDeviceConfig()
-  const clientReq = {
-    sessionId: '',
-    appVer: API_CONFIG.appVer,
-    packageCode: API_CONFIG.packageCode,
-    language: API_CONFIG.language,
-    plat: API_CONFIG.plat,
-    sysMac: device.sysMac,
-    sysModel: device.sysModel,
-  }
   const body = {
-    clientReq,
+    clientReq: buildDomainJsonClientReq(),
     data: encryptHex(JSON.stringify(payload.datas), payload.secretKey),
   }
   await fetch(`${domainApiUrl}/api/v4/report`, {
@@ -192,7 +203,6 @@ async function callDomainReportApi(
     headers: {
       'Content-Type': 'application/json',
       accessToken: payload.headers.accessToken,
-      ...getApiMetaHeaders(),
     },
     body: JSON.stringify(body),
   })

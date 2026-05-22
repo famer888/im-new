@@ -66,13 +66,14 @@ export function aesDecrypt(data: Uint8Array | Int8Array, key: string): Uint8Arra
 
 /**
  * AES-128-ECB encrypt a UTF-8 string (for API header signing etc.)
- * @returns hex string
+ * Mirrors old im `encrypt()` and returns base64 text for header signing.
  */
 export function aesEncryptString(plaintext: string, key: string): string {
   const keyHex = CryptoJS.enc.Utf8.parse(key)
-  const encrypted = CryptoJS.AES.encrypt(plaintext, keyHex, {
+  const src = CryptoJS.enc.Utf8.parse(plaintext)
+  const encrypted = CryptoJS.AES.encrypt(src, keyHex, {
     mode: CryptoJS.mode.ECB,
     padding: CryptoJS.pad.Pkcs7,
   })
-  return encrypted.ciphertext.toString(CryptoJS.enc.Hex)
+  return encrypted.toString()
 }

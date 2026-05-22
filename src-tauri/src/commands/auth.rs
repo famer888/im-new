@@ -332,16 +332,20 @@ fn release_active_login_lock(app: &tauri::AppHandle, uid: Option<&str>) {
 #[tauri::command]
 pub async fn login(
     app: tauri::AppHandle,
-    _db: State<'_, DbManager>,
+    db: State<'_, DbManager>,
     win_mgr: State<'_, WindowManager>,
     request: LoginRequest,
 ) -> Result<SessionInfo, String> {
     acquire_active_login_lock(&app, &request)?;
 
-    // 1. Initialize database for user
-    // 2. Connect WebSocket
-    // 3. Switch to main window
-    // Placeholder implementation
+    let uid = request.uid.trim();
+    if !uid.is_empty() {
+        if let Err(err) = db.get_or_create(uid) {
+            release_active_login_lock(&app, Some(uid));
+            return Err(err.to_string());
+        }
+    }
+
     win_mgr.switch_to_main(&app).map_err(|e| e.to_string())?;
 
     let session = SessionInfo {

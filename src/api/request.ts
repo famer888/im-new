@@ -37,7 +37,7 @@ export function getDeviceConfig() {
   return cachedDeviceConfig
 }
 
-function getSessionIdFromStorage(): string {
+export function getSessionIdFromStorage(): string {
   const activeSessionId = getActiveSessionId()
   if (activeSessionId) return activeSessionId
 
@@ -80,16 +80,25 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
 }
 
 /**
- * 与老 im fnClientInfoGet 完全对齐：
+ * 与老 im fnClientInfoGet 的平台语义对齐：
  * - sysModel 为平台名字符串（"MAC"/"WINDOWS"），不是设备指纹！服务端扫码配对靠它识别 PC 客户端
- * - clientInfo 里 *不含* sysMac 字段（老 im 也没有）；sysMac 只在 IsLoginReq 顶层字段传
- * - 默认保持 im-new 现有登录链路：appVer=168 / packageCode=7100 / language=2
+ * - 常规 protobuf clientInfo 里不带 version；header/domain JSON 场景单独补 version
  * - plat 固定 WIN=4（老 im 硬编码 4）
  */
-function getPlatformSysModel(): string {
+export function getPlatformSysModel(): string {
   const ua = (navigator.userAgent || '').toLowerCase()
   if (ua.includes('mac')) return 'MAC'
   return 'WINDOWS'
+}
+
+export function getHeaderClientVersion(appVer: number): string {
+  const versionName = String(import.meta.env.VITE_APP_VERSION_NAME || '').trim()
+  if (versionName) return versionName
+  const text = String(appVer || '').trim()
+  if (text.length >= 3 && /^\d+$/.test(text)) {
+    return `${text[0]}.${text[1]}.${text.slice(2)}`
+  }
+  return text || '1.0.0'
 }
 
 export function getApiMetaHeaders(options?: {
@@ -112,9 +121,12 @@ function getSignClientInfo(
   appVer = API_CONFIG.appVer,
 ) {
   const device = getDeviceConfig()
+  const version = getHeaderClientVersion(appVer)
   return {
     sessionId: withSessionId ? getSessionIdFromStorage() : '',
-    appVer,
+    // 对齐老 im：签名头里的 clientInfo 走字符串 appVer，并带上 version 字段。
+    appVer: String(appVer),
+    version,
     packageCode,
     language: API_CONFIG.language,
     plat: 4,
@@ -127,6 +139,7 @@ export function getSignedApiHeaders(options?: {
   withSessionId?: boolean
   packageCode?: number
   appVer?: number
+  includeMetaHeaders?: boolean
 }): Record<string, string> {
   const packageCode = options?.packageCode ?? API_CONFIG.packageCode
   const appVer = options?.appVer ?? API_CONFIG.appVer
@@ -139,11 +152,17 @@ export function getSignedApiHeaders(options?: {
   const timestamp = Date.now()
   const tenOrigin = `${clientStr}//${timestamp}`
   const oneOrigin = `${API_CONFIG.secretName},${timestamp}`
-  return {
-    ...getApiMetaHeaders({ appVer, packageCode }),
+  const headers: Record<string, string> = {
     'X-one': aesEncryptString(oneOrigin, API_CONFIG.headAesKey),
     'X-ten': aesEncryptString(tenOrigin, API_CONFIG.headAesKey),
     'X-ten-origin': JSON.stringify(tenOrigin),
+  }
+  if (options?.includeMetaHeaders === false) {
+    return headers
+  }
+  return {
+    ...getApiMetaHeaders({ appVer, packageCode }),
+    ...headers,
   }
 }
 
@@ -163,13 +182,13 @@ export function getOpenChatSignedApiHeaders(options?: {
   })
 }
 
-function getClientInfo(withSessionId = true): proto.IClientInfo {
+export function getClientInfo(withSessionId = true): proto.IClientInfo {
   const sessionId = withSessionId ? getSessionIdFromStorage() : ''
   return {
     sessionId,
-    appVer: 168,
-    packageCode: 7100,
-    language: 2,
+    appVer: API_CONFIG.appVer,
+    packageCode: API_CONFIG.packageCode,
+    language: API_CONFIG.language,
     plat: proto.Platform.WIN,
     sysModel: getPlatformSysModel(),
   }
@@ -235,11 +254,13 @@ export async function requestProto<TReq, TResp>(opts: {
   data?: Partial<TReq>
   aesKey?: string
   withSessionId?: boolean
+  includeMetaHeaders?: boolean
+  clientInfo?: proto.IClientInfo
 }): Promise<TResp> {
   const { url, reqType, respType, aesKey = API_CONFIG.aesKey, withSessionId = true } = opts
 
   const reqData = {
-    clientInfo: getClientInfo(withSessionId),
+    clientInfo: opts.clientInfo ?? getClientInfo(withSessionId),
     ...opts.data,
   } as unknown as Partial<TReq>
   const reqMessage = reqType.create(reqData)
@@ -249,7 +270,10 @@ export async function requestProto<TReq, TResp>(opts: {
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: getSignedApiHeaders({ withSessionId }),
+    headers: getSignedApiHeaders({
+      withSessionId,
+      includeMetaHeaders: opts.includeMetaHeaders,
+    }),
     body: packet.buffer as ArrayBuffer,
   })
 
