@@ -74,7 +74,25 @@ function handleConfirm() {
 }
 
 const displayUserType = computed(() => {
-  return editUser.value?.role ?? -1
+  if (typeof editUser.value?.role === 'number') return editUser.value.role
+  const userId = String(editUser.value?.userId ?? editUser.value?.uid ?? '').trim()
+  return findMemberById(userId)?.role ?? -1
+})
+
+const displayUserId = computed(() => String(editUser.value?.userId ?? editUser.value?.uid ?? '').trim())
+
+// 接口里的群简介编辑者常是 user.nickName/icon，群成员缓存则是 nickname/avatar，这里统一做显示兜底。
+const displayUserName = computed(() => {
+  const directName = String(editUser.value?.nickname ?? editUser.value?.nickName ?? '').trim()
+  if (directName) return directName
+  const member = findMemberById(displayUserId.value)
+  return String(member?.nickname ?? displayUserId.value).trim()
+})
+
+const displayUserAvatar = computed(() => {
+  const directAvatar = String(editUser.value?.avatar ?? editUser.value?.icon ?? '').trim()
+  if (directAvatar) return directAvatar
+  return findMemberById(displayUserId.value)?.avatar ?? ''
 })
 
 const displayUserLabel = computed(() => {
@@ -82,6 +100,8 @@ const displayUserLabel = computed(() => {
   if (displayUserType.value === 1) return '管理员'
   return ''
 })
+// 对齐旧 im：普通群成员查看群简介时，也要显示发布人的管理身份，而不是只看当前查看者权限。
+const showBadge = computed(() => displayUserType.value === 0 || displayUserType.value === 1)
 const isHistoryView = computed(() => Boolean(props.historyNotice))
 
 function findMemberById(userId: string) {
@@ -247,14 +267,14 @@ async function handleSendNotice(notifyAll: boolean) {
       </picture>
       <div class="top">
         <TextAvatar
-          :name="editUser?.nickname || editUser?.userId || ''"
-          :src="editUser?.avatar"
+          :name="displayUserName"
+          :src="displayUserAvatar"
           :size="35"
           rounded
         />
-        <h2>{{ editUser?.nickname || editUser?.userId || '' }}</h2>
+        <h2>{{ displayUserName }}</h2>
         <span
-          v-if="loginIsHost && displayUserLabel"
+          v-if="(loginIsHost || showBadge) && displayUserLabel"
           :class="{
             groupOwner: displayUserType === 0,
             isAdmin: displayUserType === 1,
