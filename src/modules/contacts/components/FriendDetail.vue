@@ -31,6 +31,15 @@ watch(contact, (val) => {
   depictDraft.value = (val as any)?.depict || ''
 }, { immediate: true })
 
+watch(
+  () => contact.value?.id,
+  (contactId) => {
+    if (!contactId) return
+    void contactStore.ensureContactDetailLoaded(contactId, { force: true })
+  },
+  { immediate: true },
+)
+
 function startChat() {
   const conv = chatStore.ensureConversation(0, props.contactId)
   chatStore.setCurrentConversation(conv.id)

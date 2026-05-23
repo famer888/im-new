@@ -348,11 +348,30 @@ export const useContactStore = defineStore('contact', () => {
         if ((detailRevisionMap.get(targetId) || 0) !== requestRevision) {
           return
         }
-        patchContact(targetId, {
+        const userInfo = (detail as { userInfo?: Record<string, any> }).userInfo || {}
+        const detailPatch: Partial<Contact> = {
           bfReadCancel: Boolean(detail.bfReadCancel),
           bfMyBlack: Boolean(detail.bfMyBlack),
           msgCancelTime: Number(detail.msgCancelTime || DEFAULT_READ_BURN_SECONDS),
-        }, {
+        }
+
+        // 对齐旧 im：好友详情接口除了开关状态，还要回填 identify/昵称/头像，
+        // 这样右侧资料面板显示好友号时不会退回成内部 uid。
+        const nickname = String(userInfo.nickName || userInfo.nickname || '').trim()
+        const avatar = String(userInfo.icon || userInfo.avatar || '').trim()
+        const identify = String(userInfo.identify || '').trim()
+        const depict = String(detail.depict || userInfo.depict || '').trim()
+        const friendRelation = userInfo.friendRelation as { remarkName?: string } | undefined
+
+        if (nickname) detailPatch.nickname = nickname
+        if (avatar) detailPatch.avatar = avatar
+        if (identify) detailPatch.identify = identify
+        if (depict) detailPatch.depict = depict
+        if (friendRelation && Object.prototype.hasOwnProperty.call(friendRelation, 'remarkName')) {
+          detailPatch.remark = friendRelation.remarkName ? String(friendRelation.remarkName) : null
+        }
+
+        patchContact(targetId, detailPatch, {
           source: 'remote',
           markDetailLoaded: true,
         })
