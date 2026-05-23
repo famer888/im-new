@@ -8,7 +8,11 @@ export interface DomainItem {
 let domainCache: Map<string, DomainItem[]> = new Map()
 let pollingTimer: ReturnType<typeof setInterval> | null = null
 
-const STORAGE_KEY = 'domain-pool-cache'
+function getEnvName(): string {
+  return String(import.meta.env.VITE_APP_ENV || 'default').trim().toLowerCase() || 'default'
+}
+
+const STORAGE_KEY = `domain-pool-cache:${getEnvName()}`
 
 const PROD_PRELOADED_DOMAIN_POOL: Record<string, string[]> = {
   webBiz: [
@@ -51,13 +55,26 @@ const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = {
   ],
 }
 
+const PROD_PRELOADED_DOMAIN_SET = new Set(
+  Object.values(PROD_PRELOADED_DOMAIN_POOL).flat(),
+)
+
 function isProdEnv(): boolean {
-  const env = String(import.meta.env.VITE_APP_ENV || '').trim().toLowerCase()
+  const env = getEnvName()
   return env === 'prod' || env === 'production'
 }
 
+function shouldAcceptDomainForEnv(domain: string): boolean {
+  // test/uat 环境不能复用生产预埋域名，避免旧缓存或动态接口污染登录前兜底顺序。
+  return isProdEnv() || !PROD_PRELOADED_DOMAIN_SET.has(domain)
+}
+
 function uniqDomains(urls: string[]): string[] {
-  return [...new Set(urls.map(url => String(url || '').trim()).filter(Boolean))]
+  return [...new Set(
+    urls
+      .map(url => String(url || '').trim())
+      .filter(url => url && shouldAcceptDomainForEnv(url)),
+  )]
 }
 
 function mergeDomains(moduleCode: string, urls: string[]) {
@@ -86,7 +103,12 @@ function loadFromStorage() {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const data = JSON.parse(raw) as Record<string, DomainItem[]>
-      domainCache = new Map(Object.entries(data))
+      domainCache = new Map(
+        Object.entries(data).map(([moduleCode, list]) => [
+          moduleCode,
+          list.filter(item => shouldAcceptDomainForEnv(item.domain)),
+        ]),
+      )
     }
   } catch { /* ignore */ }
 }
@@ -100,6 +122,10 @@ function saveToStorage() {
 
 // 立即从 localStorage 恢复缓存（同步，模块加载时执行）
 loadFromStorage()
+// 登录页首个二维码请求可能早于 OSS/API 域名拉取完成，先同步注入预埋域名保证登录前也能兜底。
+for (const [moduleCode, urls] of Object.entries(DIRECT_FALLBACK_DOMAINS)) {
+  mergeDomains(moduleCode, urls)
+}
 if (isProdEnv()) {
   for (const [moduleCode, urls] of Object.entries(PROD_PRELOADED_DOMAIN_POOL)) {
     mergeDomains(moduleCode, urls)

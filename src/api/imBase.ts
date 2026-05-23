@@ -228,7 +228,10 @@ const GroupDetailFromQrCodeRespProto = {
  * Get QR code login token from the server.
  * POST /login/qrCodeUrl
  */
-export async function getQrCodeUrl(baseUrl?: string): Promise<proto.QrCodeUrlResp> {
+export async function getQrCodeUrl(
+  baseUrl?: string,
+  onResolvedBaseUrl?: (baseUrl: string) => void,
+): Promise<proto.QrCodeUrlResp> {
   const base = baseUrl || getBaseUrl()
   return requestProto({
     url: `${base}/login/qrCodeUrl`,
@@ -236,6 +239,7 @@ export async function getQrCodeUrl(baseUrl?: string): Promise<proto.QrCodeUrlRes
     respType: proto.QrCodeUrlResp,
     // 与老 im 一致：登录前二维码接口不携带历史 session
     withSessionId: false,
+    onResolvedBaseUrl,
   })
 }
 
@@ -246,6 +250,7 @@ export async function getQrCodeUrl(baseUrl?: string): Promise<proto.QrCodeUrlRes
 export async function getIsLogin(
   data: { token: string; sysMac: string; sysModel: string },
   baseUrl?: string,
+  onResolvedBaseUrl?: (baseUrl: string) => void,
 ): Promise<proto.IsLoginResp> {
   const base = baseUrl || getBaseUrl()
   return requestProto({
@@ -259,6 +264,7 @@ export async function getIsLogin(
       sysMac: data.sysMac,
       sysModel: data.sysModel,
     },
+    onResolvedBaseUrl,
   })
 }
 

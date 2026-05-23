@@ -5,7 +5,7 @@ import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
-import { API_CONFIG, getBaseUrl } from '@/api/config'
+import { API_CONFIG, getBaseUrl, isLoginOnlyBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
 import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss, markDomainError } from '@/utils/domainPool'
 import { getOrCreateInstallCode } from '@/utils/installCode'
@@ -148,6 +148,27 @@ function applyPreferredDomains(newDomains: string[] | undefined, options: { shou
   }, 500)
 }
 
+function activateResolvedBaseUrl(baseUrl: string) {
+  const resolved = String(baseUrl || '').trim()
+  if (!resolved) return
+
+  // 底层 request 可能已自动切到备用域名；登录页必须同步，否则轮询会继续打被拦的旧域名。
+  if (!domainList.value.includes(resolved)) {
+    domainList.value = [resolved, ...domainList.value]
+  }
+  const nextIndex = domainList.value.indexOf(resolved)
+  if (nextIndex >= 0) {
+    urlIndex.value = nextIndex
+  }
+  activeQrBaseUrl.value = resolved
+}
+
+function getBusinessSessionBaseUrl(loginBaseUrl: string): string {
+  const base = String(loginBaseUrl || '').trim()
+  // 登录专用备用域名只用于二维码/轮询，登录后的业务和密钥接口继续走 webBiz。
+  return base && !isLoginOnlyBaseUrl(base) ? base : getBaseUrl()
+}
+
 // 接收来自 NetworkConfig 检测出的有效域名，合并后切到首个有效域名重新拉取二维码
 watch(
   () => props.extraDomains,
@@ -249,7 +270,10 @@ async function handleGetQrCodeUrl() {
   isOutTime.value = false
 
   try {
-    const res = await getQrCodeUrl(baseUrl)
+    let resolvedQrBaseUrl = baseUrl
+    const res = await getQrCodeUrl(baseUrl, resolvedBaseUrl => {
+      resolvedQrBaseUrl = resolvedBaseUrl
+    })
     if (requestSeq !== qrRequestSeq) return
     isLoading.value = false
 
@@ -264,6 +288,7 @@ async function handleGetQrCodeUrl() {
     }
 
     if (res?.token) {
+      activateResolvedBaseUrl(resolvedQrBaseUrl)
       hasLoadedFirstQr.value = true
       loginToken.value = res.token
       // 注意：与老 im 一致——*不* 用 res.officialUrl 覆盖当前包的固定官网域名。
@@ -311,22 +336,27 @@ function handleReGetQrCodeUrl() {
 async function handleIsLoginGet() {
   const device = getDeviceConfig()
   const baseUrl = activeQrBaseUrl.value || currentBaseUrl.value
+  let resolvedLoginBaseUrl = baseUrl
 
   try {
     const res = await getIsLogin({
       token: loginToken.value,
       sysMac: device.sysMac,
       sysModel: device.sysModel,
-    }, baseUrl)
+    }, baseUrl, resolvedBaseUrl => {
+      resolvedLoginBaseUrl = resolvedBaseUrl
+    })
+    activateResolvedBaseUrl(resolvedLoginBaseUrl)
 
     // 与老 im 一致：扫码登录成功仅以 uid > 0 为准
     if (res && res.uid && Number(res.uid) > 0) {
       const loginId = String(res.uid)
       clearTimers()
+      const sessionBaseUrl = getBusinessSessionBaseUrl(resolvedLoginBaseUrl)
 
       emit('login-success', {
-        sessionUrl: baseUrl,
-        wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(baseUrl),
+        sessionUrl: sessionBaseUrl,
+        wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(sessionBaseUrl),
         aesKey: API_CONFIG.aesKey,
         installCode: getOrCreateInstallCode(),
         uid: loginId,

@@ -3,8 +3,16 @@
  * Matches OCS protocol: [0xC1, 0x80] + uint32(len) + AES(protobuf)
  */
 import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
-import { API_CONFIG, OPEN_CHAT_PACKAGE_CODE, getBaseUrl } from './config'
+import {
+  API_CONFIG,
+  OPEN_CHAT_PACKAGE_CODE,
+  getBaseUrl,
+  getRawBaseUrl,
+  isLoginOnlyBaseUrl,
+  setBaseUrl,
+} from './config'
 import { getActiveSessionId } from './sessionContext'
+import { getAllDomains, markDomainError } from '@/utils/domainPool'
 import * as proto from '@/proto/generated'
 import { ungzip } from 'pako'
 
@@ -77,6 +85,176 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
     offset += arr.length
   }
   return result
+}
+
+function parseUrl(value: string): URL | null {
+  try {
+    return new URL(value, window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+function normalizeHttpBaseUrl(value: string): string {
+  const parsed = parseUrl(String(value || '').trim())
+  if (!parsed) return ''
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+  return `${parsed.protocol}//${parsed.host}`
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status >= 500
+}
+
+function isLoginApiRequest(url: string): boolean {
+  const parsed = parseUrl(url)
+  if (!parsed) return false
+  return parsed.pathname.startsWith('/login/')
+}
+
+function shouldFallbackWebBiz(url: string): boolean {
+  const requestBase = normalizeHttpBaseUrl(url)
+  if (!requestBase) return false
+
+  const knownBases = [
+    getRawBaseUrl(),
+    ...getAllDomains('webBiz').map(item => item.domain),
+  ]
+    .map(normalizeHttpBaseUrl)
+    .filter(Boolean)
+
+  return knownBases.includes(requestBase)
+}
+
+let reportingWebBizDomainFailure = false
+
+function getNextWebBizBaseUrl(
+  failedBase: string,
+  options: { includeLoginOnlyDomains?: boolean } = {},
+): string {
+  const failed = normalizeHttpBaseUrl(failedBase)
+  if (!failed) return ''
+
+  const normalDomains = getAllDomains('webBiz')
+    .filter(item => item.status !== 'error')
+    .map(item => item.domain)
+  const errorDomains = getAllDomains('webBiz')
+    .filter(item => item.status === 'error')
+    .map(item => item.domain)
+
+  const ordered = [...normalDomains, getRawBaseUrl(), ...errorDomains]
+  const seen = new Set<string>()
+
+  for (const candidate of ordered) {
+    const normalized = normalizeHttpBaseUrl(candidate)
+    if (!normalized || normalized === failed || seen.has(normalized)) continue
+    if (!options.includeLoginOnlyDomains && isLoginOnlyBaseUrl(normalized)) continue
+    seen.add(normalized)
+    return normalized
+  }
+
+  return ''
+}
+
+function replaceRequestBaseUrl(url: string, nextBase: string): string {
+  const requestUrl = parseUrl(url)
+  const nextUrl = parseUrl(nextBase)
+  if (!requestUrl || !nextUrl) return url
+
+  requestUrl.protocol = nextUrl.protocol
+  requestUrl.host = nextUrl.host
+  return requestUrl.toString()
+}
+
+async function reportWebBizDomainFailure(
+  failedBase: string,
+  requestUrl: string,
+  error: unknown,
+  httpStatus = 0,
+) {
+  markDomainError('webBiz', failedBase)
+
+  if (reportingWebBizDomainFailure) return
+  reportingWebBizDomainFailure = true
+
+  try {
+    const { reportErrorDomain } = await import('./imDomain')
+    await reportErrorDomain({
+      domainUrl: failedBase,
+      errorPath: requestUrl,
+      errorDesc: error instanceof Error ? error.message : String(error),
+      httpStatus,
+      moduleCode: 'webBiz',
+    })
+  } catch (reportError) {
+    console.warn('[requestProto] report webBiz domain failure failed:', reportError)
+  } finally {
+    reportingWebBizDomainFailure = false
+  }
+}
+
+async function fetchWithWebBizFallback(
+  url: string,
+  init: RequestInit,
+  options: { withSessionId: boolean; onResolvedBaseUrl?: (baseUrl: string) => void },
+): Promise<Response> {
+  // 登录前二维码接口也要切域名；withSessionId 只控制协议 session，不控制域名兜底。
+  const allowFallback = shouldFallbackWebBiz(url)
+  const failedBase = normalizeHttpBaseUrl(url)
+  const isLoginRequest = isLoginApiRequest(url)
+
+  try {
+    const response = await fetch(url, init)
+    if (response.ok && allowFallback && failedBase) {
+      options.onResolvedBaseUrl?.(failedBase)
+    }
+    if (!response.ok && allowFallback && isRetryableHttpStatus(response.status) && failedBase) {
+      markDomainError('webBiz', failedBase)
+      const nextBase = getNextWebBizBaseUrl(failedBase, {
+        includeLoginOnlyDomains: isLoginRequest,
+      })
+      if (!nextBase) return response
+
+      if (!isLoginRequest) {
+        // 先切全局 baseUrl，避免启动阶段并发请求继续从已失败主域名起步。
+        setBaseUrl(nextBase)
+      }
+      const retryUrl = replaceRequestBaseUrl(url, nextBase)
+      const retryResponse = await fetch(retryUrl, init)
+      if (retryResponse.ok) {
+        // 登录前/后命中备用域名后，切换全局 baseUrl，后续请求继续走新域名。
+        options.onResolvedBaseUrl?.(nextBase)
+        // 失败上报放到切换成功后异步做，避免上报流程继续请求已被阻断的主域名。
+        void reportWebBizDomainFailure(failedBase, url, new Error(`HTTP ${response.status}`), response.status)
+        console.warn('[requestProto] webBiz domain fallback success:', failedBase, '->', nextBase)
+      }
+      return retryResponse
+    }
+    return response
+  } catch (error) {
+    if (!allowFallback || !failedBase) throw error
+
+    markDomainError('webBiz', failedBase)
+    const nextBase = getNextWebBizBaseUrl(failedBase, {
+      includeLoginOnlyDomains: isLoginRequest,
+    })
+    if (!nextBase) throw error
+
+    if (!isLoginRequest) {
+      // 先切全局 baseUrl，避免启动阶段并发请求继续从已失败主域名起步。
+      setBaseUrl(nextBase)
+    }
+    const retryUrl = replaceRequestBaseUrl(url, nextBase)
+    const retryResponse = await fetch(retryUrl, init)
+    if (retryResponse.ok) {
+      // 登录前/后命中备用域名后，切换全局 baseUrl，后续请求继续走新域名。
+      options.onResolvedBaseUrl?.(nextBase)
+      // 失败上报放到切换成功后异步做，避免上报流程继续请求已被阻断的主域名。
+      void reportWebBizDomainFailure(failedBase, url, error)
+      console.warn('[requestProto] webBiz domain fallback success:', failedBase, '->', nextBase)
+    }
+    return retryResponse
+  }
 }
 
 /**
@@ -256,6 +434,7 @@ export async function requestProto<TReq, TResp>(opts: {
   withSessionId?: boolean
   includeMetaHeaders?: boolean
   clientInfo?: proto.IClientInfo
+  onResolvedBaseUrl?: (baseUrl: string) => void
 }): Promise<TResp> {
   const { url, reqType, respType, aesKey = API_CONFIG.aesKey, withSessionId = true } = opts
 
@@ -268,13 +447,16 @@ export async function requestProto<TReq, TResp>(opts: {
   const protoBytes = reqType.encode(reqMessage).finish()
   const packet = encodePacket(protoBytes, aesKey)
 
-  const response = await fetch(url, {
+  const response = await fetchWithWebBizFallback(url, {
     method: 'POST',
     headers: getSignedApiHeaders({
       withSessionId,
       includeMetaHeaders: opts.includeMetaHeaders,
     }),
     body: packet.buffer as ArrayBuffer,
+  }, {
+    withSessionId,
+    onResolvedBaseUrl: opts.onResolvedBaseUrl,
   })
 
   if (!response.ok) {
