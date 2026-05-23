@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { GROUP_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useGroupStore } from '@/stores/useGroupStore'
+import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useI18n } from 'vue-i18n'
@@ -29,7 +29,7 @@ const { t } = useI18n()
 const conv = computed(() => chatStore.currentConversation)
 const group = computed(() => conv.value ? groupStore.getGroup(conv.value.targetId) : undefined)
 
-const memberType = ref(-1)
+const memberType = ref<number | null>(null)
 const bfJoinCheck = ref(false)
 const bfResetQrcode = ref(false)
 const groupAliasName = ref('')
@@ -254,6 +254,16 @@ const allMembers = computed(() => {
   return groupStore.getMembers(conv.value.targetId)
 })
 
+function resolveCurrentMemberType(members: GroupMember[] = allMembers.value): number | null {
+  const uid = String(authStore.uid ?? '').trim()
+  if (!uid) return null
+  const currentMember = members.find((member) => member.userId === uid)
+  if (!currentMember) return null
+  const role = Number(currentMember.role)
+  return Number.isFinite(role) && role >= 0 ? role : null
+}
+
+const effectiveMemberType = computed(() => resolveCurrentMemberType() ?? memberType.value)
 const previewMembers = computed(() => allMembers.value.slice(0, 20))
 
 const members = computed(() => {
@@ -265,27 +275,91 @@ const members = computed(() => {
 
 const totalCount = computed(() => group.value?.memberCount ?? groupStore.getMembers(conv.value?.targetId ?? '').length)
 
-const isOwner = computed(() => memberType.value === 0)
+const isOwner = computed(() => effectiveMemberType.value === 0)
 
-onMounted(async () => {
-  if (!conv.value) return
-  const gid = conv.value.targetId
+function applyCachedPanelState(groupId: string) {
+  const cachedGroup = groupStore.getGroup(groupId)
+  memberType.value = resolveCurrentMemberType(groupStore.getMembers(groupId))
+  groupAliasName.value = cachedGroup?.groupAliasName || ''
+  notice.value = cachedGroup?.notice || ''
+  inviteShortLink.value = ''
+  bfResetQrcode.value = false
+  bfJoinCheck.value = false
+}
 
-  await groupStore.loadMembers(authStore.uid!, gid)
+let panelLoadToken = 0
 
-  try {
-    const detail = await getGroupDetail({ groupId: gid })
-    memberType.value = detail.memberType ?? 2
+async function loadPanelData(groupId: string) {
+  const token = ++panelLoadToken
+  applyCachedPanelState(groupId)
+
+  const membersTask = authStore.uid
+    ? groupStore.loadMembers(authStore.uid, groupId).then((members) => {
+      if (token !== panelLoadToken || conv.value?.targetId !== groupId) return
+      const localMemberType = resolveCurrentMemberType(members)
+      if (localMemberType !== null) {
+        memberType.value = localMemberType
+      }
+    })
+    : Promise.resolve()
+
+  const detailTask = getGroupDetail({ groupId }).then((detail) => {
+    if (token !== panelLoadToken || conv.value?.targetId !== groupId) return
+
     const groupBase = detail.group as any
+    const remoteMemberType = Number(detail.memberType)
+    if (Number.isFinite(remoteMemberType) && remoteMemberType >= 0) {
+      memberType.value = remoteMemberType
+    } else if (memberType.value === null) {
+      memberType.value = 2
+    }
+
     groupAliasName.value = groupBase?.groupAliasName || detail.groupNickName || ''
     notice.value = detail.groupNotice?.notice || ''
     inviteShortLink.value = String(groupBase?.shortLink || (detail as any)?.shortLink || '').trim()
     bfResetQrcode.value = Boolean(detail.bfResetQrcode)
-    if (groupBase?.bfJoinCheck !== undefined) bfJoinCheck.value = groupBase.bfJoinCheck
-  } catch (e) {
+    if (groupBase?.bfJoinCheck !== undefined) {
+      bfJoinCheck.value = Boolean(groupBase.bfJoinCheck)
+    }
+
+    // 把已拿到的群资料回写到 store，下一次打开右侧面板可直接首屏命中缓存。
+    groupStore.upsertGroup({
+      id: groupId,
+      groupAliasName: groupAliasName.value || null,
+      notice: notice.value || null,
+    })
+  }).catch((e) => {
+    if (token !== panelLoadToken || conv.value?.targetId !== groupId) return
+    if (memberType.value === null) {
+      memberType.value = 2
+    }
     console.error('[GroupInfoPanel] getGroupDetail failed:', e)
-  }
-})
+  })
+
+  await Promise.allSettled([membersTask, detailTask])
+}
+
+watch(
+  () => conv.value?.targetId ?? '',
+  (groupId) => {
+    panelLoadToken += 1
+    search.value = ''
+    showAllMembers.value = false
+    if (!groupId) {
+      memberType.value = null
+      groupAliasName.value = ''
+      notice.value = ''
+      inviteShortLink.value = ''
+      bfResetQrcode.value = false
+      bfJoinCheck.value = false
+      return
+    }
+
+    // 对齐旧 im：切群后先用本地缓存立即出首屏，再后台补齐远端详情。
+    void loadPanelData(groupId)
+  },
+  { immediate: true },
+)
 
 function copyText(text: string) {
   navigator.clipboard.writeText(text.endsWith(' ') ? text : `${text} `).then(() => {
@@ -520,13 +594,13 @@ function handleOnlineTime(member: any) {
           <li v-if="isOwner" class="action-btn danger" @click="handleDisbandGroup">
             {{ t('解散群聊') }}
           </li>
-          <li v-else class="action-btn danger" @click="handleExitGroup">
+          <li v-else-if="effectiveMemberType !== null" class="action-btn danger" @click="handleExitGroup">
             {{ t('删除并退出') }}
           </li>
         </ul>
 
         <!-- 管理员 (同 im index.vue 管理员 label) -->
-        <ul v-if="memberType !== 2" class="manager-label">
+        <ul v-if="effectiveMemberType !== null && effectiveMemberType !== 2" class="manager-label">
           <li>{{ t('管理员') }}</li>
         </ul>
 
@@ -537,7 +611,7 @@ function handleOnlineTime(member: any) {
               <span class="member-title">{{ t('群成员列表标题', { count: totalCount }) }}</span>
               <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" />
             </div>
-            <img v-if="memberType === 0 || memberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
+            <img v-if="effectiveMemberType === 0 || effectiveMemberType === 1" class="icon-delete" src="@/assets/images/common/user-delete.png" @click="openRemoveMember" />
           </div>
 
           <ul class="member-list">
@@ -670,7 +744,7 @@ function handleOnlineTime(member: any) {
       :visible="qrCodeVisible"
       :group-id="conv.targetId"
       :group-name="group?.name || groupAliasName"
-      :can-reset-code="memberType === 0 || bfResetQrcode"
+      :can-reset-code="effectiveMemberType === 0 || bfResetQrcode"
       @close="qrCodeVisible = false"
     />
 
@@ -697,7 +771,7 @@ function handleOnlineTime(member: any) {
       :visible="removeMemberVisible"
       :group-id="conv.targetId"
       :members="members"
-      :current-role="memberType"
+      :current-role="effectiveMemberType ?? -1"
       @close="removeMemberVisible = false"
       @removed="handleRemoved"
     />
