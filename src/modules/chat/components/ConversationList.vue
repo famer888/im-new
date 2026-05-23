@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   CHANNEL_NOTIFICATION_TARGET_ID,
@@ -46,9 +46,18 @@ const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
+const CONVERSATION_ITEM_HEIGHT = 59
+const VIRTUAL_OVERSCAN_COUNT = 36
+const MIN_VIRTUAL_VIEWPORT_HEIGHT = CONVERSATION_ITEM_HEIGHT * 12
 const repairingGroupDigestIds = new Set<string>()
 const repairingChannelNameIds = new Set<string>()
 const groupIntroTagTraceCache = new Map<string, string>()
+const conversationListRef = ref<HTMLElement | null>(null)
+const archiveEntryRef = ref<HTMLElement | null>(null)
+const scrollTop = ref(0)
+const viewportHeight = ref(0)
+const archiveEntryHeight = ref(0)
+let resizeObserver: ResizeObserver | null = null
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -207,6 +216,40 @@ const displayList = computed(() =>
     ? archivedConversations.value
     : ensureGroupNotificationVisible(normalConversations.value),
 )
+
+const archiveEntryVisible = computed(() =>
+  archivedConversations.value.length > 0 && !uiStore.chatArchiveListShow,
+)
+
+const listTopOffset = computed(() =>
+  archiveEntryVisible.value ? archiveEntryHeight.value || CONVERSATION_ITEM_HEIGHT : 0,
+)
+
+const visibleConversationRange = computed(() => {
+  const listScrollTop = Math.max(0, scrollTop.value - listTopOffset.value)
+  const effectiveViewportHeight = Math.max(viewportHeight.value, MIN_VIRTUAL_VIEWPORT_HEIGHT)
+  const startIndex = Math.max(0, Math.floor(listScrollTop / CONVERSATION_ITEM_HEIGHT) - VIRTUAL_OVERSCAN_COUNT)
+  const endIndex = Math.min(
+    displayList.value.length,
+    Math.ceil((listScrollTop + effectiveViewportHeight) / CONVERSATION_ITEM_HEIGHT) + VIRTUAL_OVERSCAN_COUNT,
+  )
+
+  return { startIndex, endIndex }
+})
+
+const visibleConversationRows = computed(() => {
+  const { startIndex, endIndex } = visibleConversationRange.value
+  return displayList.value.slice(startIndex, endIndex)
+})
+
+const virtualListStyle = computed(() => {
+  const { startIndex, endIndex } = visibleConversationRange.value
+  // 用上下 padding 撑出未渲染区域，避免绝对定位在快速滚动时出现半屏空白。
+  return {
+    paddingTop: `${startIndex * CONVERSATION_ITEM_HEIGHT}px`,
+    paddingBottom: `${Math.max(0, displayList.value.length - endIndex) * CONVERSATION_ITEM_HEIGHT}px`,
+  }
+})
 
 function ensureGroupNotificationVisible(conversations: Conversation[]): Conversation[] {
   const hasGroupNotification = conversations.some(
@@ -1080,13 +1123,44 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
     isArchived: conv.isArchived,
   })
 }
+
+function handleListScroll(event: Event) {
+  scrollTop.value = (event.currentTarget as HTMLElement).scrollTop
+}
+
+function updateVirtualMetrics() {
+  viewportHeight.value = conversationListRef.value?.clientHeight || 0
+  archiveEntryHeight.value = archiveEntryVisible.value ? archiveEntryRef.value?.offsetHeight || 0 : 0
+}
+
+function observeVirtualMetrics() {
+  resizeObserver?.disconnect()
+  resizeObserver = new ResizeObserver(updateVirtualMetrics)
+  if (conversationListRef.value) resizeObserver.observe(conversationListRef.value)
+  if (archiveEntryRef.value) resizeObserver.observe(archiveEntryRef.value)
+  updateVirtualMetrics()
+}
+
+onMounted(() => {
+  void nextTick(observeVirtualMetrics)
+})
+
+watch(archiveEntryVisible, () => {
+  void nextTick(observeVirtualMetrics)
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 </script>
 
 <template>
-  <div class="conversation-list">
+  <div ref="conversationListRef" class="conversation-list" @scroll.passive="handleListScroll">
     <!-- 归档入口（对齐旧 im chats/index.vue .archive） -->
     <div
       v-if="archivedConversations.length > 0 && !uiStore.chatArchiveListShow"
+      ref="archiveEntryRef"
       class="archive-entry"
       @click="uiStore.setChatArchiveListShow(true)"
     >
@@ -1102,9 +1176,9 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
       </div>
     </div>
 
-    <div class="list">
+    <div class="list" :style="virtualListStyle">
       <div
-        v-for="conv in displayList"
+        v-for="conv in visibleConversationRows"
         :key="conv.id"
         :class="['conv-item', {
           active: conv.id === chatStore.currentConversationId,
@@ -1274,6 +1348,7 @@ function handleContextMenu(e: MouseEvent, conv: Conversation) {
   align-items: center;
   padding: 0 16px 0 63px;
   height: 59px;
+  box-sizing: border-box;
   background-color: #fcfcfc;
   cursor: pointer;
   transition: background-color 0.2s ease;
