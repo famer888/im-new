@@ -93,13 +93,9 @@ const channelName = computed(() =>
   String(detail.value.channelName || channel.value?.channelName || channel.value?.name || channelId.value),
 )
 
-/** 与二维码编码一致：邀请页链接 + id，供转发/复制（老 im 侧实质也是按链接里的 id 拉起频道） */
-const inviteUrlWithChannelId = computed(() => {
-  const base = String(detail.value.link || '').trim()
-  const id = channelId.value
-  if (!base || !id) return ''
-  const sep = base.includes('?') ? '&' : '?'
-  return `${base}${sep}id=${encodeURIComponent(id)}`
+/** 对齐老 im：频道二维码和“复制链接”都直接使用后端返回的频道直链，不再额外拼接 id 参数。 */
+const inviteUrl = computed(() => {
+  return String(detail.value.link || '').trim()
 })
 const alias = computed(() => String(detail.value.alias || ''))
 const description = computed(() =>
@@ -378,7 +374,7 @@ function showQrToast(msg: string, type: 'success' | 'error' = 'success') {
 }
 
 function handleCopyQrLink() {
-  const qrLink = inviteUrlWithChannelId.value
+  const qrLink = inviteUrl.value
   if (!qrLink) {
     showQrToast(t('复制失败'), 'error')
     return
@@ -648,7 +644,7 @@ onBeforeUnmount(() => {
           <div v-if="channelId" ref="qrcodeWrapRef" class="qrcode-wrap">
             <QrcodeVue
               class="qrcode"
-              :value="inviteUrlWithChannelId"
+              :value="inviteUrl"
               level="H"
               :size="180"
               render-as="canvas"
