@@ -3,10 +3,13 @@ import { ref } from 'vue'
 import { getGroupContactList, getGroupMemberList, groupMemberOnLineStatusList } from '@/api/imBase'
 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
+const MEMBER_PREVIEW_COUNT = 8
 const memberLoadRequestMap = new Map<string, Promise<GroupMember[]>>()
 
 interface LoadMembersOptions {
   forceRemote?: boolean
+  /** 通讯录详情页仅需头像预览，不拉全量成员与在线状态 */
+  previewOnly?: boolean
 }
 
 function isTauri(): boolean {
@@ -54,9 +57,15 @@ export interface GroupMember {
 export const useGroupStore = defineStore('group', () => {
   const groups = ref<Group[]>([])
   const memberMap = ref<Map<string, GroupMember[]>>(new Map())
+  /** 记录成员列表是否仅为预览（8 人）或已全量加载 */
+  const memberLoadDepthMap = ref<Map<string, 'preview' | 'full'>>(new Map())
   const loading = ref(false)
 
-  function setGroupMembers(groupId: string, members: GroupMember[]) {
+  function setGroupMembers(
+    groupId: string,
+    members: GroupMember[],
+    options?: { updateMemberCount?: boolean },
+  ) {
     const previousMembers = memberMap.value.get(groupId) ?? []
     const previousGroup = getGroup(groupId)
     groupMemberRefreshDebug('setGroupMembers before', {
@@ -72,7 +81,11 @@ export const useGroupStore = defineStore('group', () => {
     memberMap.value = next
 
     const group = getGroup(groupId)
-    if (group && members.length !== group.memberCount) {
+    if (
+      options?.updateMemberCount !== false
+      && group
+      && members.length !== group.memberCount
+    ) {
       upsertGroup({
         ...group,
         memberCount: members.length,
@@ -150,16 +163,34 @@ export const useGroupStore = defineStore('group', () => {
     }
   }
 
+  function isMemberListFullyLoaded(groupId: string, cached: GroupMember[]): boolean {
+    if (memberLoadDepthMap.value.get(groupId) === 'full') return cached.length > 0
+    const expected = getGroup(groupId)?.memberCount ?? 0
+    return expected > 0 && cached.length >= expected
+  }
+
   async function loadMembers(uid: string, groupId: string, options: LoadMembersOptions = {}) {
-    const requestKey = `${groupId}:${options.forceRemote ? 'remote' : 'default'}`
+    const previewOnly = Boolean(options.previewOnly)
+    const requestKey = `${groupId}:${options.forceRemote ? 'remote' : 'default'}:${previewOnly ? 'preview' : 'full'}`
+    const cached = memberMap.value.get(groupId) ?? []
+    const loadDepth = memberLoadDepthMap.value.get(groupId)
+
+    if (previewOnly) {
+      if (isMemberListFullyLoaded(groupId, cached)) return cached
+      if (loadDepth === 'preview' && cached.length > 0) return cached
+    } else if (!options.forceRemote && isMemberListFullyLoaded(groupId, cached)) {
+      return cached
+    }
+
     const existingRequest = memberLoadRequestMap.get(requestKey)
     groupMemberRefreshDebug('loadMembers called', {
       uid,
       groupId,
       forceRemote: Boolean(options.forceRemote),
+      previewOnly,
       requestKey,
       hasExistingRequest: Boolean(existingRequest),
-      currentMemberMapCount: memberMap.value.get(groupId)?.length ?? 0,
+      currentMemberMapCount: cached.length,
       currentGroupMemberCount: getGroup(groupId)?.memberCount ?? null,
     })
     if (existingRequest) return existingRequest
@@ -176,6 +207,10 @@ export const useGroupStore = defineStore('group', () => {
           })
           if (Array.isArray(localMembers) && localMembers.length > 0) {
             members = localMembers.map((item: any) => normalizeMember(item, groupId))
+            members = sortMembersForDisplay(members)
+            if (previewOnly) {
+              members = members.slice(0, MEMBER_PREVIEW_COUNT)
+            }
           }
         } catch (e) {
           groupMemberRefreshDebug('local loadMembers failed', {
@@ -190,8 +225,12 @@ export const useGroupStore = defineStore('group', () => {
         groupMemberRefreshDebug('remote members loading', {
           groupId,
           reason: options.forceRemote ? 'forceRemote' : 'noLocalMembers',
+          previewOnly,
         })
-        members = await loadMembersViaApi(groupId)
+        members = await loadMembersViaApi(groupId, {
+          pageSize: previewOnly ? MEMBER_PREVIEW_COUNT : 200,
+          maxPages: previewOnly ? 1 : undefined,
+        })
       }
 
       groupMemberRefreshDebug('members loaded before online merge', {
@@ -200,13 +239,23 @@ export const useGroupStore = defineStore('group', () => {
         memberIds: members.map((member) => member.userId).slice(0, 10),
       })
       members = mergeMembersWithExistingStatuses(groupId, members)
-      members = await loadMemberOnlineStatuses(groupId, members)
+      if (!previewOnly) {
+        members = await loadMemberOnlineStatuses(groupId, members)
+      }
       groupMemberRefreshDebug('members loaded after online merge', {
         groupId,
         count: members.length,
         memberIds: members.map((member) => member.userId).slice(0, 10),
       })
-      setGroupMembers(groupId, members)
+
+      const nextDepth = previewOnly ? 'preview' : 'full'
+      const nextDepthMap = new Map(memberLoadDepthMap.value)
+      nextDepthMap.set(groupId, nextDepth)
+      memberLoadDepthMap.value = nextDepthMap
+
+      setGroupMembers(groupId, members, {
+        updateMemberCount: !previewOnly,
+      })
       return members
     })().finally(() => {
       groupMemberRefreshDebug('loadMembers finished', {
@@ -222,13 +271,17 @@ export const useGroupStore = defineStore('group', () => {
     return request
   }
 
-  async function loadMembersViaApi(groupId: string): Promise<GroupMember[]> {
+  async function loadMembersViaApi(
+    groupId: string,
+    options: { pageSize?: number; maxPages?: number } = {},
+  ): Promise<GroupMember[]> {
     const allMembers: GroupMember[] = []
-    const pageSize = 200
+    const pageSize = options.pageSize ?? 200
+    const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY
     let pageNum = 1
     let hasMore = true
 
-    while (hasMore) {
+    while (hasMore && pageNum <= maxPages) {
       try {
         groupMemberRefreshDebug('remote page request', {
           groupId,
@@ -424,6 +477,11 @@ export const useGroupStore = defineStore('group', () => {
       const next = new Map(memberMap.value)
       next.delete(normalizedId)
       memberMap.value = next
+    }
+    if (memberLoadDepthMap.value.has(normalizedId)) {
+      const nextDepth = new Map(memberLoadDepthMap.value)
+      nextDepth.delete(normalizedId)
+      memberLoadDepthMap.value = nextDepth
     }
   }
 

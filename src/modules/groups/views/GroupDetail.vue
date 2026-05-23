@@ -16,18 +16,14 @@ const uiStore = useUIStore()
 
 const group = computed(() => groupStore.getGroup(props.groupId))
 
-/** 与老项目 im/details/group.vue 一致：按 type 升序，截取前 8 人展示 */
-const previewMembers = computed(() => {
-  const list = [...groupStore.getMembers(props.groupId)]
-  list.sort((a, b) => a.role - b.role)
-  return list.slice(0, 8)
-})
+/** 与老项目 im/details/group.vue 一致：store 已按 role 排序，截取前 8 人展示 */
+const previewMembers = computed(() => groupStore.getMembers(props.groupId).slice(0, 8))
 
 watch(
   () => props.groupId,
   (groupId) => {
     if (!groupId || !authStore.uid) return
-    groupStore.loadMembers(authStore.uid, groupId)
+    void groupStore.loadMembers(authStore.uid, groupId, { previewOnly: true })
   },
   { immediate: true },
 )
@@ -40,8 +36,7 @@ function startChat() {
 }
 
 function handleMemberClick(member: GroupMember) {
-  const allMembers = groupStore.getMembers(props.groupId)
-  const candidateIds = allMembers.map(m => m.userId)
+  const candidateIds = previewMembers.value.map((m) => m.userId)
   uiStore.openMemberInfo(member.userId, props.groupId, candidateIds)
 }
 </script>
