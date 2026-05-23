@@ -300,7 +300,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
 
     let selfAppKeyPair: any = null
     try {
-      const resp = await getKeyPair({ targetId: Number(uid) })
+      const resp = await getKeyPair({ targetId: Number(uid), flag: 0 })
       const web = (resp as any)?.webKeyPair
       selfAppKeyPair = (resp as any)?.appKeyPair
       const serverWebPublicKey = web?.publicKey ? String(web.publicKey).toUpperCase() : ''
@@ -399,7 +399,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
     } = {}
     let selfAppKeyPair: any = null
     try {
-      const resp = await getKeyPair({ targetId: Number(uid) })
+      const resp = await getKeyPair({ targetId: Number(uid), flag: 0 })
       const web = (resp as any)?.webKeyPair
       const app = (resp as any)?.appKeyPair
       selfAppKeyPair = app
@@ -914,6 +914,11 @@ export async function ensureFriendRelKeyForVersion(
       targetId: Number(fid),
       flag: 1,
     }
+    if (fid === String(uid)) {
+      // 对齐老 im：同账号多端消息补自己 app/web 公钥时必须走 flag=0，
+      // 否则服务端可能按“好友取钥匙”分支返回空 appKeyPair，导致传输助手消息长期停留在待同步状态。
+      req.flag = 0
+    }
     if (src === 'web') {
       req.webKeyVersion = ver
     } else if (src === 'app') {
@@ -943,11 +948,13 @@ export async function ensureFriendRelKeyForVersion(
           })
           const legacyReq: {
             targetId: number
+            flag?: number
             webKeyVersion?: number
             appKeyVersion?: number
           } = {
             targetId: Number(fid),
           }
+          if (fid === String(uid)) legacyReq.flag = 0
           if (req.webKeyVersion !== undefined) legacyReq.webKeyVersion = req.webKeyVersion
           if (req.appKeyVersion !== undefined) legacyReq.appKeyVersion = req.appKeyVersion
           resp = await getKeyPair(legacyReq)

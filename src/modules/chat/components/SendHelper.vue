@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { API_CONFIG } from '@/api/config'
 import { useFileStore } from '@/stores/useFileStore'
 import pkg from '../../../../package.json'
-import logoIcon from '@/assets/images/headNav/message/logo-icon.png'
-import logoNumIcon from '@/assets/images/headNav/message/logo-num-icon.png'
+import logo45 from '../../../../resources/icons_45/logo.png'
+import logo55 from '../../../../resources/icons_55/logo.png'
+import logo97 from '../../../../resources/icons_97/logo.png'
 
 const { t } = useI18n()
 const fileStore = useFileStore()
 
 const appVersion = ref(String(pkg.version ?? '1.0.0'))
+const brandLogoMap = {
+  '45': logo45,
+  '55': logo55,
+  '97': logo97,
+} as const
 
 const activeTasks = computed(() =>
   Array.from(fileStore.tasks.values()).filter((t) => t.status !== 'done'),
@@ -22,6 +29,10 @@ const completedTasks = computed(() =>
 const hasAnyTasks = computed(
   () => activeTasks.value.length > 0 || completedTasks.value.length > 0,
 )
+
+// 文件助手品牌图要跟随当前打包品牌切换，避免 55/45 包仍显示固定的 97 素材。
+const brandLogo = computed(() => brandLogoMap[API_CONFIG.brandId] || logo97)
+const brandNumber = computed(() => API_CONFIG.brandId)
 
 function formatProgress(progress: number): string {
   return Math.round(progress * 100) + '%'
@@ -44,11 +55,9 @@ onMounted(async () => {
     <div class="brand-wrap" :class="{ compact: hasAnyTasks }">
       <div class="brand-inner">
         <div>
-          <img class="login-icon" :src="logoIcon" alt="" />
+          <img class="login-icon" :src="brandLogo" alt="" />
         </div>
-        <div>
-          <img class="login-num-icon" :src="logoNumIcon" alt="" />
-        </div>
+        <div class="brand-number">{{ brandNumber }}</div>
         <div class="version">{{ t('版本信息') }} {{ appVersion }}</div>
       </div>
     </div>
@@ -120,10 +129,12 @@ onMounted(async () => {
   display: block;
 }
 
-.login-num-icon {
+.brand-number {
   margin-top: 20px;
-  height: 26px;
-  display: block;
+  line-height: 1;
+  font-size: 30px;
+  font-weight: 700;
+  color: #3369fe;
 }
 
 .version {

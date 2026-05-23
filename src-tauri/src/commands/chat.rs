@@ -1303,9 +1303,41 @@ pub fn derive_friend_rel_key(
         hex::decode(&encrypted_msg_key_hex).map_err(|e| format!("invalid msgKey hex: {}", e))?;
     let ver = version.unwrap_or(1);
     let src = source.unwrap_or_else(|| "web".to_string());
+    tracing::info!(
+        target: "e2ee",
+        "derive_friend_rel_key start friend_id={} version={} source={} pubkey_len={} pubkey_head={} msgkey_len={} own_priv_set={}",
+        friend_id,
+        ver,
+        src,
+        public_key_hex.len(),
+        safe_head(&public_key_hex, 16),
+        encrypted_msg_key_hex.len(),
+        crypto.get_curve_private_key().is_some(),
+    );
     match crypto.derive_friend_key(&friend_id, ver, &src, &public_key_hex, &encrypted_msg_key) {
-        Ok(rel) => Ok(rel),
-        Err(e) => Err(e.to_string()),
+        Ok(rel) => {
+            tracing::info!(
+                target: "e2ee",
+                "derive_friend_rel_key OK friend_id={} version={} source={} relkey_len={} relkey_head={}",
+                friend_id,
+                ver,
+                src,
+                rel.len(),
+                safe_head(&rel, 8),
+            );
+            Ok(rel)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "e2ee",
+                "derive_friend_rel_key FAILED friend_id={} version={} source={} err={}",
+                friend_id,
+                ver,
+                src,
+                e,
+            );
+            Err(e.to_string())
+        }
     }
 }
 
@@ -1425,8 +1457,9 @@ pub fn decrypt_private_incoming(
     let data =
         hex::decode(&ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let ver = version.unwrap_or(1);
-    let candidates = vec![sender_id];
-    let _ = peer_id;
+    let peer_id = peer_id.unwrap_or_default();
+    let is_file_helper_peer = peer_id.trim() == crate::db::queries::FILE_HELPER_TARGET_ID;
+    let candidates = vec![sender_id.clone()];
     let mut plain: Option<Vec<u8>> = None;
     let mut last_err: Option<String> = None;
     let preferred_source = source
@@ -1438,19 +1471,62 @@ pub fn decrypt_private_incoming(
     } else {
         vec![vec!["web", "app"]]
     };
+    tracing::info!(
+        target: "e2ee",
+        "decrypt_private_incoming start sender_id={} peer_id={} version={} preferred_source={} candidates={:?} cipher_len={} msg_type={}",
+        sender_id,
+        peer_id,
+        ver,
+        preferred_source.unwrap_or(""),
+        candidates,
+        ciphertext_hex.len(),
+        msg_type.unwrap_or(0),
+    );
     'friend_loop: for friend_id in &candidates {
         for source_order in &source_orders {
             let mut decrypted = Err(crate::crypto::CryptoError::KeyNotFound);
             for src in source_order {
+                tracing::info!(
+                    target: "e2ee",
+                    "decrypt_private_incoming try friend_id={} version={} source={}",
+                    friend_id,
+                    ver,
+                    src,
+                );
                 decrypted = crypto.decrypt_friend_message(friend_id, ver, src, &data);
                 if let Ok(bytes) = &decrypted {
                     if validate_plain_content(msg_type.unwrap_or(0), bytes, content_md5.as_deref())
                     {
+                        tracing::info!(
+                            target: "e2ee",
+                            "decrypt_private_incoming OK friend_id={} version={} source={} plain_len={}",
+                            friend_id,
+                            ver,
+                            src,
+                            bytes.len(),
+                        );
                         break;
                     }
+                    tracing::warn!(
+                        target: "e2ee",
+                        "decrypt_private_incoming validation failed friend_id={} version={} source={} plain_len={}",
+                        friend_id,
+                        ver,
+                        src,
+                        bytes.len(),
+                    );
                     decrypted = Err(crate::crypto::CryptoError::AesError(
                         "decrypted private content failed validation".to_string(),
                     ));
+                } else if let Err(err) = &decrypted {
+                    tracing::warn!(
+                        target: "e2ee",
+                        "decrypt_private_incoming miss friend_id={} version={} source={} err={}",
+                        friend_id,
+                        ver,
+                        src,
+                        err,
+                    );
                 }
             }
             match decrypted {
@@ -1458,9 +1534,70 @@ pub fn decrypt_private_incoming(
                     plain = Some(v);
                     break 'friend_loop;
                 }
-                Err(e) => last_err = Some(e.to_string()),
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                }
             }
         }
+    }
+    if plain.is_none() && is_file_helper_peer {
+        if let Some((latest_ver, _)) = crypto.get_latest_friend_key_with_version(&sender_id, "app") {
+            if latest_ver != ver {
+                tracing::info!(
+                    target: "e2ee",
+                    "decrypt_private_incoming fallback latest-app sender_id={} peer_id={} requested_version={} latest_app_version={}",
+                    sender_id,
+                    peer_id,
+                    ver,
+                    latest_ver,
+                );
+                match crypto.decrypt_friend_message(&sender_id, latest_ver, "app", &data) {
+                    Ok(bytes) if validate_plain_content(msg_type.unwrap_or(0), &bytes, content_md5.as_deref()) => {
+                        tracing::info!(
+                            target: "e2ee",
+                            "decrypt_private_incoming fallback latest-app OK sender_id={} peer_id={} version={} plain_len={}",
+                            sender_id,
+                            peer_id,
+                            latest_ver,
+                            bytes.len(),
+                        );
+                        plain = Some(bytes);
+                    }
+                    Ok(bytes) => {
+                        tracing::warn!(
+                            target: "e2ee",
+                            "decrypt_private_incoming fallback latest-app validation failed sender_id={} peer_id={} version={} plain_len={}",
+                            sender_id,
+                            peer_id,
+                            latest_ver,
+                            bytes.len(),
+                        );
+                        last_err = Some("fallback latest-app validation failed".to_string());
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "e2ee",
+                            "decrypt_private_incoming fallback latest-app miss sender_id={} peer_id={} version={} err={}",
+                            sender_id,
+                            peer_id,
+                            latest_ver,
+                            err,
+                        );
+                        last_err = Some(err.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if plain.is_none() {
+        tracing::warn!(
+            target: "e2ee",
+            "decrypt_private_incoming FAILED sender_id={} peer_id={} version={} last_err={}",
+            sender_id,
+            peer_id,
+            ver,
+            last_err.clone().unwrap_or_else(|| "decrypt failed".to_string()),
+        );
     }
     let plain = plain.ok_or_else(|| last_err.unwrap_or_else(|| "decrypt failed".to_string()))?;
     match msg_type.unwrap_or(0) {
