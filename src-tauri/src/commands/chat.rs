@@ -2691,6 +2691,8 @@ pub async fn apply_friend_read_receipts(
                 continue;
             }
 
+            let mut sync_conversation: Option<(String, i64)> = None;
+
             // 对齐旧 im `fnMsgReadSync`：sendUid == loginId 表示同账号其它端
             // 已读了 targetId 会话内消息，本端需要按该 msgId 的发送时间清红点。
             if receipt.send_uid == login_uid && receipt.target_id > 0 {
@@ -2707,9 +2709,34 @@ pub async fn apply_friend_read_receipts(
                     .optional()
                     .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
 
-                let Some(boundary_send_time) = matched_send_time else {
-                    continue;
-                };
+                if let Some(boundary_send_time) = matched_send_time {
+                    sync_conversation = Some((conversation_id, boundary_send_time));
+                }
+            } else if receipt.target_id == login_uid && receipt.send_uid > 0 {
+                let conversation_id = format!("0_{}", receipt.send_uid);
+                let row = conn
+                    .query_row(
+                        "SELECT send_time, sender_id
+                         FROM messages
+                         WHERE conversation_id = ?1 AND id = ?2 AND is_deleted = 0
+                         LIMIT 1",
+                        rusqlite::params![conversation_id, receipt.msg_id.to_string()],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+                // 兼容现网/旧端回推 sendUid=对端 uid、targetId=当前登录人：
+                // 如果本地这条 msgId 对应的是别人发来的消息，说明这是同账号
+                // 其它端已读了该会话，本端需要同步清掉未读。
+                if let Some((boundary_send_time, sender_id)) = row {
+                    if sender_id.parse::<i64>().ok().unwrap_or_default() != login_uid {
+                        sync_conversation = Some((conversation_id, boundary_send_time));
+                    }
+                }
+            }
+
+            if let Some((conversation_id, boundary_send_time)) = sync_conversation {
 
                 let mut stmt = conn
                     .prepare_cached(
