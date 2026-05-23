@@ -13,7 +13,12 @@ function normalizeBrandId(input?: string): '45' | '55' | '97' {
   return '97'
 }
 
+export function getBrandDisplayName(input?: string): string {
+  return `OCS Chat ${normalizeBrandId(input)}`
+}
+
 const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)
+const BRAND_DISPLAY_NAME = getBrandDisplayName(BRAND_ID)
 const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID}chat.com`).trim()
 
 /** 对齐老 im 55.1.7.0：请求签名与 clientInfo 默认 packageCode 为 5520 */
@@ -44,6 +49,7 @@ export const API_CONFIG = {
   rawOpenChatDomain: RAW_OPEN_CHAT_DOMAIN,
   env: import.meta.env.VITE_APP_ENV || 'test',
   brandId: BRAND_ID,
+  brandDisplayName: BRAND_DISPLAY_NAME,
   officialUrl: OFFICIAL_URL,
 }
 

@@ -26,6 +26,7 @@ import {
 } from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
+import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
 import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
@@ -1053,18 +1054,11 @@ function isConversationMuted(conv: Conversation): boolean {
 }
 
 function handleSelect(conv: Conversation) {
-  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
-    chatStore.setCurrentConversation(conv.id)
-    chatStore.clearChannelNotificationUnread()
-    uiStore.setRightPanel('none')
-    uiStore.setDetailView('channel-notice-list')
-    return
-  }
-  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
-    chatStore.setCurrentConversation(conv.id)
-    chatStore.clearGroupNotificationUnread()
-    uiStore.setRightPanel('none')
-    uiStore.setDetailView('group-invitation')
+  if (
+    (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID)
+    || (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID)
+  ) {
+    void openNotificationModuleByConversationId(conv.id)
     return
   }
   if (conv.type === ConversationType.Friend && !isFileHelperTargetId(conv.targetId)) {

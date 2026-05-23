@@ -1,3 +1,4 @@
+use crate::branding;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tauri::{
@@ -122,11 +123,12 @@ fn open_new_window() -> Result<(), String> {
     Ok(())
 }
 
-fn tray_tooltip(count: u32) -> String {
+fn tray_tooltip(app: &AppHandle, count: u32) -> String {
+    let app_display_name = branding::app_display_name(app);
     if count > 0 {
-        format!("OCS Chat - {} 条未读消息", count)
+        format!("{} - {} 条未读消息", app_display_name, count)
     } else {
-        "OCS Chat".to_string()
+        app_display_name
     }
 }
 
@@ -203,7 +205,7 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
 
     if !flash {
         if let Some(tray) = app.tray_by_id(TRAY_ID) {
-            tray.set_tooltip(Some(tray_tooltip(count)))
+            tray.set_tooltip(Some(tray_tooltip(app, count)))
                 .map_err(|e| e.to_string())?;
             if count == 0 {
                 #[cfg(target_os = "windows")]
@@ -277,8 +279,15 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(TrayUnreadState::new());
 
+    let app_display_name = branding::app_display_name(app);
     let new_window = MenuItem::with_id(app, "new_window", "打开新窗口", true, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "打开 ocs", true, None::<&str>)?;
+    let open = MenuItem::with_id(
+        app,
+        "open",
+        format!("打开 {}", app_display_name),
+        true,
+        None::<&str>,
+    )?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let logout = MenuItem::with_id(app, "logout", "注销", true, None::<&str>)?;
     let quit_logout = MenuItem::with_id(app, "quit_logout", "退出程序并注销", true, None::<&str>)?;
@@ -286,7 +295,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(TRAY_ICON)
-        .tooltip("OCS Chat")
+        .tooltip(&app_display_name)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

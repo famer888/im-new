@@ -106,7 +106,9 @@ APP_NAME="${APP_NAME:-OCS Chat $BRAND_ID}"
 PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.$BRAND_ID.chat}"
 OFFICIAL_URL="${OFFICIAL_URL:-${BRAND_ID}chat.com}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/$PLATFORM/icons_$BRAND_ID}"
-TAURI_CONFIG_FILE="$(mktemp "$ROOT_DIR/.tauri-brand-$BRAND_ID.XXXXXX")"
+# Keep the temp config beside tauri.conf.json so relative icon paths resolve
+# against src-tauri, otherwise Tauri can fall back to the default 97 icons.
+TAURI_CONFIG_FILE="$(mktemp "$ROOT_DIR/src-tauri/.tauri-brand-$BRAND_ID.XXXXXX")"
 BRAND_BACKUP_DIR="$(mktemp -d "$ROOT_DIR/.brand-source-backup-$BRAND_ID.XXXXXX")"
 
 cleanup_generated() {

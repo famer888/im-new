@@ -17,6 +17,7 @@ import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { playNotificationSound } from '@/utils/notificationSound'
 import { isRepeatableGroupInviteReminderMessage, showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
 import { eventBus } from '@/utils/eventBus'
+import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
@@ -829,16 +830,9 @@ export async function setupTauriListeners() {
       })
     }
     chatStore.setCurrentConversation(conversationId)
-    const uiStore = useUIStore()
-    if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
-      chatStore.clearGroupNotificationUnread()
-      uiStore.setRightPanel('none')
-      uiStore.setDetailView('group-invitation')
-    } else if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) {
-      chatStore.clearChannelNotificationUnread()
-      uiStore.setRightPanel('none')
-      uiStore.setDetailView('channel-notice-list')
-    } else {
+    const openedNotificationModule = await openNotificationModuleByConversationId(conversationId)
+    if (!openedNotificationModule) {
+      const uiStore = useUIStore()
       uiStore.setDetailView('chat')
     }
     if (router.currentRoute.value.path !== '/home') {

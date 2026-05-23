@@ -1,6 +1,6 @@
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChannelStore } from '@/stores/useChannelStore'
-import { useChatStore } from '@/stores/useChatStore'
+import { CHANNEL_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useSettingStore } from '@/stores/useSettingStore'
@@ -92,6 +92,7 @@ function getMessageDigest(message: any): string {
 }
 
 function getConversationType(conversationId: string): 'friend' | 'group' | 'channel' {
+  if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) return 'channel'
   if (conversationId.startsWith('1_')) return 'group'
   if (conversationId.startsWith('2_')) return 'channel'
   return 'friend'
@@ -105,6 +106,16 @@ function getConversationTitle(conversationId: string, message?: any): string {
   const conversation = chatStore.conversations.find((item) => item.id === conversationId)
   const targetId = conversation?.targetId || conversationId.split('_')[1] || ''
   const extra = parseExtra(message?.extra)
+
+  // 频道通知沿用旧 im 的伪会话 id，但桌面提醒标题要显示真实频道名，不能按普通好友会话取值。
+  if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) {
+    const channelId = extraString(extra, ['channelId', 'channel_id'])
+    const channel = channelStore.channels.find((item) =>
+      item.id === channelId || item.channelId === channelId,
+    )
+    const channelName = extraString(extra, ['channelName', 'channel_name'])
+    return channel?.remark || channel?.channelName || channel?.name || channelName || t('频道通知')
+  }
 
   if (conversationId.startsWith('0_')) {
     const contact = contactStore.getContact(targetId)
@@ -155,13 +166,22 @@ async function ensureDirectoryLoadedForReminder(uid: string, conversationId: str
   await directoryPreloadPromise
 }
 
-function getConversationAvatar(conversationId: string): string | null {
+function getConversationAvatar(conversationId: string, message?: any): string | null {
   const contactStore = useContactStore()
   const groupStore = useGroupStore()
   const channelStore = useChannelStore()
   const chatStore = useChatStore()
   const conversation = chatStore.conversations.find((item) => item.id === conversationId)
   const targetId = conversation?.targetId || conversationId.split('_')[1] || ''
+  const extra = parseExtra(message?.extra)
+
+  if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) {
+    const channelId = extraString(extra, ['channelId', 'channel_id'])
+    const channel = channelStore.channels.find((item) =>
+      item.id === channelId || item.channelId === channelId,
+    )
+    return stripText(extra.icon) || channel?.avatar || channel?.icon || null
+  }
 
   if (conversationId.startsWith('0_')) {
     return contactStore.getContact(targetId)?.avatar || null
@@ -290,7 +310,7 @@ async function showNotificationWindow(message: any, unreadCount: number) {
         conversationId,
         title: getConversationTitle(conversationId, message),
         body: digest || t('新消息'),
-        avatar: getConversationAvatar(conversationId),
+        avatar: getConversationAvatar(conversationId, message),
         conversationType,
         senderName: conversationType === 'group' || conversationType === 'channel' ? senderName : null,
         unreadCount,

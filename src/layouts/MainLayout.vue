@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
 import {
   useChatStore,
+  CHANNEL_NOTIFICATION_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
   type Conversation,
@@ -529,6 +530,12 @@ const activeGroupMemberSyncGroupId = computed(() => {
 /** 传输助手会话仅在侧栏「传输」选中时显示聊天窗，防止通讯录/消息下误显 */
 const showChatWindow = computed(() => {
   if (uiStore.detailView !== 'chat' || !chatStore.currentConversationId) return false
+  if (
+    chatStore.currentConversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
+    || chatStore.currentConversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
+  ) {
+    return false
+  }
   const isFileHelper = isFileHelperTargetId(chatStore.currentConversation?.targetId)
   if (isFileHelper && uiStore.sidebarTab !== 'transfer') return false
   return true

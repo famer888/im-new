@@ -4,6 +4,10 @@ import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { formatSystemNotificationDisplayParts } from '@/utils/systemNotificationDisplay'
+import {
+  openNotificationModule,
+  resolveNotificationModuleTargetFromMessage,
+} from '@/utils/notificationNavigation'
 
 const props = defineProps<{
   message: Message
@@ -18,6 +22,14 @@ const parsedNotice = computed(() => {
     currentUid: String(authStore.uid || ''),
   })
 })
+
+const notificationActionTarget = computed(() => resolveNotificationModuleTargetFromMessage(props.message))
+
+function handleOpenNotificationModule() {
+  const target = notificationActionTarget.value
+  if (!target) return
+  void openNotificationModule(target)
+}
 </script>
 
 <template>
@@ -25,6 +37,14 @@ const parsedNotice = computed(() => {
     <span class="text">
       <strong v-if="parsedNotice.prefix">{{ parsedNotice.prefix }}</strong>{{ parsedNotice.text }}
     </span>
+    <button
+      v-if="notificationActionTarget"
+      class="view-btn"
+      type="button"
+      @click.stop="handleOpenNotificationModule"
+    >
+      {{ t('查看') }}
+    </button>
   </div>
 </template>
 
@@ -33,6 +53,10 @@ const parsedNotice = computed(() => {
   text-align: center;
   padding: 10px 30px !important;
   position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
 
   .text {
     display: inline-block;
@@ -47,6 +71,21 @@ const parsedNotice = computed(() => {
       font-size: 12px;
       font-weight: 600;
       color: #333;
+    }
+  }
+
+  .view-btn {
+    flex-shrink: 0;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: #178aff;
+    cursor: pointer;
+
+    &:hover {
+      opacity: 0.8;
     }
   }
 }

@@ -4,7 +4,12 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
-import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
+import {
+  CHANNEL_NOTIFICATION_TARGET_ID,
+  GROUP_NOTIFICATION_TARGET_ID,
+  isFileHelperTargetId,
+  useChatStore,
+} from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { ConversationType } from '@/types'
@@ -14,6 +19,7 @@ import {
   type GroupIntroNoticePayload,
 } from '@/utils/groupIntroNotice'
 import { isMessageEligibleForUnreadAnchor } from '@/utils/chatUnreadVisibility'
+import { isPendingGroupInviteChatMessage } from '@/utils/notificationNavigation'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
@@ -102,6 +108,17 @@ const topGroupNoticeVisible = computed(() =>
     && latestGroupIntroNotice.value.key !== dismissedGroupNoticeKey.value,
   ),
 )
+
+const hideMessageInput = computed(() => {
+  const conv = conversation.value
+  if (!conv) return false
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
+  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) return true
+
+  // 待处理入群邀请的聊天只允许查看通知，不应继续展示输入区。
+  const latestVisibleMessage = [...messages.value].reverse().find((message) => !message.isDeleted) ?? null
+  return isPendingGroupInviteChatMessage(latestVisibleMessage)
+})
 
 function getGroupNoticeAckStorageKey(uid: string, groupId: string): string {
   return `group-intro-notice-ack:${uid}:${groupId}`
@@ -500,7 +517,7 @@ onBeforeUnmount(() => {
       @load-more="handleLoadMore"
       @open-group-notice="handleOpenGroupNoticeFromMessage"
     />
-    <MessageInput @send="handleSend" />
+    <MessageInput v-if="!hideMessageInput" @send="handleSend" />
     <div
       v-if="dropAreaVisible"
       class="dom-drop-area"

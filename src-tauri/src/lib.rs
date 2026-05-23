@@ -1,3 +1,4 @@
+mod branding;
 mod commands;
 mod config;
 mod crypto;
@@ -21,13 +22,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            let app_display_name = branding::app_display_name(app);
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("failed to resolve app data dir");
 
             logger::init(&app_data_dir)?;
-            info!("OCS Chat starting...");
+            info!("{} starting...", app_display_name);
 
             let app_handle = app.handle().clone();
             commands::auth::start_active_login_monitor(app_handle.clone());
@@ -73,7 +75,7 @@ pub fn run() {
                 };
                 let mut builder =
                     WebviewWindowBuilder::new(app, "login", WebviewUrl::App(login_url.into()))
-                        .title("OCS Chat")
+                        .title(&app_display_name)
                         .inner_size(300.0, 420.0)
                         .resizable(false)
                         .center()
@@ -107,7 +109,7 @@ pub fn run() {
                 });
             }
 
-            info!("OCS Chat initialized successfully");
+            info!("{} initialized successfully", app_display_name);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

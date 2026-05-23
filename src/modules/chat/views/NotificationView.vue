@@ -12,6 +12,7 @@ import channelIcon from '@/assets/images/logo/channel-notice.webp'
 import groupChatIcon from '@/assets/images/notification-popup/group-chat-icon.png'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useSettingStore } from '@/stores/useSettingStore'
+import { getNotificationModuleTargetFromConversationId } from '@/utils/notificationNavigation'
 
 interface NotificationData {
   conversationId: string
@@ -43,6 +44,12 @@ const defaultAvatar = computed(() => {
 const avatarSrc = computed(() => safeImageSrc(data.value?.avatar, defaultAvatar.value))
 const isGroup = computed(() => data.value?.conversationType === 'group')
 const messageText = computed(() => String(data.value?.body || ''))
+const notificationModuleTarget = computed(() =>
+  getNotificationModuleTargetFromConversationId(data.value?.conversationId),
+)
+const actionButtonLabel = computed(() => (
+  notificationModuleTarget.value ? t('查看') : t('回复')
+))
 
 // 通知 payload 来自跨窗口 query/event，文本虽由 Vue 转义，仍先收窄长度和控制字符。
 function sanitizeText(value: unknown, maxLength: number): string {
@@ -131,6 +138,15 @@ async function handleReply() {
   replyInput.value?.focus()
 }
 
+async function handleActionButton() {
+  // 群/频道通知类桌面提醒右下角统一走“查看”，不能继续展开回复输入框。
+  if (notificationModuleTarget.value) {
+    await handleClick()
+    return
+  }
+  await handleReply()
+}
+
 async function handleSend() {
   const content = replyText.value.trim()
   if (!data.value || !content || sending.value) return
@@ -188,12 +204,12 @@ function handleReplyKeydown(event: KeyboardEvent) {
         v-if="!isReplying"
         class="reply-button"
         type="button"
-        @click.stop="handleReply"
+        @click.stop="handleActionButton"
       >
-        {{ t('回复') }}
+        {{ actionButtonLabel }}
       </button>
     </div>
-    <form v-if="isReplying" class="reply-form" @submit.prevent.stop>
+    <form v-if="isReplying && !notificationModuleTarget" class="reply-form" @submit.prevent.stop>
       <input
         ref="replyInput"
         v-model="replyText"

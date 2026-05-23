@@ -1,3 +1,4 @@
+import { API_CONFIG } from '@/api/config'
 import { getAllDomains } from '@/utils/domainPool'
 import { getListDomainDiagnostic } from '@/api/imDomain'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -663,7 +664,7 @@ export async function collectSendDiagnostics(): Promise<string> {
   const lastMessages = messages.slice(-8)
 
   const lines = [
-    'OCS Chat 发送诊断',
+    `${API_CONFIG.brandDisplayName} 发送诊断`,
     `time: ${new Date().toISOString()}`,
     `uid: ${authStore.uid || ''}`,
     `sessionId: ${authStore.session?.sessionId || ''}`,

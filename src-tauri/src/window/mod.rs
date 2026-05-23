@@ -1,5 +1,6 @@
 pub mod tray;
 
+use crate::branding;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -75,8 +76,11 @@ impl WindowManager {
         conversation_id: &str,
         title: &str,
     ) -> Result<(), WindowError> {
+        // Keep subwindow titles branded so multi-brand installs are easy to distinguish.
+        let window_title = branding::chat_window_title(app, title);
         if let Some(label) = self.chat_windows.get(conversation_id) {
             if let Some(window) = app.get_webview_window(label.value()) {
+                let _ = window.set_title(&window_title);
                 window
                     .set_focus()
                     .map_err(|e| WindowError::TauriError(e.to_string()))?;
@@ -88,7 +92,7 @@ impl WindowManager {
         let url = format!("/chat?id={}", conversation_id);
 
         let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
-            .title(title)
+            .title(&window_title)
             .inner_size(600.0, 500.0)
             .min_inner_size(400.0, 300.0)
             .center();
@@ -161,9 +165,10 @@ impl WindowManager {
                 (w, true)
             }
             None => {
+                let app_display_name = branding::app_display_name(app);
                 let mut builder =
                     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/#/home".into()))
-                        .title("OCS Chat")
+                        .title(&app_display_name)
                         .inner_size(900.0, 600.0)
                         .min_inner_size(800.0, 600.0)
                         .center();
@@ -246,6 +251,7 @@ impl WindowManager {
                     .map_err(|e| WindowError::TauriError(e.to_string()))?;
             }
             None => {
+                let app_display_name = branding::app_display_name(app);
                 let login_url = if auto_login {
                     "/#/login"
                 } else {
@@ -253,7 +259,7 @@ impl WindowManager {
                 };
                 let mut builder =
                     WebviewWindowBuilder::new(app, "login", WebviewUrl::App(login_url.into()))
-                        .title("OCS Chat")
+                        .title(&app_display_name)
                         .inner_size(300.0, 420.0)
                         .resizable(false)
                         .center();
