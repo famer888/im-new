@@ -1122,7 +1122,8 @@ async function ensureImageCacheFile(data: Record<string, unknown>): Promise<stri
 }
 
 async function openImageDirectory(data: Record<string, unknown>) {
-  const filePath = await ensureImageCacheFile(data)
+  const rememberedPath = await resolveRememberedImagePath(data)
+  const filePath = rememberedPath || await ensureImageCacheFile(data)
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('reveal_file_in_directory', { path: filePath })
 }
@@ -1957,6 +1958,31 @@ function normalizeImageFileName(fileName: string): string {
   return `${sanitized || 'image'}.png`
 }
 
+const imageSavedPathByMessageKey = new Map<string, string>()
+
+function imageSavedPathKey(data?: Record<string, unknown>): string {
+  return String(data?.messageId || data?.msgId || data?.customMsgId || '').trim()
+}
+
+function rememberSavedImagePath(data: Record<string, unknown> | undefined, filePath: string) {
+  const key = imageSavedPathKey(data)
+  const normalizedPath = String(filePath || '').trim()
+  if (!key || !normalizedPath) return
+  imageSavedPathByMessageKey.set(key, normalizedPath)
+}
+
+async function resolveRememberedImagePath(data: Record<string, unknown>): Promise<string> {
+  const key = imageSavedPathKey(data)
+  if (!key) return ''
+
+  const rememberedPath = String(imageSavedPathByMessageKey.get(key) || '').trim()
+  if (!rememberedPath) return ''
+  if (await tauriFileExists(rememberedPath)) return rememberedPath
+
+  imageSavedPathByMessageKey.delete(key)
+  return ''
+}
+
 function suggestImageSaveName(data: Record<string, unknown>): string {
   const rawContent = String(data.content || '').trim()
   if (!rawContent) return normalizeImageFileName(String(data.messageId || 'image'))
@@ -1979,6 +2005,8 @@ function suggestImageSaveName(data: Record<string, unknown>): string {
 }
 
 async function saveImageAs(src: string, suggestedName: string, data?: Record<string, unknown>) {
+  let tauriTargetPath = ''
+
   if ((window as any).__TAURI_INTERNALS__) {
     const {
       filePath,
@@ -1987,6 +2015,7 @@ async function saveImageAs(src: string, suggestedName: string, data?: Record<str
     } = await userSelectPngSavePathWithOverwrite(suggestedName)
     if (!filePath || canceled) return
     const finalPath = filePath.toLowerCase().endsWith('.png') ? filePath : `${filePath}.png`
+    tauriTargetPath = finalPath
     if (needsOverwriteConfirm) {
       const confirmed = await promptImageOverwrite(finalPath)
       if (!confirmed) return
@@ -2001,6 +2030,8 @@ async function saveImageAs(src: string, suggestedName: string, data?: Record<str
             sourcePath: localPath,
             targetPath: finalPath,
           })
+          // 对齐旧 im：另存为成功后，后续“打开目录”应回到用户选择的新文件。
+          rememberSavedImagePath(data, finalPath)
           showToast(t('保存成功'))
           return
         }
@@ -2034,13 +2065,14 @@ async function saveImageAs(src: string, suggestedName: string, data?: Record<str
   const dataUrl = await blobToDataUrl(blob)
 
   if ((window as any).__TAURI_INTERNALS__) {
-    const err = await exportBase64ImgToLocal(dataUrl, (() => {
-      const fixedPath = suggestedName.toLowerCase().endsWith('.png') ? suggestedName : `${suggestedName}.png`
-      return fixedPath
-    })())
+    if (!tauriTargetPath) {
+      throw new Error('image save target path unavailable')
+    }
+    const err = await exportBase64ImgToLocal(dataUrl, tauriTargetPath)
     if (err) {
       throw err
     }
+    rememberSavedImagePath(data, tauriTargetPath)
     showToast(t('保存成功'))
     return
   }
