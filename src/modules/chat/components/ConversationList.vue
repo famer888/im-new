@@ -58,6 +58,8 @@ const scrollTop = ref(0)
 const viewportHeight = ref(0)
 const archiveEntryHeight = ref(0)
 let resizeObserver: ResizeObserver | null = null
+let previewRefreshTimer: number | null = null
+const previewRepairSeenKeys = new Set<string>()
 
 type DigestSegment =
   | { type: 'text'; text: string }
@@ -66,12 +68,16 @@ type DigestSegment =
   | { type: 'sender'; text: string }
 
 function groupNoticeDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
-  const enabled = localStorage.getItem('debug:conversation-list') === '1'
-  if (!enabled) return
+  if (!isConversationListDebugEnabled()) return
   console[level](`[conversation-list] ${message}`, data || {})
 }
 
+function isConversationListDebugEnabled() {
+  return localStorage.getItem('debug:conversation-list') === '1'
+}
+
 function groupIntroTagTrace(conv: Conversation, data: Record<string, unknown>) {
+  if (!isConversationListDebugEnabled()) return
   const key = [
     conv.id,
     conv.unreadCount,
@@ -100,12 +106,12 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   }
   switch (conv.type) {
     case ConversationType.Friend:
-      return Boolean(contactStore.getContact(conv.targetId))
+      return contactIdSet.value.has(conv.targetId)
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
-      return Boolean(groupStore.getGroup(conv.targetId))
+      return groupByIdMap.value.has(conv.targetId)
     case ConversationType.Channel:
-      return Boolean(channelStore.getChannel(conv.targetId))
+      return channelByIdMap.value.has(conv.targetId)
     default:
       return false
   }
@@ -135,7 +141,7 @@ function isPendingInviteConversationPreview(conv: Conversation): boolean {
 function isSuspiciousPlaceholderGroupConversation(conv: Conversation): boolean {
   if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
 
-  const group = groupStore.getGroup(conv.targetId)
+  const group = groupByIdMap.value.get(conv.targetId)
   if (!group) return false
 
   const explicitName = String(group.name || '').trim()
@@ -176,6 +182,17 @@ function isEmptyGroupConversationPreview(conv: Conversation): boolean {
   if (String(conv.lastMsgDigest || '').trim()) return false
   return !getLoadedLatestVisibleMessage(conv)
 }
+
+const contactIdSet = computed(() => new Set(contactStore.contacts.map((contact) => contact.id)))
+const groupByIdMap = computed(() => new Map(groupStore.groups.map((group) => [group.id, group])))
+const channelByIdMap = computed(() => {
+  const map = new Map<string, (typeof channelStore.channels)[number]>()
+  for (const channel of channelStore.channels) {
+    if (channel.id) map.set(channel.id, channel)
+    if (channel.channelId) map.set(channel.channelId, channel)
+  }
+  return map
+})
 
 const normalConversations = computed(() =>
   chatStore.conversations.filter(
@@ -295,10 +312,10 @@ function getName(conv: Conversation): string {
     case ConversationType.Friend:
       return contactStore.getDisplayName(conv.targetId)
     case ConversationType.Group:
-      return groupStore.getGroup(conv.targetId)?.name ?? conv.targetId
+      return groupByIdMap.value.get(conv.targetId)?.name ?? conv.targetId
     case ConversationType.Channel:
-      return channelStore.getChannel(conv.targetId)?.channelName
-        ?? channelStore.getChannel(conv.targetId)?.name
+      return channelByIdMap.value.get(conv.targetId)?.channelName
+        ?? channelByIdMap.value.get(conv.targetId)?.name
         ?? conv.targetId
     default:
       return conv.targetId
@@ -318,9 +335,9 @@ function explicitConversationName(conv: Conversation): string {
       return String(contact?.remark || contact?.nickname || '').trim()
     }
     case ConversationType.Group:
-      return String(groupStore.getGroup(conv.targetId)?.name || '').trim()
+      return String(groupByIdMap.value.get(conv.targetId)?.name || '').trim()
     case ConversationType.Channel: {
-      const channel = channelStore.getChannel(conv.targetId)
+      const channel = channelByIdMap.value.get(conv.targetId)
       return String(channel?.channelName || channel?.name || '').trim()
     }
     default:
@@ -344,7 +361,7 @@ function getDisplayNameForAvatar(conv: Conversation): string {
 
 function shouldRepairChannelName(conv: Conversation): boolean {
   if (conv.type !== ConversationType.Channel) return false
-  const channel = channelStore.getChannel(conv.targetId)
+  const channel = channelByIdMap.value.get(conv.targetId)
   if (!channel) return false
   const name = String(channel.channelName || channel.name || '').trim()
   return !name || name === String(conv.targetId)
@@ -381,9 +398,9 @@ function getAvatar(conv: Conversation): string | null {
     case ConversationType.Friend:
       return contactStore.getContact(conv.targetId)?.avatar ?? null
     case ConversationType.Group:
-      return groupStore.getGroup(conv.targetId)?.avatar ?? null
+      return groupByIdMap.value.get(conv.targetId)?.avatar ?? null
     case ConversationType.Channel:
-      return channelStore.getChannel(conv.targetId)?.avatar ?? null
+      return channelByIdMap.value.get(conv.targetId)?.avatar ?? null
     default:
       return null
   }
@@ -391,13 +408,13 @@ function getAvatar(conv: Conversation): string | null {
 
 function getAvatarId(conv: Conversation): string | undefined {
   if (conv.type !== ConversationType.Channel) return undefined
-  const channel = channelStore.getChannel(conv.targetId)
+  const channel = channelByIdMap.value.get(conv.targetId)
   return channel?.channelId || channel?.id || conv.targetId
 }
 
 function getAvatarColor(conv: Conversation): string | undefined {
   if (conv.type !== ConversationType.Channel) return undefined
-  return channelStore.getChannel(conv.targetId)?.logoColor || undefined
+  return channelByIdMap.value.get(conv.targetId)?.logoColor || undefined
 }
 
 function getAvatarType(conv: Conversation): 'friend' | 'group' | 'channel' {
@@ -779,16 +796,47 @@ function repairGroupDigestPreview(conv: Conversation) {
 }
 
 function refreshConversationListPreview(reason = 'manual') {
+  const candidates = getPreviewRepairCandidates()
   groupNoticeDebug('refresh preview', {
     reason,
     uid: authStore.uid || '',
     currentConversationId: chatStore.currentConversationId || '',
-    count: displayList.value.length,
+    count: candidates.length,
   })
-  for (const conv of displayList.value) {
+  for (const conv of candidates) {
+    const channel = conv.type === ConversationType.Channel ? channelByIdMap.value.get(conv.targetId) : null
+    const repairKey = [
+      conv.id,
+      conv.lastMsgId || '',
+      conv.lastMsgTime || 0,
+      conv.lastMsgDigest || '',
+      channel?.channelName || '',
+      channel?.name || '',
+    ].join('|')
+    if (previewRepairSeenKeys.has(repairKey)) continue
+    previewRepairSeenKeys.add(repairKey)
     repairGroupDigestPreview(conv)
     repairChannelName(conv)
   }
+}
+
+function getPreviewRepairCandidates(): Conversation[] {
+  const seen = new Set<string>()
+  const candidates: Conversation[] = []
+  for (const conv of [...visibleConversationRows.value, ...displayList.value.slice(0, 12)]) {
+    if (seen.has(conv.id)) continue
+    seen.add(conv.id)
+    candidates.push(conv)
+  }
+  return candidates
+}
+
+function scheduleRefreshConversationListPreview(reason: string) {
+  if (previewRefreshTimer !== null) return
+  previewRefreshTimer = window.setTimeout(() => {
+    previewRefreshTimer = null
+    refreshConversationListPreview(reason)
+  }, 120)
 }
 
 if (import.meta.env.DEV) {
@@ -1010,34 +1058,36 @@ function hasDisplayUnread(conv: Conversation): boolean {
 watch(
   () => [
     String(authStore.uid || ''),
-    ...displayList.value.map((conv) => `${conv.id}:${conv.lastMsgDigest || ''}`),
-    ...displayList.value.map((conv) => {
-      const channel = conv.type === ConversationType.Channel ? channelStore.getChannel(conv.targetId) : null
+    ...visibleConversationRows.value.map((conv) => `${conv.id}:${conv.lastMsgDigest || ''}`),
+    ...visibleConversationRows.value.map((conv) => {
+      const channel = conv.type === ConversationType.Channel ? channelByIdMap.value.get(conv.targetId) : null
       return channel ? `${conv.id}:${channel.channelName || ''}:${channel.name || ''}` : ''
     }),
   ],
   () => {
-    groupNoticeDebug('sidebar data', {
-      uid: authStore.uid || '',
-      currentConversationId: chatStore.currentConversationId || '',
-      items: displayList.value.map((conv) => ({
-        id: conv.id,
-        type: conv.type,
-        targetId: conv.targetId,
-        name: getName(conv),
-        lastMsgId: conv.lastMsgId,
-        lastMsgTime: conv.lastMsgTime,
-        lastMsgDigest: conv.lastMsgDigest,
-        channelName: conv.type === ConversationType.Channel
-          ? channelStore.getChannel(conv.targetId)?.channelName || channelStore.getChannel(conv.targetId)?.name || ''
-          : '',
-        loadedCount: messageStore.getMessages(conv.id).length,
-        shouldRepair: shouldRepairGroupDigestPreview(conv),
-        shouldRepairChannelName: shouldRepairChannelName(conv),
-        digest: getDigest(conv),
-      })),
-    })
-    refreshConversationListPreview('watch')
+    if (isConversationListDebugEnabled()) {
+      groupNoticeDebug('sidebar data', {
+        uid: authStore.uid || '',
+        currentConversationId: chatStore.currentConversationId || '',
+        items: visibleConversationRows.value.map((conv) => ({
+          id: conv.id,
+          type: conv.type,
+          targetId: conv.targetId,
+          name: getName(conv),
+          lastMsgId: conv.lastMsgId,
+          lastMsgTime: conv.lastMsgTime,
+          lastMsgDigest: conv.lastMsgDigest,
+          channelName: conv.type === ConversationType.Channel
+            ? channelByIdMap.value.get(conv.targetId)?.channelName || channelByIdMap.value.get(conv.targetId)?.name || ''
+            : '',
+          loadedCount: messageStore.getMessages(conv.id).length,
+          shouldRepair: shouldRepairGroupDigestPreview(conv),
+          shouldRepairChannelName: shouldRepairChannelName(conv),
+          digest: getDigest(conv),
+        })),
+      })
+    }
+    scheduleRefreshConversationListPreview('watch')
   },
   { immediate: true },
 )
@@ -1150,6 +1200,10 @@ watch(archiveEntryVisible, () => {
 })
 
 onBeforeUnmount(() => {
+  if (previewRefreshTimer !== null) {
+    window.clearTimeout(previewRefreshTimer)
+    previewRefreshTimer = null
+  }
   resizeObserver?.disconnect()
   resizeObserver = null
 })

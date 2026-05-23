@@ -725,7 +725,9 @@ pub fn build_send_private_message_req(
         send_uid: sender_uid,
         receive_uid,
         msg_type,
-        content: vec![], // Empty for encrypted messages
+        // 对齐老 im：私聊即使带分端加密块，外层 content 仍然保留编码后的明文内容。
+        // 服务端和老协议链路会同时依赖 content/content_md5 + app/web/myself*Content。
+        content: content_plain.to_vec(),
         send_time,
         // 对齐老 im：私聊 version 使用当前账号 web key 的版本号。
         version: own_web_version,
@@ -881,7 +883,7 @@ mod tests {
         let decoded = imweb::OneToOneMessageReq::decode(req_bytes.as_slice()).unwrap();
         let msg = decoded.one_to_one_message.unwrap();
         assert_eq!(msg.msg_type, 5);
-        assert_eq!(msg.content, Vec::<u8>::new());
+        assert_eq!(msg.content, plain);
         assert_eq!(msg.version, 6);
 
         let web_content = msg.web_content.unwrap();

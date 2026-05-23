@@ -2015,6 +2015,22 @@ impl MessageBatcher {
             .map_err(|e| format!("decode PushKeyPairChangeMessageResp: {}", e))?;
         let uid = resp.uid.to_string();
         let crypto = self.app_handle.state::<crate::crypto::CryptoEngine>();
+        // 对齐旧版 im：20501 不只用于当前会话内存派生，也要继续通知前端更新好友公钥缓存，
+        // 这样重启后仍能按版本恢复单聊发消息所需的 friend key 映射。
+        let _ = self.app_handle.emit(
+            "key-pair:change",
+            serde_json::json!({
+                "uid": uid.clone(),
+                "appKeyPair": resp.app_key_pair.as_ref().map(|item| serde_json::json!({
+                    "publicKey": item.public_key,
+                    "keyVersion": item.key_version,
+                })),
+                "webKeyPair": resp.web_key_pair.as_ref().map(|item| serde_json::json!({
+                    "publicKey": item.public_key,
+                    "keyVersion": item.key_version,
+                })),
+            }),
+        );
 
         if let Some(web) = resp.web_key_pair.as_ref() {
             if !web.public_key.is_empty() && web.key_version > 0 {

@@ -2506,7 +2506,7 @@ async function handleForward(targetConvId: string) {
 
     <!-- Network status bar -->
     <Transition name="slide-down">
-      <div v-if="networkStore.isReconnecting" class="network-bar reconnecting">
+      <div v-if="networkStore.reconnectingVisible" class="network-bar reconnecting">
         {{ $t('网络连接中...') }}
       </div>
       <div v-else-if="!networkStore.isOnline" class="network-bar offline">

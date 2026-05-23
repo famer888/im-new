@@ -112,7 +112,10 @@ impl WsManager {
         }
 
         let current = *self.status.read();
-        if current == ConnectionStatus::Connected || current == ConnectionStatus::Connecting {
+        if current == ConnectionStatus::Connected
+            || current == ConnectionStatus::Connecting
+            || current == ConnectionStatus::Reconnecting
+        {
             return Ok(());
         }
 

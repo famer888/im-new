@@ -90,17 +90,27 @@ const showChatListSkeleton = computed(() =>
   && !searchKeyword.value.trim(),
 )
 const chatListSkeletonRows = Array.from({ length: CHAT_LIST_SKELETON_ROWS }, (_, index) => index)
+const contactIdSet = computed(() => new Set(contactStore.contacts.map((contact) => contact.id)))
+const groupByIdMap = computed(() => new Map(groupStore.groups.map((group) => [group.id, group])))
+const channelByIdMap = computed(() => {
+  const map = new Map<string, (typeof channelStore.channels)[number]>()
+  for (const channel of channelStore.channels) {
+    if (channel.id) map.set(channel.id, channel)
+    if (channel.channelId) map.set(channel.channelId, channel)
+  }
+  return map
+})
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   switch (conv.type) {
     case ConversationType.Friend:
       if (conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) return true
-      return Boolean(contactStore.getContact(conv.targetId))
+      return contactIdSet.value.has(conv.targetId)
     case ConversationType.Group:
       if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
-      return Boolean(groupStore.getGroup(conv.targetId))
+      return groupByIdMap.value.has(conv.targetId)
     case ConversationType.Channel:
-      return Boolean(channelStore.getChannel(conv.targetId))
+      return channelByIdMap.value.has(conv.targetId)
     default:
       return false
   }
@@ -108,7 +118,7 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
 
 function isSuspiciousPlaceholderGroupConversation(conv: Conversation): boolean {
   if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
-  const group = groupStore.getGroup(conv.targetId)
+  const group = groupByIdMap.value.get(conv.targetId)
   if (!group) return false
 
   const explicitName = String(group.name || '').trim()
@@ -122,8 +132,7 @@ function isSuspiciousPlaceholderGroupConversation(conv: Conversation): boolean {
 function isConversationMuted(conv: Conversation): boolean {
   if (conv.isMuted) return true
   if (conv.type !== ConversationType.Channel) return false
-  const channel = channelStore.getChannel(conv.targetId)
-    || channelStore.channels.find((item) => item.id === conv.targetId || item.channelId === conv.targetId)
+  const channel = channelByIdMap.value.get(conv.targetId)
   return Boolean(channel?.isDisturb)
 }
 

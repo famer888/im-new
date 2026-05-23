@@ -29,6 +29,7 @@ import {
   normalizeResolvedFileKey,
   refreshGroupRelKey,
   resolvePrivateAttachmentFileKey,
+  updateFriendKeyCacheFromPush,
 } from '@/utils/e2ee'
 import { isHiddenMessageType } from '@/types'
 
@@ -804,6 +805,17 @@ export async function setupTauriListeners() {
         groupKeyWarmupPending = null
       })
     }
+  })
+
+  listen<{
+    uid?: string | number
+    appKeyPair?: { publicKey?: string; keyVersion?: number } | null
+    webKeyPair?: { publicKey?: string; keyVersion?: number } | null
+  }>('key-pair:change', (event) => {
+    const authStore = useAuthStore()
+    const uid = String(authStore.uid || '').trim()
+    if (!uid) return
+    updateFriendKeyCacheFromPush(uid, event.payload || {})
   })
 
   listen<{ conversationId?: string }>('notification:click', async (event) => {

@@ -36,6 +36,10 @@ interface OwnKeyPair {
   keyVersion: number
 }
 
+type FriendKeyPair = { publicKey?: string; keyVersion?: number } | null
+type FriendKeyCacheEntry = Record<string, string>
+type FriendKeyCache = Record<string, FriendKeyCacheEntry>
+
 function ownKeyStorageKey(uid: string | number): string {
   return `e2ee-own-key:${uid}`
 }
@@ -91,6 +95,174 @@ async function persistOwnKey(uid: string | number, kp: OwnKeyPair): Promise<void
   }
 }
 
+const friendKeyCacheByLogin = new Map<string, FriendKeyCache>()
+
+function friendKeyStorageKey(uid: string | number): string {
+  // 对齐旧版 im：继续沿用 `${loginId}-friend-key-objs` 作为好友公钥缓存 key。
+  return `${String(uid)}-friend-key-objs`
+}
+
+function normalizeFriendCachePublicKey(value: unknown): string {
+  return String(value || '').trim().toUpperCase()
+}
+
+function loadFriendKeyCache(loginUid: string | number): FriendKeyCache {
+  const uid = String(loginUid || '').trim()
+  if (!uid) return {}
+  const memory = friendKeyCacheByLogin.get(uid)
+  if (memory) return memory
+  try {
+    const raw = localStorage.getItem(friendKeyStorageKey(uid))
+    if (!raw) {
+      const empty: FriendKeyCache = {}
+      friendKeyCacheByLogin.set(uid, empty)
+      return empty
+    }
+    const parsed = JSON.parse(raw) as FriendKeyCache
+    const normalized: FriendKeyCache = {}
+    for (const [friendId, keyInfos] of Object.entries(parsed || {})) {
+      if (!keyInfos || typeof keyInfos !== 'object') continue
+      const entry: FriendKeyCacheEntry = {}
+      for (const [key, value] of Object.entries(keyInfos)) {
+        const publicKey = normalizeFriendCachePublicKey(value)
+        if (!publicKey) continue
+        entry[key] = publicKey
+      }
+      if (Object.keys(entry).length > 0) {
+        normalized[String(friendId)] = entry
+      }
+    }
+    friendKeyCacheByLogin.set(uid, normalized)
+    return normalized
+  } catch (err) {
+    console.warn('[e2ee] load friend key cache failed:', err)
+    const empty: FriendKeyCache = {}
+    friendKeyCacheByLogin.set(uid, empty)
+    return empty
+  }
+}
+
+function saveFriendKeyCache(loginUid: string | number, cache: FriendKeyCache) {
+  const uid = String(loginUid || '').trim()
+  if (!uid) return
+  friendKeyCacheByLogin.set(uid, cache)
+  try {
+    localStorage.setItem(friendKeyStorageKey(uid), JSON.stringify(cache))
+  } catch (err) {
+    console.warn('[e2ee] save friend key cache failed:', err)
+  }
+}
+
+function friendCacheKey(source: 'app' | 'web', version: number): string {
+  return `${source === 'app' ? 'app' : 'pc'}-${version}`
+}
+
+function upsertFriendPublicKey(
+  loginUid: string | number,
+  friendId: string | number,
+  source: 'app' | 'web',
+  keyVersion: unknown,
+  publicKey: unknown,
+): boolean {
+  const uid = String(loginUid || '').trim()
+  const fid = String(friendId || '').trim()
+  const version = Number(keyVersion || 0)
+  const normalizedKey = normalizeFriendCachePublicKey(publicKey)
+  if (!uid || !fid || !version || !normalizedKey) return false
+
+  const cache = loadFriendKeyCache(uid)
+  const entry = { ...(cache[fid] || {}) }
+  const key = friendCacheKey(source, version)
+  if (entry[key] === normalizedKey) return false
+  entry[key] = normalizedKey
+  cache[fid] = entry
+  saveFriendKeyCache(uid, cache)
+  return true
+}
+
+function pickLatestFriendKeyPair(entry: FriendKeyCacheEntry | undefined, source: 'app' | 'web'): FriendKeyPair {
+  if (!entry) return null
+  const prefix = source === 'app' ? 'app-' : 'pc-'
+  let bestVersion = 0
+  let bestPublicKey = ''
+  for (const [key, publicKeyRaw] of Object.entries(entry)) {
+    if (!key.startsWith(prefix)) continue
+    const version = Number(key.slice(prefix.length))
+    const publicKey = normalizeFriendCachePublicKey(publicKeyRaw)
+    if (!version || !publicKey) continue
+    if (version > bestVersion) {
+      bestVersion = version
+      bestPublicKey = publicKey
+    }
+  }
+  if (!bestVersion || !bestPublicKey) return null
+  return { publicKey: bestPublicKey, keyVersion: bestVersion }
+}
+
+function getCachedFriendKeyPairs(loginUid: string | number, friendId: string | number): FriendKeyPairResponse {
+  const entry = loadFriendKeyCache(loginUid)[String(friendId || '').trim()]
+  return {
+    appKeyPair: pickLatestFriendKeyPair(entry, 'app'),
+    webKeyPair: pickLatestFriendKeyPair(entry, 'web'),
+  }
+}
+
+function getCachedFriendKeyPairForVersion(
+  loginUid: string | number,
+  friendId: string | number,
+  version: number,
+  source?: string,
+): FriendKeyPairResponse {
+  const entry = loadFriendKeyCache(loginUid)[String(friendId || '').trim()]
+  if (!entry || !version) {
+    return {}
+  }
+  const result: FriendKeyPairResponse = {}
+  const webPublicKey = normalizeFriendCachePublicKey(entry[friendCacheKey('web', version)])
+  const appPublicKey = normalizeFriendCachePublicKey(entry[friendCacheKey('app', version)])
+  if ((!source || source === 'web') && webPublicKey) {
+    result.webKeyPair = {
+      publicKey: webPublicKey,
+      keyVersion: version,
+    }
+  }
+  if ((!source || source === 'app') && appPublicKey) {
+    result.appKeyPair = {
+      publicKey: appPublicKey,
+      keyVersion: version,
+    }
+  }
+  return result
+}
+
+function persistFriendKeyPairs(
+  loginUid: string | number,
+  friendId: string | number,
+  resp: FriendKeyPairResponse | null | undefined,
+) {
+  if (!resp) return
+  upsertFriendPublicKey(loginUid, friendId, 'app', resp.appKeyPair?.keyVersion, resp.appKeyPair?.publicKey)
+  upsertFriendPublicKey(loginUid, friendId, 'web', resp.webKeyPair?.keyVersion, resp.webKeyPair?.publicKey)
+}
+
+export function updateFriendKeyCacheFromPush(
+  loginUid: string | number,
+  payload: {
+    uid?: string | number
+    appKeyPair?: { publicKey?: string; keyVersion?: number } | null
+    webKeyPair?: { publicKey?: string; keyVersion?: number } | null
+  },
+) {
+  const friendId = String(payload?.uid || '').trim()
+  if (!friendId) return
+  // 对齐旧版 im：20501 推送到达后，把好友 app/web 公钥按版本写入本地缓存，
+  // 后续即使接口临时返回空 key，发送链路也能继续从本地恢复。
+  persistFriendKeyPairs(loginUid, friendId, {
+    appKeyPair: payload?.appKeyPair || null,
+    webKeyPair: payload?.webKeyPair || null,
+  })
+}
+
 /**
  * 确保当前账号自己的 curve25519 keypair 可用，并已经注入 Rust。
  *
@@ -114,6 +286,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
   const localCached = loadOwnKey(uid)
   const cached = stableCached || localCached
   if (cached) {
+    upsertFriendPublicKey(uid, uid, 'web', cached.keyVersion, cached.publicKey)
     if (stableCached && !localCached) {
       saveOwnKey(uid, cached)
     } else if (!stableCached && localCached) {
@@ -159,6 +332,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           keyVersion,
         }
         await persistOwnKey(uid, kp)
+        upsertFriendPublicKey(uid, uid, 'web', kp.keyVersion, kp.publicKey)
         await tauriInvoke<void>('set_curve_private_key_hex', {
           privateKeyHex: kp.privateKey,
         })
@@ -198,6 +372,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
     }
 
     if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
+      upsertFriendPublicKey(uid, uid, 'app', selfAppKeyPair.keyVersion, selfAppKeyPair.publicKey)
       try {
         await tauriInvoke<string>('derive_friend_rel_key', {
           friendId: String(uid),
@@ -268,6 +443,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       keyVersion,
     }
     await persistOwnKey(uid, kp)
+    upsertFriendPublicKey(uid, uid, 'web', kp.keyVersion, kp.publicKey)
 
     await tauriInvoke<void>('set_curve_private_key_hex', {
       privateKeyHex: kp.privateKey,
@@ -287,6 +463,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
     }
 
     if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
+      upsertFriendPublicKey(uid, uid, 'app', selfAppKeyPair.keyVersion, selfAppKeyPair.publicKey)
       try {
         await tauriInvoke<string>('derive_friend_rel_key', {
           friendId: String(uid),
@@ -323,6 +500,51 @@ const pendingGroupKeys = new Map<string, Promise<string>>()
 const pendingChannelKeys = new Map<string, Promise<string>>()
 const pendingFriendKeys = new Map<string, Promise<string>>()
 const pendingFriendVersionKeys = new Map<string, Promise<string>>()
+
+type FriendKeyPairResponse = {
+  appKeyPair?: { publicKey?: string; keyVersion?: number } | null
+  webKeyPair?: { publicKey?: string; keyVersion?: number } | null
+}
+
+async function requestFriendKeyPair(
+  friendId: string,
+  options?: {
+    webKeyVersion?: number
+    appKeyVersion?: number
+  },
+): Promise<FriendKeyPairResponse> {
+  const primaryReq: {
+    targetId: number
+    flag: number
+    webKeyVersion?: number
+    appKeyVersion?: number
+  } = {
+    targetId: Number(friendId),
+    flag: 1,
+  }
+  if (options?.webKeyVersion !== undefined) primaryReq.webKeyVersion = options.webKeyVersion
+  if (options?.appKeyVersion !== undefined) primaryReq.appKeyVersion = options.appKeyVersion
+
+  try {
+    return await getKeyPair(primaryReq) as FriendKeyPairResponse
+  } catch (error) {
+    console.warn('[e2ee] requestFriendKeyPair primary failed, fallback legacy request', {
+      friendId,
+      options,
+      error: String(error),
+    })
+    const legacyReq: {
+      targetId: number
+      webKeyVersion?: number
+      appKeyVersion?: number
+    } = {
+      targetId: Number(friendId),
+    }
+    if (options?.webKeyVersion !== undefined) legacyReq.webKeyVersion = options.webKeyVersion
+    if (options?.appKeyVersion !== undefined) legacyReq.appKeyVersion = options.appKeyVersion
+    return await getKeyPair(legacyReq) as FriendKeyPairResponse
+  }
+}
 
 /**
  * 保证群 `groupId` 的 relKey 已经被 Rust 缓存。拉取成功后返回 relKey
@@ -518,6 +740,14 @@ export async function ensureFriendRelKey(
   e2eeDebugLog('[e2ee] ensureFriendRelKey: start', { uid, fid })
   await ensureOwnKeyPair(uid)
 
+  if (!forceRefresh) {
+    const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', { friendId: fid })
+    if (cacheHit) {
+      e2eeDebugLog('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
+      return ''
+    }
+  }
+
   if (forceRefresh) {
     pendingFriendKeys.delete(fid)
     try {
@@ -531,24 +761,29 @@ export async function ensureFriendRelKey(
   if (existing) return existing
 
   const task = (async () => {
-    let web: any
-    let app: any
-    try {
-      const resp = await getKeyPair({
-        targetId: Number(fid),
-      })
-      web = (resp as any)?.webKeyPair
-      app = (resp as any)?.appKeyPair
-    } catch {
-      // ignore and fallback below
-    }
-    if (!web?.publicKey && !app?.publicKey) {
-      console.warn(`[e2ee] getKeyPair(friend=${fid}) missing publicKey`);
-      const resp0 = await getKeyPair({
-        targetId: Number(fid),
-      })
-      web = (resp0 as any)?.webKeyPair
-      app = (resp0 as any)?.appKeyPair
+    // 对齐老 im：先用本地缓存中的最新 app/web 公钥；只有缺口时才再调接口补全。
+    // 这样服务端偶发返回空 key 时，单聊发送仍可继续使用已有缓存。
+    let merged = getCachedFriendKeyPairs(uid, fid)
+    let web: any = merged.webKeyPair
+    let app: any = merged.appKeyPair
+    if (!web?.publicKey || !app?.publicKey) {
+      try {
+        const resp = await requestFriendKeyPair(fid, {
+          webKeyVersion: -1,
+          appKeyVersion: -1,
+        })
+        persistFriendKeyPairs(uid, fid, resp)
+        merged = getCachedFriendKeyPairs(uid, fid)
+        web = merged.webKeyPair
+        app = merged.appKeyPair
+      } catch (err) {
+        console.warn('[e2ee] requestFriendKeyPair(friend/latest) failed, keep cached keys', {
+          fid,
+          err: String(err),
+          hasCachedWeb: !!web?.publicKey,
+          hasCachedApp: !!app?.publicKey,
+        })
+      }
     }
     e2eeDebugLog('[e2ee] getKeyPair(friend) resp:', {
       fid,
@@ -667,12 +902,17 @@ export async function ensureFriendRelKeyForVersion(
 
   const task = (async () => {
     await ensureOwnKeyPair(uid)
+    let cached = getCachedFriendKeyPairForVersion(uid, fid, ver, src || undefined)
+    let web = cached.webKeyPair
+    let app = cached.appKeyPair
     const req: {
       targetId: number
+      flag: number
       webKeyVersion?: number
       appKeyVersion?: number
     } = {
       targetId: Number(fid),
+      flag: 1,
     }
     if (src === 'web') {
       req.webKeyVersion = ver
@@ -685,9 +925,48 @@ export async function ensureFriendRelKeyForVersion(
       }
       req.appKeyVersion = ver
     }
-    const resp = await getKeyPair(req)
-    const web = (resp as any)?.webKeyPair
-    const app = (resp as any)?.appKeyPair
+    if (
+      forceRefresh
+      || ((src === 'web' || !src) && !web?.publicKey)
+      || ((src === 'app' || !src) && !app?.publicKey)
+    ) {
+      try {
+        let resp: any
+        try {
+          resp = await getKeyPair(req)
+        } catch (error) {
+          console.warn('[e2ee] getKeyPair(friend/version) primary failed, fallback legacy request', {
+            fid,
+            ver,
+            source: src,
+            error: String(error),
+          })
+          const legacyReq: {
+            targetId: number
+            webKeyVersion?: number
+            appKeyVersion?: number
+          } = {
+            targetId: Number(fid),
+          }
+          if (req.webKeyVersion !== undefined) legacyReq.webKeyVersion = req.webKeyVersion
+          if (req.appKeyVersion !== undefined) legacyReq.appKeyVersion = req.appKeyVersion
+          resp = await getKeyPair(legacyReq)
+        }
+        persistFriendKeyPairs(uid, fid, resp)
+        cached = getCachedFriendKeyPairForVersion(uid, fid, ver, src || undefined)
+        web = cached.webKeyPair
+        app = cached.appKeyPair
+      } catch (error) {
+        console.warn('[e2ee] getKeyPair(friend/version) failed, keep cached keys', {
+          fid,
+          ver,
+          source: src,
+          error: String(error),
+          hasCachedWeb: !!web?.publicKey,
+          hasCachedApp: !!app?.publicKey,
+        })
+      }
+    }
     let last = ''
     if (web?.publicKey && Number(web.keyVersion || 0) === ver) {
       last = await tauriInvoke<string>('derive_friend_rel_key', {
