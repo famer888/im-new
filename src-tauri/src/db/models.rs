@@ -40,7 +40,10 @@ pub struct Contact {
     pub nickname: Option<String>,
     pub avatar: Option<String>,
     pub pinyin: Option<String>,
+    pub letter: Option<String>,
     pub remark: Option<String>,
+    pub depict: Option<String>,
+    pub identify: Option<String>,
     pub status: i32,
     pub updated_at: i64,
 }

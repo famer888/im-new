@@ -1,7 +1,7 @@
 use super::DbError;
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 pub fn run_migrations(conn: &Connection) -> Result<(), DbError> {
     let current_version: i32 = conn
@@ -13,6 +13,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), DbError> {
     }
     if current_version < 2 {
         migrate_v2(conn)?;
+    }
+    if current_version < 3 {
+        migrate_v3(conn)?;
     }
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -163,6 +166,18 @@ fn migrate_v2(conn: &Connection) -> Result<(), DbError> {
         ALTER TABLE conversations ADD COLUMN sender_name TEXT;
         ALTER TABLE conversations ADD COLUMN at_me INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE conversations ADD COLUMN schedule_deletion INTEGER NOT NULL DEFAULT 0;
+        ",
+    )
+    .map_err(|e| DbError::SqliteError(e.to_string()))?;
+    Ok(())
+}
+
+fn migrate_v3(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "
+        ALTER TABLE contacts ADD COLUMN letter TEXT;
+        ALTER TABLE contacts ADD COLUMN depict TEXT;
+        ALTER TABLE contacts ADD COLUMN identify TEXT;
         ",
     )
     .map_err(|e| DbError::SqliteError(e.to_string()))?;

@@ -524,7 +524,7 @@ pub fn search_messages(
 pub fn get_contacts(conn: &Connection) -> Result<Vec<Contact>, DbError> {
     let mut stmt = conn
         .prepare_cached(
-            "SELECT id, nickname, avatar, pinyin, remark, status, updated_at
+            "SELECT id, nickname, avatar, pinyin, letter, remark, depict, identify, status, updated_at
              FROM contacts ORDER BY pinyin ASC",
         )
         .map_err(|e| DbError::SqliteError(e.to_string()))?;
@@ -536,9 +536,12 @@ pub fn get_contacts(conn: &Connection) -> Result<Vec<Contact>, DbError> {
                 nickname: row.get(1)?,
                 avatar: row.get(2)?,
                 pinyin: row.get(3)?,
-                remark: row.get(4)?,
-                status: row.get(5)?,
-                updated_at: row.get(6)?,
+                letter: row.get(4)?,
+                remark: row.get(5)?,
+                depict: row.get(6)?,
+                identify: row.get(7)?,
+                status: row.get(8)?,
+                updated_at: row.get(9)?,
             })
         })
         .map_err(|e| DbError::SqliteError(e.to_string()))?;

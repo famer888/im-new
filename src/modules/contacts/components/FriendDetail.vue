@@ -16,7 +16,8 @@ const chatStore = useChatStore()
 const uiStore = useUIStore()
 
 const contact = computed(() => contactStore.getContact(props.contactId))
-const displayId = computed(() => contact.value?.identify || contact.value?.id || '')
+// 对齐旧 im：资料面板里的 ID 只展示好友号 identify，不回退内部 uid。
+const displayId = computed(() => String(contact.value?.identify || '').trim())
 const remarkDraft = ref('')
 const depictDraft = ref('')
 const editingRemark = ref(false)

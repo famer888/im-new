@@ -20,9 +20,9 @@ pub async fn search_contacts(
     db.with_connection(&uid, |conn| {
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, nickname, avatar, pinyin, remark, status, updated_at 
+                "SELECT id, nickname, avatar, pinyin, letter, remark, depict, identify, status, updated_at
                  FROM contacts 
-                 WHERE nickname LIKE ?1 OR pinyin LIKE ?1 OR remark LIKE ?1
+                 WHERE id LIKE ?1 OR nickname LIKE ?1 OR pinyin LIKE ?1 OR remark LIKE ?1 OR identify LIKE ?1
                  ORDER BY pinyin ASC",
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
@@ -35,9 +35,12 @@ pub async fn search_contacts(
                     nickname: row.get(1)?,
                     avatar: row.get(2)?,
                     pinyin: row.get(3)?,
-                    remark: row.get(4)?,
-                    status: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    letter: row.get(4)?,
+                    remark: row.get(5)?,
+                    depict: row.get(6)?,
+                    identify: row.get(7)?,
+                    status: row.get(8)?,
+                    updated_at: row.get(9)?,
                 })
             })
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
@@ -62,13 +65,16 @@ pub async fn upsert_contact(
 ) -> Result<(), String> {
     db.with_connection(&uid, |conn| {
         conn.execute(
-            "INSERT INTO contacts (id, nickname, avatar, pinyin, remark, status, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO contacts (id, nickname, avatar, pinyin, letter, remark, depict, identify, status, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                nickname = excluded.nickname,
                avatar = excluded.avatar,
                pinyin = excluded.pinyin,
+               letter = excluded.letter,
                remark = excluded.remark,
+               depict = excluded.depict,
+               identify = excluded.identify,
                status = excluded.status,
                updated_at = excluded.updated_at",
             rusqlite::params![
@@ -76,7 +82,10 @@ pub async fn upsert_contact(
                 contact.nickname,
                 contact.avatar,
                 contact.pinyin,
+                contact.letter,
                 contact.remark,
+                contact.depict,
+                contact.identify,
                 contact.status,
                 contact.updated_at,
             ],

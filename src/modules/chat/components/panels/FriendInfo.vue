@@ -52,12 +52,8 @@ const currentReadBurnLabel = computed(() => readBurnDurationLabel(msgCancelTime.
 
 const conv = computed(() => chatStore.currentConversation)
 const contact = computed(() => (conv.value ? contactStore.getContact(conv.value.targetId) : undefined))
-const displayId = computed(() =>
-  contact.value?.identify
-  || conv.value?.targetId
-  || contact.value?.id
-  || '',
-)
+// 对齐旧 im `friend-info.vue`：右侧资料面板直接显示 chatContent.identify，不兜底 uid。
+const displayId = computed(() => String(contact.value?.identify || '').trim())
 
 const readBurn = ref(false)
 const msgCancelTime = ref(DEFAULT_READ_BURN_SECONDS)
