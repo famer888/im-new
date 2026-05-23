@@ -30,6 +30,8 @@ let lastReminderAt = 0
 let directoryPreloadPromise: Promise<void> | null = null
 let processingReminderQueue = false
 const reminderQueue: Array<{ message: Message | any; unreadCount: number }> = []
+// 同一头像地址只复用一份预热任务，避免短时间多条消息反复发起相同请求。
+const avatarPreloadPromises = new Map<string, Promise<void>>()
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
@@ -254,6 +256,54 @@ function sleep(ms: number) {
   })
 }
 
+// 仅预热通知窗可直接消费的图片协议，避免把无效 src 也塞进 Image 触发额外噪音。
+function isPreloadableAvatarSrc(value: string): boolean {
+  return /^https?:\/\//i.test(value)
+    || /^(asset|tauri|blob):/i.test(value)
+    || /^data:image\/(png|jpe?g|gif|webp|bmp|avif);base64,/i.test(value)
+}
+
+async function preloadReminderAvatar(avatar: string | null): Promise<void> {
+  const src = String(avatar || '').trim()
+  if (!src || !isPreloadableAvatarSrc(src) || typeof Image === 'undefined') return
+
+  const cached = avatarPreloadPromises.get(src)
+  if (cached) {
+    await cached
+    return
+  }
+
+  const preloadTask = new Promise<void>((resolve) => {
+    const img = new Image()
+    let settled = false
+    // 提醒不能因为头像站点慢或偶发失败而卡住，这里只给一个很短的预热窗口。
+    const timer = window.setTimeout(finish, 1200)
+
+    function finish() {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      img.onload = null
+      img.onerror = null
+      resolve()
+    }
+
+    img.onload = finish
+    img.onerror = finish
+    img.src = src
+
+    if (img.complete) finish()
+  }).finally(() => {
+    // 只把最近一次预热任务留在内存里，避免消息量大时无限增长。
+    window.setTimeout(() => {
+      avatarPreloadPromises.delete(src)
+    }, 60_000)
+  })
+
+  avatarPreloadPromises.set(src, preloadTask)
+  await preloadTask
+}
+
 export function isRepeatableGroupInviteReminderMessage(message: Message | any): boolean {
   const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
   if (convId !== '1_invitation') return false
@@ -295,6 +345,7 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     await ensureDirectoryLoadedForReminder(uid, conversationId)
     const conversationType = getConversationType(conversationId)
     const extra = parseExtra(message?.extra)
+    const avatar = getConversationAvatar(conversationId, message)
     const senderName = stripText(
       extra.senderName
         ?? extra.nickName
@@ -305,12 +356,15 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     )
     const digest = getMessageDigest(message)
 
+    // 右下角提醒窗口是按需新建的，先在主窗口把头像资源拉进缓存，避免首帧偶发显示损坏图标。
+    await preloadReminderAvatar(avatar)
+
     await invoke('show_notification_window', {
       data: {
         conversationId,
         title: getConversationTitle(conversationId, message),
         body: digest || t('新消息'),
-        avatar: getConversationAvatar(conversationId, message),
+        avatar,
         conversationType,
         senderName: conversationType === 'group' || conversationType === 'channel' ? senderName : null,
         unreadCount,
