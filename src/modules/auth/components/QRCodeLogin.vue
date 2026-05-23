@@ -7,7 +7,7 @@ import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl, isLoginOnlyBaseUrl } from '@/api/config'
 import { getDeviceConfig } from '@/api/request'
-import { getAllDomains, initDomainPoolFromApi, initDomainPoolFromOss, markDomainError } from '@/utils/domainPool'
+import { getAllDomains, getOrderedDomainUrls, initDomainPoolFromApi, initDomainPoolFromOss, markDomainError } from '@/utils/domainPool'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { WebLoginStatus } from '@/proto/generated'
 
@@ -94,18 +94,16 @@ function inferSessionWsUrl(baseUrl: string): string {
 function buildDomainList(preferredDomains: string[] = []): string[] {
   const preferred = preferredDomains.map(domain => String(domain || '').trim()).filter(Boolean)
   const base = getBaseUrl()
-  const poolDomains = getAllDomains('webBiz')
-  const normalPoolDomains = poolDomains
-    .filter(item => item.status !== 'error')
-    .map(item => item.domain)
-    .filter(Boolean)
-  const errorPoolDomains = poolDomains
+  const loginPoolDomains = getOrderedDomainUrls('login_v2', { includeError: false })
+  const normalPoolDomains = getOrderedDomainUrls('webBiz', { includeError: false })
+  const errorPoolDomains = getAllDomains('webBiz')
     .filter(item => item.status === 'error')
     .map(item => item.domain)
     .filter(Boolean)
 
   return [...new Set([
     ...preferred,
+    ...loginPoolDomains,
     base,
     ...normalPoolDomains,
     ...errorPoolDomains,
@@ -186,7 +184,8 @@ function retryAfterDomainRefresh() {
 }
 
 function retryNextDomain(): boolean {
-  markDomainError('webBiz', currentBaseUrl.value)
+  const failedBase = currentBaseUrl.value
+  void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
   if (urlIndex.value >= domainList.value.length - 1) return false
   urlIndex.value++
   qrCodeUrlError.value = false

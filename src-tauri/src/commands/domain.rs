@@ -4,6 +4,7 @@ use std::time::Duration;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DomainItem {
     pub domain: String,
     pub status: String,

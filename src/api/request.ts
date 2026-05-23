@@ -12,7 +12,7 @@ import {
   setBaseUrl,
 } from './config'
 import { getActiveSessionId } from './sessionContext'
-import { getAllDomains, markDomainError } from '@/utils/domainPool'
+import { getAllDomains, getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
 import * as proto from '@/proto/generated'
 import { ungzip } from 'pako'
 
@@ -118,6 +118,7 @@ function shouldFallbackWebBiz(url: string): boolean {
 
   const knownBases = [
     getRawBaseUrl(),
+    ...getAllDomains('login_v2').map(item => item.domain),
     ...getAllDomains('webBiz').map(item => item.domain),
   ]
     .map(normalizeHttpBaseUrl)
@@ -134,15 +135,14 @@ function getNextWebBizBaseUrl(
 ): string {
   const failed = normalizeHttpBaseUrl(failedBase)
   if (!failed) return ''
-
-  const normalDomains = getAllDomains('webBiz')
-    .filter(item => item.status !== 'error')
-    .map(item => item.domain)
-  const errorDomains = getAllDomains('webBiz')
-    .filter(item => item.status === 'error')
-    .map(item => item.domain)
-
-  const ordered = [...normalDomains, getRawBaseUrl(), ...errorDomains]
+  const loginDomains = options.includeLoginOnlyDomains
+    ? getOrderedDomainUrls('login_v2')
+    : []
+  const ordered = [
+    ...loginDomains,
+    ...getOrderedDomainUrls('webBiz'),
+    getRawBaseUrl(),
+  ]
   const seen = new Set<string>()
 
   for (const candidate of ordered) {
@@ -172,7 +172,8 @@ async function reportWebBizDomainFailure(
   error: unknown,
   httpStatus = 0,
 ) {
-  markDomainError('webBiz', failedBase)
+  const failedModuleCode = isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz'
+  void markDomainError(failedModuleCode, failedBase)
 
   if (reportingWebBizDomainFailure) return
   reportingWebBizDomainFailure = true
@@ -184,7 +185,7 @@ async function reportWebBizDomainFailure(
       errorPath: requestUrl,
       errorDesc: error instanceof Error ? error.message : String(error),
       httpStatus,
-      moduleCode: 'webBiz',
+      moduleCode: failedModuleCode,
     })
   } catch (reportError) {
     console.warn('[requestProto] report webBiz domain failure failed:', reportError)
@@ -209,7 +210,7 @@ async function fetchWithWebBizFallback(
       options.onResolvedBaseUrl?.(failedBase)
     }
     if (!response.ok && allowFallback && isRetryableHttpStatus(response.status) && failedBase) {
-      markDomainError('webBiz', failedBase)
+      void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
       const nextBase = getNextWebBizBaseUrl(failedBase, {
         includeLoginOnlyDomains: isLoginRequest,
       })
@@ -234,7 +235,7 @@ async function fetchWithWebBizFallback(
   } catch (error) {
     if (!allowFallback || !failedBase) throw error
 
-    markDomainError('webBiz', failedBase)
+    void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
     const nextBase = getNextWebBizBaseUrl(failedBase, {
       includeLoginOnlyDomains: isLoginRequest,
     })

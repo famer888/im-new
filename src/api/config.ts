@@ -1,5 +1,17 @@
+import { getFirstNormalDomain } from '@/utils/domainPool'
+
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
+}
+
+function getDomainPoolFirstNormalDomain(): string {
+  if (!isTauri()) return ''
+  try {
+    // 桌面端优先使用实时 domain 池；网页开发态仍走 Vite proxy，避免跨域。
+    return String(getFirstNormalDomain('domain') || '').trim()
+  } catch {
+    return ''
+  }
 }
 
 const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
@@ -100,7 +112,8 @@ export function getBaseUrl(): string {
 }
 
 export function getDomainUrl(): string {
-  return isTauri() ? RAW_DOMAIN_URL : '/domain-api'
+  if (!isTauri()) return '/domain-api'
+  return getDomainPoolFirstNormalDomain() || RAW_DOMAIN_URL
 }
 
 export function setBaseUrl(url: string) {

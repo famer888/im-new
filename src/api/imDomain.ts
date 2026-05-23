@@ -12,8 +12,8 @@ import {
   getHeaderClientVersion,
   getPlatformSysModel,
 } from './request'
-import { getDomainUrl, getBaseUrl, getRawBaseUrl, API_CONFIG } from './config'
-import { getAllDomains } from '@/utils/domainPool'
+import { getDomainUrl, getBaseUrl, getRawBaseUrl, API_CONFIG, isLoginOnlyBaseUrl } from './config'
+import { getAllDomains, getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
 
 /* ------------------------------------------------------------------ */
 /*  AES-128-ECB hex encrypt / decrypt  (mirrors old im's encryptHex / decryptHex)  */
@@ -83,6 +83,70 @@ function sortObjectByKeys<T extends Record<string, unknown>>(data: T): T {
     }, {} as Record<string, unknown>) as T
 }
 
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+function parseUrl(value: string): URL | null {
+  try {
+    return new URL(String(value || '').trim(), window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+function normalizeHttpBaseUrl(value: string): string {
+  const parsed = parseUrl(value)
+  if (!parsed) return ''
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+  return `${parsed.protocol}//${parsed.host}`
+}
+
+function normalizeDomainModuleCode(moduleCode: string): string {
+  const normalized = String(moduleCode || '').trim()
+  if (normalized === 'biz') return 'webBiz'
+  if (normalized === 'config' || normalized === 'domainConfig') return 'domain'
+  return normalized
+}
+
+function getDomainApiCandidates(): string[] {
+  if (!isTauri()) return [getDomainUrl()]
+  const normal = getOrderedDomainUrls('domain', { includeError: false })
+  const error = getAllDomains('domain')
+    .filter(item => item.status === 'error')
+    .map(item => item.domain)
+  return [
+    ...new Set([
+      ...normal,
+      API_CONFIG.rawDomainUrl,
+      ...error,
+    ].map(normalizeHttpBaseUrl).filter(Boolean)),
+  ]
+}
+
+function getClientTokenCandidates(preferredBase?: string): string[] {
+  if (!isTauri()) return [preferredBase || getBaseUrl()]
+
+  const preferred = normalizeHttpBaseUrl(preferredBase || '')
+  const normalBizDomains = getAllDomains('webBiz')
+    .filter(item => item.status !== 'error')
+    .map(item => item.domain)
+    .filter(domain => !isLoginOnlyBaseUrl(domain))
+  const errorBizDomains = getAllDomains('webBiz')
+    .filter(item => item.status === 'error')
+    .map(item => item.domain)
+    .filter(domain => !isLoginOnlyBaseUrl(domain))
+
+  return [
+    ...new Set([
+      preferred,
+      normalizeHttpBaseUrl(getRawBaseUrl()),
+      ...normalBizDomains.map(normalizeHttpBaseUrl),
+      ...errorBizDomains.map(normalizeHttpBaseUrl),
+    ].filter(Boolean)),
+  ]
+}
+
 /* ------------------------------------------------------------------ */
 /*  Client token cache                                                 */
 /* ------------------------------------------------------------------ */
@@ -118,26 +182,38 @@ function buildDomainJsonClientReq() {
 }
 
 async function fetchClientToken(domainBase?: string): Promise<ClientTokenData> {
-  const base = domainBase || getBaseUrl()
-  const res = await requestProto({
-    url: `${base}/domain/clientToken`,
-    reqType: proto.ClientTokenReq,
-    respType: proto.ClientTokenResp,
-    withSessionId: true,
-    includeMetaHeaders: false,
-    clientInfo: buildDomainTokenClientInfo(),
-  })
-  const data: ClientTokenData = {
-    accessToken: res.accessToken || '',
-    secretKey: res.secretKey || '',
-    mchId: Number(res.mchId) || 0,
-    expirationMillis: Number(res.expirationMillis) || 0,
+  let lastError: unknown = new Error('clientToken accessToken empty')
+
+  for (const base of getClientTokenCandidates(domainBase)) {
+    try {
+      const res = await requestProto({
+        url: `${base}/domain/clientToken`,
+        reqType: proto.ClientTokenReq,
+        respType: proto.ClientTokenResp,
+        withSessionId: true,
+        includeMetaHeaders: false,
+        clientInfo: buildDomainTokenClientInfo(),
+      })
+      const data: ClientTokenData = {
+        accessToken: res.accessToken || '',
+        secretKey: res.secretKey || '',
+        mchId: Number(res.mchId) || 0,
+        expirationMillis: Number(res.expirationMillis) || 0,
+      }
+      if (!data.accessToken) {
+        throw new Error('clientToken accessToken empty')
+      }
+      tokenCache = data
+      return data
+    } catch (error) {
+      lastError = error
+      if (isTauri()) {
+        void markDomainError('webBiz', base)
+      }
+    }
   }
-  if (!data.accessToken) {
-    throw new Error('clientToken accessToken empty')
-  }
-  tokenCache = data
-  return data
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
 async function getClientTokenData(): Promise<ClientTokenData> {
@@ -151,38 +227,55 @@ async function getClientTokenData(): Promise<ClientTokenData> {
 /*  Domain list API  (JSON + AES-hex, mirrors old im's postAxios)      */
 /* ------------------------------------------------------------------ */
 
-interface DomainDto {
+export interface DomainDto {
   domainUrl: string
   moduleCode: string
   priority?: number
 }
 
-async function callDomainListApi(
+async function requestDomainApiJson(
+  path: string,
   payload: { secretKey: string; datas: Record<string, unknown>; headers: Record<string, string> },
-): Promise<{ domainDtoList?: DomainDto[] }> {
-  const domainApiUrl = getDomainUrl()
-
+): Promise<any> {
   const body = {
     clientReq: buildDomainJsonClientReq(),
     data: encryptHex(JSON.stringify(payload.datas), payload.secretKey),
   }
+  let lastError: unknown = new Error(`domain api ${path} failed`)
 
-  const resp = await fetch(`${domainApiUrl}/api/v4/listDomain`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      accessToken: payload.headers.accessToken,
-    },
-    body: JSON.stringify(body),
-  })
-
-  const json = await resp.json()
-
-  if (json?.code !== 200) {
-    console.error('[imDomain] listDomain API error:', json)
-    return {}
+  for (const domainApiBase of getDomainApiCandidates()) {
+    try {
+      const resp = await fetch(`${domainApiBase}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accessToken: payload.headers.accessToken,
+        },
+        body: JSON.stringify(body),
+      })
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`)
+      }
+      const json = await resp.json()
+      if (json?.code !== 200) {
+        throw new Error(json?.msg || json?.message || `domain api ${path} code ${json?.code ?? 'unknown'}`)
+      }
+      return json
+    } catch (error) {
+      lastError = error
+      if (isTauri()) {
+        void markDomainError('domain', domainApiBase)
+      }
+    }
   }
 
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+async function callDomainListApi(
+  payload: { secretKey: string; datas: Record<string, unknown>; headers: Record<string, string> },
+): Promise<{ domainDtoList?: DomainDto[] }> {
+  const json = await requestDomainApiJson('/api/v4/listDomain', payload)
   if (payload.secretKey && json.data) {
     const decrypted = decryptHex(json.data, payload.secretKey)
     return JSON.parse(decrypted)
@@ -193,26 +286,14 @@ async function callDomainListApi(
 async function callDomainReportApi(
   payload: { secretKey: string; datas: Record<string, unknown>; headers: Record<string, string> },
 ): Promise<void> {
-  const domainApiUrl = getDomainUrl()
-  const body = {
-    clientReq: buildDomainJsonClientReq(),
-    data: encryptHex(JSON.stringify(payload.datas), payload.secretKey),
-  }
-  await fetch(`${domainApiUrl}/api/v4/report`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      accessToken: payload.headers.accessToken,
-    },
-    body: JSON.stringify(body),
-  })
+  await requestDomainApiJson('/api/v4/report', payload)
 }
 
 /* ------------------------------------------------------------------ */
 /*  Public: getDynamicDomainList                                       */
 /* ------------------------------------------------------------------ */
 
-export async function getDynamicDomainList(moduleCode = 'webBiz'): Promise<string[]> {
+export async function getDynamicDomainSnapshot(moduleCode = ''): Promise<DomainDto[]> {
   try {
     const { mchId, secretKey, accessToken } = await getClientTokenData()
 
@@ -233,22 +314,33 @@ export async function getDynamicDomainList(moduleCode = 'webBiz'): Promise<strin
       headers: { accessToken },
     })
 
-    let domainDtoList = res?.domainDtoList || []
-
-    domainDtoList.sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity))
-
-    const urls = [
-      ...new Set(
-        domainDtoList
-          .filter(item => item.moduleCode === moduleCode)
-          .map(item => item.domainUrl),
-      ),
-    ]
-    return urls
+    return [...new Set(
+      (res?.domainDtoList || [])
+        .map(item => ({
+          ...item,
+          moduleCode: normalizeDomainModuleCode(item.moduleCode),
+          domainUrl: String(item.domainUrl || '').trim(),
+        }))
+        .filter(item => item.domainUrl)
+        .sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity))
+        .map(item => JSON.stringify(item)),
+    )].map(item => JSON.parse(item) as DomainDto)
   } catch (err) {
-    console.error('[imDomain] getDynamicDomainList failed:', err)
+    console.error('[imDomain] getDynamicDomainSnapshot failed:', err)
     return []
   }
+}
+
+export async function getDynamicDomainList(moduleCode = 'webBiz'): Promise<string[]> {
+  const normalizedModuleCode = normalizeDomainModuleCode(moduleCode)
+  const domainDtoList = await getDynamicDomainSnapshot(moduleCode)
+  return [
+    ...new Set(
+      domainDtoList
+        .filter(item => !normalizedModuleCode || item.moduleCode === normalizedModuleCode)
+        .map(item => item.domainUrl),
+    ),
+  ]
 }
 
 export async function getListDomainDiagnostic(moduleCode = ''): Promise<{
