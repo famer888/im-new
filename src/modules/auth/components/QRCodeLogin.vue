@@ -489,7 +489,7 @@ onBeforeUnmount(() => {
           </p>
         </div>
       </section>
-      <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandDisplayName }) }}</p>
+      <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
       <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
       <button class="primaryBtn" @click="emit('show-import')">
         {{ t('载入账户设置') }}
