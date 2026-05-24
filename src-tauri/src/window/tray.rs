@@ -11,7 +11,9 @@ use tauri::{
 use tracing::{info, warn};
 
 const TRAY_ID: &str = "ocs-main-tray";
-const TRAY_ICON: Image<'static> = include_image!("./icons/tray.png");
+const TRAY_ICON_45: Image<'static> = include_image!("../resources/icons_45/24x24.png");
+const TRAY_ICON_55: Image<'static> = include_image!("../resources/icons_55/24x24.png");
+const TRAY_ICON_97: Image<'static> = include_image!("../resources/icons_97/24x24.png");
 #[cfg(target_os = "macos")]
 const MACOS_TRAY_ICON_HEIGHT: f64 = 20.0;
 
@@ -132,22 +134,35 @@ fn tray_tooltip(app: &AppHandle, count: u32) -> String {
     }
 }
 
+fn tray_icon_for_brand(brand_id: &str) -> Image<'static> {
+    match branding::normalize_brand_id(brand_id) {
+        "45" => TRAY_ICON_45,
+        "55" => TRAY_ICON_55,
+        _ => TRAY_ICON_97,
+    }
+}
+
+/// 按当前应用 identifier 选择托盘图，避免多品牌切换后误用到旧品牌图标。
+fn tray_icon_for_app(app: &AppHandle) -> Image<'static> {
+    tray_icon_for_brand(branding::app_brand_id(app))
+}
+
 #[cfg(target_os = "windows")]
 fn reset_tray_icon(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_icon(Some(TRAY_ICON));
+        let _ = tray.set_icon(Some(tray_icon_for_app(app)));
     }
 }
 
 #[cfg(target_os = "windows")]
-fn translucent_tray_icon() -> tauri::image::Image<'static> {
-    let mut rgba = TRAY_ICON.rgba().to_vec();
+fn translucent_tray_icon(base_icon: tauri::image::Image<'static>) -> tauri::image::Image<'static> {
+    let mut rgba = base_icon.rgba().to_vec();
     for pixel in rgba.chunks_exact_mut(4) {
         if pixel[3] > 0 {
             pixel[3] = 24;
         }
     }
-    tauri::image::Image::new_owned(rgba, TRAY_ICON.width(), TRAY_ICON.height())
+    tauri::image::Image::new_owned(rgba, base_icon.width(), base_icon.height())
 }
 
 #[cfg(target_os = "macos")]
@@ -258,9 +273,9 @@ pub fn update_unread_count(app: &AppHandle, count: u32, flash: bool) -> Result<(
                 show_normal_icon = !show_normal_icon;
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
                     if show_normal_icon {
-                        let _ = tray.set_icon(Some(TRAY_ICON));
+                        let _ = tray.set_icon(Some(tray_icon_for_app(&app)));
                     } else {
-                        let _ = tray.set_icon(Some(translucent_tray_icon()));
+                        let _ = tray.set_icon(Some(translucent_tray_icon(tray_icon_for_app(&app))));
                     }
                 }
 
@@ -293,8 +308,9 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let quit_logout = MenuItem::with_id(app, "quit_logout", "退出程序并注销", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&new_window, &open, &settings, &logout, &quit_logout])?;
 
+    let app_handle = app.handle().clone();
     let tray = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(TRAY_ICON)
+        .icon(tray_icon_for_app(&app_handle))
         .tooltip(&app_display_name)
         .menu(&menu)
         .show_menu_on_left_click(false)
