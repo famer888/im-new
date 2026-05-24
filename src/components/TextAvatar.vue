@@ -20,6 +20,16 @@ const props = withDefaults(defineProps<{
 
 const initial = computed(() => (props.name || '?')[0].toUpperCase())
 const imageLoadError = ref(false)
+const resolvedImageSrc = ref<string | null>(null)
+// src 频繁切换时用 token 丢弃过期异步结果，避免旧请求回写新头像。
+let resolveTaskToken = 0
+
+const AVATAR_PRELOAD_TIMEOUT_MS = 1200
+const AVATAR_FAIL_RETRY_MS = 60_000
+// 同一地址复用同一预加载任务，避免列表里重复头像并发请求。
+const avatarPreloadPromises = new Map<string, Promise<boolean>>()
+// 记录最近一次加载结果：成功直接复用，失败短时间内不重复探测。
+const avatarLoadStates = new Map<string, { loaded: boolean; updatedAt: number }>()
 
 const legacyChannelGradientColors = [
   ['#ff516a', '#ff885e'],
@@ -31,9 +41,11 @@ const legacyChannelGradientColors = [
   ['#d669ed', '#e0a2f3'],
 ]
 
-watch(() => props.src, () => {
+// 头像默认图先渲染，真实图走去重预热；这样在弱网/偶发慢站点下不会出现整列头像空白。
+watch([() => props.src, () => props.avatarType], () => {
   imageLoadError.value = false
-})
+  void refreshResolvedImageSrc()
+}, { immediate: true })
 
 const defaultSrc = computed(() => {
   if (props.avatarType === 'group') return groupIcon
@@ -41,9 +53,8 @@ const defaultSrc = computed(() => {
   return friendIcon
 })
 
-const hasSrc = computed(() => !!props.src && !imageLoadError.value)
-const showImage = computed(() => props.avatarType !== 'text' && (props.avatarType !== 'channel' || hasSrc.value))
-const imageSrc = computed<string>(() => (hasSrc.value ? (props.src as string) : defaultSrc.value))
+const showImage = computed(() => props.avatarType !== 'text' && (props.avatarType !== 'channel' || !!resolvedImageSrc.value))
+const imageSrc = computed<string>(() => resolvedImageSrc.value || defaultSrc.value)
 const useCircle = computed(() => props.rounded || props.avatarType === 'group' || props.avatarType === 'channel' || props.avatarType === 'text')
 
 function legacyGradientById(id: string | number | null | undefined): string | null {
@@ -72,7 +83,102 @@ const sizeStyle = computed(() => ({
 }))
 
 function handleImageError() {
+  const src = normalizeAvatarSrc(props.src)
+  if (src) {
+    // 真实渲染报错后把地址标记为失败，防止列表滚动时反复触发同一错误请求。
+    avatarLoadStates.set(src, {
+      loaded: false,
+      updatedAt: Date.now(),
+    })
+  }
+  resolvedImageSrc.value = null
   imageLoadError.value = true
+}
+
+function normalizeAvatarSrc(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function getCachedAvatarLoadState(src: string): boolean | null {
+  const state = avatarLoadStates.get(src)
+  if (!state) return null
+  // 失败记录只保留一小段时间，避免永久降级导致头像一直不再重试。
+  if (!state.loaded && Date.now() - state.updatedAt > AVATAR_FAIL_RETRY_MS) {
+    avatarLoadStates.delete(src)
+    return null
+  }
+  return state.loaded
+}
+
+function preloadAvatar(src: string): Promise<boolean> {
+  const cachedTask = avatarPreloadPromises.get(src)
+  if (cachedTask) return cachedTask
+
+  const task = new Promise<boolean>((resolve) => {
+    if (typeof Image === 'undefined') {
+      resolve(false)
+      return
+    }
+    const img = new Image()
+    let settled = false
+    // 只给短超时窗口，慢链路不阻塞当前头像位的兜底显示。
+    const timer = window.setTimeout(() => finish(false), AVATAR_PRELOAD_TIMEOUT_MS)
+
+    function finish(loaded: boolean) {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      img.onload = null
+      img.onerror = null
+      resolve(loaded)
+    }
+
+    img.onload = () => finish(true)
+    img.onerror = () => finish(false)
+    img.src = src
+
+    if (img.complete && img.naturalWidth > 0) finish(true)
+  }).finally(() => {
+    avatarPreloadPromises.delete(src)
+  })
+
+  avatarPreloadPromises.set(src, task)
+  return task
+}
+
+async function refreshResolvedImageSrc() {
+  const token = ++resolveTaskToken
+  const src = normalizeAvatarSrc(props.src)
+  if (!src || imageLoadError.value || props.avatarType === 'text') {
+    if (token !== resolveTaskToken) return
+    resolvedImageSrc.value = null
+    return
+  }
+
+  const cachedState = getCachedAvatarLoadState(src)
+  if (cachedState === true) {
+    if (token !== resolveTaskToken) return
+    resolvedImageSrc.value = src
+    return
+  }
+  if (cachedState === false) {
+    if (token !== resolveTaskToken) return
+    resolvedImageSrc.value = null
+    return
+  }
+
+  const loaded = await preloadAvatar(src)
+  avatarLoadStates.set(src, {
+    loaded,
+    updatedAt: Date.now(),
+  })
+  // 如果这次异步结果已过期（props 又变了），直接丢弃，避免错图闪回。
+  if (token !== resolveTaskToken) return
+  if (loaded && normalizeAvatarSrc(props.src) === src && !imageLoadError.value) {
+    resolvedImageSrc.value = src
+    return
+  }
+  resolvedImageSrc.value = null
 }
 </script>
 
