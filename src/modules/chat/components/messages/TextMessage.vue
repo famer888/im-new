@@ -68,6 +68,11 @@ const GROUP_INVITE_HOSTS = new Set(['45chat.com', '55chat.com', '97chat.com', 'o
 const INVITE_LINK_TYPE_GROUP = 1
 const INVITE_LINK_TYPE_CHANNEL = 2
 const INVITE_LINK_DOMAIN_CACHE_TTL = 24 * 60 * 60 * 1000
+const LINK_FORBIDDEN_CHARS = '\\s"\'<>\\u4e00-\\u9fa5\\u3000-\\u303F\\uFF00-\\uFFEF\\u2000-\\u206F'
+const LINK_SAFE_END_CHAR = `[^${LINK_FORBIDDEN_CHARS}\\.,;:?!()\\[\\]{}]`
+const LINK_AT_START_REGEX = new RegExp(
+  `^((?:https?://|www\\.)[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR})`,
+)
 const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 const openingMentionKeys = new Set<string>()
 const openingLinkKeys = new Set<string>()
@@ -154,16 +159,7 @@ function pushTextSegment(segments: ContentSegment[], text: string) {
 
 function detectLinkAtStart(content: string, start: number): { text: string; href: string } | null {
   const rest = content.slice(start)
-
-  // URL中禁止的字符（空格、引号、HTML、中文、通用标点）
-  // Matches: spaces, quotes, HTML brackets, CJK characters, CJK symbols, fullwidth chars, general punctuation
-  const forbiddenChars = '\\s"\'<>\\u4e00-\\u9fa5\\u3000-\\u303F\\uFF00-\\uFFEF\\u2000-\\u206F'
-
-  // 安全结束字符：不得为标点符号或分隔符
-  const safeEndChar = `[^${forbiddenChars}\\.,;:?!()\\[\\]{}]`
-
-  const regex = new RegExp(`^((?:https?://|www\\.)[^${forbiddenChars}]*${safeEndChar})`)
-  const match = rest.match(regex)
+  const match = rest.match(LINK_AT_START_REGEX)
   if (!match) return null
 
   const url = match[1]
@@ -614,6 +610,10 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
 
 const contentSegments = computed<ContentSegment[]>(() => {
   const content = props.message.content ?? ''
+  // 常规纯文本消息不进入逐字符解析，减少首屏大量文本消息的渲染开销。
+  if (content && !/[@\[]|https?:\/\/|www\./i.test(content)) {
+    return [{ type: 'text', text: content }]
+  }
   const segments: ContentSegment[] = []
   let index = 0
 

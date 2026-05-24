@@ -38,16 +38,24 @@ const searchStore = useSearchStore()
 const containerRef = ref<HTMLElement | null>(null)
 const floatDateRef = ref<HTMLElement | null>(null)
 
+function ensureMessagesAscending(messages: Message[]): Message[] {
+  for (let i = 1; i < messages.length; i++) {
+    if (messages[i - 1].sendTime > messages[i].sendTime) {
+      return messages.slice().sort((a, b) => a.sendTime - b.sendTime)
+    }
+  }
+  return messages
+}
+
 /** 与旧 im 列表一致：按发送时间升序，再算「自然日」分隔 */
 const sortedMessages = computed(() =>
-  props.messages
-    .filter((message) => isMessageVisibleInTimeline(
+  ensureMessagesAscending(
+    props.messages.filter((message) => isMessageVisibleInTimeline(
       props.conversationId,
       message,
       String(authStore.uid || ''),
-    ))
-    .slice()
-    .sort((a, b) => a.sendTime - b.sendTime),
+    )),
+  ),
 )
 
 const entriesWithDate = computed(() =>
@@ -201,6 +209,7 @@ const newMessageCount = ref(0)
 const latestNewMessageKey = ref('')
 let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
 let isProgrammaticScroll = false
+let resizePinRaf: number | null = null
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)
@@ -434,6 +443,7 @@ function onClickScrollToLatest() {
 onUnmounted(() => {
   if (floatHideTimer) clearTimeout(floatHideTimer)
   if (throttleTimer) clearTimeout(throttleTimer)
+  if (resizePinRaf !== null) cancelAnimationFrame(resizePinRaf)
   cancelScrollAnimation()
 })
 
@@ -504,9 +514,15 @@ watch(
 function handleItemResize(messageId: string, height: number) {
   void messageId
   void height
-  if (stickToBottom.value || isAtBottom.value) {
-    void pinToLatest(false)
-  }
+  if (!stickToBottom.value && !isAtBottom.value) return
+  // 合并同一帧内大量消息的 ResizeObserver 回调，避免首屏渲染时重复触发吸底滚动。
+  if (resizePinRaf !== null) return
+  resizePinRaf = requestAnimationFrame(() => {
+    resizePinRaf = null
+    if (stickToBottom.value || isAtBottom.value) {
+      void pinToLatest(false)
+    }
+  })
 }
 
 function scrollToRow(key: string) {

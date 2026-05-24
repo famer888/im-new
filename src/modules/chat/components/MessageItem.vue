@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
@@ -175,6 +175,7 @@ const showAvatar = computed(
   () => isGroupChat.value && !displayAsSelf.value,
 )
 const showReadBurnFire = computed(() => Boolean(props.message.deleteSeconds))
+let itemResizeObserver: ResizeObserver | null = null
 
 function handleContextMenu(e: MouseEvent) {
   if (uiStore.selectionMode) return
@@ -252,13 +253,19 @@ function handleQuoteClick() {
 
 onMounted(() => {
   if (itemRef.value) {
-    const observer = new ResizeObserver((entries) => {
+    // 监听气泡尺寸变化（如图片加载后高度变化），用于保持吸底状态同步。
+    itemResizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         emit('resize', entry.contentRect.height)
       }
     })
-    observer.observe(itemRef.value)
+    itemResizeObserver.observe(itemRef.value)
   }
+})
+
+onUnmounted(() => {
+  itemResizeObserver?.disconnect()
+  itemResizeObserver = null
 })
 </script>
 
