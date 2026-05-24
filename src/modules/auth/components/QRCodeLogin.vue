@@ -42,6 +42,7 @@ const domainList = ref<string[]>([getBaseUrl()])
 const urlIndex = ref(0)
 const activeQrBaseUrl = ref('')
 let qrRequestSeq = 0
+const QR_REQUEST_TIMEOUT_MS = 8000
 
 let timerOutTimer: ReturnType<typeof setTimeout> | null = null
 let loginPollingTimer: ReturnType<typeof setTimeout> | null = null
@@ -179,7 +180,15 @@ watch(
 )
 
 function retryAfterDomainRefresh() {
-  if (!qrCodeUrlError.value || loginToken.value || isLoading.value) return
+  if (loginToken.value) return
+  if (!qrCodeUrlError.value && !(!hasLoadedFirstQr.value && isLoading.value)) return
+
+  // 启动阶段首轮二维码请求如果卡住，也要允许域名池补齐后直接切到下一个域名重试，
+  // 否则 Windows 端会一直停在转圈状态，直到用户手动退出再进。
+  if (!qrCodeUrlError.value && !hasLoadedFirstQr.value && isLoading.value) {
+    qrRequestSeq += 1
+    isLoading.value = false
+  }
   retryNextDomain()
 }
 
@@ -270,9 +279,16 @@ async function handleGetQrCodeUrl() {
 
   try {
     let resolvedQrBaseUrl = baseUrl
-    const res = await getQrCodeUrl(baseUrl, resolvedBaseUrl => {
-      resolvedQrBaseUrl = resolvedBaseUrl
-    })
+    const res = await Promise.race([
+      getQrCodeUrl(baseUrl, resolvedBaseUrl => {
+        resolvedQrBaseUrl = resolvedBaseUrl
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`qrCodeUrl timeout after ${QR_REQUEST_TIMEOUT_MS}ms`))
+        }, QR_REQUEST_TIMEOUT_MS)
+      }),
+    ])
     if (requestSeq !== qrRequestSeq) return
     isLoading.value = false
 

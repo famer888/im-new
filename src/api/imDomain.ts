@@ -136,13 +136,23 @@ function getClientTokenCandidates(preferredBase?: string): string[] {
     .filter(item => item.status === 'error')
     .map(item => item.domain)
     .filter(domain => !isLoginOnlyBaseUrl(domain))
+  const normalLoginDomains = getAllDomains('login_v2')
+    .filter(item => item.status !== 'error')
+    .map(item => item.domain)
+  const errorLoginDomains = getAllDomains('login_v2')
+    .filter(item => item.status === 'error')
+    .map(item => item.domain)
 
   return [
     ...new Set([
       preferred,
       normalizeHttpBaseUrl(getRawBaseUrl()),
+      // 对齐老 im：business 域名已失效时，允许先借登录备用域名拿 clientToken/listDomain，
+      // 再把真正的 webBiz 域名池补齐，避免桌面端永远卡在首个业务域名。
       ...normalBizDomains.map(normalizeHttpBaseUrl),
+      ...normalLoginDomains.map(normalizeHttpBaseUrl),
       ...errorBizDomains.map(normalizeHttpBaseUrl),
+      ...errorLoginDomains.map(normalizeHttpBaseUrl),
     ].filter(Boolean)),
   ]
 }
@@ -208,7 +218,7 @@ async function fetchClientToken(domainBase?: string): Promise<ClientTokenData> {
     } catch (error) {
       lastError = error
       if (isTauri()) {
-        void markDomainError('webBiz', base)
+        void markDomainError(isLoginOnlyBaseUrl(base) ? 'login_v2' : 'webBiz', base)
       }
     }
   }

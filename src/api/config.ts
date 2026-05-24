@@ -1,4 +1,4 @@
-import { getFirstNormalDomain } from '@/utils/domainPool'
+import { getAllDomains, getFirstNormalDomain } from '@/utils/domainPool'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -72,12 +72,22 @@ export const API_CONFIG = {
 
 function getStoredBaseUrl(): string {
   try {
-    const stored = localStorage.getItem(API_BASE_URL_KEY) || ''
+    const stored = normalizeHttpBaseUrl(localStorage.getItem(API_BASE_URL_KEY) || '')
     if (isLoginOnlyBaseUrl(stored)) {
       localStorage.removeItem(API_BASE_URL_KEY)
       return ''
     }
     return stored
+  } catch {
+    return ''
+  }
+}
+
+function normalizeHttpBaseUrl(value: string): string {
+  try {
+    const parsed = new URL(String(value || '').trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return `${parsed.protocol}//${parsed.host}`
   } catch {
     return ''
   }
@@ -95,30 +105,34 @@ export function isLoginOnlyBaseUrl(value: string): boolean {
 
 let dynamicBaseUrl = getStoredBaseUrl()
 
-/**
- * In browser dev mode, use Vite proxy (/api) to avoid CORS.
- * In Tauri app, call the real URL directly (no CORS restriction).
- */
-export function getBaseUrl(): string {
-  if (dynamicBaseUrl) {
-    return isTauri() ? dynamicBaseUrl : '/api'
-  }
-  const stored = getStoredBaseUrl()
-  if (stored) {
-    dynamicBaseUrl = stored
-    return isTauri() ? stored : '/api'
-  }
-  return isTauri() ? RAW_BASE_URL : '/api'
+function getFirstNormalWebBizBaseUrl(): string {
+  const normal = getAllDomains('webBiz')
+    .find(item => item.status !== 'error' && !isLoginOnlyBaseUrl(item.domain))
+    ?.domain
+  if (normal) return normalizeHttpBaseUrl(normal)
+
+  const fallback = getAllDomains('webBiz')
+    .find(item => !isLoginOnlyBaseUrl(item.domain))
+    ?.domain
+  return normalizeHttpBaseUrl(fallback || '')
 }
 
-export function getDomainUrl(): string {
-  if (!isTauri()) return '/domain-api'
-  return getDomainPoolFirstNormalDomain() || RAW_DOMAIN_URL
+function isMarkedErrorWebBizBaseUrl(value: string): boolean {
+  const normalized = normalizeHttpBaseUrl(value)
+  if (!normalized) return false
+  return getAllDomains('webBiz')
+    .some(item => normalizeHttpBaseUrl(item.domain) === normalized && item.status === 'error')
 }
 
-export function setBaseUrl(url: string) {
-  const nextUrl = String(url || '').trim()
-  dynamicBaseUrl = isLoginOnlyBaseUrl(nextUrl) ? '' : nextUrl
+function isUsableWebBizBaseUrl(value: string): boolean {
+  const normalized = normalizeHttpBaseUrl(value)
+  if (!normalized || isLoginOnlyBaseUrl(normalized)) return false
+  return !isMarkedErrorWebBizBaseUrl(normalized)
+}
+
+function persistDynamicBaseUrl(value: string) {
+  const normalized = normalizeHttpBaseUrl(value)
+  dynamicBaseUrl = isLoginOnlyBaseUrl(normalized) ? '' : normalized
   try {
     if (dynamicBaseUrl) {
       localStorage.setItem(API_BASE_URL_KEY, dynamicBaseUrl)
@@ -130,8 +144,44 @@ export function setBaseUrl(url: string) {
   }
 }
 
+function resolveActiveWebBizBaseUrl(options?: { preferPool?: boolean }): string {
+  const current = normalizeHttpBaseUrl(dynamicBaseUrl)
+  const stored = getStoredBaseUrl()
+  const poolBase = getFirstNormalWebBizBaseUrl()
+
+  if (options?.preferPool && poolBase) return poolBase
+  if (isUsableWebBizBaseUrl(current)) return current
+  if (isUsableWebBizBaseUrl(stored)) return stored
+  if (poolBase) return poolBase
+  return normalizeHttpBaseUrl(RAW_BASE_URL) || RAW_BASE_URL
+}
+
+export function syncBaseUrlWithDomainPool(options?: { preferPool?: boolean }): string {
+  const resolved = resolveActiveWebBizBaseUrl(options)
+  persistDynamicBaseUrl(resolved)
+  return resolved
+}
+
+/**
+ * In browser dev mode, use Vite proxy (/api) to avoid CORS.
+ * In Tauri app, call the real URL directly (no CORS restriction).
+ */
+export function getBaseUrl(): string {
+  const resolved = syncBaseUrlWithDomainPool()
+  return isTauri() ? resolved : '/api'
+}
+
+export function getDomainUrl(): string {
+  if (!isTauri()) return '/domain-api'
+  return getDomainPoolFirstNormalDomain() || RAW_DOMAIN_URL
+}
+
+export function setBaseUrl(url: string) {
+  persistDynamicBaseUrl(url)
+}
+
 export function getRawBaseUrl(): string {
-  return dynamicBaseUrl || RAW_BASE_URL
+  return normalizeHttpBaseUrl(dynamicBaseUrl || getStoredBaseUrl() || RAW_BASE_URL) || RAW_BASE_URL
 }
 
 export function getOpenChatBaseUrl(): string {

@@ -10,6 +10,7 @@ import {
   getRawBaseUrl,
   isLoginOnlyBaseUrl,
   setBaseUrl,
+  syncBaseUrlWithDomainPool,
 } from './config'
 import { getActiveSessionId } from './sessionContext'
 import { getAllDomains, getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
@@ -102,8 +103,9 @@ function normalizeHttpBaseUrl(value: string): string {
   return `${parsed.protocol}//${parsed.host}`
 }
 
-function isRetryableHttpStatus(status: number): boolean {
-  return status === 408 || status >= 500
+function shouldFallbackForHttpStatus(status: number): boolean {
+  // 对齐老 im：桌面端业务请求只要不是 200，就允许切下一个 webBiz 域名重试一次。
+  return status !== 200
 }
 
 function isLoginApiRequest(url: string): boolean {
@@ -115,19 +117,87 @@ function isLoginApiRequest(url: string): boolean {
 function shouldFallbackWebBiz(url: string): boolean {
   const requestBase = normalizeHttpBaseUrl(url)
   if (!requestBase) return false
+  if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return false
 
-  const knownBases = [
-    getRawBaseUrl(),
-    ...getAllDomains('login_v2').map(item => item.domain),
-    ...getAllDomains('webBiz').map(item => item.domain),
-  ]
-    .map(normalizeHttpBaseUrl)
-    .filter(Boolean)
+  const domainApiBase = normalizeHttpBaseUrl(API_CONFIG.rawDomainUrl)
+  const openChatBase = normalizeHttpBaseUrl(API_CONFIG.rawOpenChatDomain)
+  if (requestBase === domainApiBase || requestBase === openChatBase) return false
 
-  return knownBases.includes(requestBase)
+  // 对齐老 im：桌面端所有走 requestProto 的业务/login 域名请求都允许触发 webBiz/login_v2 兜底，
+  // 不能要求“当前 host 必须已在本地池里”，否则首域名失配时会直接跳过切域名。
+  return true
 }
 
 let reportingWebBizDomainFailure = false
+let refreshingWebBizDomainPool = false
+
+async function refreshWebBizDomainPool(): Promise<boolean> {
+  if (refreshingWebBizDomainPool) return false
+  refreshingWebBizDomainPool = true
+  try {
+    const { initDomainPoolFromOss, initDomainPoolFromApi } = await import('@/utils/domainPool')
+    // 先补 OSS，再补 listDomain；顺序对齐旧项目的域名引导链路。
+    await initDomainPoolFromOss()
+    await initDomainPoolFromApi()
+    syncBaseUrlWithDomainPool({ preferPool: true })
+    return true
+  } catch (error) {
+    console.warn('[requestProto] refresh webBiz domain pool failed:', error)
+    return false
+  } finally {
+    refreshingWebBizDomainPool = false
+  }
+}
+
+async function resolveNextWebBizBaseUrl(
+  failedBase: string,
+  options: { isLoginRequest: boolean },
+): Promise<string> {
+  let nextBase = getNextWebBizBaseUrl(failedBase, {
+    includeLoginOnlyDomains: options.isLoginRequest,
+  })
+  if (!nextBase && !options.isLoginRequest) {
+    await refreshWebBizDomainPool()
+    nextBase = getNextWebBizBaseUrl(failedBase, {
+      includeLoginOnlyDomains: false,
+    })
+  }
+  return nextBase
+}
+
+async function retryWithNextWebBizBase(
+  url: string,
+  init: RequestInit,
+  options: { failedBase: string; isLoginRequest: boolean; onResolvedBaseUrl?: (baseUrl: string) => void },
+  errorForReport: unknown,
+  httpStatus = 0,
+): Promise<Response | null> {
+  const nextBase = await resolveNextWebBizBaseUrl(options.failedBase, {
+    isLoginRequest: options.isLoginRequest,
+  })
+  if (!nextBase) return null
+
+  const retryUrl = replaceRequestBaseUrl(url, nextBase)
+  try {
+    const retryResponse = await fetch(retryUrl, init)
+    if (shouldFallbackForHttpStatus(retryResponse.status)) {
+      void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
+      return retryResponse
+    }
+
+    if (!options.isLoginRequest) {
+      // 只有真正切换成功后，才把当前业务 baseUrl 持久化到新域名。
+      setBaseUrl(nextBase)
+    }
+    options.onResolvedBaseUrl?.(nextBase)
+    void reportWebBizDomainFailure(options.failedBase, url, errorForReport, httpStatus)
+    console.warn('[requestProto] webBiz domain fallback success:', options.failedBase, '->', nextBase)
+    return retryResponse
+  } catch (retryError) {
+    void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
+    throw retryError
+  }
+}
 
 function getNextWebBizBaseUrl(
   failedBase: string,
@@ -209,51 +279,26 @@ async function fetchWithWebBizFallback(
     if (response.ok && allowFallback && failedBase) {
       options.onResolvedBaseUrl?.(failedBase)
     }
-    if (!response.ok && allowFallback && isRetryableHttpStatus(response.status) && failedBase) {
+    if (!response.ok && allowFallback && shouldFallbackForHttpStatus(response.status) && failedBase) {
       void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
-      const nextBase = getNextWebBizBaseUrl(failedBase, {
-        includeLoginOnlyDomains: isLoginRequest,
-      })
-      if (!nextBase) return response
-
-      if (!isLoginRequest) {
-        // 先切全局 baseUrl，避免启动阶段并发请求继续从已失败主域名起步。
-        setBaseUrl(nextBase)
-      }
-      const retryUrl = replaceRequestBaseUrl(url, nextBase)
-      const retryResponse = await fetch(retryUrl, init)
-      if (retryResponse.ok) {
-        // 登录前/后命中备用域名后，切换全局 baseUrl，后续请求继续走新域名。
-        options.onResolvedBaseUrl?.(nextBase)
-        // 失败上报放到切换成功后异步做，避免上报流程继续请求已被阻断的主域名。
-        void reportWebBizDomainFailure(failedBase, url, new Error(`HTTP ${response.status}`), response.status)
-        console.warn('[requestProto] webBiz domain fallback success:', failedBase, '->', nextBase)
-      }
-      return retryResponse
+      const retryResponse = await retryWithNextWebBizBase(url, init, {
+        failedBase,
+        isLoginRequest,
+        onResolvedBaseUrl: options.onResolvedBaseUrl,
+      }, new Error(`HTTP ${response.status}`), response.status)
+      return retryResponse || response
     }
     return response
   } catch (error) {
     if (!allowFallback || !failedBase) throw error
 
     void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
-    const nextBase = getNextWebBizBaseUrl(failedBase, {
-      includeLoginOnlyDomains: isLoginRequest,
-    })
-    if (!nextBase) throw error
-
-    if (!isLoginRequest) {
-      // 先切全局 baseUrl，避免启动阶段并发请求继续从已失败主域名起步。
-      setBaseUrl(nextBase)
-    }
-    const retryUrl = replaceRequestBaseUrl(url, nextBase)
-    const retryResponse = await fetch(retryUrl, init)
-    if (retryResponse.ok) {
-      // 登录前/后命中备用域名后，切换全局 baseUrl，后续请求继续走新域名。
-      options.onResolvedBaseUrl?.(nextBase)
-      // 失败上报放到切换成功后异步做，避免上报流程继续请求已被阻断的主域名。
-      void reportWebBizDomainFailure(failedBase, url, error)
-      console.warn('[requestProto] webBiz domain fallback success:', failedBase, '->', nextBase)
-    }
+    const retryResponse = await retryWithNextWebBizBase(url, init, {
+      failedBase,
+      isLoginRequest,
+      onResolvedBaseUrl: options.onResolvedBaseUrl,
+    }, error)
+    if (!retryResponse) throw error
     return retryResponse
   }
 }

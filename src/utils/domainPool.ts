@@ -23,6 +23,12 @@ function getEnvName(): string {
 }
 
 const STORAGE_KEY = `domain-pool-cache:${getEnvName()}`
+const RAW_PREPARED_WEB_BIZ_DOMAIN = String(
+  import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co',
+).trim()
+const RAW_PREPARED_DOMAIN_API = String(
+  import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co',
+).trim()
 
 const PROD_PRELOADED_DOMAIN_POOL: Record<string, string[]> = {
   webBiz: [
@@ -51,11 +57,9 @@ const PROD_PRELOADED_DOMAIN_POOL: Record<string, string[]> = {
 }
 
 const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = {
-  // 登录页首轮请求必须在域名 API 之前可用，直连兜底先同步注入本地池。
+  // 对齐老 im：webBiz/domain 预埋域名保持业务/域名接口各自独立，不把 login_v2 混进业务请求池。
   webBiz: [
-    'https://blo.yimengwh.xyz',
-    'https://openchat-loginv2.evanth.xyz',
-    'https://a1.uuds.xyz',
+    RAW_PREPARED_WEB_BIZ_DOMAIN,
   ],
   login_v2: [
     'https://blo.yimengwh.xyz',
@@ -63,6 +67,7 @@ const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = {
     'https://a1.uuds.xyz',
   ],
   domain: [
+    RAW_PREPARED_DOMAIN_API,
     'https://a1.uuds.xyz',
   ],
 }
@@ -229,6 +234,16 @@ async function persistDomainPool(): Promise<void> {
   await syncDomainPoolToTauri()
 }
 
+async function syncActiveWebBizBaseUrl(options?: { preferPool?: boolean }): Promise<void> {
+  if (!isTauri()) return
+  try {
+    const { syncBaseUrlWithDomainPool } = await import('@/api/config')
+    syncBaseUrlWithDomainPool(options)
+  } catch {
+    // ignore baseUrl sync failures and keep pool cache available
+  }
+}
+
 function seedFallbackDomains() {
   for (const [moduleCode, urls] of Object.entries(DIRECT_FALLBACK_DOMAINS)) {
     mergeDomains(moduleCode, urls)
@@ -270,6 +285,7 @@ export async function initDomainPool() {
   }
 
   await persistDomainPool()
+  await syncActiveWebBizBaseUrl()
 }
 
 // ---------------------------------------------------------------
@@ -362,6 +378,7 @@ export async function initDomainPoolFromOss(): Promise<void> {
   )
 
   await persistDomainPool()
+  await syncActiveWebBizBaseUrl()
 }
 
 function sortDomainDtoList(domainDtoList: DynamicDomainDto[]): DynamicDomainDto[] {
@@ -394,6 +411,8 @@ export async function initDomainPoolFromApi(): Promise<void> {
 
     upsertDomainItems(items)
     await persistDomainPool()
+    // listDomain 拿到真实业务池后，优先把当前 webBiz 切到池内首个正常域名。
+    await syncActiveWebBizBaseUrl({ preferPool: true })
   } catch {
     // ignore dynamic refresh failures
   }
