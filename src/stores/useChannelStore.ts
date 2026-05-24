@@ -34,10 +34,14 @@ export interface Channel {
   updatedAt: number
 }
 
+export type ChannelDetailStatus = 'idle' | 'loading' | 'ready' | 'error'
+
 export const useChannelStore = defineStore('channel', () => {
   const channels = ref<Channel[]>([])
   const loading = ref(false)
+  const detailStatusById = ref<Record<string, ChannelDetailStatus>>({})
   let activeUid = ''
+  const detailRequestById = new Map<string, Promise<Channel | null>>()
 
   function channelDebug(message: string, data: Record<string, unknown> = {}) {
     console.warn(`[ChannelStore][debug] ${message}`, {
@@ -138,6 +142,34 @@ export const useChannelStore = defineStore('channel', () => {
   function isChannelRemoved(channelId: string, uid = activeUid): boolean {
     if (!channelId) return false
     return getRemovedChannelIds(uid).has(channelId)
+  }
+
+  function resetDetailRuntimeState() {
+    detailStatusById.value = {}
+    detailRequestById.clear()
+  }
+
+  function setChannelDetailStatus(channelId: string | number, status: ChannelDetailStatus) {
+    const id = String(channelId || '').trim()
+    if (!id) return
+    detailStatusById.value = {
+      ...detailStatusById.value,
+      [id]: status,
+    }
+  }
+
+  function clearChannelDetailStatus(channelId: string | number) {
+    const id = String(channelId || '').trim()
+    if (!id || !detailStatusById.value[id]) return
+    const next = { ...detailStatusById.value }
+    delete next[id]
+    detailStatusById.value = next
+  }
+
+  function getChannelDetailStatus(channelId: string | number): ChannelDetailStatus {
+    const id = String(channelId || '').trim()
+    if (!id) return 'idle'
+    return detailStatusById.value[id] || 'idle'
   }
 
   function isJoinedChannel(item: any): boolean {
@@ -292,6 +324,9 @@ export const useChannelStore = defineStore('channel', () => {
 
   async function loadChannels(uid: string, options?: { refreshRemote?: boolean }) {
     const refreshRemote = options?.refreshRemote ?? true
+    if (uid !== activeUid) {
+      resetDetailRuntimeState()
+    }
     activeUid = uid
     loading.value = true
     channelDebug('loadChannels start', { uid })
@@ -504,6 +539,9 @@ export const useChannelStore = defineStore('channel', () => {
     } else {
       channels.value.unshift(next)
     }
+    if (!detailStatusById.value[id]) {
+      setChannelDetailStatus(id, 'idle')
+    }
   }
 
   async function removeChannel(uid: string, channelId: string | number) {
@@ -513,6 +551,8 @@ export const useChannelStore = defineStore('channel', () => {
     rememberRemovedChannelMeta(activeUid, id, getChannel(id))
     markChannelRemoved(activeUid, id)
     channels.value = channels.value.filter((item) => String(item.id || item.channelId || '') !== id)
+    clearChannelDetailStatus(id)
+    detailRequestById.delete(id)
 
     if (!isTauri() || !uid) return
     try {
@@ -526,46 +566,88 @@ export const useChannelStore = defineStore('channel', () => {
     const id = String(channelId || '').trim()
     if (!id) return null
 
-    try {
-      const resp = await getChannelDetail({ channelId: id })
-      const code = Number(resp?.code ?? 200)
-      if (code !== 200 && code !== 0) {
-        throw new Error(resp?.msg || 'channel detail request failed')
-      }
-      if (!resp.data) return getChannel(id) || null
-      if (Number(resp.data.memberType ?? 0) < 0) {
-        await removeChannel(activeUid, id)
-        return null
-      }
+    return ensureChannelDetailReady(id, { force: true, skipLoadingState: true })
+  }
 
-      const next = normalizeChannel({
-        ...getChannel(id),
-        ...resp.data,
-        id,
-        channelId: resp.data.channelId ?? resp.data.id ?? id,
-      })
-      const index = channels.value.findIndex((item) => item.id === id)
-      if (index >= 0) {
-        channels.value[index] = next
-      } else {
-        channels.value.unshift(next)
-      }
-      return next
-    } catch (e) {
-      console.error('[ChannelStore] refreshChannelDetail failed:', e)
+  async function requestChannelDetail(id: string): Promise<Channel | null> {
+    const resp = await getChannelDetail({ channelId: id })
+    const code = Number(resp?.code ?? 200)
+    if (code !== 200 && code !== 0) {
+      throw new Error(resp?.msg || 'channel detail request failed')
+    }
+    if (!resp.data) return getChannel(id) || null
+    if (Number(resp.data.memberType ?? 0) < 0) {
+      await removeChannel(activeUid, id)
+      return null
+    }
+
+    const next = normalizeChannel({
+      ...getChannel(id),
+      ...resp.data,
+      id,
+      channelId: resp.data.channelId ?? resp.data.id ?? id,
+    })
+    const index = channels.value.findIndex((item) => item.id === id)
+    if (index >= 0) {
+      channels.value[index] = next
+    } else {
+      channels.value.unshift(next)
+    }
+    return next
+  }
+
+  async function ensureChannelDetailReady(
+    channelId: string | number,
+    options: { force?: boolean; skipLoadingState?: boolean } = {},
+  ): Promise<Channel | null> {
+    const id = String(channelId || '').trim()
+    if (!id) return null
+
+    const status = getChannelDetailStatus(id)
+    if (!options.force && status === 'ready') {
       return getChannel(id) || null
     }
+
+    const pending = detailRequestById.get(id)
+    if (pending) {
+      // 复用同一频道的进行中请求，避免短时间重复点击触发并发详情请求。
+      return pending
+    }
+
+    if (!options.skipLoadingState) {
+      setChannelDetailStatus(id, 'loading')
+    }
+    const request = (async () => {
+      try {
+        const detail = await requestChannelDetail(id)
+        // 无论是否仍在频道，详情请求已完成，避免输入区长期停留在 loading 状态。
+        setChannelDetailStatus(id, 'ready')
+        return detail
+      } catch (e) {
+        console.error('[ChannelStore] ensureChannelDetailReady failed:', e)
+        setChannelDetailStatus(id, 'error')
+        return getChannel(id) || null
+      } finally {
+        detailRequestById.delete(id)
+      }
+    })()
+    detailRequestById.set(id, request)
+
+    return request
   }
 
   return {
     channels,
     loading,
+    detailStatusById,
     loadChannels,
     getChannel,
+    getChannelDetailStatus,
     getRemovedChannelMeta,
     patchChannel,
     removeChannel,
     refreshChannelDetail,
+    ensureChannelDetailReady,
     hydratePlaceholderChannels,
   }
 })

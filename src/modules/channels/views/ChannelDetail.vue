@@ -66,6 +66,8 @@ watch(
 )
 
 function startChat() {
+  // 详情页“发送消息”入口也走后台预热，保持跳转即时响应。
+  void channelStore.ensureChannelDetailReady(props.channelId)
   const conv = chatStore.ensureConversation(2, props.channelId)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setSidebarTab('chats')

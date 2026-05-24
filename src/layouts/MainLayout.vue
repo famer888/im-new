@@ -2427,6 +2427,10 @@ async function handleForward(targetConvId: string) {
   const [convTypeRaw, convTargetId = ''] = normalizedTargetConvId.split('_')
   const convType = Number(convTypeRaw)
   if (!Number.isNaN(convType) && convTargetId) {
+    if (convType === ConversationType.Channel) {
+      // 转发落到频道时后台补齐权限，不阻塞切换到目标会话。
+      void channelStore.ensureChannelDetailReady(convTargetId)
+    }
     chatStore.ensureConversation(convType, convTargetId)
   }
 

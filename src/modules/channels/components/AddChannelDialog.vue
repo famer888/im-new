@@ -70,6 +70,8 @@ function upsertAndOpenChannel(joined = false) {
     memberType: joined ? 3 : (currentMemberType > 0 ? current.memberType : joinedChannel.value?.memberType ?? 1),
     updatedAt: Date.now(),
   }, { allowRemoved: true })
+  // 加入后可能拿到更高权限，强刷一次详情；仍保持非阻塞，避免“进入频道”按钮延迟。
+  void channelStore.ensureChannelDetailReady(id, { force: joined })
 
   const conv = chatStore.ensureConversation(ConversationType.Channel, id)
   chatStore.setCurrentConversation(conv.id)

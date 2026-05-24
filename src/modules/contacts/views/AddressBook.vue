@@ -271,6 +271,8 @@ function selectGroup(group: GroupItem) {
 }
 
 function selectChannel(channel: ChannelItem) {
+  // 通讯录入口同样不等待频道详情，统一“秒开会话 + 后台校准权限”的交互。
+  void channelStore.ensureChannelDetailReady(channel.id)
   const conv = chatStore.ensureConversation(2, channel.id)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setRightPanel('none')

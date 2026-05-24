@@ -1157,6 +1157,10 @@ function handleSelect(conv: Conversation) {
   if (conv.type === ConversationType.Friend && !isFileHelperTargetId(conv.targetId)) {
     void contactStore.ensureContactDetailLoaded(conv.targetId)
   }
+  if (conv.type === ConversationType.Channel) {
+    // 不阻塞切会话，后台补齐频道权限，避免点击频道产生明显延迟。
+    void channelStore.ensureChannelDetailReady(conv.targetId)
+  }
   chatStore.setCurrentConversation(conv.id)
   // 点击会话项后收起右侧信息面板（与 im 交互一致）
   uiStore.setRightPanel('none')

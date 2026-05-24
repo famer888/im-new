@@ -10,7 +10,6 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import {
   channelCheckJoin,
-  getChannelDetail,
   getChannelEventList,
   type ChannelEventReqItem,
 } from '@/api/imChannel'
@@ -154,8 +153,7 @@ async function hydrateNoticeChannelNames(items: ChannelNoticeItem[]): Promise<Ch
     }
 
     try {
-      const res = await getChannelDetail({ channelId })
-      const detail = res?.data as Record<string, unknown> | undefined
+      const detail = await channelStore.ensureChannelDetailReady(channelId, { force: true }) as Record<string, unknown> | null
       const channelName = pickNoticeChannelName(channelId, [
         detail?.channelName,
         detail?.name,
@@ -333,7 +331,7 @@ function handleScroll(event: Event) {
 
 async function upsertApprovedChannel(item: ChannelNoticeItem) {
   if (!item.channelId) return
-  const detail = await channelStore.refreshChannelDetail(item.channelId)
+  const detail = await channelStore.ensureChannelDetailReady(item.channelId, { force: true })
   channelStore.patchChannel(item.channelId, {
     ...detail,
     id: item.channelId,
@@ -384,8 +382,7 @@ function canOpenChannel(item: ChannelNoticeItem): boolean {
 async function handleChannelClick(item: ChannelNoticeItem) {
   if (!canOpenChannel(item)) return
   try {
-    const res = await getChannelDetail({ channelId: item.channelId })
-    const detail = res?.data
+    const detail = await channelStore.ensureChannelDetailReady(item.channelId, { force: true })
     if (!detail || !Number(detail.memberType || 0)) {
       showTip(t('此频道已失效或过期'), 'error')
       return

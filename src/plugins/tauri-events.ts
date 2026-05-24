@@ -835,6 +835,12 @@ export async function setupTauriListeners() {
     }
 
     const chatStore = useChatStore()
+    const [convTypeRaw, convTargetId = ''] = conversationId.split('_')
+    if (Number(convTypeRaw) === 2 && convTargetId) {
+      const channelStore = useChannelStore()
+      // 系统通知点开频道会话时，不等待详情接口，先恢复窗口和会话焦点。
+      void channelStore.ensureChannelDetailReady(convTargetId)
+    }
     if (conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
       console.warn('[group-notification-unread] notification click', {
         conversationId,
@@ -1945,12 +1951,26 @@ function handleDeepLink(url: string) {
       case 'chat':
         if (params.id) {
           const chatStore = useChatStore()
+          const [convTypeRaw, convTargetId = ''] = String(params.id).split('_')
+          if (Number(convTypeRaw) === 2 && convTargetId) {
+            const channelStore = useChannelStore()
+            // deep-link 进入频道会话与手动点击保持一致：先进入，后校准权限。
+            void channelStore.ensureChannelDetailReady(convTargetId)
+          }
           chatStore.setCurrentConversation(params.id)
         }
         break
       case 'channel':
         if (params.id) {
-          // Navigate to channel
+          const channelId = String(params.id).trim()
+          if (!channelId) break
+          const channelStore = useChannelStore()
+          const chatStore = useChatStore()
+          // channel 专用 deep-link 也采用非阻塞预热，减少唤起时的等待感。
+          void channelStore.ensureChannelDetailReady(channelId)
+          const conversationId = `2_${channelId}`
+          chatStore.ensureConversation(2, channelId)
+          chatStore.setCurrentConversation(conversationId)
         }
         break
     }

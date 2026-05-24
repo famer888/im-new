@@ -112,6 +112,8 @@ function selectGroup(id: string) {
 }
 
 function selectChannel(id: string) {
+  // 搜索命中跳转优先响应点击，频道详情走后台拉取。
+  void channelStore.ensureChannelDetailReady(id)
   const conv = chatStore.ensureConversation(2, id)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setRightPanel('none')
@@ -124,6 +126,10 @@ function selectChannel(id: string) {
  */
 function selectMessage(m: Message) {
   const { type, targetId } = parseConversationRef(m.conversationId)
+  if (type === 2) {
+    // 消息搜索命中频道会话时，后台补齐权限，避免跳转时卡顿。
+    void channelStore.ensureChannelDetailReady(targetId)
+  }
   const conv = chatStore.ensureConversation(type, targetId)
   const convName = convLabelForMessage(m)
   const av = avatarPropsForMessage(m)

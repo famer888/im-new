@@ -20,6 +20,8 @@ onMounted(() => {
 })
 
 function handleSelect(channel: typeof channelStore.channels[0]) {
+  // 先切会话，详情权限后台补齐，避免点击频道时出现 1-2 秒阻塞。
+  void channelStore.ensureChannelDetailReady(channel.id)
   const conv = chatStore.ensureConversation(2, channel.id)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setRightPanel('none')

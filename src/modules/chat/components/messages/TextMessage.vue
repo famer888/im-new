@@ -411,7 +411,7 @@ function parseChannelRemark(raw: any): string {
   return String(value || '').trim()
 }
 
-function openChannelConversation(raw: any) {
+function openChannelConversation(raw: any): boolean {
   const channelId = normalizeChannelId(raw)
   if (!channelId) return false
 
@@ -425,6 +425,8 @@ function openChannelConversation(raw: any) {
     icon: raw?.icon ?? raw?.avatar ?? null,
     updatedAt: Date.now(),
   })
+  // 从消息内容进入频道时先开会话，权限和成员身份在后台校准。
+  void channelStore.ensureChannelDetailReady(channelId)
 
   const conv = chatStore.ensureConversation(ConversationType.Channel, channelId)
   chatStore.setCurrentConversation(conv.id)

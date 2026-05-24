@@ -107,16 +107,35 @@ const showShutupTip = computed(() => {
   const group = groupStore.getGroup(conv.targetId)
   return Boolean(group?.isMuted)
 })
+// 频道底部交互只信“详情态”，避免使用列表/缓存快照导致首屏误判为“加入频道”。
+const currentChannelDetailStatus = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel) return 'idle'
+  return channelStore.getChannelDetailStatus(conv.targetId)
+})
+const showChannelPermissionLoadingTip = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel) return false
+  const status = currentChannelDetailStatus.value
+  return status === 'idle' || status === 'loading'
+})
+const showChannelPermissionErrorTip = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel) return false
+  return currentChannelDetailStatus.value === 'error'
+})
 const showChannelDisabledTip = computed(() => {
   const conv = chatStore.currentConversation
   const channel = currentChannel.value
   if (!conv || conv.type !== ConversationType.Channel || !channel) return false
+  if (currentChannelDetailStatus.value !== 'ready') return false
   return Boolean(channel.isDisable || Number(channel.status ?? 0) === 3)
 })
 const showChannelJoinButton = computed(() => {
   const conv = chatStore.currentConversation
   const channel = currentChannel.value
   if (!conv || conv.type !== ConversationType.Channel || !channel) return false
+  if (currentChannelDetailStatus.value !== 'ready') return false
   if (showChannelDisabledTip.value) return false
   return Number(channel.memberType ?? -1) === 0
 })
@@ -129,6 +148,7 @@ const hasChannelPublishAuthority = computed(() => {
 const showChannelNotifyToggle = computed(() => {
   const conv = chatStore.currentConversation
   if (!conv || conv.type !== ConversationType.Channel || !currentChannel.value) return false
+  if (currentChannelDetailStatus.value !== 'ready') return false
   if (showChannelDisabledTip.value) return false
   if (showChannelJoinButton.value) return false
   return !hasChannelPublishAuthority.value
@@ -144,7 +164,12 @@ const inputPlaceholder = computed(() =>
     : t('Enter发送'),
 )
 const showInputNoticeOnly = computed(() =>
-  showChannelDisabledTip.value || showChannelJoinButton.value || showChannelNotifyToggle.value || showShutupTip.value,
+  showChannelPermissionLoadingTip.value
+  || showChannelPermissionErrorTip.value
+  || showChannelDisabledTip.value
+  || showChannelJoinButton.value
+  || showChannelNotifyToggle.value
+  || showShutupTip.value,
 )
 const convId = computed(() => chatStore.currentConversationId)
 const scheduleDeletionTime = ref(0)
@@ -162,6 +187,16 @@ const currentForwardDraftItems = computed(() => (
     : []
 ))
 const hasForwardDraft = computed(() => currentForwardDraftItems.value.length > 0)
+
+watch(
+  () => chatStore.currentConversation?.type === ConversationType.Channel ? chatStore.currentConversation.targetId : '',
+  (channelId) => {
+    if (!channelId) return
+    // 切会话后后台补齐频道详情，不阻塞聊天区切换速度。
+    void channelStore.ensureChannelDetailReady(channelId)
+  },
+  { immediate: true },
+)
 
 /** 频道/群二维码「转发给朋友」：草稿里是 data: 合成图，输入区展示大图预览（对齐老 im forward + 待发图片） */
 const forwardPreviewQrSrc = computed(() => {
@@ -3143,7 +3178,13 @@ onBeforeUnmount(() => {
     @drop="handleDrop"
     @dragover="handleDragOver"
   >
-    <div v-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
+    <div v-if="showChannelPermissionLoadingTip" class="shutup-tip channel-state-tip">
+      正在获取频道权限...
+    </div>
+    <div v-else-if="showChannelPermissionErrorTip" class="shutup-tip channel-state-tip">
+      频道权限获取失败，请稍后重试
+    </div>
+    <div v-else-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
       {{ t('该频道已禁用') }}
     </div>
     <button
