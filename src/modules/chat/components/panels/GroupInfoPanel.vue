@@ -273,7 +273,7 @@ const members = computed(() => {
   return all.filter((m) => m.nickname?.toLowerCase().includes(kw) || m.userId.includes(kw))
 })
 
-const totalCount = computed(() => group.value?.memberCount ?? groupStore.getMembers(conv.value?.targetId ?? '').length)
+const totalCount = computed(() => group.value?.memberCount || groupStore.getMembers(conv.value?.targetId ?? '').length)
 
 const isOwner = computed(() => effectiveMemberType.value === 0)
 
@@ -325,6 +325,10 @@ async function loadPanelData(groupId: string) {
     // 把已拿到的群资料回写到 store，下一次打开右侧面板可直接首屏命中缓存。
     groupStore.upsertGroup({
       id: groupId,
+      name: groupBase?.name ?? groupBase?.groupName,
+      avatar: groupBase?.pic ?? groupBase?.avatar ?? groupBase?.groupAvatar,
+      ownerId: groupBase?.hostId ? String(groupBase.hostId) : undefined,
+      memberCount: Number(groupBase?.memberCount ?? 0),
       groupAliasName: groupAliasName.value || null,
       notice: notice.value || null,
     })

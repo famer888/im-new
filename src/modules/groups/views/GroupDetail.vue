@@ -5,6 +5,7 @@ import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { getGroupDetail } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 
 const props = defineProps<{ groupId: string }>()
@@ -18,15 +19,35 @@ const group = computed(() => groupStore.getGroup(props.groupId))
 
 /** 与老项目 im/details/group.vue 一致：store 已按 role 排序，截取前 8 人展示 */
 const previewMembers = computed(() => groupStore.getMembers(props.groupId).slice(0, 8))
+const displayedMemberCount = computed(() => group.value?.memberCount || previewMembers.value.length)
 
 watch(
   () => props.groupId,
   (groupId) => {
     if (!groupId || !authStore.uid) return
     void groupStore.loadMembers(authStore.uid, groupId, { previewOnly: true })
+    void refreshGroupDetail(groupId)
   },
   { immediate: true },
 )
+
+async function refreshGroupDetail(groupId: string) {
+  try {
+    const detail = await getGroupDetail({ groupId })
+    const groupBase = (detail as any)?.group || {}
+    // 详情接口比本地缓存更新；打开群资料时回填名称和人数，避免缺失时显示数字 ID 或 0 人。
+    groupStore.upsertGroup({
+      id: groupId,
+      name: groupBase.name ?? groupBase.groupName,
+      avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar,
+      ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
+      memberCount: Number(groupBase.memberCount ?? 0),
+      groupAliasName: groupBase.groupAliasName ?? null,
+    })
+  } catch (error) {
+    console.error('[GroupDetail] refresh group detail failed:', error)
+  }
+}
 
 function startChat() {
   const conv = chatStore.ensureConversation(1, props.groupId)
@@ -56,7 +77,7 @@ function handleMemberClick(member: GroupMember) {
         <div>
           <div class="name">{{ group.name || group.id }}</div>
           <div class="count">
-            {{ t('群成员共{value}人', { value: group.memberCount }) }}
+            {{ t('群成员共{value}人', { value: displayedMemberCount }) }}
           </div>
         </div>
       </div>

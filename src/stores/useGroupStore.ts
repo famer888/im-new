@@ -103,8 +103,9 @@ export const useGroupStore = defineStore('group', () => {
   function normalizeGroup(item: any): Group {
     return {
       id: String(item.id ?? item.groupId ?? item.group_id ?? ''),
-      name: item.name ?? null,
-      avatar: item.avatar ?? item.pic ?? null,
+      // 兼容旧 im 与不同接口返回：有些群资料用 groupName/groupAvatar，不兼容会退回显示数字 ID。
+      name: item.name ?? item.groupName ?? item.group_name ?? null,
+      avatar: item.avatar ?? item.pic ?? item.groupAvatar ?? item.group_avatar ?? null,
       ownerId: item.ownerId ?? item.owner_id ?? (item.hostId ? String(item.hostId) : null) ?? null,
       memberCount: Number(item.memberCount ?? item.member_count ?? 0),
       notice: item.notice ?? null,
