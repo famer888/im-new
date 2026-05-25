@@ -44,7 +44,9 @@ export const useChannelStore = defineStore('channel', () => {
   const detailRequestById = new Map<string, Promise<Channel | null>>()
 
   function channelDebug(message: string, data: Record<string, unknown> = {}) {
-    console.warn(`[ChannelStore][debug] ${message}`, {
+    if (import.meta.env.VITE_CHANNEL_DEBUG !== 'true') return
+    // 频道加载排查日志默认静默，只有显式打开环境开关时才输出。
+    console.debug(`[ChannelStore][debug] ${message}`, {
       activeUid,
       isTauri: isTauri(),
       ...data,

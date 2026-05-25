@@ -531,7 +531,7 @@ async function requestFriendKeyPair(
       return primaryResp
     }
     // 对齐旧 im：单聊好友取钥匙不带 flag；flag=1 在部分新好友上会返回空 key。
-    console.warn('[e2ee] requestFriendKeyPair primary returned empty keys, fallback legacy request', {
+    console.debug('[e2ee] requestFriendKeyPair primary returned empty keys, fallback legacy request', {
       friendId,
       options,
     })

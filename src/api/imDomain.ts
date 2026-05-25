@@ -96,10 +96,20 @@ function parseUrl(value: string): URL | null {
 }
 
 function normalizeHttpBaseUrl(value: string): string {
+  if (!String(value || '').trim()) return ''
   const parsed = parseUrl(value)
   if (!parsed) return ''
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
   return `${parsed.protocol}//${parsed.host}`
+}
+
+function isObjectStorageBaseUrl(value: string): boolean {
+  try {
+    const host = new URL(value).host.toLowerCase()
+    return host === 'storage.googleapis.com' || host.includes('.oss-') || host.includes('.oss.')
+  } catch {
+    return false
+  }
 }
 
 function normalizeDomainModuleCode(moduleCode: string): string {
@@ -120,7 +130,10 @@ function getDomainApiCandidates(): string[] {
       ...normal,
       API_CONFIG.rawDomainUrl,
       ...error,
-    ].map(normalizeHttpBaseUrl).filter(Boolean)),
+    ]
+      .map(normalizeHttpBaseUrl)
+      // OSS 只用于读取引导文件，不能当 domain API 去拼 /api/v4/listDomain。
+      .filter(base => base && !isObjectStorageBaseUrl(base))),
   ]
 }
 
