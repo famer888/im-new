@@ -316,6 +316,77 @@ function responseOk(resp: { code?: number } | null | undefined): boolean {
   return code === 200 || code === 0
 }
 
+function firstHttpUrlFromText(text: string): string {
+  const match = text.match(/https?:\/\/[^\s]+/i)
+  return match ? match[0] : ''
+}
+
+function normalizeChannelJoinLink(raw: unknown): string {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  try {
+    const url = new URL(text)
+    // 兼容频道短链：subscribeChannel 需要的是链接码，不是完整 URL。
+    const pathToken = decodeURIComponent(url.pathname.replace(/^\/+|\/+$/g, ''))
+    if (pathToken && !pathToken.includes('/')) return pathToken
+    const queryToken = String(url.searchParams.get('link') || url.searchParams.get('code') || '').trim()
+    if (queryToken) return queryToken
+  } catch {
+    // 非 URL 时按原值透传（例如接口直接返回的 link token）。
+  }
+  return text
+}
+
+function resolveJoinChannelLink(conversationId: string, preferredLink: unknown): string {
+  const directLink = normalizeChannelJoinLink(preferredLink)
+  if (directLink) return directLink
+  const recent = messageStore.getMessages(conversationId).slice(-20)
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const raw = String(recent[i]?.content || '').trim()
+    if (!raw) continue
+    const hit = normalizeChannelJoinLink(firstHttpUrlFromText(raw))
+    if (hit) return hit
+  }
+  return ''
+}
+
+function isExpiredInviteError(message: unknown): boolean {
+  const text = String(message || '').toLowerCase()
+  if (!text) return false
+  return text.includes('失效')
+    || text.includes('过期')
+    || text.includes('expired')
+    || text.includes('invalid')
+}
+
+function joinChannelErrorToken(resp: { msg?: unknown; errMsg?: unknown; errCode?: unknown } | null | undefined): string {
+  const msg = String(resp?.msg || '').trim()
+  const errMsg = String(resp?.errMsg || '').trim()
+  const errCode = Number(resp?.errCode ?? 0)
+  if (msg) return msg
+  if (errMsg) return errMsg
+  if (Number.isFinite(errCode) && errCode > 0) return String(errCode)
+  return ''
+}
+
+function isExpiredInviteResponse(resp: { msg?: unknown; errMsg?: unknown; errCode?: unknown } | null | undefined): boolean {
+  const token = joinChannelErrorToken(resp)
+  if (!token) return false
+  // 线上已观测到 1000001：服务端以错误码表示邀请链接失效/过期。
+  if (token === '1000001') return true
+  return isExpiredInviteError(token)
+}
+
+function resolveJoinChannelErrorMessage(resp: { msg?: unknown; errMsg?: unknown; errCode?: unknown } | null | undefined): string {
+  const fallback = t('加入频道失败')
+  const token = joinChannelErrorToken(resp)
+  if (!token) return fallback
+  if (token === '1000001' || isExpiredInviteError(token)) return t('此邀请链接已失效或过期')
+  // 纯数字错误码对用户不可读，仍回退到通用失败提示。
+  if (/^\d+$/.test(token)) return fallback
+  return token
+}
+
 async function toggleChannelDisturb() {
   const conv = chatStore.currentConversation
   const channel = currentChannel.value
@@ -352,19 +423,34 @@ async function handleJoinChannel() {
 
   joiningChannel.value = true
   try {
-    const resp = await subscribeChannel({
-      channelId: channel.channelId || conv.targetId,
-      link: channel.link || undefined,
+    const channelId = channel.channelId || conv.targetId
+    // 私密频道在“被移除后重新加入”场景里，频道快照可能没有 link；这里回退到最近消息中的邀请链接。
+    const joinLink = resolveJoinChannelLink(conv.id, channel.link)
+    let resp = await subscribeChannel({
+      channelId,
+      link: joinLink || undefined,
     })
-    if (!responseOk(resp)) throw new Error(resp?.msg || 'subscribe channel failed')
+    if (!responseOk(resp) && joinLink && isExpiredInviteResponse(resp)) {
+      // 兼容部分线路：历史邀请 link 过期时，服务端仍可能允许按 channelId 直接重新加入。
+      resp = await subscribeChannel({ channelId })
+    }
+    if (!responseOk(resp)) {
+      // 接口失败后立刻强刷详情：兼容“服务端已加入但本地 memberType 仍旧值”的短暂不一致。
+      const refreshed = await channelStore.ensureChannelDetailReady(channelId, { force: true })
+      if (Number(refreshed?.memberType ?? channel.memberType ?? 0) > 0) return
+      throw new Error(resolveJoinChannelErrorMessage(resp))
+    }
 
-    channelStore.patchChannel(channel.channelId || conv.targetId, {
+    channelStore.patchChannel(channelId, {
       memberType: 3,
       updatedAt: Date.now(),
     }, { allowRemoved: true })
+    void channelStore.ensureChannelDetailReady(channelId, { force: true })
   } catch (error) {
     console.warn('[MessageInput] join channel failed:', error)
-    showToast(t('加入频道失败'), 'error')
+    const fallback = t('加入频道失败')
+    const reason = error instanceof Error ? String(error.message || '').trim() : ''
+    showToast(reason || fallback, 'error')
   } finally {
     joiningChannel.value = false
   }

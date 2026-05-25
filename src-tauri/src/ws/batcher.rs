@@ -261,6 +261,31 @@ fn should_emit_subscriber_remove_fallback(
     false
 }
 
+fn is_subscriber_remove_notice_text(content: &str) -> bool {
+    let normalized = content.trim().to_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    normalized.contains("移出频道")
+        || normalized.contains("removed from channel")
+        || normalized.contains("kicked from channel")
+}
+
+fn is_subscriber_remove_event(
+    event_type: i32,
+    subscriber_operate_type: Option<i32>,
+    notice_content: &str,
+) -> bool {
+    if event_type != 2 {
+        return false;
+    }
+    if subscriber_operate_type == Some(2) {
+        return true;
+    }
+    // 兼容服务端偶发缺失 subscriberOperateType：若通知文本明确是“被移出频道”，仍按移除事件处理。
+    is_subscriber_remove_notice_text(notice_content)
+}
+
 #[cfg(test)]
 mod private_decode_tests {
     use super::*;
@@ -304,6 +329,21 @@ mod private_decode_tests {
     #[test]
     fn subscriber_remove_with_notice_should_not_emit_fallback_message() {
         assert!(!should_emit_subscriber_remove_fallback(2, Some(2), 1001, true));
+    }
+
+    #[test]
+    fn channel_notice_remove_text_without_subscriber_operate_type_should_be_treated_as_remove() {
+        assert!(is_subscriber_remove_event(2, None, "您已被移出频道"));
+    }
+
+    #[test]
+    fn subscriber_remove_operate_type_should_be_treated_as_remove_even_without_notice_text() {
+        assert!(is_subscriber_remove_event(2, Some(2), "频道通知"));
+    }
+
+    #[test]
+    fn normal_channel_notice_should_not_be_treated_as_remove() {
+        assert!(!is_subscriber_remove_event(2, Some(0), "您已加入频道"));
     }
 }
 
@@ -1938,6 +1978,16 @@ impl MessageBatcher {
                     content
                 };
                 if !content.is_empty() {
+                    let is_subscriber_remove = is_subscriber_remove_event(
+                        event.event_type,
+                        subscriber_info.map(|item| item.operate_type),
+                        content,
+                    );
+                    let notice_source = if is_subscriber_remove {
+                        "channel-remove"
+                    } else {
+                        "channel-notice"
+                    };
                     info!(
                         "[channel] emit CHANNEL_EVENT_PUSH as channel notice msg_id={} channel_id={} content={}",
                         base_msg_id, event.channel_id, content
@@ -1953,7 +2003,7 @@ impl MessageBatcher {
                         status: 1,
                         read_status: 0,
                         extra: serde_json::json!({
-                            "source": "channel-notice",
+                            "source": notice_source,
                             "channelId": event.channel_id.to_string(),
                             "channelName": channel_info
                                 .map(|item| item.channel_name.clone())
