@@ -431,7 +431,19 @@ async function openFileHelper() {
   }
   const conv = chatStore.conversations.find(c => c.targetId === FILE_HELPER_TARGET_ID)
   chatStore.setCurrentConversation(conv?.id ?? `0_${FILE_HELPER_TARGET_ID}`)
+  // 与会话列表点击保持一致：切到传输助手时关闭上一会话遗留的右侧资料面板。
+  uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
+}
+
+function handleSidebarTabClick(tab: 'chats' | 'contacts' | 'transfer') {
+  // 与用户预期一致：点击左侧三个主入口时，都先收起右侧资料面板，避免沿用上一会话状态。
+  uiStore.setRightPanel('none')
+  if (tab === 'transfer') {
+    void openFileHelper()
+    return
+  }
+  uiStore.setSidebarTab(tab)
 }
 
 onMounted(() => {
@@ -488,19 +500,19 @@ onBeforeUnmount(() => {
       </div>
 
       <ul class="nav-list">
-        <li :class="{ active: uiStore.sidebarTab === 'chats' }" @click="uiStore.setSidebarTab('chats')">
+        <li :class="{ active: uiStore.sidebarTab === 'chats' }" @click="handleSidebarTabClick('chats')">
           <img :src="uiStore.sidebarTab === 'chats' ? messageActiveIcon : messageIcon" alt="chat" />
           <span v-if="visibleChatUnread > 0" class="nav-badge">
             {{ visibleChatUnread > 99 ? '99+' : visibleChatUnread }}
           </span>
         </li>
-        <li :class="{ active: uiStore.sidebarTab === 'contacts' }" @click="uiStore.setSidebarTab('contacts')">
+        <li :class="{ active: uiStore.sidebarTab === 'contacts' }" @click="handleSidebarTabClick('contacts')">
           <img :src="uiStore.sidebarTab === 'contacts' ? contactsActiveIcon : contactsIcon" alt="contacts" />
           <span v-if="visibleContactUnread > 0" class="nav-badge">
             {{ visibleContactUnread > 99 ? '99+' : visibleContactUnread }}
           </span>
         </li>
-        <li :class="{ active: uiStore.sidebarTab === 'transfer' }" @click="openFileHelper">
+        <li :class="{ active: uiStore.sidebarTab === 'transfer' }" @click="handleSidebarTabClick('transfer')">
           <img :src="uiStore.sidebarTab === 'transfer' ? transferActiveIcon : transferIcon" alt="transfer" />
         </li>
       </ul>
