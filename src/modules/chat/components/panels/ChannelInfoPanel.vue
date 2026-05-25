@@ -14,6 +14,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
+import { shouldShowChannelShareInfo } from './channelShareVisibility'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import codeIcon from '@/assets/images/chat/code.png'
 import arrowRightIcon from '@/assets/images/chat/arrow-rgiht.png'
@@ -106,9 +107,12 @@ const channelMemberType = computed(() => {
   const value = detail.value.memberType ?? channel.value?.memberType
   return value === undefined || value === null || value === '' ? null : Number(value)
 })
+const channelLinkType = computed(() => {
+  const value = detail.value.linkType ?? channel.value?.linkType
+  return value === undefined || value === null || value === '' ? null : Number(value)
+})
 const showChannelAliasLink = computed(() => {
-  const memberType = channelMemberType.value
-  return memberType === 1 || memberType === 2
+  return shouldShowChannelShareInfo(channelLinkType.value, channelMemberType.value)
 })
 const channelDisturbed = computed(() =>
   toBool(detail.value.isDisturb ?? channel.value?.isDisturb ?? conv.value?.isMuted ?? false),
