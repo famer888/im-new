@@ -2,8 +2,12 @@ export interface DomainItem {
   domain: string
   status: 'normal' | 'error'
   moduleCode: string
+  source?: DomainSource
+  priority?: number
   lastCheck?: number
 }
+
+type DomainSource = 'dynamic' | 'prepared' | 'oss'
 
 interface DynamicDomainDto {
   domainUrl: string
@@ -75,6 +79,11 @@ const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = {
 const PROD_PRELOADED_DOMAIN_SET = new Set(
   Object.values(PROD_PRELOADED_DOMAIN_POOL).flat(),
 )
+const DOMAIN_SOURCE_RANK: Record<DomainSource, number> = {
+  dynamic: 0,
+  prepared: 1,
+  oss: 2,
+}
 
 const MODULE_CODE_ALIAS_MAP: Record<string, string> = {
   biz: 'webBiz',
@@ -105,6 +114,34 @@ function normalizeModuleCode(moduleCode: string): string {
   return MODULE_CODE_ALIAS_MAP[normalized] || normalized
 }
 
+function isPreparedSeedDomain(moduleCode: string, domain: string): boolean {
+  const normalizedModuleCode = normalizeModuleCode(moduleCode)
+  const prepared = [
+    ...(DIRECT_FALLBACK_DOMAINS[normalizedModuleCode] || []),
+    ...(PROD_PRELOADED_DOMAIN_POOL[normalizedModuleCode] || []),
+  ]
+  return prepared.includes(domain)
+}
+
+function normalizeDomainSource(source: unknown, moduleCode: string, domain: string): DomainSource {
+  if (source === 'dynamic' || source === 'prepared' || source === 'oss') return source
+  return isPreparedSeedDomain(moduleCode, domain) ? 'prepared' : 'dynamic'
+}
+
+function sortDomainItems(items: DomainItem[]): DomainItem[] {
+  // 域名使用顺序与旧 im 对齐：动态域名优先，动态都不可用后再走预埋，最后才走 OSS 配置。
+  return [...items].sort((a, b) => {
+    const sourceDiff = DOMAIN_SOURCE_RANK[a.source || 'dynamic'] - DOMAIN_SOURCE_RANK[b.source || 'dynamic']
+    if (sourceDiff !== 0) return sourceDiff
+
+    const aPriority = Number.isFinite(Number(a.priority)) ? Number(a.priority) : Infinity
+    const bPriority = Number.isFinite(Number(b.priority)) ? Number(b.priority) : Infinity
+    if (aPriority !== bPriority) return aPriority - bPriority
+
+    return 0
+  })
+}
+
 function isLoginOnlyDomain(domain: string): boolean {
   try {
     const host = new URL(String(domain || '').trim()).host.toLowerCase()
@@ -125,6 +162,8 @@ function normalizeItem(item: DomainItem): DomainItem | null {
     domain,
     moduleCode,
     status: item.status === 'error' ? 'error' : 'normal',
+    source: normalizeDomainSource(item.source, moduleCode, domain),
+    priority: Number.isFinite(Number(item.priority)) ? Number(item.priority) : undefined,
     lastCheck: Number(item.lastCheck || 0) || Date.now(),
   }
 }
@@ -144,14 +183,25 @@ function upsertDomainItems(items: DomainItem[]): boolean {
       existingMap.set(item.domain, item)
       changed = true
     } else {
+      const itemHasHigherPrioritySource =
+        DOMAIN_SOURCE_RANK[item.source || 'dynamic'] < DOMAIN_SOURCE_RANK[previous.source || 'dynamic']
+      const nextPriority = itemHasHigherPrioritySource
+        ? item.priority
+        : Number.isFinite(Number(item.priority))
+          ? Number(item.priority)
+          : previous.priority
       const nextItem: DomainItem = {
         ...previous,
         // 探测失败后的 error 状态要保留到人工/重启恢复，避免后台补池把失败域名马上洗回 normal。
         status: previous.status === 'error' ? 'error' : item.status,
+        source: itemHasHigherPrioritySource ? item.source : previous.source,
+        priority: nextPriority,
         lastCheck: Math.max(Number(previous.lastCheck || 0), Number(item.lastCheck || 0) || Date.now()),
       }
       if (
         nextItem.status !== previous.status
+        || nextItem.source !== previous.source
+        || nextItem.priority !== previous.priority
         || nextItem.lastCheck !== previous.lastCheck
         || nextItem.moduleCode !== previous.moduleCode
       ) {
@@ -160,22 +210,24 @@ function upsertDomainItems(items: DomainItem[]): boolean {
       }
     }
 
-    domainCache.set(item.moduleCode, Array.from(existingMap.values()))
+    domainCache.set(item.moduleCode, sortDomainItems(Array.from(existingMap.values())))
   }
 
   return changed
 }
 
-function mergeDomains(moduleCode: string, urls: string[]): boolean {
+function mergeDomains(moduleCode: string, urls: string[], source: DomainSource): boolean {
   const normalizedModuleCode = normalizeModuleCode(moduleCode)
   const nextUrls = uniqDomains(urls)
   if (!normalizedModuleCode || !nextUrls.length) return false
 
   return upsertDomainItems(
-    nextUrls.map(domain => ({
+    nextUrls.map((domain, index) => ({
       domain,
       status: 'normal',
       moduleCode: normalizedModuleCode,
+      source,
+      priority: index,
       lastCheck: Date.now(),
     })),
   )
@@ -188,6 +240,8 @@ function serializeDomainCache(): DomainItem[] {
       domain: item.domain,
       status: item.status,
       moduleCode: normalizeModuleCode(item.moduleCode),
+      source: item.source,
+      priority: item.priority,
       lastCheck: Number(item.lastCheck || 0) || Date.now(),
     }))
 }
@@ -246,11 +300,11 @@ async function syncActiveWebBizBaseUrl(options?: { preferPool?: boolean }): Prom
 
 function seedFallbackDomains() {
   for (const [moduleCode, urls] of Object.entries(DIRECT_FALLBACK_DOMAINS)) {
-    mergeDomains(moduleCode, urls)
+    mergeDomains(moduleCode, urls, 'prepared')
   }
   if (!isProdEnv()) return
   for (const [moduleCode, urls] of Object.entries(PROD_PRELOADED_DOMAIN_POOL)) {
-    mergeDomains(moduleCode, urls)
+    mergeDomains(moduleCode, urls, 'prepared')
   }
 }
 
@@ -370,9 +424,9 @@ export async function initDomainPoolFromOss(): Promise<void> {
         const domains = await fetchOssDomains(url)
         collected.push(...domains)
       }
-      mergeDomains(moduleCode, collected)
+      mergeDomains(moduleCode, collected, 'oss')
       if (moduleCode === 'webBiz') {
-        mergeDomains('login_v2', collected.filter(isLoginOnlyDomain))
+        mergeDomains('login_v2', collected.filter(isLoginOnlyDomain), 'oss')
       }
     }),
   )
@@ -394,7 +448,7 @@ export async function initDomainPoolFromApi(): Promise<void> {
 
     const items: DomainItem[] = []
     const now = Date.now()
-    for (const entry of domainDtoList) {
+    for (const [index, entry] of domainDtoList.entries()) {
       const domain = String(entry.domainUrl || '').trim()
       if (!domain) continue
       const moduleCodes = extractDomainSeedModules(domain, entry.moduleCode)
@@ -403,6 +457,8 @@ export async function initDomainPoolFromApi(): Promise<void> {
           domain,
           status: 'normal',
           moduleCode,
+          source: 'dynamic',
+          priority: Number.isFinite(Number(entry.priority)) ? Number(entry.priority) : index,
           lastCheck: now,
         })
       }

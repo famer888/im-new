@@ -87,6 +87,43 @@ function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
 
+function normalizeDeviceOsName(value: string): string {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'macos' || text === 'darwin' || text.includes('mac')) return 'MAC'
+  if (text.includes('win')) return 'WINDOWS'
+  if (text.includes('linux')) return 'LINUX'
+  return text.toUpperCase() || getPlatformSysModel()
+}
+
+function getUserAgentOsVersion(): string {
+  const ua = navigator.userAgent || ''
+  const mac = ua.match(/Mac OS X ([\d_]+)/i)?.[1]
+  if (mac) return mac.replace(/_/g, '.')
+  const win = ua.match(/Windows NT ([\d.]+)/i)?.[1]
+  if (win) return win
+  return ''
+}
+
+async function getDomainReportDeviceType(): Promise<string> {
+  const uaVersion = getUserAgentOsVersion()
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const info = await invoke<{ os?: string; arch?: string }>('get_platform_info')
+      const parts = [
+        normalizeDeviceOsName(info?.os || getPlatformSysModel()),
+        uaVersion,
+        String(info?.arch || '').trim(),
+      ].filter(Boolean)
+      return parts.join('-')
+    } catch {
+      // 平台信息读取失败时仍避免回退成泛化的 pc，保留浏览器能判断到的系统信息。
+    }
+  }
+
+  return [getPlatformSysModel(), uaVersion].filter(Boolean).join('-') || getPlatformSysModel()
+}
+
 function parseUrl(value: string): URL | null {
   try {
     return new URL(String(value || '').trim(), window.location.origin)
@@ -452,10 +489,11 @@ export async function reportErrorDomain(options: {
   try {
     const { mchId, secretKey, accessToken } = await getClientTokenData()
     const reqTime = Date.now()
+    const deviceType = await getDomainReportDeviceType()
     let reportReq: Record<string, unknown> = {
       deviceIp: '',
       deviceNo: '',
-      deviceType: 'pc',
+      deviceType,
       domainSource: 0,
       domainUrl,
       errorDesc: String(options.errorDesc || ''),

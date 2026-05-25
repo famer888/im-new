@@ -338,13 +338,14 @@ async function shouldShowMinimizedReminder(): Promise<boolean> {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
     const currentWindow = getCurrentWindow()
     const [minimized, visible] = await Promise.all([
-      currentWindow.isMinimized().catch(() => false),
-      currentWindow.isVisible().catch(() => true),
+      currentWindow.isMinimized(),
+      currentWindow.isVisible(),
     ])
     // 对齐桌面端目标行为：主窗口最小化或已隐藏到托盘时，都允许弹出右下角提醒。
     return minimized || !visible
   } catch {
-    return false
+    // 前端窗口状态读取在权限/平台差异下可能失败；后端命令会再次判断主窗口状态，这里放行避免误挡普通消息提醒。
+    return true
   }
 }
 
@@ -421,7 +422,8 @@ export async function showMinimizedMessageReminder(rawMessages: Message[] | any[
   if (!isTauri()) return
 
   const settingStore = useSettingStore()
-  if (!settingStore.settings.notificationEnabled || !settingStore.settings.messageReminderWhenMinimized) return
+  // 与旧 im 对齐：右下角弹窗只受“最小化时消息提醒”控制，不跟“新消息提示音”或通用通知开关绑定。
+  if (!settingStore.settings.messageReminderWhenMinimized) return
 
   const uid = String(currentUid || useAuthStore().uid || '')
   if (!uid) return
