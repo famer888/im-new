@@ -4,6 +4,12 @@ function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
 
+function isDesktopLocalDevOrigin(): boolean {
+  if (typeof window === 'undefined') return false
+  const host = String(window.location.hostname || '').toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0'
+}
+
 function getDomainPoolFirstNormalDomain(): string {
   if (!isTauri()) return ''
   try {
@@ -167,11 +173,15 @@ export function syncBaseUrlWithDomainPool(options?: { preferPool?: boolean }): s
  * In Tauri app, call the real URL directly (no CORS restriction).
  */
 export function getBaseUrl(): string {
+  // 对齐老 im：桌面开发态也要避免渲染进程跨域，统一走本地 dev proxy。
+  if (isDesktopLocalDevOrigin()) return '/api'
   const resolved = syncBaseUrlWithDomainPool()
   return isTauri() ? resolved : '/api'
 }
 
 export function getDomainUrl(): string {
+  // 开发态与 getBaseUrl 保持一致，避免 domain-api 也触发 CORS。
+  if (isDesktopLocalDevOrigin()) return '/domain-api'
   if (!isTauri()) return '/domain-api'
   return getDomainPoolFirstNormalDomain() || RAW_DOMAIN_URL
 }
@@ -185,5 +195,7 @@ export function getRawBaseUrl(): string {
 }
 
 export function getOpenChatBaseUrl(): string {
+  // 频道网关在桌面开发态也通过 Vite 代理，避免 localhost 源被网关拦截。
+  if (isDesktopLocalDevOrigin()) return '/open-chat-api'
   return isTauri() ? RAW_OPEN_CHAT_DOMAIN : '/open-chat-api'
 }

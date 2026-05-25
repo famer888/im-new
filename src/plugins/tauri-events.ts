@@ -1924,15 +1924,12 @@ export async function setupTauriListeners() {
     handleDeepLink(event.payload)
   })
 
-  // Init NTP + domain pool only in Tauri
+  // 只在这里做 NTP 初始化；domain pool 由 main.ts 统一启动，避免重复触发同一批域名请求。
   try {
     const { initNtpTime } = await import('@/utils/ntp')
-    const { initDomainPool, startPolling: startDomainPolling } = await import('@/utils/domainPool')
     initNtpTime()
-    initDomainPool()
-    startDomainPolling(300000)
   } catch (e) {
-    console.warn('[tauri-events] NTP/domain init skipped:', e)
+    console.warn('[tauri-events] NTP init skipped:', e)
   }
 }
 

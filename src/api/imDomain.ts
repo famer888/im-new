@@ -87,6 +87,12 @@ function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
 
+function isDesktopLocalDevOrigin(): boolean {
+  if (typeof window === 'undefined') return false
+  const host = String(window.location.hostname || '').toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0'
+}
+
 function normalizeDeviceOsName(value: string): string {
   const text = String(value || '').trim().toLowerCase()
   if (text === 'macos' || text === 'darwin' || text.includes('mac')) return 'MAC'
@@ -157,6 +163,8 @@ function normalizeDomainModuleCode(moduleCode: string): string {
 }
 
 function getDomainApiCandidates(): string[] {
+  // 对齐老 im 桌面开发体验：本地调试时统一走 Vite 代理，避免 WebView 对真实域名请求触发 CORS 报错。
+  if (isDesktopLocalDevOrigin()) return ['/domain-api']
   if (!isTauri()) return [getDomainUrl()]
   const normal = getOrderedDomainUrls('domain', { includeError: false })
   const error = getAllDomains('domain')
@@ -175,6 +183,8 @@ function getDomainApiCandidates(): string[] {
 }
 
 function getClientTokenCandidates(preferredBase?: string): string[] {
+  // 本地开发态下 clientToken 也固定走 /api 代理，避免轮询备用域名时刷屏 CORS 错误。
+  if (isDesktopLocalDevOrigin()) return [getBaseUrl()]
   if (!isTauri()) return [preferredBase || getBaseUrl()]
 
   const preferred = normalizeHttpBaseUrl(preferredBase || '')
