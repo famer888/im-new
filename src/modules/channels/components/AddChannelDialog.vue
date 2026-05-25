@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -32,6 +32,9 @@ const displayName = computed(() => target.value?.channelName || target.value?.na
 const memberCount = computed(() => Number(target.value?.memberCount || 0))
 const subscriberText = computed(() => t('订阅者数量', { count: memberCount.value }))
 const remark = computed(() => target.value?.remark || '')
+const remarkRef = ref<HTMLElement | null>(null)
+const remarkExpanded = ref(false)
+const showRemarkMore = ref(false)
 const joinedChannel = computed(() => {
   const id = target.value?.id || target.value?.channelId || ''
   return id ? channelStore.getChannel(id) : undefined
@@ -47,10 +50,29 @@ watch(target, () => {
   joining.value = false
   tipText.value = ''
   tipType.value = 'success'
+  remarkExpanded.value = false
+  void nextTick(checkRemarkOverflow)
 })
 
 function closeDialog() {
   emit('close')
+}
+
+async function checkRemarkOverflow() {
+  await nextTick()
+  const el = remarkRef.value
+  if (!el) {
+    showRemarkMore.value = false
+    return
+  }
+  // 以 5 行高度作为折叠阈值，只有超出时才显示“更多”。
+  const collapsedHeight = 18 * 5
+  showRemarkMore.value = el.scrollHeight > collapsedHeight + 1
+}
+
+function expandRemark() {
+  remarkExpanded.value = true
+  showRemarkMore.value = false
 }
 
 function upsertAndOpenChannel(joined = false) {
@@ -117,6 +139,29 @@ async function handleJoinChannel() {
     joining.value = false
   }
 }
+
+function handleWindowResize() {
+  if (!props.visible || !remark.value || remarkExpanded.value) return
+  void checkRemarkOverflow()
+}
+
+watch(() => props.visible, (visible) => {
+  if (!visible) return
+  remarkExpanded.value = false
+  void checkRemarkOverflow()
+})
+
+watch(remark, () => {
+  remarkExpanded.value = false
+  void checkRemarkOverflow()
+})
+
+onMounted(() => {
+  window.addEventListener('resize', handleWindowResize)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleWindowResize)
+})
 </script>
 
 <template>
@@ -135,7 +180,23 @@ async function handleJoinChannel() {
         />
         <div class="channel-name">{{ displayName }}</div>
         <div class="subscriber-count">{{ subscriberText }}</div>
-        <p v-if="remark" class="channel-remark">{{ remark }}</p>
+        <div v-if="remark" class="channel-remark-wrap">
+          <p
+            ref="remarkRef"
+            class="channel-remark"
+            :class="{ 'is-expanded': remarkExpanded }"
+          >
+            {{ remark }}
+          </p>
+          <button
+            v-if="showRemarkMore"
+            type="button"
+            class="remark-more-btn"
+            @click="expandRemark"
+          >
+            {{ t('更多') }}
+          </button>
+        </div>
         <div class="button-row">
           <button type="button" class="cancel-btn" @click="closeDialog">{{ t('取消') }}</button>
           <button type="button" class="join-btn" :disabled="joinDisabled" @click="handleJoinChannel">
@@ -200,18 +261,41 @@ async function handleJoinChannel() {
   line-height: 18px;
 }
 
-.channel-remark {
+.channel-remark-wrap {
   width: 100%;
-  max-height: 100px;
   margin: 10px 0 0;
+  position: relative;
+}
+
+.channel-remark {
   color: rgba(45, 45, 45);
-  // font-family: "Times New Roman", serif;
   font-size: 14px;
   line-height: 18px;
   font-weight: 900;
   text-align: left;
-  overflow: hidden;
+  max-height: 90px;
+  overflow-y: auto;
   word-break: break-all;
+
+  &.is-expanded {
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+.remark-more-btn {
+  margin-top: 6px;
+  margin-left: auto;
+  padding: 2px 8px;
+  display: block;
+  border: none;
+  border-radius: 10px;
+  background: #e6f2ff;
+  color: #178aff;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .button-row {

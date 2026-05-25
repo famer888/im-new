@@ -1513,10 +1513,12 @@ watch([() => videoData.value.thumbUrl, fileKey, attachmentKey, localThumbSrc, lo
   activeThumbSrc.value = ''
   localVideoPath.value = localVideoSourcePath.value
   const hasLocalFallback = useLocalThumbFallback()
+  const hasRemoteThumb = Boolean(String(videoData.value.thumbUrl || '').trim())
   void nextTick(setupPlaybackPreloadObserver)
-  if (!hasLocalFallback && await usePersistedVideoCoverCache('watch-precheck')) return
+  // 仅在消息本身没有远端封面时才读磁盘缓存，避免旧缓存覆盖服务端最新封面。
+  if (!hasLocalFallback && !hasRemoteThumb && await usePersistedVideoCoverCache('watch-precheck')) return
   if (token !== coverToken) return
-  if (!videoData.value.thumbUrl) {
+  if (!hasRemoteThumb) {
     if (!hasLocalFallback) void useCachedOrGenerateFirstFrameCover('no-thumb-url')
     return
   }
