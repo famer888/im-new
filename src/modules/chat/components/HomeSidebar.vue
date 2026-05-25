@@ -136,6 +136,12 @@ function isConversationMuted(conv: Conversation): boolean {
   return Boolean(channel?.isDisturb)
 }
 
+function isPendingInviteConversationPreview(conv: Conversation): boolean {
+  return conv.type === ConversationType.Group
+    && conv.targetId !== GROUP_NOTIFICATION_TARGET_ID
+    && chatStore.isPendingGroupInviteConversation(conv.targetId)
+}
+
 function getConversationDisplayUnreadCount(conv: Conversation): number {
   const unreadCount = Math.max(0, Number(conv.unreadCount || 0))
   if (conv.id === chatStore.currentConversationId) {
@@ -160,9 +166,12 @@ function getConversationDisplayUnreadCount(conv: Conversation): number {
 const visibleChatUnread = computed(() =>
   chatStore.conversations
     .filter((conv) =>
-      !isConversationMuted(conv)
+      // 对齐会话列表：当前选中会话会临时隐藏红点，左侧汇总也要用同一口径，避免出现“列表无红点但总数很大”。
+      conv.id !== chatStore.currentConversationId
+      && !isConversationMuted(conv)
       && !conv.isArchived
       && !isFileHelperTargetId(conv.targetId)
+      && !isPendingInviteConversationPreview(conv)
       && isConversationInCurrentRelations(conv)
       && !isSuspiciousPlaceholderGroupConversation(conv),
     )
