@@ -882,7 +882,11 @@ export const useMessageStore = defineStore('message', () => {
     })
   }
 
-  function refreshConversationSummary(conversationId: string, messages?: Message[]) {
+  function refreshConversationSummary(
+    conversationId: string,
+    messages?: Message[],
+    options?: { preserveListOrder?: boolean },
+  ) {
     if (!conversationId || !conversationId.includes('_')) return
     const existing = chatStore.conversations.find((c) => c.id === conversationId)
     if (!existing) return
@@ -897,7 +901,8 @@ export const useMessageStore = defineStore('message', () => {
       lastMsgId: latest?.id || null,
       lastMsgTime: latest?.sendTime || 0,
       lastMsgDigest: digest || null,
-      updatedAt: latest?.sendTime || 0,
+      // 进入会话加载历史消息只修正预览，不改变左侧列表位置，避免点击后列表突然重排。
+      updatedAt: options?.preserveListOrder ? existing.updatedAt : latest?.sendTime || 0,
     })
   }
 
@@ -1151,7 +1156,7 @@ export const useMessageStore = defineStore('message', () => {
         loadStartedAt,
       )
       messageMap.value.set(conversationId, mergedResult.messages)
-      refreshConversationSummary(conversationId, mergedResult.messages)
+      refreshConversationSummary(conversationId, mergedResult.messages, { preserveListOrder: true })
       const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
       if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
         groupImageLog('loadMessages done', {
