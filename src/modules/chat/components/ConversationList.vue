@@ -1293,7 +1293,7 @@ onBeforeUnmount(() => {
                   {{ segment.text }}
                 </span>
                 <span v-else-if="segment.type === 'sender'" class="sender-name">{{ segment.text }}</span>
-                <span v-else>{{ segment.text }}</span>
+                <span v-else class="digest-text">{{ segment.text }}</span>
               </template>
             </span>
             <span v-if="isConversationMuted(conv)" class="muted-icon">
@@ -1543,7 +1543,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   font-size: 12px;
-  color: #aaaaaa;
+  color: #999;
   line-height: 20px;
   gap: 2px;
 }
@@ -1572,18 +1572,22 @@ onBeforeUnmount(() => {
 }
 
 .sender-name {
-  color: #aaaaaa;
+  color: #999;
   font-size: 12px;
   flex-shrink: 0;
 }
 
 .conv-digest {
-  color: #aaaaaa;
+  color: #999;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+.digest-text {
+  color: #999;
 }
 
 .conv-digest-emoji {
