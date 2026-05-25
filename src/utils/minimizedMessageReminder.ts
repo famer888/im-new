@@ -6,7 +6,7 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import type { Message } from '@/stores/useMessageStore'
 import { formatSystemNotificationPlainText } from '@/utils/systemNotificationDisplay'
-import { parseGroupNoticeExtraObject } from '@/utils/groupNoticeDisplay'
+import { parseGroupNoticeExtraObject, replaceGroupNoticeUidPlaceholders } from '@/utils/groupNoticeDisplay'
 import ch from '@/locales/ch.json'
 import en from '@/locales/en.json'
 import pt from '@/locales/pt.json'
@@ -88,9 +88,20 @@ function getMessageDigest(message: any): string {
       t,
       currentUid: String(useAuthStore().uid || ''),
     })
-    return formatted || t('新消息')
+    // 右下角提醒没有聊天页上下文时，仍要兜底替换群通知里的 UID 占位，避免直接显示 `#{uids:...}`。
+    return replaceReminderUidPlaceholders(formatted || stripText(content)) || t('新消息')
   }
-  return stripText(content).slice(0, 120) || t('新消息')
+  return replaceReminderUidPlaceholders(stripText(content)).slice(0, 120) || t('新消息')
+}
+
+function replaceReminderUidPlaceholders(text: string): string {
+  const currentUid = String(useAuthStore().uid || '')
+  const contactStore = useContactStore()
+  return replaceGroupNoticeUidPlaceholders(text, (uid) => {
+    if (uid === currentUid) return t('你')
+    const name = contactStore.getDisplayName(uid)
+    return name && name !== uid ? name : uid
+  })
 }
 
 function getConversationType(conversationId: string): 'friend' | 'group' | 'channel' {

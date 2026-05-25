@@ -1103,7 +1103,9 @@ impl MessageBatcher {
             let Some(group) = common.group_base_info.as_ref() else {
                 continue;
             };
-            if group.group_id <= 0 || common.msg_id <= 0 {
+            // 创群/初始化类事件有时没有服务端 msgId；旧 im 仍会写入本地提示，
+            // 这里不能因为 msgId 为 0 直接丢掉，否则“邀请加入群聊”系统提示不显示。
+            if group.group_id <= 0 {
                 continue;
             }
 
@@ -2376,13 +2378,14 @@ fn friend_read_cancel_tip(seconds: i32, name: String, enabled: bool) -> String {
 
 fn group_event_content(item: &imweb::GroupReqEventMsgDto, common: &imweb::CommonMsgDto) -> String {
     let raw = common.msg.trim();
-    if !raw.is_empty() {
+    // 服务端部分群事件只下发“群聊事件”占位；前端会隐藏该占位，所以要继续按旧 im 生成可见提示文案。
+    if !raw.is_empty() && raw != "群聊事件" {
         return raw.to_string();
     }
 
     if let Some(notice) = item.group_notice_msg_dto.as_ref() {
         let notice_msg = notice.notice_msg.trim();
-        if !notice_msg.is_empty() {
+        if !notice_msg.is_empty() && notice_msg != "群聊事件" {
             return notice_msg.to_string();
         }
     }
