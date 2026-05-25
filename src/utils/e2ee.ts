@@ -526,24 +526,33 @@ async function requestFriendKeyPair(
   if (options?.appKeyVersion !== undefined) primaryReq.appKeyVersion = options.appKeyVersion
 
   try {
-    return await getKeyPair(primaryReq) as FriendKeyPairResponse
+    const primaryResp = await getKeyPair(primaryReq) as FriendKeyPairResponse
+    if (primaryResp?.webKeyPair?.publicKey || primaryResp?.appKeyPair?.publicKey) {
+      return primaryResp
+    }
+    // 对齐旧 im：单聊好友取钥匙不带 flag；flag=1 在部分新好友上会返回空 key。
+    console.warn('[e2ee] requestFriendKeyPair primary returned empty keys, fallback legacy request', {
+      friendId,
+      options,
+    })
   } catch (error) {
     console.warn('[e2ee] requestFriendKeyPair primary failed, fallback legacy request', {
       friendId,
       options,
       error: String(error),
     })
-    const legacyReq: {
-      targetId: number
-      webKeyVersion?: number
-      appKeyVersion?: number
-    } = {
-      targetId: Number(friendId),
-    }
-    if (options?.webKeyVersion !== undefined) legacyReq.webKeyVersion = options.webKeyVersion
-    if (options?.appKeyVersion !== undefined) legacyReq.appKeyVersion = options.appKeyVersion
-    return await getKeyPair(legacyReq) as FriendKeyPairResponse
   }
+
+  const legacyReq: {
+    targetId: number
+    webKeyVersion?: number
+    appKeyVersion?: number
+  } = {
+    targetId: Number(friendId),
+  }
+  if (options?.webKeyVersion !== undefined) legacyReq.webKeyVersion = options.webKeyVersion
+  if (options?.appKeyVersion !== undefined) legacyReq.appKeyVersion = options.appKeyVersion
+  return await getKeyPair(legacyReq) as FriendKeyPairResponse
 }
 
 /**
