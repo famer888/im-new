@@ -99,6 +99,12 @@ const inviteUrl = computed(() => {
   return String(detail.value.link || '').trim()
 })
 const alias = computed(() => String(detail.value.alias || ''))
+// 频道详情异步回填前，先显示“加载中”，避免右侧别名区域空白。
+const aliasDisplayText = computed(() => {
+  const aliasValue = alias.value.trim()
+  return aliasValue ? `@${aliasValue}` : t('加载中')
+})
+const hasChannelAlias = computed(() => Boolean(alias.value.trim()))
 const description = computed(() =>
   String(detail.value.remark ?? detail.value.channelDesc ?? channel.value?.remark ?? channel.value?.description ?? ''),
 )
@@ -585,7 +591,7 @@ onBeforeUnmount(() => {
     <section v-if="showChannelAliasLink" class="channel-link" @click="showQrCode = true">
       <h4>{{ t('频道别名') }}</h4>
       <div class="channel-link-info">
-        <span class="alias" @click.stop="copyAlias">{{ alias ? `@${alias}` : '' }}</span>
+        <span class="alias" :class="{ 'is-loading': !hasChannelAlias }" @click.stop="copyAlias">{{ aliasDisplayText }}</span>
         <div class="code-entrance">
           <img class="code-icon" :src="codeIcon" alt="" />
           <img class="more-icon" :src="arrowRightIcon" alt="" />
@@ -789,6 +795,11 @@ onBeforeUnmount(() => {
   cursor: pointer;
   word-wrap: break-word;
   font-weight: 600;
+
+  &.is-loading {
+    color: #999;
+    cursor: default;
+  }
 }
 
 .code-entrance {

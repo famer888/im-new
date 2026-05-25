@@ -37,6 +37,12 @@ const notice = ref('')
 const inviteShortLink = ref('')
 const clearMsgTypeList = ref<string[]>([])
 const noticePreview = computed(() => notice.value.trim())
+// 群详情异步回填前，先显示“加载中”，避免右侧出现空别名或裸 @。
+const groupAliasDisplayText = computed(() => {
+  const alias = groupAliasName.value.trim()
+  return alias ? `@${alias}` : t('加载中')
+})
+const hasGroupAlias = computed(() => Boolean(groupAliasName.value.trim()))
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -371,6 +377,12 @@ function copyText(text: string) {
   }).catch(() => {})
 }
 
+function copyGroupAlias() {
+  const alias = groupAliasName.value.trim()
+  if (!alias) return
+  copyText(`@${alias}`)
+}
+
 function openGroupNotice() {
   noticeVisible.value = true
 }
@@ -560,8 +572,8 @@ function handleOnlineTime(member: any) {
         <div class="group-alias-qrcode" @click="openQrCode">
           <h3>{{ t('群别名') }}</h3>
           <div class="alias-right">
-            <span class="alias-name" @click.stop="copyText('@' + groupAliasName)">
-              @{{ groupAliasName }}
+            <span class="alias-name" :class="{ 'is-loading': !hasGroupAlias }" @click.stop="copyGroupAlias">
+              {{ groupAliasDisplayText }}
             </span>
             <img class="code-icon" src="@/assets/images/chat/code.png" @click.stop="openQrCode" />
             <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
@@ -950,6 +962,11 @@ function handleOnlineTime(member: any) {
 
       &:hover {
         opacity: 0.8;
+      }
+
+      &.is-loading {
+        color: #999;
+        cursor: default;
       }
     }
 
