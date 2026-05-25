@@ -34,6 +34,9 @@ watch(
 async function refreshGroupDetail(groupId: string) {
   try {
     const detail = await getGroupDetail({ groupId })
+    const detailCode = Number((detail as any)?.commonResult?.errCode ?? 200)
+    // 详情接口业务失败时不覆写本地群信息，避免把已有人数/名称误写成 0 或空字符串。
+    if (detailCode !== 0 && detailCode !== 200) return
     const groupBase = (detail as any)?.group || {}
     // 详情接口比本地缓存更新；打开群资料时回填名称和人数，避免缺失时显示数字 ID 或 0 人。
     groupStore.upsertGroup({

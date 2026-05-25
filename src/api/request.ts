@@ -23,6 +23,21 @@ function generateMacAddress(): string {
   ).join('')
 }
 
+function generateLegacyStyleSysMac(): string {
+  const packageName = String(import.meta.env.VITE_APP_PACKNAME || API_CONFIG.brandId || '97').trim() || '97'
+  const hex = Array.from({ length: 6 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0'))
+  return `${packageName}-${hex.join(':')}`
+}
+
+function shouldMigrateLegacyDeviceConfig(config: { sysModel?: string; sysMac?: string } | null): boolean {
+  if (!config) return true
+  const sysModel = String(config.sysModel || '').trim()
+  const sysMac = String(config.sysMac || '').trim()
+  if (!sysModel || !sysMac) return true
+  // 对齐旧 im：sysMac 应为 “packname-xx:xx:xx:xx:xx:xx” 形态；早期随机串会导致扫码登录确认态无法完成。
+  return !sysMac.includes('-') || !sysMac.includes(':')
+}
+
 let cachedDeviceConfig: { sysModel: string; sysMac: string } | null = null
 
 export function getDeviceConfig() {
@@ -31,7 +46,16 @@ export function getDeviceConfig() {
   const stored = localStorage.getItem('device-config')
   if (stored) {
     try {
-      cachedDeviceConfig = JSON.parse(stored)
+      const parsed = JSON.parse(stored)
+      if (shouldMigrateLegacyDeviceConfig(parsed)) {
+        cachedDeviceConfig = {
+          sysModel: String(parsed?.sysModel || '').trim() || generateMacAddress(),
+          sysMac: generateLegacyStyleSysMac(),
+        }
+        localStorage.setItem('device-config', JSON.stringify(cachedDeviceConfig))
+      } else {
+        cachedDeviceConfig = parsed
+      }
       return cachedDeviceConfig!
     } catch { /* ignore */ }
   }
@@ -40,7 +64,8 @@ export function getDeviceConfig() {
     sysModel: Array.from(Array(16), () =>
       Math.floor(Math.random() * 36).toString(36)
     ).join(''),
-    sysMac: generateMacAddress(),
+    // 对齐旧 im：扫码轮询请求里的 sysMac 需要稳定且具备 packname-mac 形态。
+    sysMac: generateLegacyStyleSysMac(),
   }
   localStorage.setItem('device-config', JSON.stringify(cachedDeviceConfig))
   return cachedDeviceConfig
@@ -97,7 +122,10 @@ function parseUrl(value: string): URL | null {
 }
 
 function normalizeHttpBaseUrl(value: string): string {
-  const parsed = parseUrl(String(value || '').trim())
+  const raw = String(value || '').trim()
+  // 对齐 old im 的开发态代理语义：`/api/*` 只是本地代理路径，不是可持久化/可切换的真实域名。
+  if (!/^https?:\/\//i.test(raw)) return ''
+  const parsed = parseUrl(raw)
   if (!parsed) return ''
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
   return `${parsed.protocol}//${parsed.host}`

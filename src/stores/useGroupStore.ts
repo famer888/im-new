@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getGroupContactList, getGroupMemberList, groupMemberOnLineStatusList } from '@/api/imBase'
+import { getGroupContactList, getGroupMemberList, getGroupMemberListV2, groupMemberOnLineStatusList } from '@/api/imBase'
 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const MEMBER_PREVIEW_COUNT = 8
@@ -29,6 +29,11 @@ function groupMemberRefreshDebug(message: string, data?: Record<string, unknown>
   void message
   void data
   void level
+}
+
+function isCommonResultOk(resp: any): boolean {
+  const code = Number(resp?.commonResult?.errCode ?? 200)
+  return code === 0 || code === 200
 }
 
 export interface Group {
@@ -289,14 +294,36 @@ export const useGroupStore = defineStore('group', () => {
           pageNum,
           pageSize,
         })
-        const resp = await getGroupMemberList({
+        const requestPayload = {
           // 保持字符串 ID，避免大整数群 ID 被 Number 截断后查不到成员
           groupId,
           pageNum,
           pageSize,
           time: 0,
-        })
-        const list = resp.members || []
+        }
+        const resp = await getGroupMemberList(requestPayload)
+        let list = resp.members || []
+        let source: 'v1' | 'v2' = 'v1'
+
+        // 与旧 im 行为对齐：部分群在 V1 下会返回空列表/业务失败，需自动回退到 V2 才能拿到成员。
+        const shouldFallbackToV2 = !isCommonResultOk(resp) || (pageNum === 1 && list.length === 0)
+        if (shouldFallbackToV2) {
+          const respV2 = await getGroupMemberListV2(requestPayload)
+          list = respV2.members || []
+          source = 'v2'
+          groupMemberRefreshDebug('remote page fallback to v2', {
+            groupId,
+            pageNum,
+            pageSize,
+            v1ErrCode: (resp as any)?.commonResult?.errCode ?? null,
+            v1ErrMsg: (resp as any)?.commonResult?.errMsg ?? '',
+            v1Count: (resp?.members || []).length,
+            v2ErrCode: (respV2 as any)?.commonResult?.errCode ?? null,
+            v2ErrMsg: (respV2 as any)?.commonResult?.errMsg ?? '',
+            v2Count: list.length,
+          })
+        }
+
         groupMemberRefreshDebug('remote page response', {
           groupId,
           pageNum,
@@ -304,6 +331,7 @@ export const useGroupStore = defineStore('group', () => {
           totalLoaded: allMembers.length + list.length,
           errCode: (resp as any)?.commonResult?.errCode ?? null,
           errMsg: (resp as any)?.commonResult?.errMsg ?? '',
+          source,
         })
         for (const item of list as any[]) {
           allMembers.push(normalizeMember(item, groupId))

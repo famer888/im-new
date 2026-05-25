@@ -542,6 +542,28 @@ export async function getGroupMemberList(
 }
 
 /**
+ * Get group member list v2.
+ * POST /group/groupMemberListV2
+ */
+export async function getGroupMemberListV2(
+  data: { groupId: number | string; pageNum: number; pageSize: number; time?: number },
+  baseUrl?: string,
+): Promise<proto.GroupMemberListResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupMemberListV2`,
+    reqType: proto.GroupMemberListReq,
+    respType: proto.GroupMemberListResp,
+    data: {
+      groupId: data.groupId,
+      pageNum: data.pageNum,
+      pageSize: data.pageSize,
+      time: data.time ?? 0,
+    },
+  })
+}
+
+/**
  * Get group member online statuses.
  * POST /group/groupMemberOnLineStatusList
  */
