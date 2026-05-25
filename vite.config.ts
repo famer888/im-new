@@ -18,7 +18,8 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 1420,
       strictPort: true,
-      host: host || false,
+      // 默认监听全部本地地址，避免 localhost/127.0.0.1/::1 解析差异导致代理请求偶发失败。
+      host: host || true,
       hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
       watch: { ignored: ['**/src-tauri/**'] },
       proxy: {
