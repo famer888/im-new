@@ -250,6 +250,17 @@ fn has_dice_result_message(messages: &[DecodedMessage]) -> bool {
     })
 }
 
+fn should_emit_subscriber_remove_fallback(
+    _event_type: i32,
+    _subscriber_operate_type: Option<i32>,
+    _channel_id: i64,
+    _has_channel_notice: bool,
+) -> bool {
+    // 对齐旧版 im：订阅者退出/移除事件只消费服务端显式下发的频道通知，
+    // 没有 channel_notice_msg 时不要前端自行兜底“您已被移出频道”。
+    false
+}
+
 #[cfg(test)]
 mod private_decode_tests {
     use super::*;
@@ -283,6 +294,16 @@ mod private_decode_tests {
             &plain,
             "00000000000000000000000000000000"
         ));
+    }
+
+    #[test]
+    fn subscriber_remove_without_notice_should_not_emit_fallback_message() {
+        assert!(!should_emit_subscriber_remove_fallback(2, Some(2), 1001, false));
+    }
+
+    #[test]
+    fn subscriber_remove_with_notice_should_not_emit_fallback_message() {
+        assert!(!should_emit_subscriber_remove_fallback(2, Some(2), 1001, true));
     }
 }
 
@@ -1953,10 +1974,6 @@ impl MessageBatcher {
             && subscriber_info
                 .map(|item| item.operate_type == 0)
                 .unwrap_or(false);
-        let is_subscriber_remove = event.event_type == 2
-            && subscriber_info
-                .map(|item| item.operate_type == 2)
-                .unwrap_or(false);
         if is_subscriber_join && event.channel_id > 0 {
             let content = event.msg.trim();
             let content = if content.is_empty() {
@@ -1987,7 +2004,12 @@ impl MessageBatcher {
                 }),
             });
         }
-        if is_subscriber_remove && event.channel_id > 0 && out.is_empty() {
+        if should_emit_subscriber_remove_fallback(
+            event.event_type,
+            subscriber_info.map(|item| item.operate_type),
+            event.channel_id,
+            !out.is_empty(),
+        ) {
             let content = event.msg.trim();
             let content = if content.is_empty() {
                 "您已被移出频道"
