@@ -57,7 +57,7 @@ onMounted(async () => {
         <div>
           <img class="login-icon" :src="brandLogo" alt="" />
         </div>
-        <div class="brand-number">{{ brandNumber }}</div>
+        <h1 class="brand-number">{{ brandNumber }}</h1>
         <div class="version">{{ t('版本信息') }} {{ appVersion }}</div>
       </div>
     </div>
@@ -133,7 +133,14 @@ onMounted(async () => {
   margin-top: 20px;
   line-height: 1;
   font-size: 30px;
-  font-weight: 700;
+  // 旧 im 这里是位图数字，文本实现需要用更黑的字体族来贴近原始粗细。
+  font-family: 'Arial Black', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.3px;
+  // 用轻微倾斜替代 italic，避免倾斜角度过大。
+  display: inline-block;
+  transform: skewX(-8deg);
   color: #3369fe;
 }
 
