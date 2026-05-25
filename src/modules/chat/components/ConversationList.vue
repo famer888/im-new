@@ -1055,6 +1055,11 @@ function hasDisplayUnread(conv: Conversation): boolean {
   return getDisplayUnreadCount(conv) > 0
 }
 
+function shouldShowUnreadBadge(conv: Conversation): boolean {
+  // 对齐旧 im：选中会话后先隐藏当前项红点；真实已读仍由 ChatWindow 异步落库，避免丢失未读分隔线快照。
+  return conv.id !== chatStore.currentConversationId && hasDisplayUnread(conv)
+}
+
 watch(
   () => [
     String(authStore.uid || ''),
@@ -1242,7 +1247,7 @@ onBeforeUnmount(() => {
           active: conv.id === chatStore.currentConversationId,
           pinned: conv.isPinned && !conv.isArchived,
           'friend-online': showFriendOnlineDot(conv),
-          'has-unread': hasDisplayUnread(conv),
+          'has-unread': shouldShowUnreadBadge(conv),
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -1297,10 +1302,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <span v-if="hasDisplayUnread(conv) && !isConversationMuted(conv)" class="badge">
+        <span v-if="shouldShowUnreadBadge(conv) && !isConversationMuted(conv)" class="badge">
           {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
         </span>
-        <span v-else-if="hasDisplayUnread(conv) && isConversationMuted(conv)" class="badge muted-badge">
+        <span v-else-if="shouldShowUnreadBadge(conv) && isConversationMuted(conv)" class="badge muted-badge">
           {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
         </span>
 
