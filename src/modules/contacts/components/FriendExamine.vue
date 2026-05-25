@@ -5,7 +5,9 @@ import FriendVerifyDetail from './FriendVerifyDetail.vue'
 import type { VerifyRecord } from './FriendVerifyDetail.vue'
 import { getContactsApplyList } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
+import { useUIStore } from '@/stores/useUIStore'
 import noDataIcon from '@/assets/images/common/search-no-data.png'
 
 interface FriendRequest {
@@ -23,7 +25,9 @@ interface FriendRequest {
 }
 
 const authStore = useAuthStore()
+const chatStore = useChatStore()
 const contactStore = useContactStore()
+const uiStore = useUIStore()
 
 const requests = ref<FriendRequest[]>([])
 const showDetail = ref(false)
@@ -109,6 +113,16 @@ function openVerifyDetail(req: FriendRequest) {
   showDetail.value = true
 }
 
+function openAcceptedFriendChat(req: FriendRequest) {
+  if (req.status !== 'accepted' || !req.uid) return
+  // 已同意的好友申请等同于通讯录好友，直接复用现有好友会话入口打开聊天。
+  const conv = chatStore.ensureConversation(0, req.uid)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
+}
+
 function handleDetailBack() {
   showDetail.value = false
   selectedRecord.value = null
@@ -151,13 +165,15 @@ async function handleDetailClose() {
         <div class="section-card">
           <template v-if="pendingRequests.length > 0">
             <div v-for="req in pendingRequests" :key="req.id" class="examine-item">
-              <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
-              <div class="examine-info">
-                <div class="row-top">
-                  <div class="examine-name">{{ req.nickname || req.uid }}</div>
-                  <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
+              <div class="examine-main">
+                <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
+                <div class="examine-info">
+                  <div class="row-top">
+                    <div class="examine-name">{{ req.nickname || req.uid }}</div>
+                    <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
+                  </div>
+                  <div class="examine-msg">{{ req.message }}</div>
                 </div>
-                <div class="examine-msg">{{ req.message }}</div>
               </div>
               <div class="examine-actions">
                 <button class="btn-accept" @click="openVerifyDetail(req)">验证</button>
@@ -170,10 +186,22 @@ async function handleDetailClose() {
         <div class="section-card">
           <template v-if="recentRequests.length > 0">
             <div v-for="req in recentRequests" :key="req.id" class="examine-item">
-              <TextAvatar :name="req.nickname || req.uid" :src="req.avatar" :size="34" />
+              <TextAvatar
+                :class="{ 'accepted-chat-trigger': req.status === 'accepted' }"
+                :name="req.nickname || req.uid"
+                :src="req.avatar"
+                :size="34"
+                @click="openAcceptedFriendChat(req)"
+              />
               <div class="examine-info">
                 <div class="row-top">
-                  <div class="examine-name">{{ req.nickname || req.uid }}</div>
+                  <div
+                    class="examine-name"
+                    :class="{ 'accepted-chat-trigger': req.status === 'accepted' }"
+                    @click="openAcceptedFriendChat(req)"
+                  >
+                    {{ req.nickname || req.uid }}
+                  </div>
                   <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
                 </div>
                 <div class="examine-msg">{{ req.message }}</div>
@@ -248,6 +276,13 @@ async function handleDetailClose() {
   }
 }
 
+.examine-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
 .examine-info {
   flex: 1;
   min-width: 0;
@@ -262,6 +297,10 @@ async function handleDetailClose() {
 .examine-name {
   font-size: 12px;
   color: #000;
+}
+
+.accepted-chat-trigger {
+  cursor: pointer;
 }
 
 .black-tag {
