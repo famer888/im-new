@@ -15,6 +15,7 @@ import {
   ensureFriendRelKeyForVersion,
   ensureGroupRelKey,
   ensureOwnKeyPair,
+  refreshGroupRelKey,
   normalizeResolvedFileKey,
   resolvePrivateAttachmentFileKey,
 } from '@/utils/e2ee'
@@ -1565,6 +1566,38 @@ export const useMessageStore = defineStore('message', () => {
           error: errText,
           stack: (e as Error)?.stack || '',
         }, 'error')
+      }
+      const canRetryGroupWithFreshKey = convType === 1
+        && Boolean(targetId)
+        && /group rel key not cached|missing publickey\/msgkey|getkeypair\(group|derive_group_rel_key/i.test(errText)
+      if (canRetryGroupWithFreshKey) {
+        try {
+          // 对齐旧 im：群密钥异常时先清理并重新派生 relKey，再补发一次，避免直接把本地气泡标记失败。
+          await refreshGroupRelKey(uid, targetId)
+          const retry = await tauriInvoke<any>('send_message', {
+            uid,
+            request: {
+              conversation_id: conversationId,
+              msg_type: msgType,
+              content,
+              extra: sendExtra ?? null,
+              custom_msg_id: optimisticId,
+              snapchat_time: snapchatTime ?? 0,
+            },
+          })
+          const normalized = normalizeMessage(retry)
+          if (quoteMsg && !normalized.quoteMessage) {
+            normalized.quoteMessage = quoteMsg
+          }
+          if (extraJson && !normalized.extra) {
+            normalized.extra = extraJson
+          }
+          appendMessage(conversationId, normalized)
+          syncConversationSummary(conversationId, normalized)
+          return normalized
+        } catch (retryErr) {
+          console.warn('[send] retry after refreshGroupRelKey failed:', retryErr)
+        }
       }
       const canRetryWs = messageUsesWsSend(convType, msgType) && /Not connected/i.test(errText)
       if (canRetryWs) {
