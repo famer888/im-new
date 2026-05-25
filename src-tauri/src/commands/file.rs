@@ -139,7 +139,8 @@ pub struct ImageSendLogPayload {
 static AUDIO_PLAYERS: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
 static ACTIVE_DOWNLOADS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static VIDEO_STREAMS: OnceLock<Mutex<HashMap<String, VideoStreamSource>>> = OnceLock::new();
-static LOCAL_VIDEO_STREAMS: OnceLock<Mutex<HashMap<String, LocalVideoStreamSource>>> = OnceLock::new();
+static LOCAL_VIDEO_STREAMS: OnceLock<Mutex<HashMap<String, LocalVideoStreamSource>>> =
+    OnceLock::new();
 static VIDEO_STREAM_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static VIDEO_DECRYPTED_CHUNK_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -147,7 +148,8 @@ const VIDEO_STREAM_WINDOW_BYTES: u64 = 2 * 1024 * 1024;
 #[cfg(target_os = "windows")]
 const WINDOWS_FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
 #[cfg(target_os = "windows")]
-const WINDOWS_FFMPEG_SHA256_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256";
+const WINDOWS_FFMPEG_SHA256_URL: &str =
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256";
 #[cfg(target_os = "windows")]
 static WINDOWS_FFMPEG_DOWNLOAD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
@@ -179,14 +181,23 @@ fn video_chunk_cache_key(source: &VideoStreamSource, chunk_index: u64) -> String
     format!("{}:{}", source.stream_id, chunk_index)
 }
 
-fn get_cached_video_chunk(source: &VideoStreamSource, chunk_index: u64) -> Result<Option<Vec<u8>>, String> {
+fn get_cached_video_chunk(
+    source: &VideoStreamSource,
+    chunk_index: u64,
+) -> Result<Option<Vec<u8>>, String> {
     let cache = video_decrypted_chunk_cache()
         .lock()
         .map_err(|_| "video stream cache lock poisoned".to_string())?;
-    Ok(cache.get(&video_chunk_cache_key(source, chunk_index)).cloned())
+    Ok(cache
+        .get(&video_chunk_cache_key(source, chunk_index))
+        .cloned())
 }
 
-fn cache_video_chunk(source: &VideoStreamSource, chunk_index: u64, decrypted: Vec<u8>) -> Result<(), String> {
+fn cache_video_chunk(
+    source: &VideoStreamSource,
+    chunk_index: u64,
+    decrypted: Vec<u8>,
+) -> Result<(), String> {
     let mut cache = video_decrypted_chunk_cache()
         .lock()
         .map_err(|_| "video stream cache lock poisoned".to_string())?;
@@ -206,22 +217,37 @@ async fn prefetch_video_stream_chunks(source: VideoStreamSource) {
     chunks.dedup();
 
     for chunk_index in chunks {
-        if get_cached_video_chunk(&source, chunk_index).ok().flatten().is_some() {
+        if get_cached_video_chunk(&source, chunk_index)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             continue;
         }
-        let Some((encrypted_start, encrypted_end)) = encrypted_range_for_plain_chunk(chunk_index, source.plain_size) else {
+        let Some((encrypted_start, encrypted_end)) =
+            encrypted_range_for_plain_chunk(chunk_index, source.plain_size)
+        else {
             continue;
         };
         let result = async {
-            let encrypted = fetch_remote_encrypted_range(&client, &source, encrypted_start, encrypted_end).await?;
+            let encrypted =
+                fetch_remote_encrypted_range(&client, &source, encrypted_start, encrypted_end)
+                    .await?;
             let decrypted = crypto::aes::decrypt_message(&encrypted, &source.file_key)
                 .map_err(|e| format!("prefetch decrypt failed: {}", e))?;
             cache_video_chunk(&source, chunk_index, decrypted)?;
             Ok::<(), String>(())
-        }.await;
+        }
+        .await;
         match result {
-            Ok(()) => eprintln!("[video-stream] prefetch chunk done chunk_index={}", chunk_index),
-            Err(error) => eprintln!("[video-stream] prefetch chunk failed chunk_index={} error={}", chunk_index, error),
+            Ok(()) => eprintln!(
+                "[video-stream] prefetch chunk done chunk_index={}",
+                chunk_index
+            ),
+            Err(error) => eprintln!(
+                "[video-stream] prefetch chunk failed chunk_index={} error={}",
+                chunk_index, error
+            ),
         }
     }
 }
@@ -357,7 +383,12 @@ fn codec_name_from_tag(tag: &str) -> String {
 fn probe_video_bytes(source: &str, size: u64, bytes: &[u8]) -> VideoFormatProbe {
     let brand = parse_mp4_brand(bytes);
     let container = container_from_brand(&brand, source);
-    let mut video_codec_tag = first_fourcc(bytes, &[b"hvc1", b"hev1", b"avc1", b"avc3", b"mp4v", b"vp09", b"av01"]);
+    let mut video_codec_tag = first_fourcc(
+        bytes,
+        &[
+            b"hvc1", b"hev1", b"avc1", b"avc3", b"mp4v", b"vp09", b"av01",
+        ],
+    );
     if video_codec_tag.is_empty() {
         video_codec_tag = fallback_video_fourcc(bytes);
     }
@@ -370,16 +401,37 @@ fn probe_video_bytes(source: &str, size: u64, bytes: &[u8]) -> VideoFormatProbe 
     let is_hevc = video_codec_tag == "hvc1" || video_codec_tag == "hev1";
     let is_h264 = video_codec_tag == "avc1" || video_codec_tag == "avc3";
     let is_mp4_like = container == "MP4" || container == "MOV/QuickTime";
-    let webview_likely_supported = is_mp4_like && is_h264 && (audio_codec_tag.is_empty() || audio_codec_tag == "mp4a");
+    let webview_likely_supported =
+        is_mp4_like && is_h264 && (audio_codec_tag.is_empty() || audio_codec_tag == "mp4a");
     let needs_transcode = !webview_likely_supported;
     let summary = format!(
         "{}{} · 视频：{}{} · 音频：{}{}",
         container,
-        if brand.is_empty() { String::new() } else { format!("({})", brand) },
-        if video_codec.is_empty() { "未知".to_string() } else { video_codec.clone() },
-        if video_codec_tag.is_empty() { String::new() } else { format!(" [{}]", video_codec_tag) },
-        if audio_codec.is_empty() { "未知".to_string() } else { audio_codec.clone() },
-        if audio_codec_tag.is_empty() { String::new() } else { format!(" [{}]", audio_codec_tag) },
+        if brand.is_empty() {
+            String::new()
+        } else {
+            format!("({})", brand)
+        },
+        if video_codec.is_empty() {
+            "未知".to_string()
+        } else {
+            video_codec.clone()
+        },
+        if video_codec_tag.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", video_codec_tag)
+        },
+        if audio_codec.is_empty() {
+            "未知".to_string()
+        } else {
+            audio_codec.clone()
+        },
+        if audio_codec_tag.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", audio_codec_tag)
+        },
     );
 
     VideoFormatProbe {
@@ -450,7 +502,10 @@ async fn fetch_probe_range(
         .await
         .map_err(|e| format!("fetch video probe range failed: {}", e))?;
     if !response.status().is_success() {
-        return Err(format!("fetch video probe range failed: HTTP {}", response.status()));
+        return Err(format!(
+            "fetch video probe range failed: HTTP {}",
+            response.status()
+        ));
     }
     let range_total = response
         .headers()
@@ -468,14 +523,20 @@ async fn read_url_probe_bytes(source: &str, size: Option<u64>) -> Result<(u64, V
     const PROBE_CHUNK_SIZE: u64 = 8 * 1024 * 1024;
     let client = reqwest::Client::new();
     let head_end = size
-        .map(|value| value.saturating_sub(1).min(PROBE_CHUNK_SIZE.saturating_sub(1)))
+        .map(|value| {
+            value
+                .saturating_sub(1)
+                .min(PROBE_CHUNK_SIZE.saturating_sub(1))
+        })
         .unwrap_or_else(|| PROBE_CHUNK_SIZE.saturating_sub(1));
     let (mut bytes, range_total) = fetch_probe_range(&client, source, 0, head_end).await?;
     let known_size = size.or(range_total).unwrap_or(bytes.len() as u64);
     if known_size > PROBE_CHUNK_SIZE {
         let tail_start = known_size.saturating_sub(PROBE_CHUNK_SIZE);
         if tail_start > head_end {
-            let (tail, _) = fetch_probe_range(&client, source, tail_start, known_size.saturating_sub(1)).await?;
+            let (tail, _) =
+                fetch_probe_range(&client, source, tail_start, known_size.saturating_sub(1))
+                    .await?;
             bytes.extend_from_slice(&tail);
         }
     }
@@ -538,7 +599,9 @@ fn http_response(status: &str, headers: &[(&str, String)], body: &[u8]) -> Vec<u
     response.push_str("Access-Control-Allow-Origin: *\r\n");
     response.push_str("Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n");
     response.push_str("Access-Control-Allow-Headers: Range, Content-Type\r\n");
-    response.push_str("Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges\r\n");
+    response.push_str(
+        "Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges\r\n",
+    );
     for (key, value) in headers {
         response.push_str(key);
         response.push_str(": ");
@@ -581,7 +644,10 @@ async fn fetch_remote_encrypted_range(
             Ok(response) => response,
             Err(error) => {
                 last_error = format!("stream range request failed: {}", error);
-                eprintln!("[video-stream] fetch encrypted range request failed error={}", last_error);
+                eprintln!(
+                    "[video-stream] fetch encrypted range request failed error={}",
+                    last_error
+                );
                 continue;
             }
         };
@@ -649,8 +715,9 @@ async fn build_decrypted_video_range(
     let mut output = Vec::with_capacity((plain_end - plain_start + 1) as usize);
 
     for chunk_index in start_chunk..=end_chunk {
-        let (encrypted_start, encrypted_end) = encrypted_range_for_plain_chunk(chunk_index, source.plain_size)
-            .ok_or_else(|| "invalid video stream range".to_string())?;
+        let (encrypted_start, encrypted_end) =
+            encrypted_range_for_plain_chunk(chunk_index, source.plain_size)
+                .ok_or_else(|| "invalid video stream range".to_string())?;
         eprintln!(
             "[video-stream] decrypt chunk start plain_start={} plain_end={} chunk_index={} encrypted_start={} encrypted_end={}",
             plain_start,
@@ -668,14 +735,18 @@ async fn build_decrypted_video_range(
             encrypted_end,
             "decrypt video chunk start"
         );
-        let encrypted = fetch_remote_encrypted_range(client, source, encrypted_start, encrypted_end).await?;
+        let encrypted =
+            fetch_remote_encrypted_range(client, source, encrypted_start, encrypted_end).await?;
         let decrypted = crypto::aes::decrypt_message(&encrypted, &source.file_key)
             .map_err(|e| format!("stream decrypt failed: {}", e))?;
 
         let chunk_plain_start = chunk_index * plain_chunk_size;
         let slice_start = plain_start.saturating_sub(chunk_plain_start) as usize;
-        let slice_end = (plain_end.min(chunk_plain_start + decrypted.len() as u64 - 1) - chunk_plain_start + 1) as usize;
-        if slice_start >= decrypted.len() || slice_start >= slice_end || slice_end > decrypted.len() {
+        let slice_end = (plain_end.min(chunk_plain_start + decrypted.len() as u64 - 1)
+            - chunk_plain_start
+            + 1) as usize;
+        if slice_start >= decrypted.len() || slice_start >= slice_end || slice_end > decrypted.len()
+        {
             return Err("invalid decrypted stream slice".to_string());
         }
         output.extend_from_slice(&decrypted[slice_start..slice_end]);
@@ -726,7 +797,8 @@ async fn stream_decrypted_video_range(
                 plain_chunk_size,
                 &mut written,
                 &mut flushed_first_chunk,
-            ).await?;
+            )
+            .await?;
             eprintln!(
                 "[video-stream] stream chunk cache hit chunk_index={} sent_bytes={} written_bytes={}",
                 chunk_index,
@@ -739,10 +811,12 @@ async fn stream_decrypted_video_range(
 
         let batch_start_chunk = chunk_index;
         let batch_end_chunk = batch_start_chunk;
-        let (encrypted_start, _) = encrypted_range_for_plain_chunk(batch_start_chunk, source.plain_size)
-            .ok_or_else(|| "invalid video stream range".to_string())?;
-        let (_, encrypted_end) = encrypted_range_for_plain_chunk(batch_end_chunk, source.plain_size)
-            .ok_or_else(|| "invalid video stream range".to_string())?;
+        let (encrypted_start, _) =
+            encrypted_range_for_plain_chunk(batch_start_chunk, source.plain_size)
+                .ok_or_else(|| "invalid video stream range".to_string())?;
+        let (_, encrypted_end) =
+            encrypted_range_for_plain_chunk(batch_end_chunk, source.plain_size)
+                .ok_or_else(|| "invalid video stream range".to_string())?;
         eprintln!(
             "[video-stream] stream batch start plain_start={} plain_end={} chunk_start={} chunk_end={} encrypted_start={} encrypted_end={}",
             plain_start,
@@ -752,12 +826,14 @@ async fn stream_decrypted_video_range(
             encrypted_start,
             encrypted_end,
         );
-        let encrypted = fetch_remote_encrypted_range(client, source, encrypted_start, encrypted_end).await?;
+        let encrypted =
+            fetch_remote_encrypted_range(client, source, encrypted_start, encrypted_end).await?;
 
         let mut encrypted_offset = 0usize;
         for current_chunk in batch_start_chunk..=batch_end_chunk {
-            let (_, chunk_encrypted_end) = encrypted_range_for_plain_chunk(current_chunk, source.plain_size)
-                .ok_or_else(|| "invalid video stream range".to_string())?;
+            let (_, chunk_encrypted_end) =
+                encrypted_range_for_plain_chunk(current_chunk, source.plain_size)
+                    .ok_or_else(|| "invalid video stream range".to_string())?;
             let chunk_encrypted_start = if current_chunk == batch_start_chunk {
                 encrypted_start
             } else {
@@ -770,8 +846,11 @@ async fn stream_decrypted_video_range(
             if encrypted_slice_end > encrypted.len() {
                 return Err("invalid encrypted batch slice".to_string());
             }
-            let decrypted = crypto::aes::decrypt_message(&encrypted[encrypted_offset..encrypted_slice_end], &source.file_key)
-                .map_err(|e| format!("stream decrypt failed: {}", e))?;
+            let decrypted = crypto::aes::decrypt_message(
+                &encrypted[encrypted_offset..encrypted_slice_end],
+                &source.file_key,
+            )
+            .map_err(|e| format!("stream decrypt failed: {}", e))?;
             encrypted_offset = encrypted_slice_end;
 
             cache_video_chunk(source, current_chunk, decrypted.clone())?;
@@ -785,7 +864,8 @@ async fn stream_decrypted_video_range(
                 plain_chunk_size,
                 &mut written,
                 &mut flushed_first_chunk,
-            ).await?;
+            )
+            .await?;
             eprintln!(
                 "[video-stream] stream chunk sent chunk_index={} decrypted_bytes={} sent_bytes={} written_bytes={}",
                 current_chunk,
@@ -816,7 +896,9 @@ async fn write_decrypted_video_chunk(
         return Ok(0);
     }
     let slice_start = plain_start.saturating_sub(chunk_plain_start) as usize;
-    let slice_end = (plain_end.min(chunk_plain_start + decrypted.len() as u64 - 1) - chunk_plain_start + 1) as usize;
+    let slice_end = (plain_end.min(chunk_plain_start + decrypted.len() as u64 - 1)
+        - chunk_plain_start
+        + 1) as usize;
     if slice_start >= decrypted.len() || slice_start >= slice_end || slice_end > decrypted.len() {
         return Err("invalid decrypted stream slice".to_string());
     }
@@ -852,11 +934,15 @@ async fn read_http_request(stream: &mut TcpStream) -> Result<String, String> {
             break;
         }
         read_len += n;
-        if buffer[..read_len].windows(4).any(|item| item == b"\r\n\r\n") {
+        if buffer[..read_len]
+            .windows(4)
+            .any(|item| item == b"\r\n\r\n")
+        {
             break;
         }
     }
-    String::from_utf8(buffer[..read_len].to_vec()).map_err(|e| format!("invalid request utf8: {}", e))
+    String::from_utf8(buffer[..read_len].to_vec())
+        .map_err(|e| format!("invalid request utf8: {}", e))
 }
 
 async fn handle_local_video_stream_connection(
@@ -892,7 +978,10 @@ async fn handle_local_video_stream_connection(
         &[
             ("Content-Type", source.mime_type.clone()),
             ("Accept-Ranges", "bytes".to_string()),
-            ("Content-Range", format!("bytes {}-{}/{}", start, end, source.size)),
+            (
+                "Content-Range",
+                format!("bytes {}-{}/{}", start, end, source.size),
+            ),
             ("Content-Length", content_length.to_string()),
             ("Cache-Control", "no-store".to_string()),
             ("Connection", "close".to_string()),
@@ -935,7 +1024,10 @@ async fn handle_local_video_stream_connection(
     Ok(())
 }
 
-async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::Client) -> Result<(), String> {
+async fn handle_video_stream_connection(
+    mut stream: TcpStream,
+    client: reqwest::Client,
+) -> Result<(), String> {
     let request = read_http_request(&mut stream).await?;
     let mut lines = request.lines();
     let request_line = lines.next().unwrap_or_default();
@@ -948,8 +1040,7 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
         .unwrap_or("");
     eprintln!(
         "[video-stream] local stream request request_line={} range={}",
-        request_line,
-        range_header,
+        request_line, range_header,
     );
     tracing::warn!(
         target: "video-stream",
@@ -958,12 +1049,20 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
         "local stream request"
     );
     if method == "OPTIONS" {
-        let response = http_response("204 No Content", &[("Content-Length", "0".to_string())], &[]);
+        let response = http_response(
+            "204 No Content",
+            &[("Content-Length", "0".to_string())],
+            &[],
+        );
         let _ = stream.write_all(&response).await;
         return Ok(());
     }
     if method != "GET" && method != "HEAD" {
-        let response = http_response("405 Method Not Allowed", &[("Content-Length", "0".to_string())], &[]);
+        let response = http_response(
+            "405 Method Not Allowed",
+            &[("Content-Length", "0".to_string())],
+            &[],
+        );
         let _ = stream.write_all(&response).await;
         return Ok(());
     }
@@ -999,7 +1098,10 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
             .await;
         }
 
-        eprintln!("[video-stream] local stream token not found token={}", token);
+        eprintln!(
+            "[video-stream] local stream token not found token={}",
+            token
+        );
         tracing::warn!(
             target: "video-stream",
             token = %token,
@@ -1020,12 +1122,18 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
 
     let Some((start, end)) = parse_range_header(&request, source.plain_size).or_else(|| {
         if source.plain_size > 0 {
-            Some((0, (source.plain_size - 1).min(VIDEO_STREAM_WINDOW_BYTES - 1)))
+            Some((
+                0,
+                (source.plain_size - 1).min(VIDEO_STREAM_WINDOW_BYTES - 1),
+            ))
         } else {
             None
         }
     }) else {
-        eprintln!("[video-stream] local stream invalid range plain_size={}", source.plain_size);
+        eprintln!(
+            "[video-stream] local stream invalid range plain_size={}",
+            source.plain_size
+        );
         tracing::warn!(
             target: "video-stream",
             plain_size = source.plain_size,
@@ -1069,7 +1177,10 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
         &[
             ("Content-Type", source.mime_type.clone()),
             ("Accept-Ranges", "bytes".to_string()),
-            ("Content-Range", format!("bytes {}-{}/{}", start, end, source.plain_size)),
+            (
+                "Content-Range",
+                format!("bytes {}-{}/{}", start, end, source.plain_size),
+            ),
             ("Content-Length", content_length.to_string()),
             ("Cache-Control", "no-store".to_string()),
             ("Connection", "close".to_string()),
@@ -1090,25 +1201,24 @@ async fn handle_video_stream_connection(mut stream: TcpStream, client: reqwest::
         return Ok(());
     }
 
-    let body_bytes = match stream_decrypted_video_range(&mut stream, &client, &source, start, end).await {
-        Ok(written) => written,
-        Err(error) => {
-            eprintln!(
-                "[video-stream] local stream body failed plain_start={} plain_end={} error={}",
-                start,
-                end,
-                error,
-            );
-            tracing::error!(
-                target: "video-stream",
-                error = %error,
-                plain_start = start,
-                plain_end = end,
-                "local stream body failed"
-            );
-            return Err(error);
-        }
-    };
+    let body_bytes =
+        match stream_decrypted_video_range(&mut stream, &client, &source, start, end).await {
+            Ok(written) => written,
+            Err(error) => {
+                eprintln!(
+                    "[video-stream] local stream body failed plain_start={} plain_end={} error={}",
+                    start, end, error,
+                );
+                tracing::error!(
+                    target: "video-stream",
+                    error = %error,
+                    plain_start = start,
+                    plain_end = end,
+                    "local stream body failed"
+                );
+                return Err(error);
+            }
+        };
     eprintln!(
         "[video-stream] local stream response sent method={} plain_start={} plain_end={} body_bytes={}",
         method,
@@ -1208,7 +1318,9 @@ async fn prioritize_video_stream_urls(urls: Vec<String>) -> Vec<String> {
                     status.is_success(),
                     url.chars().take(120).collect::<String>(),
                 );
-                if status == reqwest::StatusCode::PARTIAL_CONTENT || status == reqwest::StatusCode::OK {
+                if status == reqwest::StatusCode::PARTIAL_CONTENT
+                    || status == reqwest::StatusCode::OK
+                {
                     let mut prioritized = vec![url.clone()];
                     prioritized.extend(urls.iter().enumerate().filter_map(|(item_index, item)| {
                         if item_index == index {
@@ -1303,7 +1415,10 @@ pub async fn create_local_video_stream_url(
 ) -> Result<CreateVideoStreamUrlResponse, String> {
     let path = PathBuf::from(request.path.trim());
     if !path.exists() {
-        return Err(format!("local video file not found: {}", path.to_string_lossy()));
+        return Err(format!(
+            "local video file not found: {}",
+            path.to_string_lossy()
+        ));
     }
     let metadata = tokio::fs::metadata(&path)
         .await
@@ -1343,7 +1458,10 @@ pub async fn create_local_video_stream_url(
 }
 
 #[tauri::command]
-pub async fn probe_video_format(source: String, size: Option<u64>) -> Result<VideoFormatProbe, String> {
+pub async fn probe_video_format(
+    source: String,
+    size: Option<u64>,
+) -> Result<VideoFormatProbe, String> {
     let source = source.trim().to_string();
     if source.is_empty() {
         return Err("video probe source is empty".to_string());
@@ -2404,7 +2522,10 @@ async fn fetch_windows_ffmpeg_sha256() -> Result<String, String> {
         .await
         .map_err(|e| format!("download ffmpeg sha256 failed: {}", e))?;
     if !response.status().is_success() {
-        return Err(format!("download ffmpeg sha256 failed: HTTP {}", response.status()));
+        return Err(format!(
+            "download ffmpeg sha256 failed: HTTP {}",
+            response.status()
+        ));
     }
     let body = response
         .text()
@@ -2422,7 +2543,10 @@ async fn download_file_sha256(url: &str, path: &Path) -> Result<String, String> 
         .await
         .map_err(|e| format!("download ffmpeg failed: {}", e))?;
     if !response.status().is_success() {
-        return Err(format!("download ffmpeg failed: HTTP {}", response.status()));
+        return Err(format!(
+            "download ffmpeg failed: HTTP {}",
+            response.status()
+        ));
     }
 
     let mut file = tokio::fs::File::create(path)
@@ -2502,7 +2626,11 @@ fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn ffmpeg_program_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
-    let binary_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    let binary_name = if cfg!(target_os = "windows") {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     let mut candidates = Vec::new();
     if let Some(app) = app {
         if let Some(path) = app_data_ffmpeg_path(app) {
@@ -2537,7 +2665,11 @@ fn ffmpeg_command(app: Option<&AppHandle>) -> Command {
 }
 
 #[tauri::command]
-pub async fn convert_video_to_compatible_mp4(app: AppHandle, input_path: String, output_path: String) -> Result<String, String> {
+pub async fn convert_video_to_compatible_mp4(
+    app: AppHandle,
+    input_path: String,
+    output_path: String,
+) -> Result<String, String> {
     if !cfg!(target_os = "windows") {
         return Err("视频兼容转换仅在 Windows 启用".to_string());
     }

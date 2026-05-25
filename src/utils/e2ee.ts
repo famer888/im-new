@@ -914,14 +914,14 @@ export async function ensureFriendRelKeyForVersion(
     let cached = getCachedFriendKeyPairForVersion(uid, fid, ver, src || undefined)
     let web = cached.webKeyPair
     let app = cached.appKeyPair
+    // 对齐老 im：好友私聊按版本补 key 不带 flag；flag=1 是群 key，会导致 PC 私聊 webKeyPair 取空。
     const req: {
       targetId: number
-      flag: number
+      flag?: number
       webKeyVersion?: number
       appKeyVersion?: number
     } = {
       targetId: Number(fid),
-      flag: 1,
     }
     if (fid === String(uid)) {
       // 对齐老 im：同账号多端消息补自己 app/web 公钥时必须走 flag=0，

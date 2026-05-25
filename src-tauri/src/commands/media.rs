@@ -16,11 +16,7 @@ fn media_window_restore_bounds() -> &'static Mutex<Option<MediaWindowBounds>> {
     MEDIA_WINDOW_RESTORE_BOUNDS.get_or_init(|| Mutex::new(None))
 }
 
-fn media_window_open_position(
-    app: &AppHandle,
-    x: Option<i32>,
-    y: Option<i32>,
-) -> Option<Position> {
+fn media_window_open_position(app: &AppHandle, x: Option<i32>, y: Option<i32>) -> Option<Position> {
     if let (Some(next_x), Some(next_y)) = (x, y) {
         return Some(Position::Physical(PhysicalPosition::new(next_x, next_y)));
     }

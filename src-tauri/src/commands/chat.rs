@@ -1482,60 +1482,78 @@ pub fn decrypt_private_incoming(
         ciphertext_hex.len(),
         msg_type.unwrap_or(0),
     );
-    'friend_loop: for friend_id in &candidates {
-        for source_order in &source_orders {
-            let mut decrypted = Err(crate::crypto::CryptoError::KeyNotFound);
-            for src in source_order {
-                tracing::info!(
-                    target: "e2ee",
-                    "decrypt_private_incoming try friend_id={} version={} source={}",
-                    friend_id,
-                    ver,
-                    src,
-                );
-                decrypted = crypto.decrypt_friend_message(friend_id, ver, src, &data);
-                if let Ok(bytes) = &decrypted {
-                    if validate_plain_content(msg_type.unwrap_or(0), bytes, content_md5.as_deref())
-                    {
-                        tracing::info!(
+    if validate_plain_content(msg_type.unwrap_or(0), &data, content_md5.as_deref()) {
+        // 已落库的待解密消息可能保存的是明文 protobuf content，而不是 AES 密文；
+        // 先用 contentMd5 校验，校验通过才按明文恢复，避免误放过真正密文。
+        tracing::warn!(
+            target: "e2ee",
+            "decrypt_private_incoming raw plaintext validated sender_id={} peer_id={} version={} cipher_len={}",
+            sender_id,
+            peer_id,
+            ver,
+            ciphertext_hex.len(),
+        );
+        plain = Some(data.clone());
+    }
+    if plain.is_none() {
+        'friend_loop: for friend_id in &candidates {
+            for source_order in &source_orders {
+                let mut decrypted = Err(crate::crypto::CryptoError::KeyNotFound);
+                for src in source_order {
+                    tracing::info!(
+                        target: "e2ee",
+                        "decrypt_private_incoming try friend_id={} version={} source={}",
+                        friend_id,
+                        ver,
+                        src,
+                    );
+                    decrypted = crypto.decrypt_friend_message(friend_id, ver, src, &data);
+                    if let Ok(bytes) = &decrypted {
+                        if validate_plain_content(
+                            msg_type.unwrap_or(0),
+                            bytes,
+                            content_md5.as_deref(),
+                        ) {
+                            tracing::info!(
+                                target: "e2ee",
+                                "decrypt_private_incoming OK friend_id={} version={} source={} plain_len={}",
+                                friend_id,
+                                ver,
+                                src,
+                                bytes.len(),
+                            );
+                            break;
+                        }
+                        tracing::warn!(
                             target: "e2ee",
-                            "decrypt_private_incoming OK friend_id={} version={} source={} plain_len={}",
+                            "decrypt_private_incoming validation failed friend_id={} version={} source={} plain_len={}",
                             friend_id,
                             ver,
                             src,
                             bytes.len(),
                         );
-                        break;
+                        decrypted = Err(crate::crypto::CryptoError::AesError(
+                            "decrypted private content failed validation".to_string(),
+                        ));
+                    } else if let Err(err) = &decrypted {
+                        tracing::warn!(
+                            target: "e2ee",
+                            "decrypt_private_incoming miss friend_id={} version={} source={} err={}",
+                            friend_id,
+                            ver,
+                            src,
+                            err,
+                        );
                     }
-                    tracing::warn!(
-                        target: "e2ee",
-                        "decrypt_private_incoming validation failed friend_id={} version={} source={} plain_len={}",
-                        friend_id,
-                        ver,
-                        src,
-                        bytes.len(),
-                    );
-                    decrypted = Err(crate::crypto::CryptoError::AesError(
-                        "decrypted private content failed validation".to_string(),
-                    ));
-                } else if let Err(err) = &decrypted {
-                    tracing::warn!(
-                        target: "e2ee",
-                        "decrypt_private_incoming miss friend_id={} version={} source={} err={}",
-                        friend_id,
-                        ver,
-                        src,
-                        err,
-                    );
                 }
-            }
-            match decrypted {
-                Ok(v) => {
-                    plain = Some(v);
-                    break 'friend_loop;
-                }
-                Err(e) => {
-                    last_err = Some(e.to_string());
+                match decrypted {
+                    Ok(v) => {
+                        plain = Some(v);
+                        break 'friend_loop;
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                    }
                 }
             }
         }

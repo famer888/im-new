@@ -24,7 +24,10 @@ pub fn is_hidden_conversation_summary_message(
     }
 
     let raw = content.unwrap_or_default().trim();
-    raw == "群聊事件" && extra.unwrap_or_default().contains("\"source\":\"group-event\"")
+    raw == "群聊事件"
+        && extra
+            .unwrap_or_default()
+            .contains("\"source\":\"group-event\"")
 }
 
 /// 保证本地存在「文件传输助手」会话行（服务端未必下发）

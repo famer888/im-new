@@ -1506,7 +1506,15 @@ impl MessageBatcher {
                     .unwrap_or(om.content.as_slice());
                 let allow_plain_fallback = ver == 0 || ciphertexts_to_try.is_empty();
 
-                if !allow_plain_fallback {
+                if validate_plain_content(om.msg_type, fallback_cipher, &om.content_md5) {
+                    // 兼容服务端只回外层明文 content、但仍带 version/source 的私聊消息；
+                    // 先用 contentMd5 校验，避免把真正密文误当成明文。
+                    warn!(
+                        "PRIVATE_MSG_RECEIVED decrypt failed but raw plaintext validated sender_uid={} msg_id={} msg_type={} err={}",
+                        om.send_uid, om.msg_id, om.msg_type, e
+                    );
+                    decode_content_obj(om.msg_type, fallback_cipher)
+                } else if !allow_plain_fallback {
                     decrypt_pending = true;
                     warn!(
                         "PRIVATE_MSG_RECEIVED encrypted decrypt failed sender_uid={} msg_id={} err={}",
