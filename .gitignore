@@ -12,7 +12,8 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/WixTools/
 src-tauri/.generated-icons/
-.tauri-brand-*.json
+src-tauri/.tauri-brand-*
+.brand-source-backup-*/
 
 # IDE
 .vscode/*
