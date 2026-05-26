@@ -376,7 +376,8 @@ async function handleCheck(item: ChannelNoticeItem, flag: boolean, index: number
 }
 
 function canOpenChannel(item: ChannelNoticeItem): boolean {
-  return Boolean(item.channelId && (item.jumpPage || item.reqStatus === 1))
+  // 频道通知仅“已同意”允许跳转，待处理/已拒绝/已失效/已移出都必须禁止打开。
+  return Boolean(item.channelId && item.reqStatus === 1)
 }
 
 async function handleChannelClick(item: ChannelNoticeItem) {
