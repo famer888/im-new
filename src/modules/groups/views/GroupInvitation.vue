@@ -6,11 +6,13 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { GROUP_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
-import { getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
+import { useUIStore } from '@/stores/useUIStore'
+import { getGroupDetail, getGroupReqList, groupCheckJoin, groupUserCheckJoin } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { eventBus } from '@/utils/eventBus'
 import { formatGroupNoticeDisplayText } from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
+import { ConversationType } from '@/types'
 
 interface GroupReqItem {
   groupReqId: number
@@ -38,13 +40,16 @@ const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const chatStore = useChatStore()
 const messageStore = useMessageStore()
+const uiStore = useUIStore()
 const { t } = useI18n()
 const list = ref<GroupReqItem[]>([])
 const notificationConversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
 const SELF_INVITE_REQ_TYPES = new Set([1, 2, 15])
+const GROUP_DETAIL_CHECK_TTL_MS = 30 * 1000
 let groupInvitationRefreshSeq = 0
 let groupInvitationRefreshRunning = false
 let groupInvitationRefreshQueuedReason = ''
+const groupDetailCheckCache = new Map<string, { valid: boolean; checkedAt: number }>()
 
 function groupInvitationRefreshLog(message: string, data?: Record<string, unknown>) {
   console.warn(`[group-invitation-refresh] ${message}`, data || {})
@@ -621,6 +626,63 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
   }
 }
 
+function canOpenGroup(item: GroupReqItem): boolean {
+  // 群通知仅“已同意”允许跳转，待同意/已拒绝/已失效等状态都必须禁止打开。
+  return Boolean(item.groupId && Number(item.groupReqStatus) === 1)
+}
+
+function getCachedGroupDetailCheck(groupId: string): boolean | null {
+  const cached = groupDetailCheckCache.get(groupId)
+  if (!cached) return null
+  if (Date.now() - cached.checkedAt > GROUP_DETAIL_CHECK_TTL_MS) {
+    groupDetailCheckCache.delete(groupId)
+    return null
+  }
+  return cached.valid
+}
+
+async function verifyGroupAvailableBeforeOpen(item: GroupReqItem): Promise<boolean> {
+  const groupId = String(item.groupId || '')
+  if (!groupId) return false
+
+  const cachedResult = getCachedGroupDetailCheck(groupId)
+  if (cachedResult !== null) return cachedResult
+
+  const detail = await getGroupDetail({ groupId })
+  const code = Number((detail as any)?.commonResult?.errCode ?? 200)
+  const groupBase = (detail as any)?.group
+  const isAvailable = (code === 0 || code === 200) && Boolean(groupBase)
+  groupDetailCheckCache.set(groupId, { valid: isAvailable, checkedAt: Date.now() })
+  if (!isAvailable) return false
+
+  // 详情校验通过后回填群资料，避免进入会话后显示旧名称/旧头像。
+  groupStore.upsertGroup({
+    id: groupId,
+    name: groupBase.name ?? groupBase.groupName ?? item.groupName,
+    avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar ?? item.pic ?? null,
+    ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
+    memberCount: Number(groupBase.memberCount ?? 0),
+    groupAliasName: groupBase.groupAliasName ?? null,
+  })
+  return true
+}
+
+async function handleGroupClick(item: GroupReqItem) {
+  if (!canOpenGroup(item)) return
+  try {
+    const available = await verifyGroupAvailableBeforeOpen(item)
+    if (!available) throw new Error('group unavailable')
+  } catch {
+    item.groupReqStatus = 3
+    eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
+    return
+  }
+  const conv = chatStore.ensureConversation(ConversationType.Group, item.groupId)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
+}
+
 onMounted(() => {
   chatStore.clearGroupNotificationUnread()
   loadList('mounted')
@@ -640,7 +702,12 @@ function handleGroupInvitationUpdate() {
   <div class="group-invitation">
     <h1>{{ t('群通知') }}</h1>
     <ul class="notify-box">
-      <li v-for="(item, index) in list" :key="item.localId || item.groupReqId">
+      <li
+        v-for="(item, index) in list"
+        :key="item.localId || item.groupReqId"
+        :class="{ clickable: canOpenGroup(item) }"
+        @click="handleGroupClick(item)"
+      >
         <TextAvatar
           class="item-avatar"
           :name="item.groupName"
@@ -661,8 +728,8 @@ function handleGroupInvitationUpdate() {
           class="right-info"
         >
           <template v-if="!item.groupReqStatus">
-            <button type="button" @click="handleCheck(item, false, index)">{{ t('拒绝') }}</button>
-            <button type="button" class="active" @click="handleCheck(item, true, index)">{{ t('通过') }}</button>
+            <button type="button" @click.stop="handleCheck(item, false, index)">{{ t('拒绝') }}</button>
+            <button type="button" class="active" @click.stop="handleCheck(item, true, index)">{{ t('通过') }}</button>
           </template>
           <span v-else class="status-label">{{ statusLabel(item.groupReqStatus) }}</span>
         </div>
@@ -718,6 +785,10 @@ function handleGroupInvitationUpdate() {
       left: 65px;
       height: 1px;
       background: #ebebeb;
+    }
+
+    &.clickable {
+      cursor: pointer;
     }
 
     &.empty-tip {
