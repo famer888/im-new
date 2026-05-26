@@ -441,6 +441,8 @@ async function cleanupPendingGroupConversations(items: GroupReqItem[]) {
 
   for (const groupId of pendingGroupIds) {
     chatStore.markPendingGroupInviteConversation(groupId)
+    // 待同意邀请不应出现在通讯录群组；这里和实时事件链保持一致，兜底清理历史残留。
+    groupStore.removeGroup(groupId)
     const conversationId = `1_${groupId}`
     messageStore.clearConversationMessages(conversationId)
     if (!chatStore.conversations.some((conv) => conv.id === conversationId)) continue

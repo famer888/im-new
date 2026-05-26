@@ -307,9 +307,20 @@ function isPendingGroupReqChatMessage(message: any): boolean {
 }
 
 function isPendingGroupInvitationNotice(convId: string, extra: any): boolean {
-  return convId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
-    && String(extra?.source || '') === 'group-event-req'
-    && Number(extra?.groupReqStatus ?? 0) !== 1
+  if (convId !== `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
+
+  const source = String(extra?.source || '')
+  const status = Number(extra?.groupReqStatus ?? 0)
+  if (source === 'group-event-req') {
+    return status !== 1
+  }
+  // 兼容 WS `group-event`：邀请你入群（未同意）会落到 `1_invitation`，必须视作“待同意通知”，不能写入通讯录群列表。
+  if (source === 'group-event') {
+    const reqType = Number(extra?.groupReqType ?? 0)
+    if ([1, 2, 15].includes(reqType)) return status !== 1
+    if ([3, 4].includes(reqType)) return status === 2
+  }
+  return false
 }
 
 function applyGroupEventMemberPatch(groupStore: ReturnType<typeof useGroupStore>, groupId: string, extra: any) {
@@ -1329,6 +1340,8 @@ export async function setupTauriListeners() {
               groupReqStatus,
             })
             chatStore.markPendingGroupInviteConversation(groupId)
+            // 对齐旧行为：待同意邀请不属于“已加入群”，要从通讯录群组中移除，避免出现“群资料暂不可用”。
+            groupStore.removeGroup(groupId)
             await chatStore.deleteConversation(currentUid, `1_${groupId}`).catch((err: unknown) => {
               console.warn('[group-invite] delete pending group conversation failed:', { groupId, err })
             })
