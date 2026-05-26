@@ -13,6 +13,7 @@ import groupChatIcon from '@/assets/images/notification-popup/group-chat-icon.pn
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { getNotificationModuleTargetFromConversationId } from '@/utils/notificationNavigation'
+import { buildNotificationEmojiSegments } from '@/utils/notificationEmojiSegments'
 
 interface NotificationData {
   conversationId: string
@@ -44,6 +45,7 @@ const defaultAvatar = computed(() => {
 const avatarSrc = computed(() => safeImageSrc(data.value?.avatar, defaultAvatar.value))
 const isGroup = computed(() => data.value?.conversationType === 'group')
 const messageText = computed(() => String(data.value?.body || ''))
+const messageSegments = computed(() => buildNotificationEmojiSegments(messageText.value))
 const notificationModuleTarget = computed(() =>
   getNotificationModuleTargetFromConversationId(data.value?.conversationId),
 )
@@ -197,7 +199,17 @@ function handleReplyKeydown(event: KeyboardEvent) {
         </div>
         <div class="text-content">
           <span v-if="data.senderName" class="user-name">{{ data.senderName }}:</span>
-          <span class="msg-value">{{ messageText }}</span>
+          <span class="msg-value">
+            <template v-for="(segment, index) in messageSegments" :key="`${segment.type}-${index}`">
+              <img
+                v-if="segment.type === 'emoji'"
+                class="emoji-item"
+                :src="segment.src"
+                :alt="segment.token"
+              />
+              <span v-else>{{ segment.value }}</span>
+            </template>
+          </span>
         </div>
       </div>
       <button
@@ -340,6 +352,12 @@ function handleReplyKeydown(event: KeyboardEvent) {
 
 .user-name {
   color: #fb9e3e;
+}
+
+.emoji-item {
+  width: 18px;
+  height: 18px;
+  vertical-align: text-bottom;
 }
 
 .close-item {
