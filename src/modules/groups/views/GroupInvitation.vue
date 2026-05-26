@@ -43,6 +43,7 @@ const messageStore = useMessageStore()
 const uiStore = useUIStore()
 const { t } = useI18n()
 const list = ref<GroupReqItem[]>([])
+const listLoading = ref(false)
 const notificationConversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
 const SELF_INVITE_REQ_TYPES = new Set([1, 2, 15])
 const GROUP_DETAIL_CHECK_TTL_MS = 30 * 1000
@@ -550,6 +551,8 @@ async function loadList(reason = 'manual') {
     return
   }
 
+  // 群通知在首次或空列表刷新时需要明确展示“加载中”，避免误显示“暂无群通知”。
+  listLoading.value = true
   groupInvitationRefreshRunning = true
   try {
     let nextReason = reason
@@ -560,6 +563,7 @@ async function loadList(reason = 'manual') {
     } while (nextReason)
   } finally {
     groupInvitationRefreshRunning = false
+    listLoading.value = false
   }
 }
 
@@ -734,7 +738,8 @@ function handleGroupInvitationUpdate() {
           <span v-else class="status-label">{{ statusLabel(item.groupReqStatus) }}</span>
         </div>
       </li>
-      <li v-if="list.length === 0" class="empty-tip">{{ t('暂无群通知') }}</li>
+      <li v-if="listLoading && list.length === 0" class="empty-tip">{{ t('加载中') }}</li>
+      <li v-else-if="list.length === 0" class="empty-tip">{{ t('暂无群通知') }}</li>
     </ul>
   </div>
 </template>
