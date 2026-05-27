@@ -7,6 +7,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import { mediaViewerState } from '@/utils/mediaViewerState'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
 import fileImageIcon from '@/assets/images/message/file-image.png'
 import fileVideoIcon from '@/assets/images/message/file-video.png'
@@ -30,6 +31,8 @@ const isFileHelperChat = computed(
 )
 const displayAsSelf = computed(() => isSelf.value || isFileHelperChat.value)
 const isOpening = ref(false)
+const dangerousDialogVisible = ref(false)
+const dangerousFileDialogContent = '请不要直接打开这个文件，确认来源可信后再打开目录修改扩展名打开'
 let openToken = 0
 let stopDownloadEvents: Array<() => void> = []
 
@@ -432,6 +435,10 @@ function logFileOpen(
   void payload
 }
 
+function showDangerousFileDialog() {
+  dangerousDialogVisible.value = true
+}
+
 async function openExcelPreviewWindow(target: string) {
   const { invoke } = await import('@tauri-apps/api/core')
   mediaViewerState.send({
@@ -481,7 +488,8 @@ async function handleOpenInBrowser() {
     logFileOpen('warn', 'blocked dangerous extension', {
       extension: fileExt.value,
     })
-    eventBus.emit('show-toast', { message: '高危文件不支持直接打开', type: 'error' })
+    // 对齐旧 im：高危文件点击改为明确弹窗提醒，不再只用 toast 一闪而过。
+    showDangerousFileDialog()
     return
   }
 
@@ -530,7 +538,7 @@ async function handleOpenInBrowser() {
       target = downloadResult.filePath
       cacheLocalPathOnMessage(downloadResult.filePath)
       if (downloadResult.isDangerous) {
-        eventBus.emit('show-toast', { message: '高危文件已隔离，不支持直接打开', type: 'error' })
+        showDangerousFileDialog()
         return
       }
     }
@@ -586,17 +594,28 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['file-message', { self: displayAsSelf }]" @click="handleOpenInBrowser">
-    <div class="file-bubble">
-      <img class="file-icon" :src="fileIcon" alt="" />
-      <div class="file-main">
-        <div class="file-title-row">
-          <h2 class="file-name">{{ fileData.name || fileData.fileName || '文件' }}</h2>
-          <span v-if="isDangerousFile" class="danger-badge">高危文件</span>
+  <div>
+    <div :class="['file-message', { self: displayAsSelf }]" @click="handleOpenInBrowser">
+      <div class="file-bubble">
+        <img class="file-icon" :src="fileIcon" alt="" />
+        <div class="file-main">
+          <div class="file-title-row">
+            <h2 class="file-name">{{ fileData.name || fileData.fileName || '文件' }}</h2>
+            <span v-if="isDangerousFile" class="danger-badge">高危文件</span>
+          </div>
+          <div class="file-size">{{ isOpening ? '打开中...' : fileSize }}</div>
         </div>
-        <div class="file-size">{{ isOpening ? '打开中...' : fileSize }}</div>
       </div>
     </div>
+    <ConfirmDialog
+      v-model:visible="dangerousDialogVisible"
+      variant="im"
+      :title="'高危文件'"
+      :content="dangerousFileDialogContent"
+      :show-title="true"
+      :show-confirm="false"
+      :cancel-text="'取消'"
+    />
   </div>
 </template>
 

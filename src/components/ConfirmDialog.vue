@@ -10,6 +10,10 @@ const props = withDefaults(defineProps<{
   content: string
   confirmText?: string
   cancelText?: string
+  /** 允许 im 风格在正文区域显示标题（默认保持现状不显示） */
+  showTitle?: boolean
+  /** 与旧 window.confirm 兼容：可隐藏确认按钮，仅保留取消按钮 */
+  showConfirm?: boolean
   /** default：带标题栏；im：无标题、正文居中、按钮样式对齐老 im */
   variant?: 'default' | 'im'
   type?: 'info' | 'warning' | 'danger'
@@ -20,6 +24,8 @@ const props = withDefaults(defineProps<{
   title: '提示',
   confirmText: '确定',
   cancelText: '取消',
+  showTitle: false,
+  showConfirm: true,
   variant: 'default',
   type: 'info',
   showIcon: false,
@@ -64,7 +70,9 @@ function onKeydown(ev: KeyboardEvent) {
   }
   else if (ev.key === 'Enter') {
     ev.preventDefault()
-    handleConfirm()
+    // 仅取消模式下 Enter 等价于关闭，避免触发不存在的确认动作。
+    if (props.showConfirm) handleConfirm()
+    else handleCancel()
   }
 }
 
@@ -103,11 +111,17 @@ onBeforeUnmount(() => {
           </div>
           <div class="modal-body" :class="{ 'modal-body--im': variant === 'im' }">
             <img v-if="iconSrc" class="modal-app-icon" :src="iconSrc" alt="">
+            <h3 v-if="variant === 'im' && showTitle" class="modal-im-title">{{ displayTitle }}</h3>
             <p>{{ displayContent }}</p>
           </div>
-          <div class="modal-footer" :class="{ 'modal-footer--im': variant === 'im' }">
+          <div class="modal-footer" :class="{ 'modal-footer--im': variant === 'im', 'modal-footer--single': !showConfirm }">
             <button type="button" class="btn btn-cancel" @click="handleCancel">{{ displayCancelText }}</button>
-            <button type="button" :class="['btn', variant === 'im' ? 'btn-im-primary' : `btn-${type}`]" @click="handleConfirm">
+            <button
+              v-if="showConfirm"
+              type="button"
+              :class="['btn', variant === 'im' ? 'btn-im-primary' : `btn-${type}`]"
+              @click="handleConfirm"
+            >
               {{ displayConfirmText }}
             </button>
           </div>
@@ -208,12 +222,25 @@ onBeforeUnmount(() => {
 }
 
 .modal-body--im {
-  padding: 10px 0 5px;
+  padding: 0;
   text-align: center;
   color: #999;
   font-size: 14px;
   line-height: 20px;
   word-wrap: break-word;
+
+  p {
+    margin: 0;
+    padding: 10px 0 5px;
+  }
+}
+
+.modal-im-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: #000;
 }
 
 .modal-app-icon {
@@ -271,6 +298,12 @@ onBeforeUnmount(() => {
     &:hover {
       background: #0f7ae8;
     }
+  }
+}
+
+.modal-footer--single.modal-footer--im {
+  .btn-cancel {
+    margin-right: 0;
   }
 }
 
