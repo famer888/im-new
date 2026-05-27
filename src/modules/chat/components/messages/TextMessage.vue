@@ -139,7 +139,8 @@ function readUnknownMention(content: string, start: number): string {
   if (content.charAt(start) !== '@') return ''
 
   let end = start + 1
-  while (end < content.length && !/\s/.test(content.charAt(end))) {
+  // 未命中群成员时也按 mention 边界截断，避免把尾部标点一起当成 @ 名称。
+  while (end < content.length && !isMentionBoundary(content.charAt(end))) {
     end += 1
   }
 
