@@ -660,7 +660,11 @@ function handleGlobalInviteInvited(payload?: { message?: string; type?: 'success
 
 function messageSupportsCopy(msgType: unknown): boolean {
   const t = Number(msgType)
-  return t === MessageType.Text || t === MessageType.Html2
+  // 对齐旧 im：通知类提示消息也允许复制，便于用户转贴给客服或同事排查。
+  return t === MessageType.Text
+    || t === MessageType.Html2
+    || t === MessageType.System
+    || t === MessageType.Notice
 }
 
 function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
@@ -681,31 +685,6 @@ function messageSupportsVideoFileActions(data: Record<string, unknown>): boolean
     && Number(data.msgType) === MessageType.Video
     && Boolean(getVideoFileSource(data).url)
 }
-
-const OFFICE_COMPATIBLE_FILE_EXTENSIONS = new Set([
-  'doc',
-  'docx',
-  'dot',
-  'dotx',
-  'rtf',
-  'odt',
-  'wps',
-  'ppt',
-  'pptx',
-  'pps',
-  'ppsx',
-  'pot',
-  'potx',
-  'odp',
-  'dps',
-  'xls',
-  'xlsx',
-  'xlt',
-  'xltx',
-  'csv',
-  'ods',
-  'et',
-])
 
 function normalizeFileUrl(value: unknown): string {
   const raw = String(value || '').trim()
@@ -767,7 +746,8 @@ function messageSupportsFileActions(data: Record<string, unknown>): boolean {
   if (!(window as any).__TAURI_INTERNALS__) return false
   if (Number(data.msgType) !== MessageType.File) return false
   const source = getFileMessageSource(data)
-  return Boolean(source.url) && OFFICE_COMPATIBLE_FILE_EXTENSIONS.has(source.ext)
+  // 对齐旧 im：文件消息（7）右键“另存为/打开目录”不限制为 Office 扩展名。
+  return Boolean(source.url)
 }
 
 function parseMessageExtra(data: Record<string, unknown>): Record<string, unknown> {
@@ -1708,9 +1688,9 @@ async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise
   if (await tauriFileExists(savePath)) return savePath
 
   const key = await resolveFileMessageKey(data)
-  if (!key) throw new Error('文件密钥缺失，无法下载')
   const menuChannel = buildContextMenuDownloadChannel(data, 'file')
   const requestState = registerContextMenuDownloadRequest(menuChannel)
+  // 文件密钥可能为空（明文文件），此时仍走同一下载链路，避免把“可下载文件”误判成失败。
   const result = await waitForOfficeFileDownload(url, key, savePath, menuChannel, requestState)
   if (result.isDangerous) throw new Error('高危文件已隔离，不支持直接打开或另存为')
   return result.filePath
@@ -1737,7 +1717,7 @@ async function saveOfficeFileAs(data: Record<string, unknown>) {
   const selectedPath = await save({
     defaultPath,
     ...(!isMacOS() && extension
-      ? { filters: [{ name: 'Office', extensions: [extension] }] }
+      ? { filters: [{ name: '文件', extensions: [extension] }] }
       : {}),
   })
   if (!selectedPath) return
