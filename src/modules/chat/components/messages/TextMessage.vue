@@ -5,6 +5,7 @@ import { emojiObj } from '@/utils/emoji'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useUIStore, type AddChannelTarget, type AddGroupTarget, type MemberInfoProfile } from '@/stores/useUIStore'
@@ -31,6 +32,7 @@ const props = defineProps<{
 
 const authStore = useAuthStore()
 const chatStore = useChatStore()
+const contactStore = useContactStore()
 const groupStore = useGroupStore()
 const channelStore = useChannelStore()
 const uiStore = useUIStore()
@@ -675,6 +677,27 @@ function findMentionMember(label: string, members: GroupMember[]): GroupMember |
   })
 }
 
+function resolveMentionLocalFriend(cleanLabel: string): { userId: string; nickname: string; avatar: string; remark: string | null; depict: string | null; isFriend: boolean } | null {
+  const text = cleanLabel.trim()
+  if (!text) return null
+
+  const contact = contactStore.contacts.find((item) =>
+    String(item.id || '').trim() === text
+    || String(item.nickname || '').trim() === text
+    || String(item.remark || '').trim() === text,
+  )
+  if (!contact?.id) return null
+
+  return {
+    userId: contact.id,
+    nickname: contact.nickname || contact.id,
+    avatar: contact.avatar || '',
+    remark: contact.remark || null,
+    depict: (contact as any).depict || null,
+    isFriend: true,
+  }
+}
+
 async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
   const groupId = messageGroupId.value
 
@@ -691,6 +714,17 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
       : findMentionMember(segment.text, members)
 
     if (!member) {
+      const localFriend = resolveMentionLocalFriend(cleanLabel)
+      if (localFriend) {
+        // 群聊里的 @ 文本可能是备注/昵称，先映射到好友 uid 再打开，确保展示“发送消息”入口。
+        uiStore.openMemberInfo(localFriend.userId, groupId, [cleanLabel], localFriend)
+        return
+      }
+      if (groupId) {
+        // 对齐“点击头像”逻辑：群内 @ 未命中本地成员缓存时，先按 uid 直开成员信息，避免误走远端别名导致“未找到”。
+        uiStore.openMemberInfo(cleanLabel, groupId, [cleanLabel])
+        return
+      }
       const slowTimer = window.setTimeout(() => {
         setMentionResolving(openingKey, true)
       }, 350)
