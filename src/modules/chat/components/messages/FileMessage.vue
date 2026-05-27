@@ -342,19 +342,25 @@ function waitForDownloadFile(url: string, key: string, savePath: string, msgId: 
   })
 }
 
-function cacheLocalPathOnMessage(localPath: string) {
+function cacheLocalPathOnMessage(localPath: string, isDangerous?: boolean) {
   const messageId = props.message.id || props.message.customMsgId || ''
   if (!messageId) return
 
+  // 下载后若后端判定为高危，需要把标记写回消息，保证后续点击持续走高危弹窗分支。
+  const nextDangerousFlag = isDangerous
+    ? { isDangerous: true, is_dangerous: true }
+    : {}
   const nextContent = {
     ...(fileData.value || {}),
     local: localPath,
     localPath,
+    ...nextDangerousFlag,
   }
   const nextExtra = {
     ...(extraData.value || {}),
     local: localPath,
     localPath,
+    ...nextDangerousFlag,
   }
 
   messageStore.updateMessage(messageId, {
@@ -536,7 +542,7 @@ async function handleOpenInBrowser() {
       )
       if (token !== openToken) return
       target = downloadResult.filePath
-      cacheLocalPathOnMessage(downloadResult.filePath)
+      cacheLocalPathOnMessage(downloadResult.filePath, downloadResult.isDangerous)
       if (downloadResult.isDangerous) {
         showDangerousFileDialog()
         return
