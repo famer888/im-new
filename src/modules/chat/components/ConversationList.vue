@@ -46,6 +46,7 @@ const emojiMap = emojiObj as Record<string, string>
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
+const LEGACY_CHANNEL_NOTIFICATION_TARGET_ID = '9902'
 const CONVERSATION_ITEM_HEIGHT = 59
 const VIRTUAL_OVERSCAN_COUNT = 36
 const MIN_VIRTUAL_VIEWPORT_HEIGHT = CONVERSATION_ITEM_HEIGHT * 12
@@ -97,8 +98,19 @@ function isNotFileHelper(c: Conversation): boolean {
   return !isFileHelperTargetId(c.targetId)
 }
 
+function isChannelNotificationConversation(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Friend) return false
+  const targetId = String(conv.targetId || '')
+  const conversationId = String(conv.id || '')
+  // 对齐老 im：频道通知伪会话既可能是 channelNotice，也可能沿用历史 targetId=9902。
+  return targetId === CHANNEL_NOTIFICATION_TARGET_ID
+    || targetId === LEGACY_CHANNEL_NOTIFICATION_TARGET_ID
+    || conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
+    || conversationId === `0_${LEGACY_CHANNEL_NOTIFICATION_TARGET_ID}`
+}
+
 function isConversationInCurrentRelations(conv: Conversation): boolean {
-  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+  if (isChannelNotificationConversation(conv)) {
     return true
   }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
@@ -302,7 +314,7 @@ function ensureGroupNotificationVisible(conversations: Conversation[]): Conversa
 }
 
 function getName(conv: Conversation): string {
-  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+  if (isChannelNotificationConversation(conv)) {
     return t('频道通知')
   }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
@@ -323,7 +335,7 @@ function getName(conv: Conversation): string {
 }
 
 function explicitConversationName(conv: Conversation): string {
-  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+  if (isChannelNotificationConversation(conv)) {
     return t('频道通知')
   }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
@@ -347,7 +359,7 @@ function explicitConversationName(conv: Conversation): string {
 
 function shouldShowNamePlaceholder(conv: Conversation): boolean {
   if (!(window as any).__TAURI_INTERNALS__) return false
-  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) return false
+  if (isChannelNotificationConversation(conv)) return false
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
   return !explicitConversationName(conv)
 }
@@ -388,7 +400,7 @@ function repairChannelName(conv: Conversation) {
 }
 
 function getAvatar(conv: Conversation): string | null {
-  if (conv.type === ConversationType.Friend && conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) {
+  if (isChannelNotificationConversation(conv)) {
     return channelNotificationIcon
   }
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) {
