@@ -2180,6 +2180,13 @@ const contextMenuItems = computed((): MenuItem[] => {
     ]
   }
   if (data.type === 'message') {
+    if (data.avatarMenu === true && data.conversationType === ConversationType.Group) {
+      // 对齐旧 im：群聊头像右键只显示“@成员”，避免出现复制/删除等消息菜单。
+      const memberName = String(data.senderName || '').replace(/^@+/, '').trim()
+      if (!memberName) return []
+      return [{ key: 'at_member', label: `@${memberName}` }]
+    }
+
     const items: MenuItem[] = []
     const readBurnOnlyDelete = isReadBurnMessage(data)
     const isGroupIntroNoticeMenu = Boolean(data.isGroupIntroNotice)
@@ -2373,6 +2380,15 @@ async function handleContextMenuSelect(key: string) {
       case 'forward':
         uiStore.openForwardDialog(msgId)
         break
+      case 'at_member': {
+        const uid = String(data.senderId || '').trim()
+        const name = String(data.senderName || '').trim() || uid
+        if (!uid || !name) break
+        // 统一复用输入框现有的 @ 插入通道，保证桌面端/网页端行为一致。
+        eventBus.emit('editor:insert-at', { uid, name })
+        eventBus.emit('editor:focus')
+        break
+      }
       case 'copy_msg_info': {
         if (!canCopyMessageInfo()) break
         const info = JSON.stringify(buildCopyMessageInfo(data))

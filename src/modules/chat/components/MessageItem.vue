@@ -177,11 +177,12 @@ const showAvatar = computed(
 const showReadBurnFire = computed(() => Boolean(props.message.deleteSeconds))
 let itemResizeObserver: ResizeObserver | null = null
 
-function handleContextMenu(e: MouseEvent) {
+function handleContextMenu(e: MouseEvent, options?: { isAvatar?: boolean }) {
   if (uiStore.selectionMode) return
   e.preventDefault()
+  const isAvatarMenu = options?.isAvatar === true
   const menuX = displayAsSelf.value ? e.clientX - 180 : e.clientX
-  const imageEl = e.currentTarget instanceof HTMLElement
+  const imageEl = !isAvatarMenu && e.currentTarget instanceof HTMLElement
     ? e.currentTarget.querySelector('.image-message .image-wrapper img')
     : null
   const imageSrc = imageEl instanceof HTMLImageElement
@@ -201,6 +202,9 @@ function handleContextMenu(e: MouseEvent) {
     msgType: props.message.msgType,
     isGroupIntroNotice: isGroupIntroNotice.value,
     readStatus: props.message.readStatus,
+    // 头像右键单独走“艾特菜单”，避免和普通消息右键项混在一起。
+    avatarMenu: isAvatarMenu,
+    conversationType: chatStore.currentConversation?.type,
     content: props.message.content,
     extra: props.message.extra,
     senderName: senderName.value,
@@ -309,6 +313,7 @@ onUnmounted(() => {
         class="msg-avatar"
         style="cursor: pointer;"
         @click="uiStore.openMemberInfo(message.senderId)"
+        @contextmenu.prevent.stop="handleContextMenu($event, { isAvatar: true })"
       />
       <div class="bubble-area" @contextmenu.stop="handleContextMenu">
         <span v-if="showAvatar" class="sender-name" style="cursor: pointer;" @click="uiStore.openMemberInfo(message.senderId)">{{ senderName }}</span>
