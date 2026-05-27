@@ -1,7 +1,7 @@
 export const MEDIA_VIEWER_STORAGE_KEY = 'media_viewer_state'
 
 export type MediaViewerType = 'image' | 'video' | 'file'
-export type MediaViewerFileKind = 'excel'
+export type MediaViewerFileKind = 'excel' | 'pdf' | 'docx'
 
 export interface MediaViewerPayload {
   title: string

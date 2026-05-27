@@ -7,6 +7,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import { mediaViewerState } from '@/utils/mediaViewerState'
+import { resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
 import fileImageIcon from '@/assets/images/message/file-image.png'
@@ -51,7 +52,7 @@ const DANGEROUS_EXTENSIONS = new Set([
   'wsf',
 ])
 
-// PDF/Word/Excel 的前端预览依赖已对齐到 package.json；预览页接入前，文件点击仍走下载后系统打开兜底。
+// 文件消息结构同时兼容新旧字段，避免历史消息因字段名差异导致打开失败。
 const fileData = computed(() => {
   try {
     return JSON.parse(props.message.content ?? '{}')
@@ -101,7 +102,6 @@ const fileExt = computed(() => {
   const ext = String(fileData.value.ext || fileName.value.split('.').pop() || '').toLowerCase()
   return ext.replace(/^\./, '')
 })
-const isExcelPreviewFile = computed(() => ['xls', 'xlsx'].includes(fileExt.value))
 // 与老 im 的文件气泡保持一致：危险扩展名在消息内直接展示“高危文件”标签。
 const isDangerousFile = computed(() => {
   const explicitFlag = fileData.value.isDangerous ?? fileData.value.is_dangerous ?? extraData.value.isDangerous ?? extraData.value.is_dangerous
@@ -445,14 +445,15 @@ function showDangerousFileDialog() {
   dangerousDialogVisible.value = true
 }
 
-async function openExcelPreviewWindow(target: string) {
+async function openFilePreviewWindow(kind: MediaPreviewFileKind, target: string) {
   const { invoke } = await import('@tauri-apps/api/core')
   mediaViewerState.send({
     title: fileName.value,
     mediaType: 'file',
-    fileKind: 'excel',
+    fileKind: kind,
     src: target,
     filePath: target,
+    fileName: fileName.value,
     size: Number(fileData.value.size || fileData.value.fileSize || 0) || 0,
   })
   await invoke('open_media_window', {
@@ -549,14 +550,22 @@ async function handleOpenInBrowser() {
       }
     }
 
-    if (isExcelPreviewFile.value) {
-      logFileOpen('warn', 'invoke excel media preview', {
+    // 对齐老 im 的入口策略：pdf/doc/docx/xls/xlsx 都优先进入统一媒体窗预览，失败再走默认应用。
+    const previewKind = resolveMediaPreviewFileKind({
+      fileName: fileName.value,
+      fileUrl: remoteTarget,
+      localPath: target,
+    })
+    if (previewKind) {
+      logFileOpen('warn', 'invoke file media preview', {
+        previewKind,
         target,
         targetInfo: describeBrowserTarget(target),
         source: targetMatch?.label || null,
       })
-      await openExcelPreviewWindow(target)
-      logFileOpen('info', 'excel media preview success', {
+      await openFilePreviewWindow(previewKind, target)
+      logFileOpen('info', 'file media preview success', {
+        previewKind,
         target,
         targetInfo: describeBrowserTarget(target),
         source: targetMatch?.label || null,

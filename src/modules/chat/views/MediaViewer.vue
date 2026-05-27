@@ -4,11 +4,13 @@ import { useI18n } from 'vue-i18n'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
+import '@js-preview/docx/lib/index.css'
 import '@js-preview/excel/lib/index.css'
 import ContextMenu, { type MenuItem } from '@/components/ContextMenu.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
+import { getFileExtension, resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
 import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
 import minimizeIcon from '@/assets/windows_control_icons/min-w-30.png'
@@ -18,7 +20,7 @@ import restoreIcon from '@/assets/windows_control_icons/restore-w-30.png'
 const { t } = useI18n()
 const payload = ref<MediaViewerPayload | null>(null)
 const videoRef = ref<HTMLVideoElement | null>(null)
-const excelPreviewRef = ref<HTMLElement | null>(null)
+const filePreviewRef = ref<HTMLElement | null>(null)
 const isMaximized = ref(false)
 const rotation = ref(0)
 const isVideoPlaying = ref(false)
@@ -37,6 +39,7 @@ const videoProbe = ref<VideoFormatProbe | null>(null)
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
+const filePreviewLoading = ref(false)
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
@@ -44,26 +47,26 @@ const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
-let excelPreviewer: { destroy?: () => void } | null = null
-let excelPreviewToken = 0
+let filePreviewer: { destroy?: () => void } | null = null
+let filePreviewToken = 0
 let videoPrepareTimer = 0
 let videoPlayWatchTimer = 0
 let videoProbeToken = 0
 let videoPlayReloadRetries = 0
 let videoAutoTranscodeSource = ''
 
-type ExcelPreviewSource = string | ArrayBuffer
-type ExcelPreviewSourceKind = 'url' | 'local-array-buffer'
+type FilePreviewSource = string | ArrayBuffer
+type FilePreviewSourceKind = 'url' | 'local-array-buffer'
 
-interface ExcelPreviewSourceCandidate {
-  kind: ExcelPreviewSourceKind
-  load: () => Promise<ExcelPreviewSource>
+interface FilePreviewSourceCandidate {
+  kind: FilePreviewSourceKind
+  load: () => Promise<FilePreviewSource>
 }
 
-type ExcelPreviewModule = {
-  init?: (el: HTMLElement) => { preview?: (src: ExcelPreviewSource) => Promise<void> | void; destroy?: () => void }
+type FilePreviewModule = {
+  init?: (el: HTMLElement) => { preview?: (src: FilePreviewSource) => Promise<void> | void; destroy?: () => void }
   default?: {
-    init?: (el: HTMLElement) => { preview?: (src: ExcelPreviewSource) => Promise<void> | void; destroy?: () => void }
+    init?: (el: HTMLElement) => { preview?: (src: FilePreviewSource) => Promise<void> | void; destroy?: () => void }
   }
 }
 
@@ -153,22 +156,23 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer
 }
 
-async function readLocalExcelArrayBuffer(localPath: string): Promise<ArrayBuffer> {
+async function readLocalFileArrayBuffer(localPath: string): Promise<ArrayBuffer> {
   const files = await invoke<LocalFilePayload[]>('read_local_files', { paths: [localPath] })
   const dataBase64 = files[0]?.dataBase64 || files[0]?.data_base64 || ''
-  if (!dataBase64) throw new Error('local excel file read returned empty data')
+  if (!dataBase64) throw new Error('local file read returned empty data')
   return base64ToArrayBuffer(dataBase64)
 }
 
-function createExcelPreviewSourceCandidates(src: string, localPath: string): ExcelPreviewSourceCandidate[] {
-  const candidates: ExcelPreviewSourceCandidate[] = []
+function createFilePreviewSourceCandidates(src: string, localPath: string): FilePreviewSourceCandidate[] {
+  const candidates: FilePreviewSourceCandidate[] = []
   const normalizedSrc = String(src || '').trim()
   const normalizedLocalPath = String(localPath || '').trim()
 
+  // 桌面端优先直接读取本地字节，避免 file/asset URL 在不同 WebView 安全策略下加载失败。
   if ((window as any).__TAURI_INTERNALS__ && normalizedLocalPath) {
     candidates.push({
       kind: 'local-array-buffer',
-      load: () => readLocalExcelArrayBuffer(normalizedLocalPath),
+      load: () => readLocalFileArrayBuffer(normalizedLocalPath),
     })
   }
 
@@ -196,10 +200,19 @@ const videoCoverSrc = computed(() => {
 })
 const isVideo = computed(() => payload.value?.mediaType === 'video')
 const isFile = computed(() => payload.value?.mediaType === 'file')
-const isExcelFile = computed(() => isFile.value && payload.value?.fileKind === 'excel')
+// 兼容历史 payload：若没有显式 fileKind，就按文件名/路径后缀推断预览类型。
+const activeFileKind = computed<MediaPreviewFileKind | null>(() => {
+  if (!isFile.value) return null
+  return payload.value?.fileKind || resolveMediaPreviewFileKind({
+    fileName: payload.value?.fileName || payload.value?.title || '',
+    fileUrl: payload.value?.src || '',
+    localPath: payload.value?.filePath || '',
+  })
+})
+const isPreviewableFile = computed(() => isFile.value && Boolean(activeFileKind.value))
 const payloadVideoDuration = computed(() => normalizeVideoDuration(payload.value?.duration))
 const filePreviewSrc = computed(() => {
-  if (!isExcelFile.value) return ''
+  if (!isPreviewableFile.value) return ''
   return ensureMediaSrc(payload.value?.src || payload.value?.filePath || '')
 })
 const isPortraitVideo = computed(() => {
@@ -375,7 +388,7 @@ function mediaViewerVideoLog(message: string, data?: Record<string, unknown>, le
 
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   resetVideoState({ clearSource: !nextPayload || nextPayload.mediaType !== 'video' })
-  destroyExcelPreviewer()
+  destroyFilePreviewer()
   payload.value = nextPayload
   if (nextPayload?.mediaType === 'video') {
     videoDuration.value = payloadVideoDuration.value
@@ -401,7 +414,7 @@ function applyPayload(nextPayload: MediaViewerPayload | null) {
     document.title = '文件'
   }
   void nextTick(() => {
-    void setupExcelPreview()
+    void setupFilePreview()
     if (nextPayload?.mediaType === 'video') {
       startVideoPreparingOnOpen()
       void probeCurrentVideoFormat()
@@ -518,61 +531,77 @@ async function probeCurrentVideoFormat(sourceOverride = '') {
   }
 }
 
-function disposeExcelPreviewer() {
-  if (excelPreviewer?.destroy) {
+function disposeFilePreviewer() {
+  if (filePreviewer?.destroy) {
     try {
-      excelPreviewer.destroy()
+      filePreviewer.destroy()
     } catch (error) {
-      console.warn('[media-viewer] excel preview destroy failed:', error)
+      console.warn('[media-viewer] file preview destroy failed:', error)
     }
   }
-  excelPreviewer = null
-  if (excelPreviewRef.value) {
-    excelPreviewRef.value.innerHTML = ''
+  filePreviewer = null
+  if (filePreviewRef.value) {
+    filePreviewRef.value.innerHTML = ''
   }
+  filePreviewLoading.value = false
 }
 
-function destroyExcelPreviewer() {
-  excelPreviewToken += 1
-  disposeExcelPreviewer()
+function destroyFilePreviewer() {
+  filePreviewToken += 1
+  disposeFilePreviewer()
 }
 
-async function setupExcelPreview() {
-  const token = ++excelPreviewToken
-  const mount = excelPreviewRef.value
+async function loadFilePreviewModule(kind: MediaPreviewFileKind): Promise<FilePreviewModule> {
+  if (kind === 'excel') return import('@js-preview/excel') as Promise<FilePreviewModule>
+  if (kind === 'pdf') return import('@js-preview/pdf') as Promise<FilePreviewModule>
+  return import('@js-preview/docx') as Promise<FilePreviewModule>
+}
+
+async function setupFilePreview() {
+  const token = ++filePreviewToken
+  const mount = filePreviewRef.value
+  const kind = activeFileKind.value
   const src = filePreviewSrc.value
-  if (!mount || !src || !isExcelFile.value) return
+  if (!mount || !src || !kind || !isPreviewableFile.value) {
+    filePreviewLoading.value = false
+    return
+  }
 
   mount.innerHTML = ''
+  // 文档预览初始化和解析都可能较慢，先展示 loading，避免用户误以为页面卡死。
+  filePreviewLoading.value = true
   const localPath = localFilePath.value
-  const previewSourceCandidates = createExcelPreviewSourceCandidates(src, localPath)
-  const previewErrors: Array<{ kind: ExcelPreviewSourceKind; error: unknown }> = []
+  const previewSourceCandidates = createFilePreviewSourceCandidates(src, localPath)
+  const previewErrors: Array<{ kind: FilePreviewSourceKind; error: unknown }> = []
   try {
-    const excelModule = await import('@js-preview/excel') as ExcelPreviewModule
-    if (token !== excelPreviewToken) return
-    const initPreview = excelModule.init || excelModule.default?.init
-    if (!initPreview) throw new Error('excel preview init unavailable')
+    const previewModule = await loadFilePreviewModule(kind)
+    if (token !== filePreviewToken) return
+    const initPreview = previewModule.init || previewModule.default?.init
+    if (!initPreview) throw new Error(`${kind} preview init unavailable`)
 
     for (const candidate of previewSourceCandidates) {
       try {
         const previewSource = await candidate.load()
-        if (token !== excelPreviewToken) return
-        disposeExcelPreviewer()
+        if (token !== filePreviewToken) return
+        disposeFilePreviewer()
         const previewer = initPreview(mount)
-        excelPreviewer = previewer
+        filePreviewer = previewer
         await previewer.preview?.(previewSource)
-        if (token !== excelPreviewToken) return
+        if (token !== filePreviewToken) return
+        filePreviewLoading.value = false
         return
       } catch (error) {
         previewErrors.push({ kind: candidate.kind, error })
       }
     }
 
-    throw previewErrors[previewErrors.length - 1]?.error || new Error('excel preview source unavailable')
+    throw previewErrors[previewErrors.length - 1]?.error || new Error(`${kind} preview source unavailable`)
   } catch (error) {
-    if (token !== excelPreviewToken) return
-    console.warn('[media-viewer] excel preview failed:', {
+    if (token !== filePreviewToken) return
+    filePreviewLoading.value = false
+    console.warn('[media-viewer] file preview failed:', {
       error,
+      fileKind: kind,
       previewErrors,
       localPath,
       src,
@@ -869,6 +898,52 @@ function pathDirectoryName(filePath: string): string {
   return segments.length > 1 ? segments[segments.length - 2] : pathBaseName(filePath)
 }
 
+function pathDir(filePath: string): string {
+  const normalized = String(filePath || '').trim()
+  if (!normalized) return ''
+  const matched = normalized.match(/^(.*)[\\/][^\\/]+$/)
+  return matched?.[1] || ''
+}
+
+function normalizeFileExt(extLike: string): string {
+  const ext = String(extLike || '').trim().toLowerCase()
+  if (!ext) return ''
+  return ext.startsWith('.') ? ext : `.${ext}`
+}
+
+function preferredFileOpenExt(): string {
+  const fromName = normalizeFileExt(getFileExtension(String(payload.value?.fileName || payload.value?.title || '')))
+  if (fromName) return fromName
+  const fromSrc = normalizeFileExt(getFileExtension(String(payload.value?.src || '')))
+  if (fromSrc) return fromSrc
+  const fromPath = normalizeFileExt(getFileExtension(String(payload.value?.filePath || '')))
+  return fromPath
+}
+
+async function ensureDefaultOpenPathForFile(sourcePath: string): Promise<string> {
+  const source = String(sourcePath || '').trim()
+  if (!source) return source
+  if (normalizeFileExt(getFileExtension(source))) return source
+
+  const ext = preferredFileOpenExt()
+  if (!ext) return source
+  const dir = pathDir(source)
+  if (!dir) return source
+
+  const preferredName = String(payload.value?.fileName || payload.value?.title || '').trim()
+  const fallbackStem = pathBaseName(source).replace(/\.[^.]+$/, '')
+  const stem = safeFileName(preferredName.replace(/\.[^.]+$/, '') || fallbackStem || 'file', 'file')
+  const { join } = await import('@tauri-apps/api/path')
+  const targetPath = await join(dir, `${stem}-open${ext}`)
+
+  // 缓存文件常是无后缀哈希名；先复制为带后缀副本，避免系统默认应用把它误判成文本。
+  await invoke('copy_file_overwrite', {
+    sourcePath: source,
+    targetPath,
+  })
+  return targetPath
+}
+
 function normalizeImageFileName(name: string): string {
   const cleaned = String(name || 'image')
     .trim()
@@ -1082,7 +1157,8 @@ async function openWithDefaultApp() {
       return
     }
     try {
-      await invoke('open_file', { path: target })
+      const openTarget = await ensureDefaultOpenPathForFile(target)
+      await invoke('open_file', { path: openTarget || target })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error || '未知错误')
       console.warn('[media-viewer] open file failed:', error)
@@ -1369,7 +1445,7 @@ onUnmounted(() => {
   document.body.classList.remove(mediaViewerPageClass)
   document.getElementById('app')?.classList.remove(mediaViewerPageClass)
   resetVideoState()
-  destroyExcelPreviewer()
+  destroyFilePreviewer()
   unsubscribe?.()
   unlistenWindowEvents.forEach((unlisten) => unlisten())
   unlistenWindowEvents = []
@@ -1547,10 +1623,14 @@ onUnmounted(() => {
         </button>
       </div>
       <div
-        v-else-if="isExcelFile"
+        v-else-if="isPreviewableFile"
         class="file-preview-wrap"
       >
-        <div ref="excelPreviewRef" class="excel-preview-mount"></div>
+        <div v-if="filePreviewLoading" class="file-preview-loading">
+          <span class="file-preview-loading-spinner"></span>
+          <span class="file-preview-loading-text">文件加载中...</span>
+        </div>
+        <div ref="filePreviewRef" class="file-preview-mount"></div>
       </div>
       <div
         v-else-if="imageSrc"
@@ -1864,11 +1944,39 @@ onUnmounted(() => {
   background: #f5f6f8;
 }
 
-.excel-preview-mount {
+.file-preview-mount {
   width: 100%;
   height: 100%;
   overflow: auto;
   background: #fff;
+}
+
+.file-preview-loading {
+  position: absolute;
+  inset: 32px 0 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(245, 246, 248, 0.92);
+  color: #4a5568;
+  pointer-events: none;
+}
+
+.file-preview-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(74, 85, 104, 0.2);
+  border-top-color: rgba(74, 85, 104, 0.8);
+  animation: media-video-loading-spin 0.9s linear infinite;
+}
+
+.file-preview-loading-text {
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .media-video {
