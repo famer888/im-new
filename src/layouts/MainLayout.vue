@@ -1261,6 +1261,87 @@ function isBlobOrDataUrl(url: string): boolean {
   return /^(blob|data):/i.test(url)
 }
 
+type ContextMenuDownloadRequestState = {
+  requestId: string
+  statusVersion: number
+}
+
+// 右键下载/另存为按“消息维度”记录当前有效请求，防止旧事件回写污染最新状态。
+const latestContextMenuDownloadRequest = new Map<string, ContextMenuDownloadRequestState>()
+const contextMenuDownloadVersionCounter = new Map<string, number>()
+
+function createContextMenuRequestId(channelId: string): string {
+  const randomSuffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `${channelId}-${randomSuffix}`
+}
+
+function extractDownloadRequestId(payload: { requestId?: string; request_id?: string } | null | undefined): string {
+  return String(payload?.requestId || payload?.request_id || '')
+}
+
+function extractDownloadStatusVersion(
+  payload: { statusVersion?: number; status_version?: number } | null | undefined,
+): number {
+  const raw = payload?.statusVersion ?? payload?.status_version ?? -1
+  const version = Number(raw)
+  return Number.isFinite(version) ? version : -1
+}
+
+function nextContextMenuDownloadStatusVersion(channelId: string): number {
+  // 每个消息通道单调递增版本号，配合 requestId 双重校验事件归属。
+  const next = (contextMenuDownloadVersionCounter.get(channelId) || 0) + 1
+  contextMenuDownloadVersionCounter.set(channelId, next)
+  return next
+}
+
+function registerContextMenuDownloadRequest(channelId: string): ContextMenuDownloadRequestState {
+  const activeRequest = latestContextMenuDownloadRequest.get(channelId)
+  // 同一消息右键重复点击时复用进行中的 requestId，避免并发监听全部等待不到匹配事件。
+  if (activeRequest) return activeRequest
+  const requestId = createContextMenuRequestId(channelId)
+  const statusVersion = nextContextMenuDownloadStatusVersion(channelId)
+  const requestState = { requestId, statusVersion }
+  latestContextMenuDownloadRequest.set(channelId, requestState)
+  return requestState
+}
+
+function clearContextMenuDownloadRequest(channelId: string, requestState: ContextMenuDownloadRequestState) {
+  const activeRequest = latestContextMenuDownloadRequest.get(channelId)
+  if (
+    activeRequest?.requestId === requestState.requestId
+    && activeRequest?.statusVersion === requestState.statusVersion
+  ) {
+    latestContextMenuDownloadRequest.delete(channelId)
+  }
+}
+
+function isActiveContextMenuDownloadRequest(
+  channelId: string,
+  requestState: ContextMenuDownloadRequestState,
+  payload: {
+    requestId?: string
+    request_id?: string
+    statusVersion?: number
+    status_version?: number
+  } | null | undefined,
+): boolean {
+  // 只消费“当前最新请求 + 同 requestId + 同状态版本戳”事件，避免旧请求状态覆盖新请求结果。
+  const activeRequest = latestContextMenuDownloadRequest.get(channelId)
+  return (
+    activeRequest?.requestId === requestState.requestId
+    && activeRequest?.statusVersion === requestState.statusVersion
+    && extractDownloadRequestId(payload) === requestState.requestId
+    && extractDownloadStatusVersion(payload) === requestState.statusVersion
+  )
+}
+
+function buildContextMenuDownloadChannel(data: Record<string, unknown>, scope: 'video' | 'file'): string {
+  const messageId = String(data.messageId || data.msgId || '').trim()
+  return messageId ? `${scope}-menu-${imageCacheSafeName(messageId)}` : `${scope}-menu-${Date.now()}`
+}
+
 function showVideoPreparingProgress(progress: number) {
   const percent = Math.max(1, Math.min(99, Math.round(progress * 100)))
   showToast(`正在准备视频文件 ${percent}%`)
@@ -1271,6 +1352,7 @@ async function waitForDownloadFile(
   fileKey: string,
   savePath: string,
   msgId: string,
+  requestState: ContextMenuDownloadRequestState,
   onProgress?: (progress: number) => void,
 ) {
   const [{ invoke }, { listen }] = await Promise.all([
@@ -1284,6 +1366,7 @@ async function waitForDownloadFile(
     let unlistenError: (() => void) | null = null
     let unlistenProgress: (() => void) | null = null
     const cleanup = () => {
+      // 每次调用都只保留一组监听，避免重复注册造成多次回调。
       unlistenDone?.()
       unlistenError?.()
       unlistenProgress?.()
@@ -1293,19 +1376,24 @@ async function waitForDownloadFile(
     }
 
     try {
-      unlistenDone = await listen(`file:done:${msgId}`, () => {
+      unlistenDone = await listen<{ requestId?: string; request_id?: string; statusVersion?: number; status_version?: number }>(`file:done:${msgId}`, (event) => {
         if (settled) return
+        if (!isActiveContextMenuDownloadRequest(msgId, requestState, event.payload)) return
         settled = true
         cleanup()
+        clearContextMenuDownloadRequest(msgId, requestState)
         resolve()
       })
-      unlistenError = await listen<{ error?: string }>(`file:error:${msgId}`, (event) => {
+      unlistenError = await listen<{ error?: string; requestId?: string; request_id?: string; statusVersion?: number; status_version?: number }>(`file:error:${msgId}`, (event) => {
         if (settled) return
+        if (!isActiveContextMenuDownloadRequest(msgId, requestState, event.payload)) return
         settled = true
         cleanup()
+        clearContextMenuDownloadRequest(msgId, requestState)
         reject(new Error(event.payload?.error || '视频下载失败'))
       })
-      unlistenProgress = await listen<{ progress?: number }>(`file:progress:${msgId}`, (event) => {
+      unlistenProgress = await listen<{ progress?: number; requestId?: string; request_id?: string; statusVersion?: number; status_version?: number }>(`file:progress:${msgId}`, (event) => {
+        if (!isActiveContextMenuDownloadRequest(msgId, requestState, event.payload)) return
         const progress = Number(event.payload?.progress || 0)
         if (Number.isFinite(progress)) onProgress?.(Math.max(0, Math.min(1, progress)))
       })
@@ -1314,6 +1402,8 @@ async function waitForDownloadFile(
         fileKey,
         savePath,
         msgId,
+        requestId: requestState.requestId,
+        statusVersion: requestState.statusVersion,
         logTag: 'video-menu',
         emitDataUrl: false,
       })
@@ -1321,6 +1411,7 @@ async function waitForDownloadFile(
       if (!settled) {
         settled = true
         cleanup()
+        clearContextMenuDownloadRequest(msgId, requestState)
         reject(error)
       }
     }
@@ -1392,11 +1483,14 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
         encrypted: Boolean(source.fileKey),
       })
       if (source.fileKey) {
+        const menuChannel = buildContextMenuDownloadChannel(data, 'video')
+        const requestState = registerContextMenuDownloadRequest(menuChannel)
         await waitForDownloadFile(
           candidate,
           source.fileKey,
           savePath,
-          `video-menu-${Date.now()}`,
+          menuChannel,
+          requestState,
           showVideoPreparingProgress,
         )
       } else {
@@ -1513,7 +1607,13 @@ async function resolveFileMessageKey(data: Record<string, unknown>): Promise<str
   }
 }
 
-async function waitForOfficeFileDownload(url: string, fileKey: string, savePath: string, msgId: string): Promise<{ filePath: string; isDangerous: boolean }> {
+async function waitForOfficeFileDownload(
+  url: string,
+  fileKey: string,
+  savePath: string,
+  msgId: string,
+  requestState: ContextMenuDownloadRequestState,
+): Promise<{ filePath: string; isDangerous: boolean }> {
   const [{ invoke }, { listen }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/api/event'),
@@ -1524,6 +1624,7 @@ async function waitForOfficeFileDownload(url: string, fileKey: string, savePath:
     let unlistenDone: (() => void) | null = null
     let unlistenError: (() => void) | null = null
     const cleanup = () => {
+      // 结束后立即清监听，避免重试叠加旧监听。
       unlistenDone?.()
       unlistenError?.()
       unlistenDone = null
@@ -1531,19 +1632,23 @@ async function waitForOfficeFileDownload(url: string, fileKey: string, savePath:
     }
 
     try {
-      unlistenDone = await listen<{ filePath?: string; file_path?: string; isDangerous?: boolean; is_dangerous?: boolean }>(`file:done:${msgId}`, (event) => {
+      unlistenDone = await listen<{ filePath?: string; file_path?: string; isDangerous?: boolean; is_dangerous?: boolean; requestId?: string; request_id?: string; statusVersion?: number; status_version?: number }>(`file:done:${msgId}`, (event) => {
         if (settled) return
+        if (!isActiveContextMenuDownloadRequest(msgId, requestState, event.payload)) return
         settled = true
         cleanup()
+        clearContextMenuDownloadRequest(msgId, requestState)
         resolve({
           filePath: event.payload?.filePath || event.payload?.file_path || savePath,
           isDangerous: Boolean(event.payload?.isDangerous ?? event.payload?.is_dangerous),
         })
       })
-      unlistenError = await listen<{ error?: string }>(`file:error:${msgId}`, (event) => {
+      unlistenError = await listen<{ error?: string; requestId?: string; request_id?: string; statusVersion?: number; status_version?: number }>(`file:error:${msgId}`, (event) => {
         if (settled) return
+        if (!isActiveContextMenuDownloadRequest(msgId, requestState, event.payload)) return
         settled = true
         cleanup()
+        clearContextMenuDownloadRequest(msgId, requestState)
         reject(new Error(event.payload?.error || '文件下载失败'))
       })
       await invoke('download_file', {
@@ -1551,6 +1656,8 @@ async function waitForOfficeFileDownload(url: string, fileKey: string, savePath:
         fileKey,
         savePath,
         msgId,
+        requestId: requestState.requestId,
+        statusVersion: requestState.statusVersion,
         logTag: 'file',
         emitDataUrl: false,
       })
@@ -1558,6 +1665,7 @@ async function waitForOfficeFileDownload(url: string, fileKey: string, savePath:
       if (!settled) {
         settled = true
         cleanup()
+        clearContextMenuDownloadRequest(msgId, requestState)
         reject(error)
       }
     }
@@ -1601,7 +1709,9 @@ async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise
 
   const key = await resolveFileMessageKey(data)
   if (!key) throw new Error('文件密钥缺失，无法下载')
-  const result = await waitForOfficeFileDownload(url, key, savePath, `file-menu-${Date.now()}`)
+  const menuChannel = buildContextMenuDownloadChannel(data, 'file')
+  const requestState = registerContextMenuDownloadRequest(menuChannel)
+  const result = await waitForOfficeFileDownload(url, key, savePath, menuChannel, requestState)
   if (result.isDangerous) throw new Error('高危文件已隔离，不支持直接打开或另存为')
   return result.filePath
 }

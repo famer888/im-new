@@ -40,6 +40,8 @@ pub struct UploadResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadProgress {
     pub msg_id: String,
+    pub request_id: Option<String>,
+    pub status_version: Option<u64>,
     pub progress: f64, // 0.0 - 1.0
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
@@ -159,6 +161,35 @@ fn audio_players() -> &'static Mutex<HashMap<String, Child>> {
 
 fn active_downloads() -> &'static Mutex<HashSet<String>> {
     ACTIVE_DOWNLOADS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+// 下载任务去重键：同一消息写同一路径视为同一个下载任务。
+fn build_download_key(msg_id: &str, path: &Path) -> String {
+    format!("{}|{}", msg_id, path.to_string_lossy())
+}
+
+fn try_register_active_download(download_key: &str) -> Result<bool, String> {
+    let mut active = active_downloads()
+        .lock()
+        .map_err(|_| "active download lock poisoned".to_string())?;
+    Ok(active.insert(download_key.to_string()))
+}
+
+fn unregister_active_download(download_key: &str) {
+    if let Ok(mut active) = active_downloads().lock() {
+        active.remove(download_key);
+    }
+}
+
+async fn send_download_request(url: &str) -> Result<(reqwest::Response, String), String> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
+    // 记录最终 URL，便于观测 302/redirect 后实际落点是否一致。
+    let final_url = response.url().to_string();
+    Ok((response, final_url))
 }
 
 fn video_streams() -> &'static Mutex<HashMap<String, VideoStreamSource>> {
@@ -1860,20 +1891,19 @@ pub async fn download_file(
     file_key: String,
     save_path: String,
     msg_id: String,
+    // 前端用 request_id 过滤旧事件，避免重试时旧失败覆盖新成功状态。
+    request_id: Option<String>,
+    // status_version 是单调递增的版本戳，用于区分同一消息多次重试的状态归属。
+    status_version: Option<u64>,
     log_tag: Option<String>,
     emit_data_url: Option<bool>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&save_path);
     // 图片/视频组件会因重渲染、缩略图失败重试、重复点击同时请求同一文件；
     // 这里按 msg_id + save_path 去重，让后续请求复用当前任务最终的 file:done/file:error 事件。
-    let download_key = format!("{}|{}", msg_id, path.to_string_lossy());
-    {
-        let mut active = active_downloads()
-            .lock()
-            .map_err(|_| "active download lock poisoned".to_string())?;
-        if !active.insert(download_key.clone()) {
-            return Ok(());
-        }
+    let download_key = build_download_key(&msg_id, &path);
+    if !try_register_active_download(&download_key)? {
+        return Ok(());
     }
     let should_emit_data_url = emit_data_url.unwrap_or(true);
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
@@ -1913,6 +1943,8 @@ pub async fn download_file(
 
     let app_clone = app.clone();
     let msg_id_clone = msg_id.clone();
+    let request_id_clone = request_id.clone();
+    let status_version_clone = status_version;
     let should_log_audio_clone = should_log_audio;
     let should_log_file_open_clone = should_log_file_open;
     let should_log_video_menu_clone = should_log_video_menu;
@@ -1999,17 +2031,16 @@ pub async fn download_file(
                     url.chars().take(180).collect::<String>(),
                 );
             }
-            let response = reqwest::get(&url)
-                .await
-                .map_err(|e| format!("Download failed: {}", e))?;
+            let (response, final_url) = send_download_request(&url).await?;
             let status = response.status();
             if should_log_audio_clone {
                 tracing::info!(
                     target: "group-audio",
-                    "download_file http response msg_id={} status={} ok={}",
+                    "download_file http response msg_id={} status={} ok={} final_url_head={}",
                     msg_id_clone,
                     status.as_u16(),
                     status.is_success(),
+                    final_url.chars().take(120).collect::<String>(),
                 );
             }
             if should_log_file_open_clone {
@@ -2018,15 +2049,17 @@ pub async fn download_file(
                     msg_id = %msg_id_clone,
                     status = status.as_u16(),
                     ok = status.is_success(),
+                    final_url_head = %final_url.chars().take(160).collect::<String>(),
                     "download_file http response"
                 );
             }
             if should_log_video_menu_clone {
                 eprintln!(
-                    "[video-menu] download_file http response msg_id={} status={} ok={}",
+                    "[video-menu] download_file http response msg_id={} status={} ok={} final_url_head={}",
                     msg_id_clone,
                     status.as_u16(),
                     status.is_success(),
+                    final_url.chars().take(180).collect::<String>(),
                 );
             }
             if !status.is_success() {
@@ -2085,6 +2118,8 @@ pub async fn download_file(
                             &format!("file:progress:{}", msg_id_clone),
                             DownloadProgress {
                                 msg_id: msg_id_clone.clone(),
+                                request_id: request_id_clone.clone(),
+                                status_version: status_version_clone,
                                 progress,
                                 total_bytes,
                                 downloaded_bytes,
@@ -2159,6 +2194,8 @@ pub async fn download_file(
                 &format!("file:progress:{}", msg_id_clone),
                 DownloadProgress {
                     msg_id: msg_id_clone.clone(),
+                    request_id: request_id_clone.clone(),
+                    status_version: status_version_clone,
                     progress: 0.9,
                     total_bytes: downloaded_bytes,
                     downloaded_bytes,
@@ -2255,6 +2292,8 @@ pub async fn download_file(
                     &format!("file:done:{}", msg_id_clone),
                     DownloadProgress {
                         msg_id: msg_id_clone,
+                        request_id: request_id_clone.clone(),
+                        status_version: status_version_clone,
                         progress: 1.0,
                         total_bytes: size,
                         downloaded_bytes: size,
@@ -2285,13 +2324,17 @@ pub async fn download_file(
                 }
                 let _ = app_clone.emit(
                     &format!("file:error:{}", msg_id_clone),
-                    serde_json::json!({ "error": e }),
+                    serde_json::json!({
+                        "error": e,
+                        "requestId": request_id_clone.clone(),
+                        "request_id": request_id_clone,
+                        "statusVersion": status_version_clone,
+                        "status_version": status_version_clone,
+                    }),
                 );
             }
         }
-        if let Ok(mut active) = active_downloads().lock() {
-            active.remove(&download_key);
-        }
+        unregister_active_download(&download_key);
     });
 
     Ok(())
@@ -2301,6 +2344,8 @@ pub async fn download_file(
 pub async fn get_download_progress(msg_id: String) -> Result<DownloadProgress, String> {
     Ok(DownloadProgress {
         msg_id,
+        request_id: None,
+        status_version: None,
         progress: 0.0,
         total_bytes: 0,
         downloaded_bytes: 0,
@@ -2841,6 +2886,105 @@ pub async fn open_file(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("open file failed: {}", e))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn read_http_request_path(socket: &mut tokio::net::TcpStream) -> Option<String> {
+        let mut buf = [0u8; 2048];
+        let n = socket.read(&mut buf).await.ok()?;
+        if n == 0 {
+            return None;
+        }
+        let req = String::from_utf8_lossy(&buf[..n]);
+        let first_line = req.lines().next().unwrap_or_default();
+        let mut parts = first_line.split_whitespace();
+        let _method = parts.next().unwrap_or_default();
+        Some(parts.next().unwrap_or_default().to_string())
+    }
+
+    #[test]
+    fn same_target_download_is_deduped_for_concurrency() {
+        let path = PathBuf::from("/tmp/f03-download-test.bin");
+        let key = build_download_key("msg-1", &path);
+        let same_key = build_download_key("msg-1", &path);
+        assert_eq!(key, same_key);
+
+        unregister_active_download(&key);
+        assert!(try_register_active_download(&key).expect("register first key"));
+        assert!(!try_register_active_download(&same_key).expect("register duplicated key"));
+        unregister_active_download(&key);
+    }
+
+    #[tokio::test]
+    async fn download_request_follows_302_redirect() {
+        // 沙箱环境可能禁止本地端口绑定；此时跳过，避免把环境限制误判为逻辑失败。
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skip redirect test: local tcp bind is not permitted in current environment");
+                return;
+            }
+            Err(err) => panic!("bind local server failed: {err}"),
+        };
+        let addr = listener.local_addr().expect("read local addr");
+
+        let server = tokio::spawn(async move {
+            let mut served_redirect = false;
+            let mut served_final = false;
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.expect("accept connection");
+                let path = read_http_request_path(&mut socket)
+                    .await
+                    .unwrap_or_default();
+
+                if path.starts_with("/redirect") {
+                    served_redirect = true;
+                    let response = "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write redirect response");
+                } else {
+                    served_final = true;
+                    let body = b"ok";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write final headers");
+                    socket
+                        .write_all(body)
+                        .await
+                        .expect("write final body");
+                }
+            }
+            (served_redirect, served_final)
+        });
+
+        let initial_url = format!("http://{}/redirect", addr);
+        let (response, final_url) = send_download_request(&initial_url)
+            .await
+            .expect("download via redirect");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(
+            final_url.ends_with("/final"),
+            "expected final url to end with /final, got {final_url}"
+        );
+        let body = response.text().await.expect("read response body");
+        assert_eq!(body, "ok");
+
+        let (served_redirect, served_final) = server.await.expect("join server task");
+        assert!(served_redirect, "redirect endpoint was not requested");
+        assert!(served_final, "final endpoint was not requested");
     }
 }
 
