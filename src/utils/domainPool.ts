@@ -1,3 +1,5 @@
+import { requestViaTauriOrFetch } from '@/utils/tauriHttp'
+
 export interface DomainItem {
   domain: string
   status: 'normal' | 'error'
@@ -384,16 +386,17 @@ function parseDomainListFromOss(data: unknown): string[] {
 
 async function fetchOssDomains(ossUrl: string): Promise<string[]> {
   try {
-    let content = ''
-    if (isTauri()) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      // 对齐老 im 主进程 CORS 处理：OSS 引导域名在 Tauri 中走 Rust 拉取，避免 WebView CORS / 预检失败。
-      content = await invoke<string>('fetch_url_text', { url: ossUrl })
-    } else {
-      const response = await fetch(ossUrl)
-      if (!response.ok) return []
-      content = await response.text()
-    }
+    // 对齐 F05：OSS 引导文件统一走同一层调用，桌面端由主进程代发，网页端走 fetch 兜底。
+    const response = await requestViaTauriOrFetch({
+      url: ossUrl,
+      method: 'GET',
+      headers: {
+        Accept: 'text/plain,application/json,*/*',
+      },
+      purpose: 'oss_seed',
+    })
+    if (!response.ok) return []
+    const content = response.body
     const data = JSON.parse(atob(content.trim()))
     return parseDomainListFromOss(data)
   } catch {

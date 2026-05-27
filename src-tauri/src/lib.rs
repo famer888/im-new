@@ -221,6 +221,7 @@ pub fn run() {
             commands::domain::get_first_normal_domain,
             commands::domain::fetch_url_text,
             commands::domain::probe_url,
+            commands::domain::proxy_http_text,
             commands::platform::get_platform_info,
             commands::platform::get_network_snapshot,
             commands::platform::system_beep,

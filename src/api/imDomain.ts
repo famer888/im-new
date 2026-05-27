@@ -14,6 +14,7 @@ import {
 } from './request'
 import { getDomainUrl, getBaseUrl, getRawBaseUrl, API_CONFIG, isLoginOnlyBaseUrl } from './config'
 import { getAllDomains, getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
+import { requestViaTauriOrFetch } from '@/utils/tauriHttp'
 
 /* ------------------------------------------------------------------ */
 /*  AES-128-ECB hex encrypt / decrypt  (mirrors old im's encryptHex / decryptHex)  */
@@ -315,18 +316,26 @@ async function requestDomainApiJson(
 
   for (const domainApiBase of getDomainApiCandidates()) {
     try {
-      const resp = await fetch(`${domainApiBase}${path}`, {
+      const resp = await requestViaTauriOrFetch({
+        url: `${domainApiBase}${path}`,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           accessToken: payload.headers.accessToken,
         },
         body: JSON.stringify(body),
+        // 对齐 F05：domain API 在桌面端统一走主进程代发，避免 WebView CORS/预检差异。
+        purpose: 'domain_api',
       })
       if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`)
+        throw new Error(resp.error || `HTTP ${resp.status}`)
       }
-      const json = await resp.json()
+      let json: any
+      try {
+        json = JSON.parse(resp.body || '{}')
+      } catch {
+        throw new Error('domain api invalid json response')
+      }
       if (json?.code !== 200) {
         throw new Error(json?.msg || json?.message || `domain api ${path} code ${json?.code ?? 'unknown'}`)
       }
