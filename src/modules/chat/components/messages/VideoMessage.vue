@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { convertFileSrc, invoke as tauriInvoke } from '@tauri-apps/api/core'
+import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { eventBus } from '@/utils/eventBus'
+import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
 const props = defineProps<{
   message: Message
@@ -231,9 +232,9 @@ const privateAttachmentCandidates = computed(() => {
   return candidates
 })
 const localVideoSourcePath = computed(() => {
-  if (extraLocalVideoPath.value) return fileUrlToLocalPath(extraLocalVideoPath.value)
-  if (videoData.value.localPath) return fileUrlToLocalPath(videoData.value.localPath)
-  if (isLocalFilePath(videoData.value.url)) return fileUrlToLocalPath(videoData.value.url)
+  if (extraLocalVideoPath.value) return toFsPath(extraLocalVideoPath.value)
+  if (videoData.value.localPath) return toFsPath(videoData.value.localPath)
+  if (isLocalLikePath(videoData.value.url)) return toFsPath(videoData.value.url)
   return ''
 })
 const dragFileName = computed(() =>
@@ -324,25 +325,6 @@ function pathFileName(path: string): string {
   return safeFileName(raw.split(/[\\/]/).pop() || '')
 }
 
-function isLocalFilePath(src: string): boolean {
-  const raw = String(src || '').trim()
-  if (!raw || /^(https?|blob|data|asset|tauri):/i.test(raw)) return false
-  return /^file:/i.test(raw) || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
-}
-
-function fileUrlToLocalPath(src: string): string {
-  const raw = String(src || '').trim()
-  if (!/^file:/i.test(raw)) return raw
-  try {
-    const parsed = new URL(raw)
-    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return raw.replace(/^file:\/\/?/i, '')
-  }
-}
-
 function decodedUrlFileName(url: string): string {
   const cleanUrl = String(url || '').split('?')[0].split('#')[0]
   const rawName = cleanUrl.split(/[\\/]/).pop() || ''
@@ -368,18 +350,7 @@ function getVideoFileName(url: string, explicitName = '', localPath = ''): strin
 }
 
 function ensureMediaSrc(src: string): string {
-  const raw = String(src || '').trim()
-  if (!raw) return ''
-  if (/^(https?|asset|blob|data):/i.test(raw)) return raw
-  if (/^file:/i.test(raw)) {
-    const localPath = fileUrlToLocalPath(raw)
-    return (window as any).__TAURI_INTERNALS__ ? convertFileSrc(localPath) : raw
-  }
-  const normalized = raw.replace(/\\/g, '/')
-  if (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('/')) {
-    return (window as any).__TAURI_INTERNALS__ ? convertFileSrc(normalized) : `file://${encodeURI(normalized)}`
-  }
-  return raw
+  return toDisplaySrc(src)
 }
 
 function videoExt(url: string): string {
@@ -692,10 +663,10 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
   const isLocalFileTarget = !/^https?:/i.test(target)
   let mediaSrc = target
   let mediaFilePath: string | null = isLocalFileTarget ? target : null
-  if (isLocalFileTarget && isLocalFilePath(target)) {
+  if (isLocalFileTarget && isLocalLikePath(target)) {
     const result = await invoke<{ url: string }>('create_local_video_stream_url', {
       request: {
-        path: fileUrlToLocalPath(target),
+        path: toFsPath(target),
         mimeType: videoData.value.mimeType || '',
         name: getVideoFileName(target, videoData.value.name),
       },
@@ -1207,8 +1178,8 @@ async function buildVideoCoverSources(): Promise<string[]> {
 
   const url = videoData.value.url
   if (!url) return [...new Set(sources)]
-  if (/^(blob|data):/i.test(url) || isLocalFilePath(url)) {
-    sources.push(url)
+  if (/^(blob|data):/i.test(url) || isLocalLikePath(url)) {
+    sources.push(toFsPath(url))
     return [...new Set(sources)]
   }
 

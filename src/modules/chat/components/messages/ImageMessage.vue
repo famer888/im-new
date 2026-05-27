@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
+import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
 const props = defineProps<{
   message: Message
@@ -138,41 +138,17 @@ const imageData = computed((): {
   }
 })
 
-function isLocalFilePath(src: string): boolean {
-  const raw = String(src || '').trim()
-  if (!raw || /^(https?|blob|data|asset|tauri):/i.test(raw)) return false
-  return /^file:/i.test(raw) || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
-}
-
-function fileUrlToLocalPath(src: string): string {
-  const raw = String(src || '').trim()
-  if (!/^file:/i.test(raw)) return raw
-  try {
-    const parsed = new URL(raw)
-    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return raw.replace(/^file:\/\/?/i, '')
-  }
-}
-
 function toDisplayImageSrc(src: string): string {
-  const raw = String(src || '').trim()
-  if (!raw) return ''
-  if ((window as any).__TAURI_INTERNALS__ && isLocalFilePath(raw)) {
-    return convertFileSrc(fileUrlToLocalPath(raw))
-  }
-  return raw
+  return toDisplaySrc(src)
 }
 
 const localSourcePath = computed(() => {
   const explicitPath = imageData.value.localPath
-  if (explicitPath) return fileUrlToLocalPath(explicitPath)
+  if (explicitPath) return toFsPath(explicitPath)
   const url = imageData.value.url
-  if (isLocalFilePath(url)) return fileUrlToLocalPath(url)
+  if (isLocalLikePath(url)) return toFsPath(url)
   const thumbnail = imageData.value.thumbnailUrl
-  if (isLocalFilePath(thumbnail)) return fileUrlToLocalPath(thumbnail)
+  if (isLocalLikePath(thumbnail)) return toFsPath(thumbnail)
   return ''
 })
 const thumbnailUrl = computed(() => toDisplayImageSrc(imageData.value.thumbnailUrl || imageData.value.url || ''))

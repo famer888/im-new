@@ -7,8 +7,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import type { Message } from '@/stores/useMessageStore'
+import { toDisplaySrc } from '@/utils/resourcePath'
 
 const props = defineProps<{
   message?: Message
@@ -46,32 +46,8 @@ function extractUrlFromRawContent(raw: string): string {
   return match?.[0] || value
 }
 
-function isLocalFilePath(src: string): boolean {
-  const raw = String(src || '').trim()
-  if (!raw || /^(https?|blob|data|asset|tauri):/i.test(raw)) return false
-  return /^file:/i.test(raw) || raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)
-}
-
-function fileUrlToLocalPath(src: string): string {
-  const raw = String(src || '').trim()
-  if (!/^file:/i.test(raw)) return raw
-  try {
-    const parsed = new URL(raw)
-    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return raw.replace(/^file:\/\/?/i, '')
-  }
-}
-
 function toDisplayGifSrc(src: string): string {
-  const raw = String(src || '').trim()
-  if (!raw) return ''
-  if ((window as any).__TAURI_INTERNALS__ && isLocalFilePath(raw)) {
-    return convertFileSrc(fileUrlToLocalPath(raw))
-  }
-  return raw
+  return toDisplaySrc(src)
 }
 
 const gifUrl = computed(() => {

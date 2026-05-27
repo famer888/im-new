@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-shell'
 import '@js-preview/docx/lib/index.css'
@@ -12,6 +12,7 @@ import Toast from '@/components/Toast.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import { getFileExtension, resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
+import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
 import minimizeIcon from '@/assets/windows_control_icons/min-w-30.png'
 import squareIcon from '@/assets/windows_control_icons/max-w-30.png'
@@ -93,45 +94,7 @@ interface VideoFormatProbe {
 }
 
 function ensureMediaSrc(src: string): string {
-  const raw = String(src || '').trim()
-  if (!raw) return ''
-  if (/^(https?|asset|blob|data):/i.test(raw)) return raw
-  if ((window as any).__TAURI_INTERNALS__) {
-    if (/^file:/i.test(raw)) return convertFileSrc(fileUrlToLocalPath(raw))
-    return convertFileSrc(raw)
-  }
-  if (/^file:/i.test(raw)) return raw
-  const normalized = raw.replace(/\\/g, '/')
-  if (/^[A-Za-z]:\//.test(normalized)) {
-    return `file:///${encodeURI(normalized)}`
-  }
-  if (normalized.startsWith('/')) {
-    return `file://${encodeURI(normalized)}`
-  }
-  return raw
-}
-
-function fileUrlToLocalPath(src: string): string {
-  const raw = String(src || '').trim()
-  if (/^asset:/i.test(raw) || /^https?:\/\/asset\.localhost/i.test(raw)) {
-    try {
-      const parsed = new URL(raw)
-      let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-      if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-      return pathname
-    } catch {
-      return raw.replace(/^asset:\/\/[^/]+\/?/i, '')
-    }
-  }
-  if (!/^file:/i.test(raw)) return raw
-  try {
-    const parsed = new URL(raw)
-    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return raw.replace(/^file:\/\/?/i, '')
-  }
+  return toDisplaySrc(src)
 }
 
 function imageExtFromDataUrl(src: string): string {
@@ -244,27 +207,25 @@ const canOpenWithDefaultApp = computed(() =>
 const localVideoPath = computed(() => {
   if (!isVideo.value) return ''
   const filePath = String(payload.value?.filePath || '').trim()
-  if (filePath && !/^https?:/i.test(filePath)) return fileUrlToLocalPath(filePath)
+  if (filePath && isLocalLikePath(filePath)) return toFsPath(filePath)
   const src = String(payload.value?.src || '').trim()
-  if (/^file:/i.test(src)) return fileUrlToLocalPath(src)
-  if (src && !/^(https?|asset|blob|data):/i.test(src)) return fileUrlToLocalPath(src)
+  if (isLocalLikePath(src)) return toFsPath(src)
   return ''
 })
 const localImagePath = computed(() => {
   if (isFile.value) return localFilePath.value
   const filePath = String(payload.value?.filePath || '').trim()
-  if (filePath) return fileUrlToLocalPath(filePath)
+  if (filePath && isLocalLikePath(filePath)) return toFsPath(filePath)
   const src = String(payload.value?.src || '').trim()
-  if (/^file:/i.test(src)) return fileUrlToLocalPath(src)
+  if (isLocalLikePath(src)) return toFsPath(src)
   return ''
 })
 const localFilePath = computed(() => {
   if (!isFile.value) return ''
   const filePath = String(payload.value?.filePath || '').trim()
-  if (filePath) return fileUrlToLocalPath(filePath)
+  if (filePath && isLocalLikePath(filePath)) return toFsPath(filePath)
   const src = String(payload.value?.src || '').trim()
-  if (/^(file|asset):/i.test(src) || /^https?:\/\/asset\.localhost/i.test(src)) return fileUrlToLocalPath(src)
-  if (src && !/^(https?|asset|blob|data):/i.test(src)) return fileUrlToLocalPath(src)
+  if (isLocalLikePath(src)) return toFsPath(src)
   return ''
 })
 const canOpenDirectory = computed(() => Boolean(localImagePath.value))
@@ -1138,10 +1099,10 @@ async function closeWindow() {
 async function openWithDefaultApp() {
   const filePath = String(payload.value?.filePath || '').trim()
   const src = String(payload.value?.src || '').trim()
-  let target = filePath || fileUrlToLocalPath(src)
+  let target = filePath || toFsPath(src)
   if (isVideo.value) {
-    if (target && !/^https?:/i.test(target)) {
-      await invoke('open_file', { path: fileUrlToLocalPath(target) })
+    if (target && isLocalLikePath(target)) {
+      await invoke('open_file', { path: toFsPath(target) })
       return
     }
     const localVideo = await downloadVideoForDefaultApp()
@@ -1174,10 +1135,10 @@ async function openWithDefaultApp() {
         target = fixedPath
       } catch (error) {
         console.warn('[media-viewer] repair .img cache failed:', error)
-        target = fileUrlToLocalPath(src) || filePath
+        target = toFsPath(src) || filePath
       }
     } else {
-      target = fileUrlToLocalPath(src) || filePath
+      target = toFsPath(src) || filePath
     }
   }
   if (!target) return

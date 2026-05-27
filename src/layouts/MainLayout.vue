@@ -53,7 +53,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
 import { API_CONFIG } from '@/api/config'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
@@ -1114,19 +1114,6 @@ function normalizeVideoUrl(value: unknown): string {
   return raw
 }
 
-function fileUrlToLocalPath(src: string): string {
-  const raw = String(src || '').trim()
-  if (!/^file:/i.test(raw)) return raw
-  try {
-    const parsed = new URL(raw)
-    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return raw.replace(/^file:\/\/?/i, '')
-  }
-}
-
 function getVideoFileSource(data: Record<string, unknown>): { url: string; fileKey: string; fileName: string } {
   const extra = parseMessageExtra(data)
   const rawContent = String(data.content || '').trim()
@@ -1423,7 +1410,7 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
   })
 
   if (!isRemoteUrl(url)) {
-    const localPath = fileUrlToLocalPath(url)
+    const localPath = toFsPath(url)
     videoMenuLog('check local video path', { localPath })
     if (await tauriFileExists(localPath)) return localPath
     throw new Error('video file not found')
@@ -1679,7 +1666,7 @@ async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise
   if (!url || isBlobOrDataUrl(url)) throw new Error('文件地址不可用')
 
   if (!isRemoteUrl(url)) {
-    const localPath = fileUrlToLocalPath(url)
+    const localPath = toFsPath(url)
     if (await tauriFileExists(localPath)) return localPath
     throw new Error('本地文件不存在')
   }
@@ -1893,7 +1880,7 @@ async function copyMessageImage(data: Record<string, unknown>) {
   const imagePath = String(data.imagePath || '').trim()
   if ((window as any).__TAURI_INTERNALS__ && imagePath) {
     try {
-      imageSrc = convertFileSrc(imagePath)
+      imageSrc = toDisplaySrc(imagePath)
     } catch (error) {
       console.warn('[clipboard] image local path conversion failed:', error)
     }
@@ -2136,7 +2123,7 @@ async function saveImageAs(src: string, suggestedName: string, data?: Record<str
     ? (() => {
         try {
           const imagePath = String(data.imagePath || '').trim()
-          if (imagePath) return convertFileSrc(imagePath)
+          if (imagePath) return toDisplaySrc(imagePath)
         } catch {
           // ignore local path conversion failure and fallback to original src
         }

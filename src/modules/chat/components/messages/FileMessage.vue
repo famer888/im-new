@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
@@ -8,6 +8,7 @@ import { ensureGroupRelKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
+import { normalizeOpenTarget } from '@/utils/resourcePath'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
 import fileImageIcon from '@/assets/images/message/file-image.png'
@@ -36,6 +37,7 @@ const dangerousDialogVisible = ref(false)
 const dangerousFileDialogContent = '请不要直接打开这个文件，确认来源可信后再打开目录修改扩展名打开'
 let openToken = 0
 let stopDownloadEvents: Array<() => void> = []
+const loggedDecryptPendingFileIds = new Set<string>()
 
 const DANGEROUS_EXTENSIONS = new Set([
   'exe',
@@ -52,13 +54,67 @@ const DANGEROUS_EXTENSIONS = new Set([
   'wsf',
 ])
 
+function parseFileMessageContent(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  const text = String(raw || '').trim()
+  if (!text) return {}
+  try {
+    const parsed = JSON.parse(text)
+    // 兼容部分端上报的“二次 JSON 字符串”格式（例如 "\"{...}\""）。
+    if (typeof parsed === 'string') {
+      try {
+        const nested = JSON.parse(parsed)
+        if (nested && typeof nested === 'object') return nested as Record<string, unknown>
+      } catch {
+        // Fall through to non-JSON compatibility parsing below.
+      }
+    }
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>
+  } catch {
+    // Fall through to non-JSON compatibility parsing below.
+  }
+
+  // 对齐老 im：兼容历史 `url||name||size||mimeType` 结构。
+  if (text.includes('||')) {
+    const [url = '', name = '', size = '0', mimeType = ''] = text.split('||')
+    const urlName = url.split('?')[0].split('/').pop() || ''
+    return {
+      url,
+      fileUrl: url,
+      name: name || urlName || '未知文件',
+      size: Number(size || 0) || 0,
+      mimeType,
+    }
+  }
+
+  // 兼容仅上报 URL/路径的文件消息，避免接收侧回退成“未知文件”。
+  const normalizedTarget = normalizeOpenTarget(text)
+  if (normalizedTarget) {
+    const urlName = normalizedTarget.split('?')[0].split(/[\\/]/).pop() || ''
+    return {
+      url: normalizedTarget,
+      fileUrl: normalizedTarget,
+      name: urlName || '未知文件',
+      size: 0,
+    }
+  }
+
+  // decryptPending 占位文案至少保留可读提示，避免显示成“未知文件”。
+  if (/^\[[^\]]+\]$/.test(text)) {
+    return {
+      name: text,
+      size: 0,
+    }
+  }
+
+  return {}
+}
+
 // 文件消息结构同时兼容新旧字段，避免历史消息因字段名差异导致打开失败。
 const fileData = computed(() => {
-  try {
-    return JSON.parse(props.message.content ?? '{}')
-  } catch {
-    return { name: '未知文件', size: 0 }
-  }
+  const parsed = parseFileMessageContent(props.message.content)
+  if (Object.keys(parsed).length > 0) return parsed
+  return { name: '未知文件', size: 0 }
 })
 
 const fileSize = computed(() => {
@@ -133,6 +189,33 @@ const groupId = computed(() => {
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
 
+watch(
+  () => [props.message.id, props.message.customMsgId, props.message.content, props.message.extra],
+  () => {
+    const content = String(props.message.content || '').trim()
+    const isPendingCipherHint = /^\[加密消息，等待密钥同步\]$/.test(content)
+    if (!isPendingCipherHint) return
+    const messageId = String(props.message.id || props.message.customMsgId || '')
+    if (!messageId || loggedDecryptPendingFileIds.has(messageId)) return
+    loggedDecryptPendingFileIds.add(messageId)
+    // 仅在“文件消息 + 解密占位”场景打一条诊断日志，便于定位是否是 relKey 同步问题。
+    console.warn('[DEBUG-doc-file] decrypt-pending file placeholder', {
+      messageId,
+      conversationId: props.message.conversationId,
+      msgType: props.message.msgType,
+      decryptPending: (extraData.value as any)?.decryptPending ?? null,
+      cipherHexLen: String((extraData.value as any)?.cipherHex || '').length,
+      cipherCandidatesLen: Array.isArray((extraData.value as any)?.cipherCandidates)
+        ? (extraData.value as any).cipherCandidates.length
+        : 0,
+      version: (extraData.value as any)?.version ?? null,
+      source: (extraData.value as any)?.source ?? null,
+      senderId: props.message.senderId,
+    })
+  },
+  { immediate: true },
+)
+
 type BrowserOpenCandidate = {
   label: string
   value: unknown
@@ -189,24 +272,7 @@ function normalizeLocalBrowserTarget(value: unknown): string {
 }
 
 function normalizeBrowserTarget(value: unknown): string {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
-  if (raw.startsWith('//')) return `https:${raw}`
-  if (/^https?:\/\//i.test(raw)) return raw
-  if (/^file:/i.test(raw)) return fileUrlToLocalPath(raw)
-  if (raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw)) return raw
-  return ''
-}
-
-function fileUrlToLocalPath(src: string): string {
-  try {
-    const parsed = new URL(String(src || '').trim())
-    let pathname = decodeURIComponent(parsed.pathname.replace(/\+/g, ' '))
-    if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1)
-    return pathname
-  } catch {
-    return String(src || '').trim().replace(/^file:\/\/?/i, '')
-  }
+  return normalizeOpenTarget(value)
 }
 
 function safeName(name: string): string {

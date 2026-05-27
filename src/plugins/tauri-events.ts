@@ -1191,6 +1191,16 @@ export async function setupTauriListeners() {
                   })),
                   err: String(err),
                 })
+                if (msgType === 7) {
+                  console.warn('[DEBUG-doc-file] private file decrypt failed after retries', {
+                    msgId,
+                    peerId,
+                    senderId,
+                    version: Number(extra?.version || 0),
+                    cipherHexLen: String(extra?.cipherHex || '').length,
+                    contentMd5: String(extra?.contentMd5 || extra?.content_md5 || ''),
+                  })
+                }
               }
             } else if (convId.startsWith('1_')) {
               const groupId = String(extra?.groupId || convId.split('_')[1] || '')
@@ -1236,6 +1246,15 @@ export async function setupTauriListeners() {
                   cipherLen: cipherHex.length,
                   err: String(err),
                 })
+                if (msgType === 7) {
+                  console.warn('[DEBUG-doc-file] group file decrypt failed after refresh', {
+                    msgId,
+                    groupId,
+                    version: Number(extra?.version || 0),
+                    cipherHexLen: cipherHex.length,
+                    contentMd5: String(extra?.contentMd5 || extra?.content_md5 || ''),
+                  })
+                }
                 // 保留占位文案 + decryptPending=true，下一轮 batch/重启后仍可再试。
               }
             } else if (convId.startsWith('2_')) {
