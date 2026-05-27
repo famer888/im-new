@@ -1692,7 +1692,8 @@ async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise
   const requestState = registerContextMenuDownloadRequest(menuChannel)
   // 文件密钥可能为空（明文文件），此时仍走同一下载链路，避免把“可下载文件”误判成失败。
   const result = await waitForOfficeFileDownload(url, key, savePath, menuChannel, requestState)
-  if (result.isDangerous) throw new Error('高危文件已隔离，不支持直接打开或另存为')
+  // 对齐旧 im：右键“打开目录/另存为”允许继续使用隔离后的 .dangerous 文件路径，
+  // 由用户在系统目录中手动确认来源并重命名后再打开。
   return result.filePath
 }
 
