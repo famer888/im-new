@@ -83,16 +83,21 @@ const displayUserId = computed(() => String(editUser.value?.userId ?? editUser.v
 
 // 接口里的群简介编辑者常是 user.nickName/icon，群成员缓存则是 nickname/avatar，这里统一做显示兜底。
 const displayUserName = computed(() => {
+  const member = findMemberById(displayUserId.value)
+  // 优先使用群成员列表里的实时昵称，避免 groupDetail 返回的 editUser.nickName 旧值覆盖新昵称。
+  const memberName = String(member?.nickname ?? '').trim()
+  if (memberName) return memberName
   const directName = String(editUser.value?.nickname ?? editUser.value?.nickName ?? '').trim()
   if (directName) return directName
-  const member = findMemberById(displayUserId.value)
-  return String(member?.nickname ?? displayUserId.value).trim()
+  return String(displayUserId.value).trim()
 })
 
 const displayUserAvatar = computed(() => {
+  const memberAvatar = String(findMemberById(displayUserId.value)?.avatar ?? '').trim()
+  if (memberAvatar) return memberAvatar
   const directAvatar = String(editUser.value?.avatar ?? editUser.value?.icon ?? '').trim()
   if (directAvatar) return directAvatar
-  return findMemberById(displayUserId.value)?.avatar ?? ''
+  return ''
 })
 
 const displayUserLabel = computed(() => {
@@ -352,7 +357,7 @@ async function handleSendNotice(notifyAll: boolean) {
     transform: translate(-50%, -50%);
     padding: 10px 16px;
     border-radius: 8px;
-    width: 438px;
+    width: 520px;
     box-sizing: border-box;
 
     > picture {
@@ -381,6 +386,7 @@ async function handleSendNotice(notifyAll: boolean) {
       min-height: 70px;
       display: flex;
       align-items: center;
+      flex-wrap: nowrap;
 
       :deep(.text-avatar) {
         margin-right: 10px;
@@ -388,16 +394,22 @@ async function handleSendNotice(notifyAll: boolean) {
 
       > h2 {
         display: block;
+        flex: 1;
+        min-width: 0;
         margin: 0;
         padding: 0;
         line-height: 30px;
         font-size: 14px;
         font-weight: 600;
         color: #333;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       > span {
         display: block;
+        flex-shrink: 0;
         padding: 1px 10px;
         margin-left: 5px;
         background-color: #3369fe;

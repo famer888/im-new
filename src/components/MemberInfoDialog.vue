@@ -50,6 +50,18 @@ const nickname = computed(() => contactInfo.value?.nickname || groupMemberInfo.v
 const remark = computed(() => contactInfo.value?.remark || profile.value?.remark || '')
 const depict = computed(() => (contactInfo.value as any)?.depict || (groupMemberInfo.value as any)?.depict || profile.value?.depict || '')
 const addToken = computed(() => profile.value?.addToken || '')
+const memberRoleLabel = computed(() => {
+  const role = Number(groupMemberInfo.value?.role ?? -1)
+  if (role === 0) return t('群主')
+  if (role === 1) return t('管理员')
+  return ''
+})
+const memberRoleClass = computed(() => {
+  const role = Number(groupMemberInfo.value?.role ?? -1)
+  if (role === 0) return 'owner'
+  if (role === 1) return 'admin'
+  return ''
+})
 
 const displayName = computed(() => {
   if (isSelf.value) return nickname.value
@@ -314,7 +326,10 @@ async function handleConfirmAdd() {
         
         <div class="top">
           <TextAvatar :name="displayName" :src="avatar" :size="60" rounded />
-          <h2 class="name-h2">{{ displayName }}</h2>
+          <div class="title-row">
+            <h2 class="name-h2">{{ displayName }}</h2>
+            <span v-if="memberRoleLabel" class="role-badge" :class="memberRoleClass">{{ memberRoleLabel }}</span>
+          </div>
         </div>
 
         <div class="info-list">
@@ -429,17 +444,45 @@ async function handleConfirmAdd() {
   border-bottom: 1px solid #eee;
   margin-bottom: 15px;
   gap: 20px;
-  
-  .name-h2 {
-    margin: 0;
-    padding: 0 1em 0 0;
-    line-height: 30px;
-    font-size: 16px;
-    color: #333;
-    font-weight: 600;
-    word-break: break-all;
-    max-height: 90px;
-    overflow: hidden;
+
+  .title-row {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .name-h2 {
+      margin: 0;
+      line-height: 30px;
+      font-size: 16px;
+      color: #333;
+      font-weight: 600;
+      word-break: break-all;
+      max-height: 90px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .role-badge {
+      flex: 0 0 auto;
+      height: 22px;
+      line-height: 22px;
+      padding: 0 8px;
+      border-radius: 11px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+
+      &.owner {
+        background: #3369fe;
+        color: #fff;
+      }
+
+      &.admin {
+        background: #3369fe;
+        color: #fff;
+      }
+    }
   }
 }
 
