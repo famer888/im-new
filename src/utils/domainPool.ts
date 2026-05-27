@@ -1,4 +1,5 @@
 import { requestViaTauriOrFetch } from '@/utils/tauriHttp'
+import preloadedDomainSnapshot from '../../scripts/domains.json'
 
 export interface DomainItem {
   domain: string
@@ -22,6 +23,25 @@ let pollingTimer: ReturnType<typeof setInterval> | null = null
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
+}
+
+function hasRunArg(arg: string): boolean {
+  try {
+    const args = JSON.parse(String(import.meta.env.VITE_APP_RUN_ARGS || '[]'))
+    return Array.isArray(args) && args.includes(arg)
+  } catch {
+    return false
+  }
+}
+
+function shouldWriteDomainSnapshot(): boolean {
+  // 对齐老 im：只在显式开关时写回 domains.json，避免日常运行污染仓库内快照。
+  return String(import.meta.env.VITE_DOMAIN_SNAPSHOT_WRITE || '') === '1' || hasRunArg('domains')
+}
+
+function shouldUsePreloadedSnapshot(): boolean {
+  // 对齐老 im：生产包默认回灌 domains.json；即便 VITE_APP_ENV 暂时不是 prod，也以构建态 PROD 兜底。
+  return Boolean(import.meta.env.PROD) || isProdEnv() || String(import.meta.env.VITE_DOMAIN_SNAPSHOT_FORCE || '') === '1'
 }
 
 function getEnvName(): string {
@@ -310,6 +330,54 @@ function seedFallbackDomains() {
   }
 }
 
+function normalizeSnapshotModuleCode(moduleCode: string): string {
+  const normalized = normalizeModuleCode(moduleCode)
+  if (normalized === 'session') return 'webSession'
+  if (normalized === 'friend' || normalized === 'group' || normalized === 'login') return 'webBiz'
+  return normalized
+}
+
+function applyPreloadedDomainSnapshot() {
+  if (!shouldUsePreloadedSnapshot()) return
+  const snapshot = preloadedDomainSnapshot as { domainDtoList?: Array<{ domainUrl?: string, moduleCode?: string, priority?: number }> }
+  const domainDtoList = Array.isArray(snapshot?.domainDtoList) ? snapshot.domainDtoList : []
+  if (!domainDtoList.length) return
+
+  const now = Date.now()
+  const items: DomainItem[] = []
+  for (const [index, entry] of domainDtoList.entries()) {
+    const domain = String(entry?.domainUrl || '').trim()
+    const moduleCode = normalizeSnapshotModuleCode(String(entry?.moduleCode || ''))
+    if (!domain || !moduleCode) continue
+    items.push({
+      domain,
+      moduleCode,
+      status: 'normal',
+      source: 'prepared',
+      priority: Number.isFinite(Number(entry?.priority)) ? Number(entry?.priority) : index,
+      lastCheck: now,
+    })
+  }
+
+  if (!items.length) return
+  upsertDomainItems(items)
+}
+
+async function saveDomainListSnapshot(domainDtoList: DynamicDomainDto[]): Promise<void> {
+  if (!shouldWriteDomainSnapshot()) return
+  if (!isTauri()) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('save_list_domain_snapshot', {
+      payload: {
+        response: { domainDtoList },
+      },
+    })
+  } catch {
+    // ignore snapshot save failures to keep domain refresh flow stable
+  }
+}
+
 function extractDomainSeedModules(domain: string, moduleCode: string): string[] {
   const modules = new Set<string>()
   const normalizedModuleCode = normalizeModuleCode(moduleCode)
@@ -323,10 +391,12 @@ function extractDomainSeedModules(domain: string, moduleCode: string): string[] 
 // 立即从 localStorage 恢复缓存（同步，模块加载时执行）
 loadFromStorage()
 seedFallbackDomains()
+applyPreloadedDomainSnapshot()
 saveToStorage()
 
 export async function initDomainPool() {
   seedFallbackDomains()
+  applyPreloadedDomainSnapshot()
   if (!isTauri()) {
     await persistDomainPool()
     return
@@ -448,6 +518,7 @@ export async function initDomainPoolFromApi(): Promise<void> {
     const { getDynamicDomainSnapshot } = await import('@/api/imDomain')
     const domainDtoList = sortDomainDtoList(await getDynamicDomainSnapshot(''))
     if (!domainDtoList.length) return
+    await saveDomainListSnapshot(domainDtoList)
 
     const items: DomainItem[] = []
     const now = Date.now()

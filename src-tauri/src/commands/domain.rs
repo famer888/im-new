@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::State;
@@ -49,6 +52,21 @@ pub struct ProxyHttpResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDomainSnapshotPayload {
+    pub response: Option<Value>,
+    pub module_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDomainSnapshotResult {
+    pub success: bool,
+    pub file_path: String,
+    pub error: Option<String>,
+}
+
 pub struct DomainPoolState {
     pub domains: Mutex<Vec<DomainItem>>,
 }
@@ -93,6 +111,49 @@ pub fn get_first_normal_domain(
         .find(|d| d.module_code == module_code && d.status == "normal")
         .or_else(|| pool.iter().find(|d| d.module_code == module_code))
         .map(|d| d.domain.clone())
+}
+
+fn resolve_domain_snapshot_path() -> PathBuf {
+    if let Ok(project_root) = std::env::var("OCS_PROJECT_ROOT") {
+        return PathBuf::from(project_root).join("scripts").join("domains.json");
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        return current_dir.join("scripts").join("domains.json");
+    }
+
+    PathBuf::from("scripts").join("domains.json")
+}
+
+#[tauri::command]
+pub fn save_list_domain_snapshot(payload: SaveDomainSnapshotPayload) -> SaveDomainSnapshotResult {
+    let file_path = resolve_domain_snapshot_path();
+    let file_path_text = file_path.to_string_lossy().to_string();
+    let response = payload.response.unwrap_or_else(|| Value::Object(Default::default()));
+
+    // 对齐老 im：调试态 listDomain 快照写回 scripts/domains.json，供生产预载兜底回灌。
+    let write_result = (|| -> Result<(), String> {
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create snapshot dir failed: {}", e))?;
+        }
+        let text = serde_json::to_string_pretty(&response)
+            .map_err(|e| format!("serialize snapshot failed: {}", e))?;
+        fs::write(&file_path, text).map_err(|e| format!("write snapshot failed: {}", e))?;
+        Ok(())
+    })();
+
+    match write_result {
+        Ok(_) => SaveDomainSnapshotResult {
+            success: true,
+            file_path: file_path_text,
+            error: None,
+        },
+        Err(err) => SaveDomainSnapshotResult {
+            success: false,
+            file_path: file_path_text,
+            error: Some(err),
+        },
+    }
 }
 
 fn parse_http_url(url: &str) -> Result<url::Url, String> {

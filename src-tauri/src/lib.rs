@@ -219,6 +219,7 @@ pub fn run() {
             commands::domain::update_domain_pool,
             commands::domain::mark_domain_error,
             commands::domain::get_first_normal_domain,
+            commands::domain::save_list_domain_snapshot,
             commands::domain::fetch_url_text,
             commands::domain::probe_url,
             commands::domain::proxy_http_text,
