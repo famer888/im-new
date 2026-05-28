@@ -19,6 +19,43 @@ fn hidden_windows_command(program: &str) -> std::process::Command {
 }
 
 #[cfg(target_os = "windows")]
+fn decode_windows_text_output(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+        return text;
+    }
+
+    // Windows PowerShell 5.x 常把 stdout 写成 UTF-16LE，这里做兜底解码避免粘贴乱码。
+    let utf16_bytes = if bytes.starts_with(&[0xFF, 0xFE]) {
+        &bytes[2..]
+    } else {
+        bytes
+    };
+    let likely_utf16le = utf16_bytes.len() >= 2
+        && utf16_bytes.len() % 2 == 0
+        && utf16_bytes
+            .chunks_exact(2)
+            .take(64)
+            .filter(|chunk| chunk[1] == 0)
+            .count()
+            >= 8;
+    if likely_utf16le {
+        let units: Vec<u16> = utf16_bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units)
+            .trim_end_matches('\u{0}')
+            .to_string();
+    }
+
+    String::from_utf8_lossy(bytes).to_string()
+}
+
+#[cfg(target_os = "windows")]
 fn command_status_with_timeout(
     command: &mut std::process::Command,
     timeout: Duration,
@@ -170,10 +207,14 @@ pub fn read_clipboard_text() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         let output = hidden_windows_command("powershell.exe")
-            .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-Clipboard -Raw",
+            ])
             .output()
             .map_err(|e| e.to_string())?;
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        return Ok(decode_windows_text_output(&output.stdout));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

@@ -1400,6 +1400,10 @@ async function readClipboardFiles() {
   }
 }
 
+function hasMojibakeArtifacts(text: string) {
+  return text.includes('\uFFFD')
+}
+
 function clipboardPayloadToFile(payload: ClipboardFilePayload) {
   const binary = atob(payload.dataBase64)
   const bytes = new Uint8Array(binary.length)
@@ -1488,17 +1492,25 @@ async function handlePaste(e: ClipboardEvent) {
     return
   }
 
+  let text = e.clipboardData?.getData('text/plain') || ''
+  // Windows WebView 下 clipboardData 可能出现乱码；检测到异常字符时强制走原生剪贴板读取。
+  if ((window as any).__TAURI_INTERNALS__ && hasMojibakeArtifacts(text)) {
+    const nativeText = await readClipboardText()
+    if (nativeText) text = nativeText
+  }
+  // 优先处理文本，避免每次文本粘贴都先走一次原生文件探测导致明显卡顿。
+  if (!text) {
+    text = await readClipboardText()
+  }
+  if (text) {
+    insertPlainTextAtSelection(text)
+    return
+  }
+
   const nativeFiles = await readClipboardFiles()
   if (nativeFiles.length > 0) {
     pendingFiles.value = nativeFiles
     showFilePreview.value = true
-    return
-  }
-
-  // 纯文本粘贴，防止带格式
-  const text = e.clipboardData?.getData('text/plain') || await readClipboardText()
-  if (text) {
-    insertPlainTextAtSelection(text)
   }
 }
 
