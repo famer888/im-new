@@ -611,7 +611,7 @@ onBeforeUnmount(() => {
     cursor: default;
     min-width: 120px;
     min-height: 150px;
-    background: #bababa;
+    background: transparent;
 
     &.is-preview-ready {
       cursor: pointer;
