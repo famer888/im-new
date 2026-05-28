@@ -448,10 +448,11 @@ function formatTime(ts: number): string {
   void locale.value
   const d = dayjs(ts)
   const today = dayjs()
+  // 对齐旧 im 的 chatTime 展示：今天仅时分，昨天带“昨天+时分”，更早日期保留“月/日+时分”。
   if (d.isSame(today, 'day')) return d.format('HH:mm')
-  if (d.isSame(today.subtract(1, 'day'), 'day')) return t('昨天')
-  if (d.isSame(today, 'year')) return d.format('MM/DD')
-  return d.format('YYYY/MM/DD')
+  if (d.isSame(today.subtract(1, 'day'), 'day')) return `${t('昨天')}${d.format('HH:mm')}`
+  if (d.isSame(today, 'year')) return d.format('MM/DD HH:mm')
+  return d.format('YYYY/MM/DD HH:mm')
 }
 
 function getDisplayTime(conv: Conversation): number {
