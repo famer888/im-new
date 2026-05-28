@@ -51,11 +51,17 @@ type ContentSegment =
   | { type: 'text'; text: string }
   | { type: 'emoji'; name: string; src: string }
   | { type: 'at'; text: string; memberId?: string }
-  | { type: 'link'; text: string; href: string }
+  | { type: 'link'; text: string; href: string; showConfirm?: boolean }
 
 interface MentionCandidate {
   label: string
   memberId: string
+}
+
+interface ExtraLinkRange {
+  location: number
+  length: number
+  link: string
 }
 
 type AliasTarget =
@@ -73,7 +79,7 @@ const INVITE_LINK_DOMAIN_CACHE_TTL = 24 * 60 * 60 * 1000
 const LINK_FORBIDDEN_CHARS = '\\s"\'<>\\u4e00-\\u9fa5\\u3000-\\u303F\\uFF00-\\uFFEF\\u2000-\\u206F'
 const LINK_SAFE_END_CHAR = `[^${LINK_FORBIDDEN_CHARS}\\.,;:?!()\\[\\]{}]`
 const LINK_AT_START_REGEX = new RegExp(
-  `^((?:https?://|www\\.)[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR})`,
+  `^((?:(?:https?|rtmps?)://|www\\.)[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR})`,
 )
 const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 const openingMentionKeys = new Set<string>()
@@ -160,6 +166,66 @@ function pushTextSegment(segments: ContentSegment[], text: string) {
   }
 }
 
+function pushLinkSegment(segments: ContentSegment[], link: { text: string; href: string; showConfirm?: boolean }) {
+  const rtmpPrefixMatch = link.text.match(/^(rtmps?:\/\/)/i)
+  if (!rtmpPrefixMatch) {
+    segments.push({ type: 'link', text: link.text, href: link.href, showConfirm: link.showConfirm })
+    return
+  }
+
+  // 对齐产品要求：rtmp:// 前缀仅展示为普通文本，不进入可点击范围。
+  const prefix = rtmpPrefixMatch[1]
+  const rest = link.text.slice(prefix.length)
+  // 用 Word Joiner 禁止“rtmp://”和后续地址之间换行，确保这一段保持同一行展示。
+  pushTextSegment(segments, `${prefix}\u2060`)
+  if (rest) {
+    segments.push({ type: 'link', text: rest, href: link.href, showConfirm: link.showConfirm })
+  }
+}
+
+function parseMessageExtraObject(rawExtra: unknown): Record<string, unknown> | null {
+  if (!rawExtra) return null
+  if (typeof rawExtra === 'string') {
+    try {
+      const parsed = JSON.parse(rawExtra)
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    } catch {
+      return null
+    }
+  }
+  return typeof rawExtra === 'object' ? rawExtra as Record<string, unknown> : null
+}
+
+function getExtraLinkRanges(content: string, rawExtra: unknown): ExtraLinkRange[] {
+  const extra = parseMessageExtraObject(rawExtra)
+  const rawLinks = Array.isArray(extra?.links) ? extra.links : []
+  return rawLinks
+    .map((item) => {
+      const location = Number((item as any)?.location)
+      const length = Number((item as any)?.length)
+      const link = String((item as any)?.link || '').trim()
+      return { location, length, link }
+    })
+    .filter((item) => (
+      Number.isInteger(item.location)
+      && Number.isInteger(item.length)
+      && item.location >= 0
+      && item.length > 0
+      && item.location + item.length <= content.length
+      && !!item.link
+    ))
+    .sort((a, b) => a.location - b.location || b.length - a.length)
+}
+
+function detectExtraLinkAt(content: string, start: number, ranges: ExtraLinkRange[]): { text: string; href: string } | null {
+  const range = ranges.find((item) => item.location === start)
+  if (!range) return null
+  return {
+    text: content.slice(range.location, range.location + range.length),
+    href: range.link,
+  }
+}
+
 function detectLinkAtStart(content: string, start: number): { text: string; href: string } | null {
   const rest = content.slice(start)
   const match = rest.match(LINK_AT_START_REGEX)
@@ -167,6 +233,8 @@ function detectLinkAtStart(content: string, start: number): { text: string; href
 
   const url = match[1]
   if (url.startsWith('http') && url.length <= 7) return null // At least "http://" + one char
+  if (url.startsWith('rtmp://') && url.length <= 8) return null
+  if (url.startsWith('rtmps://') && url.length <= 9) return null
   if (url.startsWith('www.') && url.length <= 5) return null
   return { text: url, href: url }
 }
@@ -612,21 +680,35 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
 }
 
 const contentSegments = computed<ContentSegment[]>(() => {
-  const content = props.message.content ?? ''
+  const rawContent = props.message.content ?? ''
+  // 仅针对推流地址展示：把“推流地址：”和 rtmp:// 之间空白改成不可换行空格，强制同一行显示。
+  const content = rawContent.replace(
+    /(推流地址[：:])[\s\u2028\u2029]+(rtmps?:\/\/)/gi,
+    '$1\u00A0$2',
+  )
+  const extraLinkRanges = getExtraLinkRanges(content, props.message.extra)
   // 常规纯文本消息不进入逐字符解析，减少首屏大量文本消息的渲染开销。
-  if (content && !/[@\[]|https?:\/\/|www\./i.test(content)) {
+  if (content && !extraLinkRanges.length && !/[@\[]|https?:\/\/|rtmps?:\/\/|www\./i.test(content)) {
     return [{ type: 'text', text: content }]
   }
   const segments: ContentSegment[] = []
   let index = 0
 
   while (index < content.length) {
+    // 对齐旧 im：服务端下发的 links(location/length/link) 优先作为可点击链接渲染。
+    const extraLink = detectExtraLinkAt(content, index, extraLinkRanges)
+    if (extraLink) {
+      pushLinkSegment(segments, { text: extraLink.text, href: extraLink.href, showConfirm: true })
+      index += extraLink.text.length
+      continue
+    }
+
     const rest = content.slice(index)
 
     // Links take priority over emoji and mentions
     const linkMatch = detectLinkAtStart(content, index)
     if (linkMatch) {
-      segments.push({ type: 'link', text: linkMatch.text, href: linkMatch.href })
+      pushLinkSegment(segments, { text: linkMatch.text, href: linkMatch.href })
       index += linkMatch.text.length
       continue
     }
@@ -756,6 +838,30 @@ function isLinkResolving(segment: Extract<ContentSegment, { type: 'link' }>): bo
   return resolvingLinkKeys.value.has(linkResolvingKey(segment))
 }
 
+function isStreamLikeLink(rawHref: string): boolean {
+  const href = String(rawHref || '').trim().toLowerCase()
+  return href.startsWith('rtmp://') || href.startsWith('rtmps://')
+}
+
+function isStreamLinkSegment(segment: Extract<ContentSegment, { type: 'link' }>): boolean {
+  return isStreamLikeLink(segment.href)
+}
+
+async function openExternalLink(rawHref: string) {
+  const target = rawHref || ''
+  if (!target) return
+  // 推流协议本身不是浏览器导航协议；对齐产品期望，点击后用 https 落到浏览器打开。
+  const browserTarget = target
+    .replace(/^rtmps?:\/\//i, 'https://')
+  if ((window as any).__TAURI_INTERNALS__) {
+    // 桌面端统一用系统浏览器打开可导航 URL。
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(browserTarget)
+    return
+  }
+  window.open(browserTarget, '_blank')
+}
+
 async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegment, { type: 'link' }>) {
   event.preventDefault()
   event.stopPropagation()
@@ -771,13 +877,23 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   let normalizedHref = ''
   let inviteLinkType = 0
   try {
+    if (segment.showConfirm) {
+      const ok = window.confirm(`${t('打开链接')}\n${segment.href}`)
+      if (!ok) return
+    }
+
+    // 推流地址不参与邀请链路识别，直接打开浏览器，避免点击后网络探测导致卡顿。
+    if (isStreamLikeLink(segment.href)) {
+      await openExternalLink(segment.href)
+      return
+    }
+
     normalizedHref = completionUrl(segment.href)
     inviteLinkType = await getInviteLinkType(normalizedHref)
 
     if (inviteLinkType === INVITE_LINK_TYPE_GROUP) {
       if (await openGroupInviteLink(normalizedHref, true)) return
-      window.open(normalizedHref || segment.href, '_blank')
-      eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+      await openExternalLink(normalizedHref || segment.href)
       return
     }
 
@@ -791,13 +907,12 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
     const url = normalizeUrl(normalizedHref)
     if (url && isGroupInviteLink(url) && await openGroupInviteLink(normalizedHref)) return
 
-    window.open(normalizedHref || segment.href, '_blank')
-    eventBus.emit('show-toast', { message: '已打开链接', type: 'success' })
+    await openExternalLink(normalizedHref || segment.href)
   } catch (error) {
     console.error('[TextMessage] resolve group invite link failed:', error)
     eventBus.emit('show-toast', { message: (error as Error)?.message || t('加入群聊失败'), type: 'error' })
     if (inviteLinkType === INVITE_LINK_TYPE_GROUP && normalizedHref) {
-      window.open(normalizedHref, '_blank')
+      await openExternalLink(normalizedHref)
     }
   } finally {
     window.clearTimeout(slowTimer)
@@ -828,7 +943,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
         />
         <span
           v-else-if="segment.type === 'link'"
-          :class="['text-link', { resolving: isLinkResolving(segment) }]"
+          :class="['text-link', { resolving: isLinkResolving(segment), 'stream-link': isStreamLinkSegment(segment) }]"
           @click.stop="handleLinkClick($event, segment)"
         >
           {{ segment.text }}
@@ -842,7 +957,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
 
 <style lang="scss" scoped>
 .text-message.com-msg-text {
-  max-width: 450px;
+  max-width: 650px;
   min-width: 130px;
   border-radius: 10px;
   border-top-left-radius: 0;
@@ -859,7 +974,8 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   }
 
   > .content-text {
-    padding-right: 75px;
+    padding-right: 12px;
+    padding-bottom: 18px;
     line-height: 22px;
     white-space: pre-wrap;
     letter-spacing: 0.5px;
@@ -868,7 +984,6 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
     .at-mention,
     .text-link {
       color: #3369fe;
-      display: inline-block;
       cursor: pointer;
       font-weight: normal;
       position: relative;
@@ -898,17 +1013,26 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
       }
     }
 
+    .at-mention {
+      display: inline-block;
+    }
+
     .text-link {
+      display: inline;
       text-decoration: none;
 
       &:hover {
         text-decoration: underline;
       }
+
+      &.stream-link {
+        white-space: nowrap;
+      }
     }
   }
 
   &.channel > .content-text {
-    padding-right: 92px;
+    padding-right: 12px;
   }
 }
 
