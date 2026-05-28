@@ -7,6 +7,7 @@ import { setupTauriListeners } from './plugins/tauri-events'
 import { installTauriElectronBridge } from './shims/tauri-electron-bridge'
 import { initDomainPool, initDomainPoolFromApi, initDomainPoolFromOss, startPolling } from '@/utils/domainPool'
 import { ErrorType, sendErrToSentry } from '@/utils/sentry'
+import { logRuntimePlatform } from '@/utils/runtimePlatform'
 import './assets/styles/global.scss'
 
 import en from '@/locales/en.json'
@@ -61,6 +62,7 @@ function setupDevtoolsShortcut() {
 }
 
 async function bootstrap() {
+  void logRuntimePlatform('app-start')
   const initialLocale = await resolveInitialLocale()
   const i18n = createI18n({
     legacy: false,
