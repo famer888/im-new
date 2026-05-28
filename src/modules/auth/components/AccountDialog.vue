@@ -7,7 +7,7 @@
         :size="55"
         rounded
       />
-      <h2 class="dialog-title ellipsis">{{ displayName }}</h2>
+      <h2 class="dialog-title ellipsis" :title="displayName">{{ displayName }}</h2>
     </div>
 
     <p
@@ -26,7 +26,7 @@
         @keydown.enter.prevent="handleNicknameSave"
         @keydown.esc.prevent="handleNicknameCancel"
       />
-      <i v-else class="ellipsis nickname-text">{{ authStore.nickname || '-' }}</i>
+      <i v-else class="ellipsis nickname-text" :title="authStore.nickname || '-'">{{ authStore.nickname || '-' }}</i>
       <button
         v-if="!isNicknameEditing"
         class="edit-btn"
@@ -172,6 +172,7 @@ async function handleNicknameSave() {
     return
   }
 
+  let shouldCloseEditor = true
   if (nextName !== authStore.nickname) {
     nicknameSaving.value = true
     try {
@@ -185,18 +186,26 @@ async function handleNicknameSave() {
       if (commonResult?.errCode === 200) {
         authStore.updateProfile({ nickname: nextName })
       } else {
+        // 昵称更新失败时保留编辑态并展示后端原因，避免用户误以为前端仅支持固定长度。
         nicknameDraft.value = authStore.nickname || ''
+        shouldCloseEditor = false
+        showToast(commonResult?.errMsg || $t('修改失败'), 'error')
         console.warn('[AccountDialog] update nickname failed:', commonResult?.errMsg || commonResult?.errCode)
       }
     } catch (error) {
+      // 网络异常时同样保留编辑态，便于用户直接修改后重试。
       nicknameDraft.value = authStore.nickname || ''
+      shouldCloseEditor = false
+      showToast((error as Error)?.message || $t('操作失败'), 'error')
       console.warn('[AccountDialog] update nickname failed:', error)
     } finally {
       nicknameSaving.value = false
     }
   }
 
-  isNicknameEditing.value = false
+  if (shouldCloseEditor) {
+    isNicknameEditing.value = false
+  }
 }
 
 onMounted(() => {
