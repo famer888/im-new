@@ -76,6 +76,8 @@ const navBarRef = ref<HTMLElement | null>(null)
 const logoutConfirmVisible = ref(false)
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const CHAT_LIST_SKELETON_ROWS = 6
+const AVATAR_DEVTOOLS_TRIGGER_COUNT = 5
+const avatarRightClickCount = ref(0)
 const searchPlaceholder = computed(() => {
   void locale.value
   return addAction.value && uiStore.sidebarTab === 'contacts'
@@ -338,6 +340,21 @@ function handleAvatarClick(event: MouseEvent) {
   uiStore.openAccountDialog()
 }
 
+async function handleAvatarContextMenu() {
+  // 对齐旧 im：头像右键累计 5 次后打开控制台，便于线上问题排查。
+  avatarRightClickCount.value += 1
+  if (avatarRightClickCount.value < AVATAR_DEVTOOLS_TRIGGER_COUNT) return
+  avatarRightClickCount.value = 0
+  if (!(window as any).__TAURI_INTERNALS__) return
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('open_devtools')
+  } catch (error) {
+    console.warn('[devtools] open failed:', error)
+  }
+}
+
 function handleClickOutside(event: MouseEvent) {
   const target = event.target as Node | null
   if (uiStore.accountDialogVisible && avatarWrapRef.value && target && !avatarWrapRef.value.contains(target)) {
@@ -487,7 +504,7 @@ onBeforeUnmount(() => {
     <div ref="navBarRef" class="nav-bar">
       <div ref="avatarWrapRef" class="nav-avatar-wrap">
         <div class="nav-avatar">
-          <picture @click="handleAvatarClick">
+          <picture @click="handleAvatarClick" @contextmenu.prevent="handleAvatarContextMenu">
             <TextAvatar
               class="account-avatar"
               :name="authStore.nickname || authStore.uid || 'User'"

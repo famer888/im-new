@@ -151,6 +151,26 @@ pub async fn toggle_devtools(window: tauri::WebviewWindow) -> Result<(), String>
 }
 
 #[tauri::command]
+pub async fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        // 对齐旧 im：头像右键多次触发时只负责“打开”控制台，避免已打开时被误关闭。
+        if !window.is_devtools_open() {
+            window.open_devtools();
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = window;
+        Err(String::from(
+            "devtools shortcut is only supported on macOS and Windows",
+        ))
+    }
+}
+
+#[tauri::command]
 pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
     app.exit(0);
     Ok(())
