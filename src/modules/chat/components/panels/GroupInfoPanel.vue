@@ -826,7 +826,7 @@ function handleOnlineTime(member: any) {
     background: #fff;
     cursor: pointer;
     font-size: 14px;
-    font-weight: 900;
+    font-weight: normal;
   }
 }
 
@@ -954,7 +954,7 @@ function handleOnlineTime(member: any) {
     .alias-name {
       font-size: 14px;
       color: #178aff;
-      font-weight: 600;
+      font-weight: normal;
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
@@ -1003,7 +1003,7 @@ function handleOnlineTime(member: any) {
       margin: 0;
       font-size: 14px;
       color: #000;
-      font-weight: 600;
+      font-weight: normal;
     }
 
     .arrow {
@@ -1047,7 +1047,7 @@ function handleOnlineTime(member: any) {
     > span {
       font-size: 14px;
       color: #333;
-      font-weight: 600;
+      font-weight: normal;
     }
 
     &.action-btn {
@@ -1055,7 +1055,7 @@ function handleOnlineTime(member: any) {
       justify-content: center;
       cursor: pointer;
       font-size: 14px;
-      font-weight: 600;
+      font-weight: normal;
 
       &.danger {
         color: #f44e5a;
@@ -1076,7 +1076,7 @@ function handleOnlineTime(member: any) {
     padding: 8px 10px;
     font-size: 14px;
     color: #333;
-    font-weight: 500;
+    font-weight: normal;
   }
 }
 
@@ -1100,7 +1100,7 @@ function handleOnlineTime(member: any) {
       .member-title {
         font-size: 14px;
         color: #178aff;
-        font-weight: 600;
+        font-weight: normal;
       }
 
       .icon-arrow {
@@ -1282,7 +1282,7 @@ function handleOnlineTime(member: any) {
   background: #fff;
   cursor: pointer;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: normal;
   flex-shrink: 0;
 
 }
