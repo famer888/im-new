@@ -8,6 +8,7 @@ import { useContactStore } from './useContactStore'
 import { useGroupStore } from './useGroupStore'
 import { useChannelStore } from './useChannelStore'
 import { useMessageStore } from './useMessageStore'
+import { GROUP_NOTIFICATION_TARGET_ID } from './useChatStore'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -69,6 +70,13 @@ function parseConversationRef(conversationId: string): { type: number; targetId:
  */
 function isSearchableTextMessage(msgType: number): boolean {
   return msgType === 0 || msgType === 8
+}
+
+function isSearchMessageConversationAllowed(message: Message): boolean {
+  const { type, targetId } = parseConversationRef(String(message.conversationId || ''))
+  // 对齐旧 im：群通知伪会话仅用于通知模块，不作为普通会话消息搜索结果展示。
+  if (type === 1 && targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  return true
 }
 
 export const useSearchStore = defineStore('search', () => {
@@ -180,6 +188,7 @@ export const useSearchStore = defineStore('search', () => {
       for (const m of list) {
         if (m.isDeleted) continue
         if (!isSearchableTextMessage(Number(m.msgType || 0))) continue
+        if (!isSearchMessageConversationAllowed(m)) continue
         const digest = messageDigestForSearch(m)
         const text = (m.content || '').toLowerCase()
         if (text.includes(q) || digest.toLowerCase().includes(q)) {
@@ -250,7 +259,11 @@ export const useSearchStore = defineStore('search', () => {
       const dbMsgs = Array.isArray(rawMsgs)
         ? rawMsgs
           .map(normalizeSearchMessage)
-          .filter((m) => !m.isDeleted && isSearchableTextMessage(Number(m.msgType || 0)))
+          .filter((m) =>
+            !m.isDeleted
+            && isSearchableTextMessage(Number(m.msgType || 0))
+            && isSearchMessageConversationAllowed(m),
+          )
         : []
       const messages = mergeMessagesByConvAndId(dbMsgs, memoryMsgs).slice(0, 50)
 

@@ -288,6 +288,11 @@ function handleClearSearch() {
   }
 }
 
+function handleClearSearchKeyword() {
+  // 与旧 im 一致：点击“联系人/群/频道”搜索项后退出搜索态，恢复会话列表。
+  searchKeyword.value = ''
+}
+
 /** 与 im 搜索条一致：点击输入区域外缘仍可聚焦输入框，便于开始搜索 */
 function handleSearchBarClick(e: MouseEvent) {
   const el = e.target as HTMLElement
@@ -644,7 +649,11 @@ onBeforeUnmount(() => {
           v-else-if="searchStore.searchSpecifiedChatInfo"
           :search-text="searchKeyword"
         />
-        <SearchResults v-else-if="searchKeyword.trim()" :keyword="searchKeyword" />
+        <SearchResults
+          v-else-if="searchKeyword.trim()"
+          :keyword="searchKeyword"
+          @clear-keyword="handleClearSearchKeyword"
+        />
         <SendHelper v-else-if="uiStore.sidebarTab === 'transfer'" />
         <div v-else-if="showChatListSkeleton" class="conversation-list-skeleton" aria-hidden="true">
           <div v-for="row in chatListSkeletonRows" :key="row" class="conversation-skeleton-item">

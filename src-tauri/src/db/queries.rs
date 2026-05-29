@@ -476,52 +476,85 @@ pub fn search_messages(
     conversation_id: Option<&str>,
     limit: i64,
 ) -> Result<Vec<Message>, DbError> {
-    let sql = if conversation_id.is_some() {
-        // 对齐旧 im `searchTable`：会话内搜索仅匹配文本(0)/公告(8)，避免图片/视频内容 URL 被关键字误命中。
-        "SELECT m.id, m.custom_msg_id, m.conversation_id, m.sender_id, m.msg_type, 
-                m.content, m.send_time, m.status, m.read_status, m.version, m.is_deleted, m.extra
-         FROM messages m
-         JOIN messages_fts fts ON m.rowid = fts.rowid
-         WHERE fts.content MATCH ?1 AND m.conversation_id = ?2 AND m.is_deleted = 0
-           AND m.msg_type IN (0, 8)
-         ORDER BY m.send_time DESC
-         LIMIT ?3"
+    // 对齐旧 im：消息搜索按“包含关键字”匹配（substring），而不是 FTS 的整词匹配。
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{}%", escaped);
+
+    let messages = if let Some(conv) = conversation_id {
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT m.id, m.custom_msg_id, m.conversation_id, m.sender_id, m.msg_type,
+                        m.content, m.send_time, m.status, m.read_status, m.version, m.is_deleted, m.extra
+                 FROM messages m
+                 WHERE m.is_deleted = 0
+                   AND m.conversation_id = ?2
+                   AND m.msg_type IN (0, 8)
+                   AND COALESCE(m.content, '') LIKE ?1 ESCAPE '\\'
+                 ORDER BY m.send_time DESC
+                 LIMIT ?3",
+            )
+            .map_err(|e| DbError::SqliteError(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![pattern, conv, limit], |row| {
+                Ok(Message {
+                    id: row.get(0)?,
+                    custom_msg_id: row.get(1)?,
+                    conversation_id: row.get(2)?,
+                    sender_id: row.get(3)?,
+                    msg_type: row.get(4)?,
+                    content: row.get(5)?,
+                    send_time: row.get(6)?,
+                    status: row.get(7)?,
+                    read_status: row.get(8)?,
+                    version: row.get(9)?,
+                    is_deleted: row.get::<_, i32>(10)? != 0,
+                    extra: row.get(11)?,
+                })
+            })
+            .map_err(|e| DbError::SqliteError(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::SqliteError(e.to_string()))?
     } else {
-        "SELECT m.id, m.custom_msg_id, m.conversation_id, m.sender_id, m.msg_type,
-                m.content, m.send_time, m.status, m.read_status, m.version, m.is_deleted, m.extra
-         FROM messages m
-         JOIN messages_fts fts ON m.rowid = fts.rowid
-         WHERE fts.content MATCH ?1 AND m.is_deleted = 0
-         ORDER BY m.send_time DESC
-         LIMIT ?3"
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT m.id, m.custom_msg_id, m.conversation_id, m.sender_id, m.msg_type,
+                        m.content, m.send_time, m.status, m.read_status, m.version, m.is_deleted, m.extra
+                 FROM messages m
+                 WHERE m.is_deleted = 0
+                   AND m.msg_type IN (0, 8)
+                   AND COALESCE(m.content, '') LIKE ?1 ESCAPE '\\'
+                 ORDER BY m.send_time DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| DbError::SqliteError(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![pattern, limit], |row| {
+                Ok(Message {
+                    id: row.get(0)?,
+                    custom_msg_id: row.get(1)?,
+                    conversation_id: row.get(2)?,
+                    sender_id: row.get(3)?,
+                    msg_type: row.get(4)?,
+                    content: row.get(5)?,
+                    send_time: row.get(6)?,
+                    status: row.get(7)?,
+                    read_status: row.get(8)?,
+                    version: row.get(9)?,
+                    is_deleted: row.get::<_, i32>(10)? != 0,
+                    extra: row.get(11)?,
+                })
+            })
+            .map_err(|e| DbError::SqliteError(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DbError::SqliteError(e.to_string()))?
     };
 
-    let mut stmt = conn
-        .prepare_cached(sql)
-        .map_err(|e| DbError::SqliteError(e.to_string()))?;
-
-    let conv = conversation_id.unwrap_or("");
-    let rows = stmt
-        .query_map(params![query, conv, limit], |row| {
-            Ok(Message {
-                id: row.get(0)?,
-                custom_msg_id: row.get(1)?,
-                conversation_id: row.get(2)?,
-                sender_id: row.get(3)?,
-                msg_type: row.get(4)?,
-                content: row.get(5)?,
-                send_time: row.get(6)?,
-                status: row.get(7)?,
-                read_status: row.get(8)?,
-                version: row.get(9)?,
-                is_deleted: row.get::<_, i32>(10)? != 0,
-                extra: row.get(11)?,
-            })
-        })
-        .map_err(|e| DbError::SqliteError(e.to_string()))?;
-
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| DbError::SqliteError(e.to_string()))
+    Ok(messages)
 }
 
 // ─── Contacts ───

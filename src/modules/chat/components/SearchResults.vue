@@ -15,6 +15,9 @@ import emptyIcon from '@/assets/images/common/empty-icon.png'
 const props = defineProps<{
   keyword: string
 }>()
+const emit = defineEmits<{
+  (e: 'clear-keyword'): void
+}>()
 
 const { t, locale } = useI18n()
 const searchStore = useSearchStore()
@@ -91,6 +94,8 @@ function formatMsgTime(ts: number): string {
 }
 
 function clearSearchUi() {
+  // 点会话结果后同时清空输入关键词，避免出现“关键词仍在但结果已被清空”的假空态。
+  emit('clear-keyword')
   searchStore.clearResults()
   uiStore.searchVisible = false
 }
@@ -140,7 +145,7 @@ function selectMessage(m: Message) {
   uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')
   uiStore.setDetailView('chat')
-  clearSearchUi()
+  // 对齐旧 im：点击“消息”搜索结果后保留当前搜索结果列表，避免左侧瞬间变成“暂无数据”空态。
 }
 </script>
 
