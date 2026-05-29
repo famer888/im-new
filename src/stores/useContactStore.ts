@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getContactsApplyList, getContactsDetail, getContactsList } from '@/api/imBase'
+import { isOfficialAccountTargetId, OFFICIAL_ACCOUNT_NAME } from '@/stores/useChatStore'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 
 const NEW_FRIEND_REQ_TOTAL_SUFFIX = '-newFriendReqTotal'
@@ -237,6 +238,8 @@ export const useContactStore = defineStore('contact', () => {
   }
 
   function getDisplayName(id: string): string {
+    // 对齐旧 im：官方号 9900 不一定在通讯录里，也必须稳定显示固定名称。
+    if (isOfficialAccountTargetId(id)) return OFFICIAL_ACCOUNT_NAME
     const contact = getContact(id)
     return contact?.remark || contact?.nickname || id
   }

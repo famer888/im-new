@@ -1,6 +1,12 @@
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChannelStore } from '@/stores/useChannelStore'
-import { CHANNEL_NOTIFICATION_TARGET_ID, useChatStore } from '@/stores/useChatStore'
+import {
+  CHANNEL_NOTIFICATION_TARGET_ID,
+  OFFICIAL_ACCOUNT_NAME,
+  isOfficialAccountTargetId,
+  useChatStore,
+} from '@/stores/useChatStore'
+import { API_CONFIG } from '@/api/config'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useSettingStore } from '@/stores/useSettingStore'
@@ -12,6 +18,8 @@ import en from '@/locales/en.json'
 import pt from '@/locales/pt.json'
 import tw from '@/locales/tw.json'
 import vi from '@/locales/vi.json'
+import brandLogoIcon from '@/assets/images/logo/logo.png'
+import official55Icon from '@/assets/images/logo/official-55.png'
 
 type LocaleKey = 'ch' | 'en' | 'pt' | 'tw' | 'vi'
 type LocaleMessages = Record<string, string>
@@ -23,6 +31,7 @@ const localeMessages: Record<LocaleKey, LocaleMessages> = {
   tw: tw as LocaleMessages,
   vi: vi as LocaleMessages,
 }
+const officialAccountIcon = API_CONFIG.brandId === '55' ? official55Icon : brandLogoIcon
 const REPEATABLE_GROUP_INVITE_REQ_TYPES = new Set([1, 2, 15])
 const REMINDER_COOLDOWN_MS = 900
 
@@ -131,6 +140,7 @@ function getConversationTitle(conversationId: string, message?: any): string {
   }
 
   if (conversationId.startsWith('0_')) {
+    if (isOfficialAccountTargetId(targetId)) return OFFICIAL_ACCOUNT_NAME
     const contact = contactStore.getContact(targetId)
     const senderName = extraString(extra, ['senderName', 'nickName', 'nickname'])
     return contact?.remark || contact?.nickname || conversation?.senderName || senderName || targetId || t('新消息')
@@ -197,6 +207,10 @@ function getConversationAvatar(conversationId: string, message?: any): string | 
   }
 
   if (conversationId.startsWith('0_')) {
+    if (isOfficialAccountTargetId(targetId)) {
+      // 按当前品牌包展示官方号头像：55 使用老 im 头像，其它品牌使用各自 logo。
+      return officialAccountIcon
+    }
     return contactStore.getContact(targetId)?.avatar || null
   }
   if (conversationId.startsWith('1_')) {

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
+import {
+  useChatStore,
+  isFileHelperTargetId,
+  isOfficialAccountTargetId,
+  OFFICIAL_ACCOUNT_NAME,
+} from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
@@ -11,11 +16,14 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
+import { API_CONFIG } from '@/api/config'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { ConversationType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
+import brandLogoIcon from '@/assets/images/logo/logo.png'
+import official55Icon from '@/assets/images/logo/official-55.png'
 import userIconV from '@/assets/images/userInfo/user-icon-v.png'
 import editIcon from '@/assets/images/message/edit-icon.png'
 import searchIcon from '@/assets/images/headNav/icon-search-black.png'
@@ -34,6 +42,7 @@ const authStore = useAuthStore()
 const messageStore = useMessageStore()
 const searchStore = useSearchStore()
 const { t, locale } = useI18n()
+const officialAccountIcon = API_CONFIG.brandId === '55' ? official55Icon : brandLogoIcon
 
 function headerMemberRefreshDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
   void message
@@ -97,9 +106,22 @@ const isFileHelper = computed(
 const isFriendChat = computed(
   () => conversation.value?.type === ConversationType.Friend && !isFileHelper.value,
 )
+const isOfficialAccountChat = computed(
+  () => {
+    const conv = conversation.value
+    if (!conv || conv.type !== ConversationType.Friend) return false
+    // 兼容不同包/不同账号数据：官方号既可能是固定 9900，也可能由服务端下发为品牌官方昵称。
+    if (isOfficialAccountTargetId(conv.targetId)) return true
+    const displayName = String(
+      contactStore.getDisplayName(conv.targetId) || conv.senderName || '',
+    ).trim()
+    return displayName === OFFICIAL_ACCOUNT_NAME
+  },
+)
 
 const canOpenHeaderMenu = computed(
-  () => conversation.value?.type === ConversationType.Friend
+  () => (conversation.value?.type === ConversationType.Friend
+      && !isOfficialAccountChat.value)
     || conversation.value?.type === ConversationType.Group
     || conversation.value?.type === ConversationType.Channel,
 )
@@ -141,6 +163,7 @@ const title = computed(() => {
   if (isFileHelperTargetId(conversation.value.targetId)) return t('传输助手')
   switch (conversation.value.type) {
     case ConversationType.Friend:
+      if (isOfficialAccountChat.value) return OFFICIAL_ACCOUNT_NAME
       return contactStore.getDisplayName(conversation.value.targetId)
     case ConversationType.Group: {
       const group = groupStore.getGroup(conversation.value.targetId)
@@ -191,6 +214,10 @@ const avatar = computed(() => {
   if (isFileHelperTargetId(conversation.value.targetId)) return fileHelperIcon
   switch (conversation.value.type) {
     case ConversationType.Friend:
+      if (isOfficialAccountChat.value) {
+        // 按当前品牌包展示官方号头像：55 使用老 im 头像，其它品牌使用各自 logo。
+        return officialAccountIcon
+      }
       return contactStore.getContact(conversation.value.targetId)?.avatar || ''
     case ConversationType.Group:
       return groupStore.getGroup(conversation.value.targetId)?.avatar || ''
@@ -229,9 +256,9 @@ watch(friendContact, (contact) => {
 }, { immediate: true })
 
 function startEditRemark() {
-  if (!friendContact.value) return
+  if (!isFriendChat.value) return
   editingRemark.value = true
-  remarkDraft.value = friendContact.value.remark || friendContact.value.nickname || ''
+  remarkDraft.value = friendContact.value?.remark || friendContact.value?.nickname || title.value || ''
   nextTick(() => {
     remarkInputRef.value?.focus()
     remarkInputRef.value?.select()
@@ -243,29 +270,47 @@ function startEditRemark() {
  * `UpdateContacts({ op: 4, param: { contactsId, noteName } })` 一致。
  */
 async function saveRemark() {
+  const conv = conversation.value
+  if (!conv || conv.type !== ConversationType.Friend) return
+  const targetId = String(conv.targetId || '').trim()
+  if (!targetId) return
   const contact = friendContact.value
-  if (!contact) return
   editingRemark.value = false
   const val = remarkDraft.value.trim()
-  const prevRemark = (contact.remark || '').trim()
+  const prevRemark = (contact?.remark || '').trim()
   if (val === prevRemark) return
 
-  const prevStored = contact.remark
+  const prevStored = contact?.remark || null
   try {
     await updateContacts({
       op: proto.ContactsOperator.REMARK,
       param: {
-        contactsId: Number(contact.id),
+        contactsId: Number(targetId),
         /** 空字符串表示删除备注（与 im `noteName: isDeleeteRemarkName ? "" : this.name` 一致） */
         noteName: val === '' ? '' : val,
       },
     })
-    contactStore.patchContact(contact.id, { remark: val || null })
+    if (contact) {
+      contactStore.patchContact(contact.id, { remark: val || null })
+    } else {
+      // 官方号等特殊会话可能尚未进入通讯录列表，这里补一条本地联系人以承接备注展示。
+      await contactStore.upsertContact({
+        id: targetId,
+        remark: val || null,
+        nickname: title.value || OFFICIAL_ACCOUNT_NAME,
+        status: 1,
+        updatedAt: Date.now(),
+      }, { persist: false, source: 'local' })
+    }
     showToast(t('修改成功'), 'success')
   } catch (e) {
     console.error('[ChatHeader] update remark failed', e)
-    contact.remark = prevStored
-    remarkDraft.value = prevStored || contact.nickname || ''
+    if (contact) {
+      contact.remark = prevStored
+      remarkDraft.value = prevStored || contact.nickname || ''
+    } else {
+      remarkDraft.value = title.value || OFFICIAL_ACCOUNT_NAME
+    }
     showToast(t('操作失败'), 'error')
   }
 }
@@ -385,7 +430,7 @@ watch(
         @click="handleSearch"
       />
       <button
-        v-if="!isFileHelper"
+        v-if="!isFileHelper && canOpenHeaderMenu"
         class="more-btn"
         type="button"
         @click="toggleRightPanel"

@@ -4,8 +4,10 @@ import { useI18n } from 'vue-i18n'
 import {
   CHANNEL_NOTIFICATION_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
+  OFFICIAL_ACCOUNT_NAME,
   useChatStore,
   isFileHelperTargetId,
+  isOfficialAccountTargetId,
   type Conversation,
 } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
@@ -14,6 +16,7 @@ import { useChannelStore } from '@/stores/useChannelStore'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { API_CONFIG } from '@/api/config'
 import { ConversationType, isHiddenMessageType } from '@/types'
 import TextAvatar from '@/components/TextAvatar.vue'
 import dayjs from 'dayjs'
@@ -32,6 +35,8 @@ import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
 import channelNotificationIcon from '@/assets/images/logo/channel-notice.webp'
+import brandLogoIcon from '@/assets/images/logo/logo.png'
+import official55Icon from '@/assets/images/logo/official-55.png'
 import channelFeatureIcon from '@/assets/images/channel/feature.png'
 
 const { t, locale } = useI18n()
@@ -43,6 +48,7 @@ const messageStore = useMessageStore()
 const uiStore = useUIStore()
 const authStore = useAuthStore()
 const emojiMap = emojiObj as Record<string, string>
+const officialAccountIcon = API_CONFIG.brandId === '55' ? official55Icon : brandLogoIcon
 const HIDDEN_GROUP_NOTICE_TEXT = '群聊事件'
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/g
 const PURE_UID_RE = /\b\d{5,}\b/g
@@ -118,6 +124,8 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   }
   switch (conv.type) {
     case ConversationType.Friend:
+      // 对齐旧 im：官方号不依赖通讯录存在，也要保留在会话列表。
+      if (isOfficialAccountTargetId(conv.targetId)) return true
       return contactIdSet.value.has(conv.targetId)
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
@@ -322,6 +330,7 @@ function getName(conv: Conversation): string {
   }
   switch (conv.type) {
     case ConversationType.Friend:
+      if (isOfficialAccountTargetId(conv.targetId)) return OFFICIAL_ACCOUNT_NAME
       return contactStore.getDisplayName(conv.targetId)
     case ConversationType.Group:
       return groupByIdMap.value.get(conv.targetId)?.name ?? conv.targetId
@@ -343,6 +352,7 @@ function explicitConversationName(conv: Conversation): string {
   }
   switch (conv.type) {
     case ConversationType.Friend: {
+      if (isOfficialAccountTargetId(conv.targetId)) return OFFICIAL_ACCOUNT_NAME
       const contact = contactStore.getContact(conv.targetId)
       return String(contact?.remark || contact?.nickname || '').trim()
     }
@@ -408,6 +418,10 @@ function getAvatar(conv: Conversation): string | null {
   }
   switch (conv.type) {
     case ConversationType.Friend:
+      if (isOfficialAccountTargetId(conv.targetId)) {
+        // 按当前品牌包展示官方号头像：55 使用老 im 头像，其它品牌使用各自 logo。
+        return officialAccountIcon
+      }
       return contactStore.getContact(conv.targetId)?.avatar ?? null
     case ConversationType.Group:
       return groupByIdMap.value.get(conv.targetId)?.avatar ?? null

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
+import { API_CONFIG } from '@/api/config'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -13,10 +14,17 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
 /** 与旧 im/文档一致：系统占位好友 id，会话 id 为 `0_9901` */
 export const FILE_HELPER_TARGET_ID = '9901'
 const LEGACY_FILE_HELPER_TARGET_ID = '10008'
+/** 与旧 im 一致：官方号固定使用 9900；名称按当前品牌动态显示。 */
+export const OFFICIAL_ACCOUNT_TARGET_ID = '9900'
+export const OFFICIAL_ACCOUNT_NAME = `${API_CONFIG.brandId} Messenger`
 
 export function isFileHelperTargetId(targetId: string | number | null | undefined): boolean {
   const id = String(targetId ?? '')
   return id === FILE_HELPER_TARGET_ID || id === LEGACY_FILE_HELPER_TARGET_ID
+}
+
+export function isOfficialAccountTargetId(targetId: string | number | null | undefined): boolean {
+  return String(targetId ?? '') === OFFICIAL_ACCOUNT_TARGET_ID
 }
 
 /** 群通知伪会话 id（与 im id:"invitation" type:"group" 一致） */

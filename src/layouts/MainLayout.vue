@@ -8,6 +8,7 @@ import {
   CHANNEL_NOTIFICATION_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
+  isOfficialAccountTargetId,
   type Conversation,
 } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
@@ -277,7 +278,11 @@ async function releaseChatListNameGate(refreshPromise: Promise<unknown> | null) 
 
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return true
-  if (conv.type === ConversationType.Friend) return Boolean(contactStore.getContact(conv.targetId))
+  if (conv.type === ConversationType.Friend) {
+    // 对齐旧 im：官方号 9900 不是普通通讯录联系人，也不能被初始化清理掉。
+    if (isOfficialAccountTargetId(conv.targetId)) return true
+    return Boolean(contactStore.getContact(conv.targetId))
+  }
   if (conv.type === ConversationType.Group) return Boolean(groupStore.getGroup(conv.targetId))
   if (conv.type === ConversationType.Channel) return Boolean(channelStore.getChannel(conv.targetId))
   return false

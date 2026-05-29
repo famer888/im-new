@@ -8,6 +8,7 @@ import {
   FILE_HELPER_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
+  isOfficialAccountTargetId,
   type Conversation,
 } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -107,6 +108,8 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   switch (conv.type) {
     case ConversationType.Friend:
       if (conv.targetId === CHANNEL_NOTIFICATION_TARGET_ID) return true
+      // 对齐旧 im：官方号 9900 可独立存在于会话列表，不依赖通讯录。
+      if (isOfficialAccountTargetId(conv.targetId)) return true
       return contactIdSet.value.has(conv.targetId)
     case ConversationType.Group:
       if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
