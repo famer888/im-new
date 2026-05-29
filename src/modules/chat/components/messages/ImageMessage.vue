@@ -187,11 +187,10 @@ const extraData = computed((): Record<string, any> => {
 })
 const isOwnSingleImageUploadPlaceholder = computed(() => {
   const type = Number(props.message.msgType)
-  return props.message.conversationId.startsWith('0_')
-    && (type === 1 || type === 9)
+  // 与旧版发送交互对齐：只要是自己发送中的图片消息（status=0），单聊/群聊/频道都显示同款 loading 蒙层。
+  return (type === 1 || type === 9)
     && String(props.message.senderId || '') === String(authStore.uid || '')
-    && Boolean(extraData.value.uploadPending)
-    && Number(props.message.status) <= 0
+    && Number(props.message.status) === 0
 })
 const isOwnSingleImageUploading = computed(() =>
   isOwnSingleImageUploadPlaceholder.value && Number(props.message.status) === 0,
@@ -252,7 +251,14 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, fileKey, attachmentKey, isOwn
   activeSrc.value = ''
   localFilePath.value = ''
   if (isOwnSingleImageUploadPlaceholder.value) {
+    // 发送中的本地图片也先渲染缩略图，避免仅显示灰色加载蒙层。
     cleanupDownloadEvents()
+    if (localSourcePath.value) {
+      localFilePath.value = localSourcePath.value
+    }
+    activeSrc.value = thumbnailUrl.value
+    materializeDataImageForDrag()
+    markLoadedIfImageAlreadyComplete()
     return
   }
   if (!thumbnailUrl.value && !imageData.value.url && !fileKey.value && !attachmentKey.value) {
@@ -446,8 +452,10 @@ function imageDragLog(
 const shouldUseNativeFileDrag = computed(() => {
   if (!(window as any).__TAURI_INTERNALS__) return false
   const runtimePlatform = String((window as any).__OCS_RUNTIME_PLATFORM__ || '').toLowerCase()
+  // macOS/Windows 桌面端统一走原生文件拖拽，避免 HTML 拖拽被系统当成文本剪贴生成“@ FILE”。
+  if (runtimePlatform === 'macos' || runtimePlatform === 'darwin') return true
   if (runtimePlatform === 'windows') return true
-  return /windows|win32|win64/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`)
+  return /mac|darwin|windows|win32|win64/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`)
 })
 
 async function getImageSavePath(join: (...paths: string[]) => Promise<string>, baseDir: string, msgId: string, fileName: string) {
@@ -865,7 +873,7 @@ onBeforeUnmount(() => {
       @click="handleImageWrapperClick"
     >
       <img
-        v-if="activeSrc && !loadError && !isOwnSingleImageUploadPlaceholder"
+        v-if="activeSrc && !loadError"
         ref="imageElRef"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"

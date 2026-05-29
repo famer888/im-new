@@ -767,13 +767,19 @@ fn run_native_file_drag_macos(
         return Err("native drag event is not available".to_string());
     };
 
-    let filename = NSString::from_str(path.to_string_lossy().as_ref());
-    let drag_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0));
     let view = unsafe {
         (ns_view as *mut NSView)
             .as_ref()
             .ok_or_else(|| "native window view is not available".to_string())?
     };
+    let filename = NSString::from_str(path.to_string_lossy().as_ref());
+    let window_point = event.locationInWindow();
+    let view_point = view.convertPoint_fromView(window_point, None);
+    // 拖拽起点必须跟随当前鼠标位置，避免图标从窗口左下角（0,0）“飞过来”。
+    let drag_rect = NSRect::new(
+        NSPoint::new(view_point.x - 0.5, view_point.y - 0.5),
+        NSSize::new(1.0, 1.0),
+    );
 
     #[allow(deprecated)]
     let accepted = view.dragFile_fromRect_slideBack_event(&filename, drag_rect, false, &event);
