@@ -6,7 +6,43 @@
 import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
 import { API_CONFIG, getOpenChatBaseUrl } from './config'
 import { getOpenChatSignedApiHeaders } from './request'
+import { getRuntimePlatform } from '@/utils/runtimePlatform'
 import { ungzip } from 'pako'
+
+let cachedPackagedMacRuntime: boolean | null = null
+
+async function isTauriPackagedMacRuntime(): Promise<boolean> {
+  if (cachedPackagedMacRuntime !== null) return cachedPackagedMacRuntime
+  if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
+    cachedPackagedMacRuntime = false
+    return cachedPackagedMacRuntime
+  }
+  if (!import.meta.env.PROD) {
+    cachedPackagedMacRuntime = false
+    return cachedPackagedMacRuntime
+  }
+  // 复用项目统一的平台判定，避免各处重复维护 UA 规则导致端差异。
+  const platform = await getRuntimePlatform()
+  cachedPackagedMacRuntime = platform === 'macos'
+  return cachedPackagedMacRuntime
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+function decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(String(base64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes.buffer
+}
 
 function getUint32Bytes(num: number): Uint8Array {
   const buf = new ArrayBuffer(4)
@@ -199,16 +235,44 @@ export interface SearchAliasContentResp {
 async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
   const base = getOpenChatBaseUrl()
   const url = `${base}${path}`
+  const headers = {
+    'Content-Type': 'application/octet-stream',
+    Accept: 'application/json',
+    ...getOpenChatSignedApiHeaders(),
+  }
 
   // 频道接口不是 protobuf，而是“固定头 + AES(JSON)”这一条老协议，不能复用通用 requestProto。
   const packet = encodePacketWithAesJson(data, API_CONFIG.secretKey)
+
+  // 先仅对 mac 打包端启用代理转发，避免影响已稳定的 Windows 打包链路。
+  if (await isTauriPackagedMacRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<{
+      ok: boolean
+      status: number
+      bodyBase64: string
+      error?: string
+    }>('proxy_http_binary', {
+      request: {
+        url,
+        method: 'POST',
+        headers,
+        bodyBase64: encodeBase64(packet),
+      },
+    })
+    if (!result?.ok) {
+      throw new Error(`HTTP ${Number(result?.status || 0)}${result?.error ? `; ${result.error}` : ''}`)
+    }
+    const buf = decodeBase64ToArrayBuffer(result.bodyBase64 || '')
+    if (buf.byteLength < 6) {
+      throw new Error(`channel api response too short: ${buf.byteLength}`)
+    }
+    return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
+  }
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      Accept: 'application/json',
-      ...getOpenChatSignedApiHeaders(),
-    },
+    headers,
     body: packet.buffer as ArrayBuffer,
   })
   if (!res.ok) {

@@ -39,6 +39,29 @@ function shouldWriteDomainSnapshot(): boolean {
   return String(import.meta.env.VITE_DOMAIN_SNAPSHOT_WRITE || '') === '1' || hasRunArg('domains')
 }
 
+function getSessionIdFromStorage(): string {
+  try {
+    const currentUid = String(localStorage.getItem('current-uid') || '').trim()
+    const accountListText = localStorage.getItem('login-account-list')
+    const accountList = accountListText ? JSON.parse(accountListText) : []
+    if (currentUid && Array.isArray(accountList)) {
+      const current = accountList.find((item: any) => String(item?.id || '').trim() === currentUid)
+      const currentSessionId = String(current?.sessionId || '').trim()
+      if (currentSessionId) return currentSessionId
+    }
+
+    const browserSessionText = localStorage.getItem('browser-session')
+    if (browserSessionText) {
+      const browserSession = JSON.parse(browserSessionText)
+      const browserSessionId = String(browserSession?.sessionId || '').trim()
+      if (browserSessionId) return browserSessionId
+    }
+  } catch {
+    // ignore parse/storage errors
+  }
+  return ''
+}
+
 function shouldUsePreloadedSnapshot(): boolean {
   // 对齐老 im：生产包默认回灌 domains.json；即便 VITE_APP_ENV 暂时不是 prod，也以构建态 PROD 兜底。
   return Boolean(import.meta.env.PROD) || isProdEnv() || String(import.meta.env.VITE_DOMAIN_SNAPSHOT_FORCE || '') === '1'
@@ -515,6 +538,8 @@ function sortDomainDtoList(domainDtoList: DynamicDomainDto[]): DynamicDomainDto[
 /** 通过后端 API 获取完整域名列表并写入缓存，不依赖 Tauri */
 export async function initDomainPoolFromApi(): Promise<void> {
   try {
+    // 未登录时 clientToken 接口必然拿不到 accessToken，直接跳过可避免启动阶段误报刷屏。
+    if (!getSessionIdFromStorage()) return
     const { getDynamicDomainSnapshot } = await import('@/api/imDomain')
     const domainDtoList = sortDomainDtoList(await getDynamicDomainSnapshot(''))
     if (!domainDtoList.length) return

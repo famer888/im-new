@@ -94,6 +94,11 @@ function isDesktopLocalDevOrigin(): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0'
 }
 
+function shouldUseViteDevProxy(): boolean {
+  // 仅在 Vite 开发模式下使用相对代理路径，避免打包环境 localhost 误判成 dev 代理。
+  return !!import.meta.env.DEV && isDesktopLocalDevOrigin()
+}
+
 function normalizeDeviceOsName(value: string): string {
   const text = String(value || '').trim().toLowerCase()
   if (text === 'macos' || text === 'darwin' || text.includes('mac')) return 'MAC'
@@ -165,7 +170,7 @@ function normalizeDomainModuleCode(moduleCode: string): string {
 
 function getDomainApiCandidates(): string[] {
   // 对齐老 im 桌面开发体验：本地调试时统一走 Vite 代理，避免 WebView 对真实域名请求触发 CORS 报错。
-  if (isDesktopLocalDevOrigin()) return ['/domain-api']
+  if (shouldUseViteDevProxy()) return ['/domain-api']
   if (!isTauri()) return [getDomainUrl()]
   const normal = getOrderedDomainUrls('domain', { includeError: false })
   const error = getAllDomains('domain')
@@ -185,7 +190,7 @@ function getDomainApiCandidates(): string[] {
 
 function getClientTokenCandidates(preferredBase?: string): string[] {
   // 本地开发态下 clientToken 也固定走 /api 代理，避免轮询备用域名时刷屏 CORS 错误。
-  if (isDesktopLocalDevOrigin()) return [getBaseUrl()]
+  if (shouldUseViteDevProxy()) return [getBaseUrl()]
   if (!isTauri()) return [preferredBase || getBaseUrl()]
 
   const preferred = normalizeHttpBaseUrl(preferredBase || '')
@@ -315,6 +320,10 @@ async function requestDomainApiJson(
   let lastError: unknown = new Error(`domain api ${path} failed`)
 
   for (const domainApiBase of getDomainApiCandidates()) {
+    // 兜底过滤：domain API 只允许 http(s) 基地址，防止异常候选（如 ws/tauri）导致整轮报错。
+    if (!/^https?:\/\//i.test(String(domainApiBase || '').trim())) {
+      continue
+    }
     try {
       const resp = await requestViaTauriOrFetch({
         url: `${domainApiBase}${path}`,
