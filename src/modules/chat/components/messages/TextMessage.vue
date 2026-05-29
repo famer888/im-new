@@ -543,14 +543,37 @@ async function resolveChannelLinkTarget(href: string): Promise<ChannelLinkResp |
   try {
     const res = await isChannelLink({ link })
     if (Number(res?.code ?? 0) === 200 && res?.data) return res
+    // 服务端已返回成功但 data 为空时，才按“链接失效/过期”处理；避免把网络异常误判成失效。
+    if (Number(res?.code ?? 0) === 200) return { ...res, data: null }
+    // 兜底再试一次短链码：部分线路更偏向接收 path token，而不是完整 URL。
+    const token = (() => {
+      try {
+        const parsed = new URL(link)
+        return decodeURIComponent(parsed.pathname.replace(/^\/+|\/+$/g, ''))
+      } catch {
+        return ''
+      }
+    })()
+    if (token && !token.includes('/')) {
+      const tokenRes = await isChannelLink({ link: token })
+      if (Number(tokenRes?.code ?? 0) === 200 && tokenRes?.data) return tokenRes
+      if (Number(tokenRes?.code ?? 0) === 200) return { ...tokenRes, data: null }
+    }
   } catch (error) {
     console.warn('[TextMessage] resolve channel link failed:', error)
+    throw error
   }
   return null
 }
 
 async function openChannelInviteLink(href: string, showInvalidToast: boolean): Promise<boolean> {
-  const channelLink = await resolveChannelLinkTarget(href)
+  let channelLink: ChannelLinkResp | null = null
+  try {
+    channelLink = await resolveChannelLinkTarget(href)
+  } catch {
+    // 兼容旧 im：频道链接解析遇到网络/端侧异常时不提示“已失效”，交给外链兜底打开。
+    return false
+  }
   if (channelLink?.data) {
     if (canOpenChannelDirectly(channelLink.data)) {
       openChannelConversation(channelLink.data)
