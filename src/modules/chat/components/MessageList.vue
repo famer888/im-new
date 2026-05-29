@@ -210,6 +210,7 @@ const latestNewMessageKey = ref('')
 let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
 let isProgrammaticScroll = false
 let resizePinRaf: number | null = null
+let topAutoLoadArmed = true
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)
@@ -338,7 +339,14 @@ function handleScroll() {
     }
   }
 
-  if (scrollTop < 100 && props.hasMore && !props.loading) {
+  if (scrollTop > 140) {
+    // 重新离开顶部后再允许下一次自动分页，避免在阈值附近反复触发导致“长期加载中”。
+    topAutoLoadArmed = true
+  }
+  if (scrollTop < 100 && props.hasMore && !props.loading && topAutoLoadArmed) {
+    // 顶部触发历史分页时，明确关闭吸底，避免分页结束后被 loading watcher 拉回底部。
+    stickToBottom.value = false
+    topAutoLoadArmed = false
     emit('load-more')
   }
 
@@ -351,6 +359,7 @@ watch(
     await nextTick()
     lastMessageId.value = ''
     stickToBottom.value = true
+    topAutoLoadArmed = true
     clearNewMessageTip()
     const list = sortedMessages.value
     lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''

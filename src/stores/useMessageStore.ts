@@ -172,7 +172,7 @@ export interface Message {
 }
 
 const MAX_CACHED_MESSAGES = 500
-const PAGE_SIZE = 50
+const PAGE_SIZE = 80
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const groupIntroMessageTraceCache = new Set<string>()
 const HIDDEN_GROUP_EVENT_TEXT = '群聊事件'
@@ -471,12 +471,27 @@ function singleVideoLog(
   void level
 }
 
-function isSameMessageIdentity(a: Message, b: Message): boolean {
-  if (a.id && b.id && String(a.id) === String(b.id)) return true
-  if (a.customMsgId && b.customMsgId && String(a.customMsgId) === String(b.customMsgId)) return true
-  if (a.customMsgId && b.id && String(a.customMsgId) === String(b.id)) return true
-  if (a.id && b.customMsgId && String(a.id) === String(b.customMsgId)) return true
-  return false
+function collectMessageIdentityKeys(message: Message): string[] {
+  const keys: string[] = []
+  const id = String(message.id || '').trim()
+  const custom = String(message.customMsgId || '').trim()
+  if (id) keys.push(`id:${id}`)
+  if (custom) keys.push(`custom:${custom}`)
+  if (id && custom) keys.push(`pair:${id}:${custom}`)
+  return keys
+}
+
+function mergeUniqueMessagesInOrder(messages: Message[]): Message[] {
+  const seen = new Set<string>()
+  const merged: Message[] = []
+  for (const message of messages) {
+    const keys = collectMessageIdentityKeys(message)
+    const duplicated = keys.some((key) => seen.has(key))
+    if (duplicated) continue
+    merged.push(message)
+    for (const key of keys) seen.add(key)
+  }
+  return merged
 }
 
 function shouldPreserveMessageDuringLoad(message: Message, loadStartedAt: number): boolean {
@@ -488,10 +503,14 @@ function shouldPreserveMessageDuringLoad(message: Message, loadStartedAt: number
 }
 
 function mergeLoadedMessagesWithLocal(conversationId: string, loaded: Message[], existing: Message[], loadStartedAt = 0) {
+  const loadedIdentityKeys = new Set<string>()
+  for (const item of loaded) {
+    for (const key of collectMessageIdentityKeys(item)) loadedIdentityKeys.add(key)
+  }
   const preservedLocalMessages = existing.filter((message) => (
     message.conversationId === conversationId
     && shouldPreserveMessageDuringLoad(message, loadStartedAt)
-    && !loaded.some((item) => isSameMessageIdentity(item, message))
+    && !collectMessageIdentityKeys(message).some((key) => loadedIdentityKeys.has(key))
   ))
   if (preservedLocalMessages.length === 0) {
     return { messages: loaded, preserved: [] as Message[] }
@@ -1140,6 +1159,13 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
     loadingMap.value.set(conversationId, true)
+    // 底层命令偶发卡住时，兜底清理 loading 状态，避免界面长期停在“加载中...”。
+    const loadingWatchdog = setTimeout(() => {
+      if (isLoading(conversationId)) {
+        console.warn('[msg] loadMessages watchdog reset loading', { conversationId })
+        loadingMap.value.set(conversationId, false)
+      }
+    }, 12000)
     try {
       const result = await tauriInvoke<any[]>('get_messages', {
         uid,
@@ -1147,46 +1173,83 @@ export const useMessageStore = defineStore('message', () => {
         limit: PAGE_SIZE,
       })
       const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
-      const normalized = await retryDecryptPendingPrivateMessages(uid, normalizedBase)
-      const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
-      const latestExisting = getMessages(conversationId)
-      const mergedResult = mergeLoadedMessagesWithLocal(
-        conversationId,
-        filteredResult.messages,
-        latestExisting,
-        loadStartedAt,
-      )
-      messageMap.value.set(conversationId, mergedResult.messages)
-      refreshConversationSummary(conversationId, mergedResult.messages, { preserveListOrder: true })
-      const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
-      if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
-        groupImageLog('loadMessages done', {
-          uid,
+      const applyLoadedSnapshot = (snapshot: Message[]) => {
+        const filteredResult = filterMessagesHiddenByLogoutClear(uid, snapshot)
+        const latestExisting = getMessages(conversationId)
+        const mergedResult = mergeLoadedMessagesWithLocal(
           conversationId,
-          force,
-          rawCount: Array.isArray(result) ? result.length : 0,
-          storedCount: mergedResult.messages.length,
-          loadedGroupImages: loadedGroupImages.slice(-5).map(messageLogSummary),
-          preservedLocalGroupImages: mergedResult.preserved.map(messageLogSummary),
-        })
+          filteredResult.messages,
+          latestExisting,
+          loadStartedAt,
+        )
+        messageMap.value.set(conversationId, mergedResult.messages)
+        refreshConversationSummary(conversationId, mergedResult.messages, { preserveListOrder: true })
+        const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
+        if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
+          groupImageLog('loadMessages done', {
+            uid,
+            conversationId,
+            force,
+            rawCount: Array.isArray(result) ? result.length : 0,
+            storedCount: mergedResult.messages.length,
+            loadedGroupImages: loadedGroupImages.slice(-5).map(messageLogSummary),
+            preservedLocalGroupImages: mergedResult.preserved.map(messageLogSummary),
+          })
+        }
+        hasMoreMap.value.set(
+          conversationId,
+          !filteredResult.hitLogoutClearBoundary && snapshot.length >= PAGE_SIZE,
+        )
       }
-      hasMoreMap.value.set(
-        conversationId,
-        !filteredResult.hitLogoutClearBoundary && normalized.length >= PAGE_SIZE,
-      )
+
+      // 先渲染首屏，避免被解密耗时阻塞；解密成功后再静默回填真实文案/附件信息。
+      applyLoadedSnapshot(normalizedBase)
+      const hasDecryptPending = normalizedBase.some((message) => {
+        const extra = parseExtraObject(message.extra)
+        return Boolean(extra?.decryptPending)
+      })
+      if (hasDecryptPending) {
+        void retryDecryptPendingPrivateMessages(uid, normalizedBase)
+          .then((resolved) => {
+            applyLoadedSnapshot(resolved)
+          })
+          .catch((error) => {
+            console.warn('[msg] async decrypt on loadMessages failed', {
+              conversationId,
+              err: String(error),
+            })
+          })
+      }
     } finally {
+      clearTimeout(loadingWatchdog)
       loadingMap.value.set(conversationId, false)
     }
   }
 
-  async function loadOlderMessages(uid: string, conversationId: string) {
+  async function loadOlderMessages(
+    uid: string,
+    conversationId: string,
+    options?: { silent?: boolean },
+  ) {
     if (!isTauri()) return
     if (isLoading(conversationId) || !hasMore(conversationId)) return
+    const silent = options?.silent === true
 
     const existing = getMessages(conversationId)
     const beforeTime = existing.length > 0 ? existing[0].sendTime : undefined
 
-    loadingMap.value.set(conversationId, true)
+    // 后台补齐未读分隔线时使用静默分页，不展示顶部“加载中...”并避免打断当前阅读位置。
+    let loadingWatchdog: ReturnType<typeof setTimeout> | null = null
+    if (!silent) {
+      loadingMap.value.set(conversationId, true)
+      // 与首屏加载同样兜底，避免历史分页请求挂起时 loading 长时间不消失。
+      loadingWatchdog = setTimeout(() => {
+        if (isLoading(conversationId)) {
+          console.warn('[msg] loadOlderMessages watchdog reset loading', { conversationId })
+          loadingMap.value.set(conversationId, false)
+        }
+      }, 12000)
+    }
     try {
       const result = await tauriInvoke<any[]>('get_messages', {
         uid,
@@ -1195,22 +1258,45 @@ export const useMessageStore = defineStore('message', () => {
         limit: PAGE_SIZE,
       })
       const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
-      const normalized = await retryDecryptPendingPrivateMessages(uid, normalizedBase)
-      const filteredResult = filterMessagesHiddenByLogoutClear(uid, normalized)
-      if (filteredResult.messages.length > 0) {
-        const latestExisting = getMessages(conversationId)
-        const merged = [...filteredResult.messages, ...latestExisting]
-        if (merged.length > MAX_CACHED_MESSAGES) {
-          merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
+      const applyOlderSnapshot = (snapshot: Message[]) => {
+        const filteredResult = filterMessagesHiddenByLogoutClear(uid, snapshot)
+        if (filteredResult.messages.length > 0) {
+          const latestExisting = getMessages(conversationId)
+          // 旧消息分页可能触发“原始列表 + 解密回填”两次合并，这里线性去重避免重复气泡和 O(n²) 开销。
+          const merged = mergeUniqueMessagesInOrder([...filteredResult.messages, ...latestExisting])
+          if (merged.length > MAX_CACHED_MESSAGES) {
+            merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
+          }
+          messageMap.value.set(conversationId, merged)
         }
-        messageMap.value.set(conversationId, merged)
+        hasMoreMap.value.set(
+          conversationId,
+          !filteredResult.hitLogoutClearBoundary && snapshot.length >= PAGE_SIZE,
+        )
       }
-      hasMoreMap.value.set(
-        conversationId,
-        !filteredResult.hitLogoutClearBoundary && normalized.length >= PAGE_SIZE,
-      )
+
+      // 分页先回显，保证历史区加载不被解密阻塞；解密回填放后台执行。
+      applyOlderSnapshot(normalizedBase)
+      const hasDecryptPending = normalizedBase.some((message) => {
+        const extra = parseExtraObject(message.extra)
+        return Boolean(extra?.decryptPending)
+      })
+      if (hasDecryptPending) {
+        void retryDecryptPendingPrivateMessages(uid, normalizedBase)
+          .then((resolved) => {
+            applyOlderSnapshot(resolved)
+          })
+          .catch((error) => {
+            console.warn('[msg] async decrypt on loadOlderMessages failed', {
+              conversationId,
+              err: String(error),
+              silent,
+            })
+          })
+      }
     } finally {
-      loadingMap.value.set(conversationId, false)
+      if (loadingWatchdog) clearTimeout(loadingWatchdog)
+      if (!silent) loadingMap.value.set(conversationId, false)
     }
   }
 

@@ -209,13 +209,14 @@ async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
 
     const inspectedUnreadCount = collectUnreadCandidates(convId, uid).length
     const exhaustedHistory = !messageStore.hasMore(convId)
-    if (exhaustedHistory || inspectedUnreadCount >= targetUnreadCount || pageLoads >= 20) {
+    // 未读锚点补齐只做有限页数扫描，避免进入会话时长时间“加载中”。
+    if (exhaustedHistory || inspectedUnreadCount >= targetUnreadCount || pageLoads >= 6) {
       sessionUnreadMessageIds.value = []
       sessionInitialUnread.value = 0
       return
     }
 
-    await messageStore.loadOlderMessages(uid, convId)
+    await messageStore.loadOlderMessages(uid, convId, { silent: true })
     if (conversationId.value !== convId) return
     pageLoads += 1
   }
