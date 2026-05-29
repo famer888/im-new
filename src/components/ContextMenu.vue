@@ -201,7 +201,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 .menu-divider { height: 1px; background: #ebeef5; margin: 4px 0; }
 
 .menu-label {
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .context-menu--im {
@@ -388,7 +388,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 .submenu-name {
   width: 80px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.2;
   color: #000;
   white-space: nowrap;
@@ -413,7 +413,7 @@ onUnmounted(() => document.removeEventListener('click', handleOutside))
 }
 
 .submenu-item--title {
-  font-weight: 600;
+  font-weight: 400;
   color: #000;
   cursor: default;
 }
