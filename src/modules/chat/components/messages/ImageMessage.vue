@@ -23,11 +23,22 @@ const naturalImageHeight = ref(0)
 let downloadToken = 0
 let materializeToken = 0
 let stopDownloadEvents: Array<() => void> = []
+let nativeDragStartPoint: { x: number; y: number } | null = null
+let nativeDragStarted = false
+let suppressNextClick = false
+
+const NATIVE_DRAG_THRESHOLD = 4
 
 type ImageDisplayCacheEntry = {
   src: string
   localFilePath: string
   cachedAt: number
+}
+
+type LocalFilePayload = {
+  mime?: string
+  dataBase64?: string
+  data_base64?: string
 }
 
 const IMAGE_DISPLAY_CACHE_MAX = 240
@@ -610,14 +621,192 @@ function handleImageDragStart(event: DragEvent) {
   }
 }
 
+function cleanupNativeImageDragListeners() {
+  window.removeEventListener('mousemove', handleNativeDragMouseMove, true)
+  window.removeEventListener('mouseup', handleNativeDragMouseUp, true)
+}
+
+function getPreparedNativeDragPath(): string {
+  const filePath = String(localFilePath.value || '').trim()
+  if (!filePath || /^(https?|blob|data):/i.test(filePath)) return ''
+  return filePath
+}
+
+async function buildPluginDragIcon(filePath: string): Promise<string> {
+  if (!(window as any).__TAURI_INTERNALS__) return filePath
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    // 直接读取本地文件生成 data URL，避免 canvas 跨域污染导致 toDataURL 失败。
+    const files = await invoke<LocalFilePayload[]>('read_local_files', {
+      paths: [filePath],
+    })
+    const payload = files?.[0]
+    const dataBase64 = String(payload?.dataBase64 || payload?.data_base64 || '').trim()
+    if (!dataBase64) {
+      imageDragLog('plugin drag icon fallback: local file payload empty', {
+        messageId: props.message.id || props.message.customMsgId || '',
+        localFilePath: filePath,
+        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+      }, 'warn')
+      return filePath
+    }
+    const mime = String(payload?.mime || '').trim().toLowerCase()
+    if (mime && !mime.startsWith('image/')) {
+      imageDragLog('plugin drag icon fallback: local file mime is not image', {
+        messageId: props.message.id || props.message.customMsgId || '',
+        localFilePath: filePath,
+        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+        mime,
+      }, 'warn')
+      return filePath
+    }
+    const mimeType = mime || inferImageMimeType(dragFileName.value || pathFileName(filePath), activeSrc.value)
+    return `data:${mimeType};base64,${dataBase64}`
+  } catch (error) {
+    imageDragLog('plugin drag icon fallback: read local file failed', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: filePath,
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+      error: error instanceof Error ? error.message : String(error || ''),
+    }, 'warn')
+    return filePath
+  }
+}
+
+async function startNativeImageFileDrag(filePath: string) {
+  if (!(window as any).__TAURI_INTERNALS__ || !filePath) return
+
+  try {
+    const [{ getCurrentWindow }, { startDrag }] = await Promise.all([
+      import('@tauri-apps/api/window'),
+      import('@crabnebula/tauri-plugin-drag'),
+    ])
+    const runtimePlatform = String((window as any).__OCS_RUNTIME_PLATFORM__ || '').toLowerCase()
+
+    // Windows 优先走 drag 插件以提供系统级拖拽预览动画；失败时再回退旧原生方案。
+    if (runtimePlatform === 'windows' || /windows|win32|win64/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`)) {
+      try {
+        let pluginDropResult = ''
+        let pluginDropCursor: { x: number; y: number } | null = null
+        const dragIcon = await buildPluginDragIcon(filePath)
+        await startDrag({
+          item: [filePath],
+          icon: dragIcon,
+          mode: 'copy',
+        }, (event) => {
+          pluginDropResult = String(event.result || '')
+          pluginDropCursor = {
+            x: Number(event.cursorPos?.x || 0),
+            y: Number(event.cursorPos?.y || 0),
+          }
+          const normalized = pluginDropResult.toLowerCase()
+          // 记录插件拖拽最终状态，便于判断是被目标拒收还是用户取消。
+          imageDragLog('plugin drag event', {
+            messageId: props.message.id || props.message.customMsgId || '',
+            localFilePath: filePath,
+            iconKind: dragIcon.startsWith('data:image/png;base64,') ? 'base64' : 'path',
+            runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+            result: event.result,
+            cursorPos: event.cursorPos,
+          }, (normalized === 'cancel' || normalized === 'cancelled') ? 'warn' : 'info')
+        })
+        imageDragLog('plugin drag invoked', {
+          messageId: props.message.id || props.message.customMsgId || '',
+          localFilePath: filePath,
+          iconKind: dragIcon.startsWith('data:image/png;base64,') ? 'base64' : 'path',
+          runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+        })
+
+        const normalizedPluginResult = pluginDropResult.toLowerCase()
+        if (normalizedPluginResult === 'cancel' || normalizedPluginResult === 'cancelled') {
+          imageDragLog('plugin drag cancelled, fallback to native drag', {
+            messageId: props.message.id || props.message.customMsgId || '',
+            localFilePath: filePath,
+            runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+            pluginResult: pluginDropResult,
+            cursorPos: pluginDropCursor,
+          }, 'warn')
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('start_native_file_drag', { path: filePath })
+          imageDragLog('native drag invoked after plugin cancel', {
+            messageId: props.message.id || props.message.customMsgId || '',
+            localFilePath: filePath,
+            runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+          })
+        }
+        return
+      } catch (pluginError) {
+        imageDragLog('plugin drag invoke failed, fallback to native drag', {
+          messageId: props.message.id || props.message.customMsgId || '',
+          localFilePath: filePath,
+          runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+          error: pluginError instanceof Error ? pluginError.message : String(pluginError || ''),
+        }, 'warn')
+      }
+    }
+
+    // 非 Windows 或插件不可用时，再聚焦窗口并走现有原生兜底逻辑。
+    await getCurrentWindow().setFocus().catch(() => {})
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('start_native_file_drag', { path: filePath })
+    imageDragLog('native drag invoked (fallback)', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: filePath,
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+    })
+  } catch (error) {
+    imageDragLog('native drag invoke failed', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: filePath,
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+      error: error instanceof Error ? error.message : String(error || ''),
+    }, 'error')
+  } finally {
+    window.setTimeout(() => {
+      suppressNextClick = false
+    }, 300)
+  }
+}
+
+function handleNativeDragMouseMove(event: MouseEvent) {
+  if (!nativeDragStartPoint || nativeDragStarted) return
+
+  const dx = event.clientX - nativeDragStartPoint.x
+  const dy = event.clientY - nativeDragStartPoint.y
+  if (Math.hypot(dx, dy) < NATIVE_DRAG_THRESHOLD) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  nativeDragStarted = true
+  suppressNextClick = true
+  cleanupNativeImageDragListeners()
+  nativeDragStartPoint = null
+
+  const filePath = getPreparedNativeDragPath()
+  if (!filePath) {
+    imageDragLog('native drag skipped: local file path missing', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: String(localFilePath.value || '').trim(),
+      activeSrcHead: String(activeSrc.value || '').slice(0, 120),
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+    }, 'warn')
+    void materializeDataImageForDrag()
+    return
+  }
+  void startNativeImageFileDrag(filePath)
+}
+
+function handleNativeDragMouseUp() {
+  nativeDragStartPoint = null
+  nativeDragStarted = false
+  cleanupNativeImageDragListeners()
+}
+
 function handleNativeDragMouseDown(event: MouseEvent) {
   if (!shouldUseNativeFileDrag.value || !(window as any).__TAURI_INTERNALS__) return
   if (event.button !== 0) return
-  event.preventDefault()
-  event.stopPropagation()
-
-  const filePath = String(localFilePath.value || '').trim()
-  if (!filePath || /^(https?|blob|data):/i.test(filePath)) {
+  const filePath = getPreparedNativeDragPath()
+  if (!filePath) {
     imageDragLog('native drag skipped: local file path missing', {
       messageId: props.message.id || props.message.customMsgId || '',
       localFilePath: filePath,
@@ -628,23 +817,23 @@ function handleNativeDragMouseDown(event: MouseEvent) {
     return
   }
 
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('start_native_file_drag', { path: filePath }))
-    .then(() => {
-      imageDragLog('native drag invoked', {
-        messageId: props.message.id || props.message.customMsgId || '',
-        localFilePath: filePath,
-        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
-      })
-    })
-    .catch((error) => {
-      imageDragLog('native drag invoke failed', {
-        messageId: props.message.id || props.message.customMsgId || '',
-        localFilePath: filePath,
-        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
-        error: error instanceof Error ? error.message : String(error || ''),
-      }, 'error')
-    })
+  event.preventDefault()
+  event.stopPropagation()
+  nativeDragStartPoint = { x: event.clientX, y: event.clientY }
+  nativeDragStarted = false
+  cleanupNativeImageDragListeners()
+  window.addEventListener('mousemove', handleNativeDragMouseMove, true)
+  window.addEventListener('mouseup', handleNativeDragMouseUp, true)
+}
+
+function handleImageWrapperClick(event: MouseEvent) {
+  if (suppressNextClick) {
+    event.preventDefault()
+    event.stopPropagation()
+    suppressNextClick = false
+    return
+  }
+  void openPreview()
 }
 
 function handleImageDragEnd(event: DragEvent) {
@@ -659,6 +848,9 @@ function handleImageDragEnd(event: DragEvent) {
 onBeforeUnmount(() => {
   downloadToken += 1
   materializeToken += 1
+  nativeDragStartPoint = null
+  nativeDragStarted = false
+  cleanupNativeImageDragListeners()
   cleanupDownloadEvents()
 })
 </script>
@@ -670,7 +862,7 @@ onBeforeUnmount(() => {
       :class="{ 'is-preview-ready': canOpenPreview }"
       :style="imageBoxStyle"
       @mousedown.left="handleNativeDragMouseDown"
-      @click="openPreview"
+      @click="handleImageWrapperClick"
     >
       <img
         v-if="activeSrc && !loadError && !isOwnSingleImageUploadPlaceholder"

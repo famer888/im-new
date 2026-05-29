@@ -19,6 +19,7 @@
     "core:window:allow-unmaximize",
     "core:window:allow-unminimize",
     "notification:default",
+    "drag:allow-start-drag",
     "shell:allow-open",
     "dialog:default",
     "dialog:allow-save"
