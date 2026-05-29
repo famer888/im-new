@@ -477,11 +477,13 @@ pub fn search_messages(
     limit: i64,
 ) -> Result<Vec<Message>, DbError> {
     let sql = if conversation_id.is_some() {
+        // 对齐旧 im `searchTable`：会话内搜索仅匹配文本(0)/公告(8)，避免图片/视频内容 URL 被关键字误命中。
         "SELECT m.id, m.custom_msg_id, m.conversation_id, m.sender_id, m.msg_type, 
                 m.content, m.send_time, m.status, m.read_status, m.version, m.is_deleted, m.extra
          FROM messages m
          JOIN messages_fts fts ON m.rowid = fts.rowid
          WHERE fts.content MATCH ?1 AND m.conversation_id = ?2 AND m.is_deleted = 0
+           AND m.msg_type IN (0, 8)
          ORDER BY m.send_time DESC
          LIMIT ?3"
     } else {

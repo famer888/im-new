@@ -64,6 +64,13 @@ function parseConversationRef(conversationId: string): { type: number; targetId:
   }
 }
 
+/**
+ * 与旧 im `searchTable` 一致：会话内搜索只匹配文本/公告消息，避免图片/视频 URL 噪音命中。
+ */
+function isSearchableTextMessage(msgType: number): boolean {
+  return msgType === 0 || msgType === 8
+}
+
 export const useSearchStore = defineStore('search', () => {
   const keyword = ref('')
   const isSearching = ref(false)
@@ -172,6 +179,7 @@ export const useSearchStore = defineStore('search', () => {
     for (const [, list] of messageStore.messageMap) {
       for (const m of list) {
         if (m.isDeleted) continue
+        if (!isSearchableTextMessage(Number(m.msgType || 0))) continue
         const digest = messageDigestForSearch(m)
         const text = (m.content || '').toLowerCase()
         if (text.includes(q) || digest.toLowerCase().includes(q)) {
@@ -240,7 +248,9 @@ export const useSearchStore = defineStore('search', () => {
         (c.name || c.channelName || '').toLowerCase().includes(qLower),
       )
       const dbMsgs = Array.isArray(rawMsgs)
-        ? rawMsgs.map(normalizeSearchMessage).filter((m) => !m.isDeleted)
+        ? rawMsgs
+          .map(normalizeSearchMessage)
+          .filter((m) => !m.isDeleted && isSearchableTextMessage(Number(m.msgType || 0)))
         : []
       const messages = mergeMessagesByConvAndId(dbMsgs, memoryMsgs).slice(0, 50)
 
@@ -276,6 +286,7 @@ export const useSearchStore = defineStore('search', () => {
       .getMessages(conversationId)
       .filter((m) => {
         if (m.isDeleted) return false
+        if (!isSearchableTextMessage(Number(m.msgType || 0))) return false
         const text = (m.content || '').toLowerCase()
         const digest = messageDigestForSearch(m).toLowerCase()
         return text.includes(qLower) || digest.includes(qLower)
@@ -294,7 +305,9 @@ export const useSearchStore = defineStore('search', () => {
         conversationId,
       })
       const db = Array.isArray(raw)
-        ? raw.map(normalizeSearchMessage).filter((m) => !m.isDeleted)
+        ? raw
+          .map(normalizeSearchMessage)
+          .filter((m) => !m.isDeleted && isSearchableTextMessage(Number(m.msgType || 0)))
         : []
       chatSearchResults.value = mergeMessagesByConvAndId(db, local).slice(0, 100)
     } catch (e) {
