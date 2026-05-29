@@ -274,6 +274,18 @@ function currentMediaWindow() {
   return getCurrentWindow()
 }
 
+async function lowerMediaWindowBeforeDefaultOpen() {
+  if (!(window as any).__TAURI_INTERNALS__ || !isWindowsPlatform()) return
+  const currentWindow = currentMediaWindow()
+  if (!currentWindow) return
+  try {
+    // 媒体窗默认是置顶窗；Windows 下不先取消置顶，外部默认应用可能被压在下层看起来“没打开”。
+    await currentWindow.setAlwaysOnTop(false)
+  } catch (error) {
+    console.warn('[media-viewer] disable always-on-top before default open failed:', error)
+  }
+}
+
 function mediaSourceSummary(src: string): Record<string, unknown> {
   const raw = String(src || '').trim()
   return {
@@ -1105,6 +1117,7 @@ async function openWithDefaultApp() {
   const filePath = String(payload.value?.filePath || '').trim()
   const src = String(payload.value?.src || '').trim()
   let target = filePath || toFsPath(src)
+  await lowerMediaWindowBeforeDefaultOpen()
   if (isVideo.value) {
     if (target && isLocalLikePath(target)) {
       await invoke('open_file', { path: toFsPath(target) })

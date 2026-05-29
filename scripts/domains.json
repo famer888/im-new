@@ -516,7 +516,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://test-68official-v2123.ae86tea.com",
+      "domainUrl": "https://test-68official-v2123.ae86tea.com",
       "id": 1672,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -525,7 +525,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://test-68official-v2456.ae86tea.com",
+      "domainUrl": "https://test-68official-v2456.ae86tea.com",
       "id": 1673,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -534,7 +534,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://www.baidu.com",
+      "domainUrl": "https://www.baidu.com",
       "id": 1696,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -543,7 +543,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://www.baidu222.com",
+      "domainUrl": "https://www.baidu.com",
       "id": 1704,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -579,7 +579,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://test-68official-v2.ae86tea.com",
+      "domainUrl": "https://test-68official-v2.ae86tea.com",
       "id": 1600,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,

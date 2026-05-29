@@ -649,10 +649,16 @@ pub fn start_native_file_drag(window: tauri::WebviewWindow, path: String) -> Res
         return start_native_file_drag_macos(window, file_path);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
         let _ = window;
-        Err("native file drag is only supported on macOS".to_string())
+        return start_native_file_drag_windows(&file_path);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = window;
+        Err("native file drag is only supported on macOS and Windows".to_string())
     }
 }
 
@@ -800,6 +806,47 @@ $files = New-Object System.Collections.Specialized.StringCollection
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn start_native_file_drag_windows(path: &std::path::Path) -> Result<(), String> {
+    let path_text = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$files = New-Object System.Collections.Specialized.StringCollection
+[void]$files.Add('{path}')
+$data = New-Object System.Windows.Forms.DataObject
+$data.SetFileDropList($files)
+$form = New-Object System.Windows.Forms.Form
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$form.ShowInTaskbar = $false
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$form.Location = New-Object System.Drawing.Point(-32000, -32000)
+$form.Size = New-Object System.Drawing.Size(1, 1)
+$form.Opacity = 0.01
+$form.TopMost = $true
+$form.Add_Shown({{
+  try {{
+    [void]$form.DoDragDrop($data, [System.Windows.Forms.DragDropEffects]::Copy)
+  }} finally {{
+    $form.Close()
+  }}
+}})
+[System.Windows.Forms.Application]::Run($form)
+"#,
+        path = path_text
+    );
+
+    // Windows 从桌面应用拖出文件时，需走 OLE DoDragDrop 才能被资源管理器接收；
+    // 这里改为后台启动并立即返回，避免前端 invoke 等待拖拽结束导致窗口假死。
+    let mut command = hidden_windows_command("powershell.exe");
+    command.args(["-NoProfile", "-Sta", "-Command", &script]);
+    command
+        .spawn()
+        .map_err(|e| format!("spawn native drag command failed: {}", e))?;
+    Ok(())
 }
 
 fn read_files_from_paths(

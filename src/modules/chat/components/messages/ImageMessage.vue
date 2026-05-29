@@ -387,6 +387,58 @@ function pathFileName(path: string): string {
   return safeFileName(raw.split(/[\\/]/).pop() || '')
 }
 
+function toFileDragUrl(path: string): string {
+  const raw = String(path || '').trim()
+  if (!raw) return ''
+  const normalized = raw.replace(/\\/g, '/')
+  if (/^[A-Za-z]:\//.test(normalized)) return encodeURI(`file:///${normalized}`)
+  if (normalized.startsWith('/')) return encodeURI(`file://${normalized}`)
+  return ''
+}
+
+function inferImageMimeType(fileName: string, src: string): string {
+  const dataUrlMatch = String(src || '').match(/^data:(image\/[a-z0-9.+-]+);/i)
+  if (dataUrlMatch?.[1]) return dataUrlMatch[1]
+
+  const lowerName = String(fileName || '').toLowerCase()
+  if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'image/jpeg'
+  if (lowerName.endsWith('.gif')) return 'image/gif'
+  if (lowerName.endsWith('.webp')) return 'image/webp'
+  if (lowerName.endsWith('.bmp')) return 'image/bmp'
+  if (lowerName.endsWith('.avif')) return 'image/avif'
+  if (lowerName.endsWith('.svg')) return 'image/svg+xml'
+  return 'image/png'
+}
+
+function imageDragLog(
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  const payload = data || {}
+  if (level === 'error') console.error(`[image-drag] ${message}`, payload)
+  else if (level === 'warn') console.warn(`[image-drag] ${message}`, payload)
+  else console.info(`[image-drag] ${message}`, payload)
+
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[image-drag] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
+const shouldUseNativeFileDrag = computed(() => {
+  if (!(window as any).__TAURI_INTERNALS__) return false
+  const runtimePlatform = String((window as any).__OCS_RUNTIME_PLATFORM__ || '').toLowerCase()
+  if (runtimePlatform === 'windows') return true
+  return /windows|win32|win64/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`)
+})
+
 async function getImageSavePath(join: (...paths: string[]) => Promise<string>, baseDir: string, msgId: string, fileName: string) {
   const uid = safeName(String(authStore.uid || '0'))
   if (groupId.value) {
@@ -511,10 +563,97 @@ async function materializeDataImageForDrag() {
 }
 
 function handleImageDragStart(event: DragEvent) {
-  if (!localFilePath.value) return
+  if (shouldUseNativeFileDrag.value) {
+    // Windows 由原生拖拽命令接管，避免 WebView2 的 HTML 拖拽被桌面拒收（🚫）。
+    imageDragLog('html dragstart blocked: native drag mode enabled', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: localFilePath.value,
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+    })
+    event.preventDefault()
+    return
+  }
+  if (!localFilePath.value) {
+    // 先记录拖拽失败原因：没有本地文件路径时，Windows 桌面一定无法接收文件拖拽。
+    imageDragLog('dragstart skipped: local file path missing', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      activeSrcHead: String(activeSrc.value || '').slice(0, 120),
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+    }, 'warn')
+    return
+  }
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'copy'
+    const fileUrl = toFileDragUrl(localFilePath.value)
+    if (!fileUrl) {
+      imageDragLog('dragstart skipped: failed to build file url', {
+        localFilePath: localFilePath.value,
+        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+      }, 'warn')
+      return
+    }
+    const fileName = dragFileName.value || 'image.png'
+    const mimeType = inferImageMimeType(fileName, activeSrc.value)
+    // Windows WebView 需要 DownloadURL 才能把聊天图片真正拖出到桌面文件系统。
+    event.dataTransfer.setData('DownloadURL', `${mimeType}:${fileName}:${fileUrl}`)
+    event.dataTransfer.setData('text/uri-list', fileUrl)
+    event.dataTransfer.setData('text/plain', fileUrl)
+    imageDragLog('dragstart data prepared', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: localFilePath.value,
+      fileUrl,
+      fileName,
+      mimeType,
+      dragTypes: Array.from(event.dataTransfer.types || []),
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+    })
   }
+}
+
+function handleNativeDragMouseDown(event: MouseEvent) {
+  if (!shouldUseNativeFileDrag.value || !(window as any).__TAURI_INTERNALS__) return
+  if (event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+
+  const filePath = String(localFilePath.value || '').trim()
+  if (!filePath || /^(https?|blob|data):/i.test(filePath)) {
+    imageDragLog('native drag skipped: local file path missing', {
+      messageId: props.message.id || props.message.customMsgId || '',
+      localFilePath: filePath,
+      activeSrcHead: String(activeSrc.value || '').slice(0, 120),
+      runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+    }, 'warn')
+    void materializeDataImageForDrag()
+    return
+  }
+
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('start_native_file_drag', { path: filePath }))
+    .then(() => {
+      imageDragLog('native drag invoked', {
+        messageId: props.message.id || props.message.customMsgId || '',
+        localFilePath: filePath,
+        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+      })
+    })
+    .catch((error) => {
+      imageDragLog('native drag invoke failed', {
+        messageId: props.message.id || props.message.customMsgId || '',
+        localFilePath: filePath,
+        runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+        error: error instanceof Error ? error.message : String(error || ''),
+      }, 'error')
+    })
+}
+
+function handleImageDragEnd(event: DragEvent) {
+  imageDragLog('dragend', {
+    messageId: props.message.id || props.message.customMsgId || '',
+    localFilePath: localFilePath.value,
+    dropEffect: event.dataTransfer?.dropEffect || '',
+    runtimePlatform: (window as any).__OCS_RUNTIME_PLATFORM__ || 'unknown',
+  })
 }
 
 onBeforeUnmount(() => {
@@ -530,6 +669,7 @@ onBeforeUnmount(() => {
       class="image-wrapper"
       :class="{ 'is-preview-ready': canOpenPreview }"
       :style="imageBoxStyle"
+      @mousedown.left="handleNativeDragMouseDown"
       @click="openPreview"
     >
       <img
@@ -537,11 +677,12 @@ onBeforeUnmount(() => {
         ref="imageElRef"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"
-        draggable="true"
+        :draggable="!shouldUseNativeFileDrag"
         :alt="dragFileName"
         :title="dragFileName"
         :class="{ loaded: isLoaded }"
         @dragstart="handleImageDragStart"
+        @dragend="handleImageDragEnd"
         @load="handleLoad"
         @error="handleError"
       />

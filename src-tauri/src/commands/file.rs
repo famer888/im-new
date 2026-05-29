@@ -2872,11 +2872,22 @@ pub async fn open_file(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        hidden_windows_command("explorer.exe")
+        // Windows 优先走 `start` 交给 Shell 执行默认打开动作，通常比直接 explorer 更容易把目标应用切到前台。
+        match hidden_windows_command("cmd")
+            .args(["/C", "start", ""])
             .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("open file failed: {}", e))?;
-        return Ok(());
+            .status()
+        {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(_) | Err(_) => {
+                // 兜底保留旧逻辑，避免极端路径或系统策略下 `start` 失败后无法打开文件。
+                hidden_windows_command("explorer.exe")
+                    .arg(&file_path)
+                    .spawn()
+                    .map_err(|e| format!("open file failed: {}", e))?;
+                return Ok(());
+            }
+        }
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
