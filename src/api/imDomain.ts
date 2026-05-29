@@ -168,6 +168,22 @@ function normalizeDomainModuleCode(moduleCode: string): string {
   return normalized
 }
 
+function appendUatAlternateProtocol(base: string, list: string[]): void {
+  if (API_CONFIG.env !== 'uat') return
+  try {
+    const parsed = new URL(base)
+    const altProtocol = parsed.protocol === 'https:' ? 'http:' : parsed.protocol === 'http:' ? 'https:' : ''
+    if (!altProtocol) return
+    const altBase = `${altProtocol}//${parsed.host}`
+    // 仅在 UAT 追加同 host 的另一协议兜底，保持首选协议优先，异常时再回退。
+    if (altBase && !isObjectStorageBaseUrl(altBase)) {
+      list.push(altBase)
+    }
+  } catch {
+    // ignore invalid URL and keep original candidates
+  }
+}
+
 function getDomainApiCandidates(): string[] {
   // 对齐老 im 桌面开发体验：本地调试时统一走 Vite 代理，避免 WebView 对真实域名请求触发 CORS 报错。
   if (shouldUseViteDevProxy()) return ['/domain-api']
@@ -176,16 +192,22 @@ function getDomainApiCandidates(): string[] {
   const error = getAllDomains('domain')
     .filter(item => item.status === 'error')
     .map(item => item.domain)
-  return [
-    ...new Set([
-      ...normal,
-      API_CONFIG.rawDomainUrl,
-      ...error,
-    ]
-      .map(normalizeHttpBaseUrl)
-      // OSS 只用于读取引导文件，不能当 domain API 去拼 /api/v4/listDomain。
-      .filter(base => base && !isObjectStorageBaseUrl(base))),
+  const rawCandidates = [
+    ...normal,
+    API_CONFIG.rawDomainUrl,
+    ...error,
   ]
+    .map(normalizeHttpBaseUrl)
+    // OSS 只用于读取引导文件，不能当 domain API 去拼 /api/v4/listDomain。
+    .filter(base => base && !isObjectStorageBaseUrl(base))
+
+  const candidatesWithProtocolFallback: string[] = []
+  rawCandidates.forEach((base) => {
+    candidatesWithProtocolFallback.push(base)
+    appendUatAlternateProtocol(base, candidatesWithProtocolFallback)
+  })
+
+  return [...new Set(candidatesWithProtocolFallback)]
 }
 
 function getClientTokenCandidates(preferredBase?: string): string[] {

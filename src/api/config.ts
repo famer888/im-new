@@ -10,6 +10,12 @@ function isDesktopLocalDevOrigin(): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0'
 }
 
+function isWindowsRuntime(): boolean {
+  if (typeof window === 'undefined') return false
+  const ua = String(window.navigator?.userAgent || '').toLowerCase()
+  return ua.includes('windows')
+}
+
 function shouldUseViteDevProxy(): boolean {
   // 只在 Vite 开发模式启用相对代理路径，避免打包环境误走 `/api` 导致主进程 URL 解析失败。
   return !!import.meta.env.DEV && isDesktopLocalDevOrigin()
@@ -163,6 +169,11 @@ function resolveActiveWebBizBaseUrl(options?: { preferPool?: boolean }): string 
 
   // 对齐本地开发体验：test 打包包优先固定到 VITE_APP_BASE_API，避免被域名池切到异常测试域名导致行为不一致。
   if (isTauri() && API_CONFIG.env === 'test' && !options?.preferPool) {
+    return rawBase
+  }
+
+  // UAT Windows 打包端先固定主域名，避免命中异常动态 webBiz 域名导致 /sys/getKeyPair 487 连锁失败。
+  if (isTauri() && API_CONFIG.env === 'uat' && isWindowsRuntime() && !options?.preferPool) {
     return rawBase
   }
 

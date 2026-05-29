@@ -583,7 +583,27 @@ export async function markDomainError(moduleCode: string, domain: string) {
   const normalizedModuleCode = normalizeModuleCode(moduleCode)
   const list = domainCache.get(normalizedModuleCode)
   if (!list) return
-  const item = list.find(entry => entry.domain === domain)
+  let normalizedFailedBase = ''
+  try {
+    const parsed = new URL(String(domain || '').trim())
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      normalizedFailedBase = `${parsed.protocol}//${parsed.host}`
+    }
+  } catch {
+    normalizedFailedBase = ''
+  }
+  // 失败域名可能存在尾斜杠等格式差异，这里按标准化基地址匹配，避免 487 域名漏标记。
+  const item = list.find((entry) => {
+    if (entry.domain === domain) return true
+    if (!normalizedFailedBase) return false
+    try {
+      const parsed = new URL(String(entry.domain || '').trim())
+      const normalizedEntryBase = `${parsed.protocol}//${parsed.host}`
+      return normalizedEntryBase === normalizedFailedBase
+    } catch {
+      return false
+    }
+  })
   if (!item) return
   item.status = 'error'
   item.lastCheck = Date.now()
