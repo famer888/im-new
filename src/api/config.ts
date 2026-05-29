@@ -154,12 +154,18 @@ function resolveActiveWebBizBaseUrl(options?: { preferPool?: boolean }): string 
   const current = normalizeHttpBaseUrl(dynamicBaseUrl)
   const stored = getStoredBaseUrl()
   const poolBase = getFirstNormalWebBizBaseUrl()
+  const rawBase = normalizeHttpBaseUrl(RAW_BASE_URL) || RAW_BASE_URL
+
+  // 对齐本地开发体验：test 打包包优先固定到 VITE_APP_BASE_API，避免被域名池切到异常测试域名导致行为不一致。
+  if (isTauri() && API_CONFIG.env === 'test' && !options?.preferPool) {
+    return rawBase
+  }
 
   if (options?.preferPool && poolBase) return poolBase
   if (isUsableWebBizBaseUrl(current)) return current
   if (isUsableWebBizBaseUrl(stored)) return stored
   if (poolBase) return poolBase
-  return normalizeHttpBaseUrl(RAW_BASE_URL) || RAW_BASE_URL
+  return rawBase
 }
 
 export function syncBaseUrlWithDomainPool(options?: { preferPool?: boolean }): string {
