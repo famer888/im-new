@@ -413,7 +413,7 @@ watch(
   background: #fff;
   flex-shrink: 0;
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 400;
   position: relative;
   overflow: hidden;
 }
@@ -526,14 +526,14 @@ watch(
 
 .file-helper-title {
   font-size: inherit;
-  font-weight: 700;
+  font-weight: 400;
   color: #333;
   line-height: 1;
 }
 
 .title {
   font-size: inherit;
-  font-weight: 700;
+  font-weight: 400;
   color: #333;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -553,7 +553,7 @@ watch(
   min-width: 120px;
   max-width: 360px;
   font-size: inherit;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 1;
   color: #333;
   border: 1px solid #dcdfe6;
@@ -565,7 +565,7 @@ watch(
 /* im .comTop 传输助手：16px / Bold */
 .title-file-helper {
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 400;
   color: #333;
 }
 

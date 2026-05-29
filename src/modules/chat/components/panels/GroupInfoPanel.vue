@@ -944,6 +944,7 @@ function handleOnlineTime(member: any) {
     font-size: 14px;
     color: #000;
     margin: 0;
+    font-weight: 400;
     flex-shrink: 0;
   }
 
