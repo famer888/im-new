@@ -1592,6 +1592,7 @@ onBeforeUnmount(() => {
 
 .conv-digest {
   color: #999;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1601,6 +1602,7 @@ onBeforeUnmount(() => {
 
 .digest-text {
   color: #999;
+  font-size: 12px;
 }
 
 .conv-digest-emoji {
