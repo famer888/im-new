@@ -516,7 +516,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://www.google.com",
+      "domainUrl": "http://test-68official-v2123.ae86tea.com",
       "id": 1672,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -525,7 +525,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://www.baidu.com",
+      "domainUrl": "http://test-68official-v2456.ae86tea.com",
       "id": 1673,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -534,7 +534,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://www.baidu111.com",
+      "domainUrl": "http://www.baidu.com",
       "id": 1696,
       "moduleCode": "officialWebsite_4",
       "moduleId": 58,
@@ -588,7 +588,25 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://test-68official-v2.ae86tea.com",
+      "domainUrl": "http://test-68official-v2aa.ae86tea.com",
+      "id": 1730,
+      "moduleCode": "officialWebsite_3",
+      "moduleId": 61,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "http://test-68official-v2a1.ae86tea.com",
+      "id": 1731,
+      "moduleCode": "officialWebsite_3",
+      "moduleId": 61,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://97chat.app/zh/index",
       "id": 1584,
       "moduleCode": "officialWebsite_3",
       "moduleId": 61,
@@ -624,7 +642,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "http://test-domain-navigation785fd.ae86tea.com",
+      "domainUrl": "http://test-domain-navigation3534.ae86tea.com",
       "id": 1674,
       "moduleCode": "WebsiteNavigationH5",
       "moduleId": 69,

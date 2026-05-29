@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::State;
+use base64::{engine::general_purpose, Engine as _};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +50,24 @@ pub struct ProxyHttpResponse {
     pub ok: bool,
     pub status: u16,
     pub body: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyHttpBinaryRequest {
+    pub url: String,
+    pub method: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+    pub body_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyHttpBinaryResponse {
+    pub ok: bool,
+    pub status: u16,
+    pub body_base64: String,
     pub error: Option<String>,
 }
 
@@ -245,6 +264,74 @@ pub async fn proxy_http_text(request: ProxyHttpRequest) -> Result<ProxyHttpRespo
             None
         } else {
             Some(format!("proxy request failed: HTTP {}", status))
+        },
+    })
+}
+
+/// 桌面端二进制协议请求代理：把渲染层 protobuf+AES POST 交给主进程 reqwest 发送，绕开 WebView CORS 限制。
+#[tauri::command]
+pub async fn proxy_http_binary(
+    request: ProxyHttpBinaryRequest,
+) -> Result<ProxyHttpBinaryResponse, String> {
+    let parsed = parse_http_url(&request.url)?;
+    let method = normalize_http_method(request.method.as_deref());
+    if method != "POST" {
+        return Err(format!("method {} is not allowed for binary proxy", method));
+    }
+
+    let body = general_purpose::STANDARD
+        .decode(request.body_base64.trim())
+        .map_err(|e| format!("decode binary request body failed: {}", e))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|e| format!("create http client failed: {}", e))?;
+
+    let mut req = client.post(parsed);
+    if let Some(headers) = request.headers {
+        for (key, value) in headers {
+            let header_key = key.trim();
+            if header_key.is_empty() {
+                continue;
+            }
+            req = req.header(header_key, value);
+        }
+    }
+    req = req.body(body);
+
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("proxy binary request failed: {}", e))?;
+    let status = response.status().as_u16();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("read binary response failed: {}", e))?;
+    let ok = (200..300).contains(&status);
+    if !ok {
+        let body_preview = String::from_utf8_lossy(bytes.as_ref())
+            .chars()
+            .take(300)
+            .collect::<String>();
+        tracing::warn!(
+            target: "proxy-http-binary",
+            "proxy_http_binary failed status={} url={} body_head={}",
+            status,
+            request.url,
+            body_preview
+        );
+    }
+
+    Ok(ProxyHttpBinaryResponse {
+        ok,
+        status,
+        body_base64: general_purpose::STANDARD.encode(bytes.as_ref()),
+        error: if ok {
+            None
+        } else {
+            Some(format!("proxy request failed: HTTP {} url={}", status, request.url))
         },
     })
 }
