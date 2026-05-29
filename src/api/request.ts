@@ -131,6 +131,56 @@ function normalizeHttpBaseUrl(value: string): string {
   return `${parsed.protocol}//${parsed.host}`
 }
 
+function isDesktopLocalDevOrigin(): boolean {
+  if (typeof window === 'undefined') return false
+  const host = String(window.location.hostname || '').toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0'
+}
+
+function isTauriPackagedRuntime(): boolean {
+  if (typeof window === 'undefined') return false
+  return !!(window as any).__TAURI_INTERNALS__ && !isDesktopLocalDevOrigin()
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+function decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(String(base64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes.buffer
+}
+
+function normalizeHeadersToRecord(headers?: HeadersInit): Record<string, string> {
+  if (!headers) return {}
+  if (headers instanceof Headers) {
+    const result: Record<string, string> = {}
+    headers.forEach((value, key) => { result[key] = value })
+    return result
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers.map(([key, value]) => [String(key), String(value)]))
+  }
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [String(key), String(value)]),
+  )
+}
+
+function toUint8ArrayFromRequestBody(body: BodyInit | null | undefined): Uint8Array {
+  if (!body) return new Uint8Array()
+  if (body instanceof ArrayBuffer) return new Uint8Array(body)
+  if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+  throw new Error('unsupported binary request body type')
+}
+
 function shouldFallbackForHttpStatus(status: number): boolean {
   // 对齐老 im：桌面端业务请求只要不是 200，就允许切下一个 webBiz 域名重试一次。
   return status !== 200
@@ -199,7 +249,7 @@ async function retryWithNextWebBizBase(
   options: { failedBase: string; isLoginRequest: boolean; onResolvedBaseUrl?: (baseUrl: string) => void },
   errorForReport: unknown,
   httpStatus = 0,
-): Promise<Response | null> {
+): Promise<ProtoHttpResponse | null> {
   const nextBase = await resolveNextWebBizBaseUrl(options.failedBase, {
     isLoginRequest: options.isLoginRequest,
   })
@@ -207,7 +257,7 @@ async function retryWithNextWebBizBase(
 
   const retryUrl = replaceRequestBaseUrl(url, nextBase)
   try {
-    const retryResponse = await fetch(retryUrl, init)
+    const retryResponse = await sendProtoHttpRequest(retryUrl, init)
     if (shouldFallbackForHttpStatus(retryResponse.status)) {
       void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
       return retryResponse
@@ -292,18 +342,62 @@ async function reportWebBizDomainFailure(
   }
 }
 
+type ProtoHttpResponse = {
+  ok: boolean
+  status: number
+  arrayBuffer: () => Promise<ArrayBuffer>
+  errorText?: string
+}
+
+type TauriBinaryProxyResponse = {
+  ok: boolean
+  status: number
+  bodyBase64: string
+  error?: string
+}
+
+async function sendProtoHttpRequest(url: string, init: RequestInit): Promise<ProtoHttpResponse> {
+  // 对齐老 im 桌面语义：打包端请求由主进程代发，避免 tauri.localhost 源触发 WebView CORS。
+  if (isTauriPackagedRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const bodyBytes = toUint8ArrayFromRequestBody(init.body as BodyInit | null | undefined)
+    const result = await invoke<TauriBinaryProxyResponse>('proxy_http_binary', {
+      request: {
+        url,
+        method: String(init.method || 'POST').toUpperCase(),
+        headers: normalizeHeadersToRecord(init.headers),
+        bodyBase64: encodeBase64(bodyBytes),
+      },
+    })
+    const responseBodyBuffer = decodeBase64ToArrayBuffer(result.bodyBase64 || '')
+    return {
+      ok: !!result.ok,
+      status: Number(result.status || 0),
+      arrayBuffer: async () => responseBodyBuffer,
+      errorText: result.error || '',
+    }
+  }
+
+  const response = await fetch(url, init)
+  return {
+    ok: response.ok,
+    status: response.status,
+    arrayBuffer: () => response.arrayBuffer(),
+  }
+}
+
 async function fetchWithWebBizFallback(
   url: string,
   init: RequestInit,
   options: { withSessionId: boolean; onResolvedBaseUrl?: (baseUrl: string) => void },
-): Promise<Response> {
+): Promise<ProtoHttpResponse> {
   // 登录前二维码接口也要切域名；withSessionId 只控制协议 session，不控制域名兜底。
   const allowFallback = shouldFallbackWebBiz(url)
   const failedBase = normalizeHttpBaseUrl(url)
   const isLoginRequest = isLoginApiRequest(url)
 
   try {
-    const response = await fetch(url, init)
+    const response = await sendProtoHttpRequest(url, init)
     if (response.ok && allowFallback && failedBase) {
       options.onResolvedBaseUrl?.(failedBase)
     }
@@ -534,7 +628,16 @@ export async function requestProto<TReq, TResp>(opts: {
   })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    let bodyPreview = ''
+    try {
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      bodyPreview = new TextDecoder('utf-8').decode(bytes).slice(0, 300)
+    } catch {
+      bodyPreview = ''
+    }
+    const proxyError = response.errorText ? `; ${response.errorText}` : ''
+    const detail = bodyPreview ? `; body=${bodyPreview}` : ''
+    throw new Error(`HTTP ${response.status}; url=${url}${proxyError}${detail}`)
   }
 
   const respBuffer = await response.arrayBuffer()

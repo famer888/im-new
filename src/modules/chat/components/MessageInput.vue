@@ -2166,6 +2166,13 @@ async function putObjectToOss(options: {
       status: result.status,
       body: result.body,
     }, result.ok ? 'info' : 'error')
+    // 桌面端与浏览器分支统一：非 2xx 必须抛错，交给上层域名轮换重试，避免把失败上传误判为成功。
+    if (!result.ok || result.status < 200 || result.status >= 300) {
+      const error = new Error(`上传图片失败：HTTP ${result.status}`)
+      ;(error as any).status = result.status
+      ;(error as any).responseBody = result.body
+      throw error
+    }
     return
   }
 
@@ -2278,7 +2285,8 @@ async function uploadImageLikeIm(
 
   const width = options?.width ?? 0
   const height = options?.height ?? 0
-  const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
+  // 优先回填实际上传成功的域名，保持打包端与开发端一致的可访问结果。
+  const finalUrl = toHttpsUrl(stripQuery(uploadUrl || responseUrl))
   traceLog(trace, 'upload done', {
     finalUrlHost: (() => {
       try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
@@ -2378,7 +2386,8 @@ async function uploadFileLikeIm(
     logPrefix: '[file-send] ',
   })
 
-  const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
+  // 优先回填实际上传成功的域名，保持打包端与开发端一致的可访问结果。
+  const finalUrl = toHttpsUrl(stripQuery(uploadUrl || responseUrl))
   fileTraceLog(trace, 'upload done', {
     name: file.name,
     originalBytes: file.size,

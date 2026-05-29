@@ -13,6 +13,7 @@ import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/ut
 import { getFileExtension, resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
+import { getRuntimePlatform, type RuntimePlatform } from '@/utils/runtimePlatform'
 import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
 import minimizeIcon from '@/assets/windows_control_icons/min-w-30.png'
 import squareIcon from '@/assets/windows_control_icons/max-w-30.png'
@@ -37,6 +38,8 @@ const videoProbeLoading = ref(false)
 const videoConverting = ref(false)
 const videoAutoTranscodeTried = ref(false)
 const videoProbe = ref<VideoFormatProbe | null>(null)
+// 优先使用统一的平台探测结果，避免只靠 UA 在桌面容器里出现误判。
+const runtimePlatform = ref<RuntimePlatform>('unknown')
 const menuVisible = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
@@ -261,6 +264,8 @@ let unsubscribe: (() => void) | null = null
 let unlistenWindowEvents: Array<() => void> = []
 
 function isWindowsPlatform(): boolean {
+  // 已探测到平台时优先使用探测值；探测失败再退回 UA 兜底。
+  if (runtimePlatform.value !== 'unknown') return runtimePlatform.value === 'windows'
   return /win|windows/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`)
 }
 
@@ -1141,8 +1146,22 @@ async function openWithDefaultApp() {
       target = toFsPath(src) || filePath
     }
   }
+  if ((window as any).__TAURI_INTERNALS__ && !isLocalLikePath(target)) {
+    try {
+      // blob/data 源没有真实磁盘路径，Windows 默认应用无法直接接收；先落盘再打开。
+      target = await ensureLocalImageForDefaultApp()
+    } catch (error) {
+      console.warn('[media-viewer] fallback save image for default app failed:', error)
+      target = ''
+    }
+  }
   if (!target) return
   try {
+    if ((window as any).__TAURI_INTERNALS__) {
+      // 桌面端统一走后端 open_file，减少 plugin-shell 在本地路径场景下的静默失败差异。
+      await invoke('open_file', { path: toFsPath(target) })
+      return
+    }
     await open(target)
   } catch (error) {
     console.warn('[media-viewer] openWithDefaultApp failed:', error)
@@ -1229,6 +1248,22 @@ async function downloadVideoForDefaultApp(options: { silent?: boolean } = {}): P
       resolve('')
     }
   })
+}
+
+async function ensureLocalImageForDefaultApp(): Promise<string> {
+  if (localImagePath.value) return localImagePath.value
+  if (!(window as any).__TAURI_INTERNALS__) return ''
+  const dataUrl = await fetchImageAsPngDataUrl()
+  const [{ appDataDir, join }] = await Promise.all([
+    import('@tauri-apps/api/path'),
+  ])
+  const baseDir = await appDataDir()
+  const safeName = normalizeImageFileName(suggestedImageFileName())
+  const targetPath = await join(baseDir, 'image-cache', 'default-open', `${Date.now()}-${safeName}`)
+  // 图片源是 blob/data 时没有真实磁盘路径；先落盘再走系统默认应用打开，避免点击无响应。
+  const err = await exportBase64ImgToLocal(dataUrl, targetPath)
+  if (err) throw err
+  return targetPath
 }
 
 async function ensureLocalVideoForVideoAction(options: { silent?: boolean } = {}): Promise<string> {
@@ -1373,6 +1408,11 @@ onMounted(async () => {
   document.documentElement.classList.add(mediaViewerPageClass)
   document.body.classList.add(mediaViewerPageClass)
   document.getElementById('app')?.classList.add(mediaViewerPageClass)
+  try {
+    runtimePlatform.value = await getRuntimePlatform()
+  } catch {
+    runtimePlatform.value = 'unknown'
+  }
   applyPayload(mediaViewerState.get())
   unsubscribe = mediaViewerState.subscribe((nextPayload) => {
     applyPayload(nextPayload)
