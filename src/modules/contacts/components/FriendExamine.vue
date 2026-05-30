@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
 import FriendVerifyDetail from './FriendVerifyDetail.vue'
 import type { VerifyRecord } from './FriendVerifyDetail.vue'
@@ -28,6 +29,7 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
 const uiStore = useUIStore()
+const { t } = useI18n()
 
 const requests = ref<FriendRequest[]>([])
 const showDetail = ref(false)
@@ -150,18 +152,18 @@ async function handleDetailClose() {
 
     <template v-else>
       <div class="examine-header">
-        <span class="title">新的朋友</span>
+        <span class="title">{{ t('新的好友') }}</span>
       </div>
 
-      <div v-if="loadState === 1" class="loading">loading..</div>
-      <div v-else-if="loadState === 2" class="loading">数据获取失败</div>
+      <div v-if="loadState === 1" class="loading">{{ t('加载中') }}</div>
+      <div v-else-if="loadState === 2" class="loading">{{ t('数据获取失败') }}</div>
       <div v-else-if="loadState === 3" class="loading">
         <img class="icon-no-data" :src="noDataIcon" alt="" />
-        <div>无数据</div>
+        <div>{{ t('暂无数据') }}</div>
       </div>
 
       <div v-else class="examine-content">
-        <div class="section-title">待处理</div>
+        <div class="section-title">{{ t('待处理') }}</div>
         <div class="section-card">
           <template v-if="pendingRequests.length > 0">
             <div v-for="req in pendingRequests" :key="req.id" class="examine-item">
@@ -170,19 +172,19 @@ async function handleDetailClose() {
                 <div class="examine-info">
                   <div class="row-top">
                     <div class="examine-name">{{ req.nickname || req.uid }}</div>
-                    <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
+                    <span v-if="req.bfMyBlack" class="black-tag">{{ t('已拉黑') }}</span>
                   </div>
                   <div class="examine-msg">{{ req.message }}</div>
                 </div>
               </div>
               <div class="examine-actions">
-                <button class="btn-accept" @click="openVerifyDetail(req)">验证</button>
+                <button class="btn-accept" @click="openVerifyDetail(req)">{{ t('验证') }}</button>
               </div>
             </div>
           </template>
         </div>
 
-        <div class="section-title">近期请求</div>
+        <div class="section-title">{{ t('近期请求') }}</div>
         <div class="section-card">
           <template v-if="recentRequests.length > 0">
             <div v-for="req in recentRequests" :key="req.id" class="examine-item">
@@ -202,12 +204,12 @@ async function handleDetailClose() {
                   >
                     {{ req.nickname || req.uid }}
                   </div>
-                  <span v-if="req.bfMyBlack" class="black-tag">已拉黑</span>
+                  <span v-if="req.bfMyBlack" class="black-tag">{{ t('已拉黑') }}</span>
                 </div>
                 <div class="examine-msg">{{ req.message }}</div>
               </div>
-              <span v-if="req.status === 'accepted'" class="status-text accepted">已同意</span>
-              <span v-else class="status-text rejected">已拒绝</span>
+              <span v-if="req.status === 'accepted'" class="status-text accepted">{{ t('已同意') }}</span>
+              <span v-else class="status-text rejected">{{ t('已拒绝') }}</span>
             </div>
           </template>
         </div>
