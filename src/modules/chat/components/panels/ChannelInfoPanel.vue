@@ -9,7 +9,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType, MessageType } from '@/types'
-import { getChannelDetail, getChannelUsers, updateMember, updateChannel } from '@/api/imChannel'
+import { deleteChannelManage, getChannelDetail, getChannelManages, getChannelUsers, updateMember, updateChannel } from '@/api/imChannel'
 import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
@@ -28,6 +28,12 @@ interface ChannelMember {
   memberType: number
   online?: boolean
   createTime?: number
+}
+
+interface ChannelManager extends ChannelMember {
+  removeAuthorize: boolean
+  setterUid?: string
+  setterText: string
 }
 
 const { t, locale } = useI18n()
@@ -82,6 +88,11 @@ const editDescDraft = ref('')
 const editDescDraftCopy = ref('')
 const isEditDesc = ref(false)
 const showQrCode = ref(false)
+const managerDialogVisible = ref(false)
+const loadingManagers = ref(false)
+const managerOwner = ref<ChannelManager | null>(null)
+const managerList = ref<ChannelManager[]>([])
+const removingManagerId = ref('')
 const toastMessage = ref('')
 const toastTimer = ref<number | null>(null)
 const loadingMembers = ref(false)
@@ -134,6 +145,7 @@ const filteredMembers = computed(() => {
   if (!q) return members.value
   return members.value.filter((item) => item.name.toLowerCase().includes(q) || item.id.includes(q))
 })
+const managerCount = computed(() => managerList.value.length + (managerOwner.value ? 1 : 0))
 
 function toBool(value: unknown): boolean {
   if (value === undefined || value === null || value === '') return false
@@ -214,6 +226,66 @@ function normalizeTimestampMs(value: unknown): number | undefined {
   if (!Number.isFinite(num) || num <= 0) return undefined
   // 兼容部分线路返回秒级时间戳，统一转成毫秒用于“xx前在线”文案。
   return num < 1e12 ? Math.trunc(num * 1000) : Math.trunc(num)
+}
+
+function normalizeChannelMemberType(raw: Record<string, unknown>): number {
+  if (raw.memberType !== undefined && raw.memberType !== null && raw.memberType !== '') {
+    return Number(raw.memberType)
+  }
+  const type = Number(raw.type ?? raw.role ?? 2)
+  // 对齐老 im：channelAdminRight/pageAdmin 的 type 0/1/2 分别映射 owner/admin/member。
+  if (type === 0) return 1
+  if (type === 1) return 2
+  if (type === 2) return 3
+  return 3
+}
+
+function parseChannelManager(raw: Record<string, unknown>): ChannelManager {
+  const user = (raw.userInfoDTO || raw) as Record<string, unknown>
+  const id = String(user.uid ?? user.id ?? raw.uid ?? raw.id ?? '')
+  const online =
+    normalizeOnlineFlag(user.onLineStatus)
+    ?? normalizeOnlineFlag(raw.onLineStatus)
+    ?? normalizeOnlineFlag(user.online)
+    ?? normalizeOnlineFlag(raw.online)
+  const createTime =
+    normalizeTimestampMs(user.createTime)
+    ?? normalizeTimestampMs(raw.createTime)
+    ?? normalizeTimestampMs(user.lastTime)
+    ?? normalizeTimestampMs(raw.lastTime)
+  return {
+    id,
+    name: String(user.name || user.nickName || user.nickname || id),
+    avatar: String(user.icon || raw.icon || ''),
+    memberType: normalizeChannelMemberType(raw),
+    online,
+    createTime,
+    setterUid: String(raw.setterUid ?? ''),
+    setterText: String(raw.setter || ''),
+    removeAuthorize: false,
+  }
+}
+
+function canRemoveManager(manager: ChannelManager, ownerId: string, loginId: string): boolean {
+  if (!ownerId || !loginId) return false
+  if (ownerId === loginId) return true
+  if (!manager.setterUid) return false
+  return manager.setterUid === loginId
+}
+
+function getManagerExtraText(member: ChannelManager): string {
+  if (member.memberType === 1) return getMemberStatus(member)
+  if (member.setterText.trim()) return member.setterText
+  return getMemberStatus(member)
+}
+
+function toFallbackManager(member: ChannelMember): ChannelManager {
+  return {
+    ...member,
+    removeAuthorize: false,
+    setterUid: '',
+    setterText: '',
+  }
 }
 
 function getMemberStatus(member: ChannelMember): string {
@@ -374,6 +446,81 @@ const canClearHistory = computed(() => {
   const memberType = currentUserMemberType.value
   return memberType !== 3
 })
+
+function closeManagerDialog() {
+  managerDialogVisible.value = false
+  removingManagerId.value = ''
+}
+
+async function loadManagerList() {
+  if (!channelId.value) return
+  loadingManagers.value = true
+  managerOwner.value = null
+  managerList.value = []
+  try {
+    const resp = await getChannelManages({ channelId: channelId.value, pageNum: 1, pageSize: 200 })
+    const parsed = (resp.data?.rowList || [])
+      .map((row) => parseChannelManager(row as Record<string, unknown>))
+      .filter((item) => item.id)
+
+    const fallbackOwner = members.value.find((item) => item.memberType === 1)
+    const fallbackAdmins = members.value.filter((item) => item.memberType === 2)
+    const owner = parsed.find((item) => item.memberType === 1)
+      ?? (fallbackOwner ? toFallbackManager(fallbackOwner) : null)
+    const admins = parsed.filter((item) => item.memberType === 2)
+
+    const ownerId = owner?.id || ''
+    const loginId = String(authStore.uid || '')
+    managerOwner.value = owner
+    // 对齐老 im：群主可移除全部管理员；管理员只能移除自己设置的管理员。
+    managerList.value = (admins.length > 0 ? admins : fallbackAdmins.map((item) => toFallbackManager(item)))
+      .map((item) => ({
+        ...item,
+        removeAuthorize: canRemoveManager(item, ownerId, loginId),
+      }))
+  } catch (error) {
+    console.warn('[ChannelInfoPanel] load channel managers failed:', error)
+    // 管理员接口失败时回退到成员列表，保证“管理员弹窗”至少可展示当前成员角色信息。
+    const fallbackOwner = members.value.find((item) => item.memberType === 1)
+    const fallbackAdmins = members.value.filter((item) => item.memberType === 2)
+    const loginId = String(authStore.uid || '')
+    const ownerId = fallbackOwner?.id || ''
+    managerOwner.value = fallbackOwner ? toFallbackManager(fallbackOwner) : null
+    managerList.value = fallbackAdmins.map((item) => ({
+      ...toFallbackManager(item),
+      ...item,
+      removeAuthorize: canRemoveManager(toFallbackManager(item), ownerId, loginId),
+    }))
+  } finally {
+    loadingManagers.value = false
+  }
+}
+
+async function openManagerDialog() {
+  if (!adminPrivacy.value) return
+  managerDialogVisible.value = true
+  await loadManagerList()
+}
+
+async function removeManager(item: ChannelManager) {
+  if (!channelId.value || !item.id || !item.removeAuthorize || removingManagerId.value) return
+  removingManagerId.value = item.id
+  try {
+    const resp = await deleteChannelManage({ channelId: channelId.value, uid: item.id })
+    if (!responseOk(resp)) throw new Error(resp?.msg || 'delete channel manager failed')
+    showQrToast(t('移除成功'))
+    managerList.value = managerList.value.filter((manager) => manager.id !== item.id)
+    // 弹窗移除成功后同步当前成员列表角色，避免主列表角标滞后。
+    members.value = members.value.map((member) =>
+      member.id === item.id ? { ...member, memberType: 3 } : member,
+    )
+  } catch (error) {
+    console.warn('[ChannelInfoPanel] remove channel manager failed:', error)
+    showQrToast(t('修改失败'), 'error')
+  } finally {
+    removingManagerId.value = ''
+  }
+}
 
 // 频道简介编辑权限按“频道创建人”控制：非创建人也能打开弹窗，但只能查看不能修改。
 const canEditChannelDescription = computed(() => {
@@ -642,6 +789,7 @@ watch(
   (type) => {
     if (type !== ConversationType.Channel) {
       showQrCode.value = false
+      closeManagerDialog()
     }
   },
 )
@@ -652,6 +800,7 @@ onBeforeUnmount(() => {
     imageOverwriteResolver(false)
     imageOverwriteResolver = null
   }
+  closeManagerDialog()
 })
 </script>
 
@@ -771,7 +920,10 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-if="adminPrivacy" class="manager-title">
-      <h4>{{ t('管理员') }}</h4>
+      <button class="manager-entry" type="button" @click="openManagerDialog">
+        <span>{{ t('管理员') }}</span>
+        <span class="arrow">›</span>
+      </button>
     </section>
 
     <section v-if="adminPrivacy" class="member-section">
@@ -799,6 +951,66 @@ onBeforeUnmount(() => {
         </li>
       </ul>
     </section>
+
+    <!-- 弹窗挂到 body，避免受右侧面板父级布局影响导致遮罩层高度不完整。 -->
+    <Teleport to="body">
+      <div v-if="managerDialogVisible" class="channelManageDialog" @click="closeManagerDialog">
+        <div @click.stop>
+          <picture @click="closeManagerDialog">
+            <img src="@/assets/images/common/close-icon.png" alt="" />
+          </picture>
+          <div class="member-list"></div>
+          <div class="title">{{ t('管理员') }}（{{ managerCount }}/50）</div>
+          <div v-if="loadingManagers" class="member-list loading">{{ t('加载中') }}...</div>
+          <div v-else class="member-list">
+            <div v-if="managerOwner" class="member-item cursor">
+              <TextAvatar
+                class="member-avatar"
+                :name="managerOwner.name || managerOwner.id"
+                :src="managerOwner.avatar || null"
+                :size="30"
+                rounded
+              />
+              <div class="member-info">
+                <div class="member-info-top">
+                  <div class="member-name">{{ managerOwner.name || managerOwner.id }}</div>
+                  <div class="badge">{{ t('所有者') }}</div>
+                </div>
+                <div class="member-online-state">{{ getManagerExtraText(managerOwner) }}</div>
+              </div>
+            </div>
+
+            <div
+              v-for="member in managerList"
+              :key="member.id"
+              class="member-item cursor"
+              :class="{ 'has-remove-btn': member.removeAuthorize }"
+            >
+              <TextAvatar
+                class="member-avatar"
+                :name="member.name || member.id"
+                :src="member.avatar || null"
+                :size="30"
+                rounded
+              />
+              <div class="member-info">
+                <div class="member-info-top">
+                  <div class="member-name">{{ member.name || member.id }}</div>
+                </div>
+                <div class="member-online-state">{{ getManagerExtraText(member) }}</div>
+              </div>
+              <span
+                v-if="member.removeAuthorize"
+                class="remove-manage cursor"
+                @click.stop="removeManager(member)"
+              >
+                {{ removingManagerId === member.id ? `${t('加载中')}...` : t('移除') }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <Toast
       :visible="qrToastVisible"
@@ -959,11 +1171,29 @@ onBeforeUnmount(() => {
   padding: 0 10px;
   display: flex;
   align-items: center;
+}
 
-  h4 {
-    margin: 0;
-    font-size: 14px;
-    color: #333;
+.manager-entry {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  font-size: 14px;
+  color: #333;
+
+  > span:first-child {
+    font-weight: 600;
+  }
+
+  .arrow {
+    color: #b0b0b0;
+    font-size: 18px;
+    line-height: 1;
   }
 }
 
@@ -1040,6 +1270,142 @@ onBeforeUnmount(() => {
   background: #3369fe;
   color: #fff;
   font-size: 12px;
+}
+
+.channelManageDialog {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 10000;
+  background: rgba($color: #000000, $alpha: 0.2);
+  > div {
+    background: #fff;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 10px 16px;
+    border-radius: 8px;
+    width: 400px;
+    box-sizing: border-box;
+    > picture {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+
+      &:hover {
+        opacity: 0.8;
+      }
+    }
+    .title {
+      background: #fff;
+      color: #333;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+
+    .member-list {
+      margin-top: 10px;
+      width: 100%;
+      padding-bottom: 10px;
+      background: #fff;
+      overflow-y: auto;
+      max-height: 350px;
+
+      &.loading {
+        color: #999;
+        font-size: 12px;
+        line-height: 22px;
+      }
+
+      .member-item {
+        width: 100%;
+        text-align: center;
+        display: flex;
+        align-items: center;
+        position: relative;
+        padding: 5px 10px;
+        box-sizing: border-box;
+
+        &:hover {
+          background: #f5f5f5;
+        }
+
+        &.has-remove-btn {
+          .member-info {
+            padding-right: 42px;
+          }
+        }
+
+        .remove-manage {
+          position: absolute;
+          right: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+
+          &:hover {
+            color: #3369fe;
+          }
+        }
+
+        .member-avatar {
+          width: 30px;
+          height: 30px;
+          border-radius: 50%;
+        }
+
+        .member-name {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          font-size: 14px;
+        }
+        .badge {
+          font-size: 10px;
+          color: #fff;
+          padding: 2px 6px;
+          border-radius: 99px;
+          background: #3369fe;
+          flex-shrink: 0;
+          margin-left: 4px;
+        }
+
+        .member-info {
+          margin-left: 10px;
+          width: 100%;
+          overflow: hidden;
+        }
+
+        .member-info-top {
+          display: flex;
+          align-items: center;
+          width: 100%;
+          overflow: hidden;
+        }
+
+        .member-online-state {
+          text-align: left;
+          font-size: 12px;
+          color: #b9babe;
+          word-break: break-all;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+      }
+    }
+  }
 }
 
 .intro-section.clickable {
