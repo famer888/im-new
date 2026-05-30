@@ -323,14 +323,31 @@ const canClearHistory = computed(() => {
   return memberType !== 3
 })
 
+// 频道简介编辑权限按“频道创建人”控制：非创建人也能打开弹窗，但只能查看不能修改。
+const canEditChannelDescription = computed(() => {
+  const ownerId = String(
+    detail.value.ownerId
+    ?? detail.value.owner_id
+    ?? detail.value.hostId
+    ?? channel.value?.ownerId
+    ?? '',
+  ).trim()
+  if (!authStore.uid) return false
+  // 部分接口不返回 ownerId，回退到 memberType=1（所有者）判断，避免创建人被误判为只读。
+  if (!ownerId) {
+    return Number(detail.value.memberType ?? channel.value?.memberType ?? currentUserMemberType.value ?? 3) === 1
+  }
+  return ownerId === String(authStore.uid)
+})
+
 function roleLabel(memberType: number): string {
   if (memberType === 1) return t('所有者')
   if (memberType === 2) return t('管理员')
   return ''
 }
 
-function openEditDesc() {
-  if (!canClearHistory.value) return
+// 频道简介入口始终可打开，编辑能力在弹窗内按 canEditChannelDescription 单独限制。
+function openDescriptionDialog() {
   editDescDraft.value = description.value || ''
   editDescDraftCopy.value = editDescDraft.value
   editDescVisible.value = true
@@ -348,7 +365,7 @@ function handleCancel() {
 }
 
 async function handleOk() {
-  if (!channelId.value) return
+  if (!channelId.value || !canEditChannelDescription.value) return
   try {
     const resp = await updateChannel({
       channelId: channelId.value,
@@ -601,7 +618,7 @@ onBeforeUnmount(() => {
 
     <div v-if="toastMessage" class="toast">{{ toastMessage }}</div>
 
-    <section class="panel-section intro-section" :class="{ clickable: canClearHistory }" @click="canClearHistory && openEditDesc()">
+    <section class="panel-section intro-section clickable" @click="openDescriptionDialog">
       <div class="section-head">
         <h4>{{ t('频道简介') }}</h4>
         <span class="arrow">›</span>
@@ -617,19 +634,19 @@ onBeforeUnmount(() => {
         </picture>
         <section>
           <textarea
-            v-if="isEditDesc && canClearHistory"
+            v-if="isEditDesc && canEditChannelDescription"
             v-model="editDescDraft"
             maxlength="800"
             type="text"
             :placeholder="t('请输入内容')"
-            :disabled="!canClearHistory"
+            :disabled="!canEditChannelDescription"
           />
           <div v-else :style="{ height: '203px' }">
             <p :class="['notice-view', { empty: !editDescDraft }]">{{ editDescDraft || t('无简介') }}</p>
           </div>
-          <span v-if="canClearHistory && isEditDesc">{{ 800 - editDescDraft.length }}</span>
+          <span v-if="canEditChannelDescription && isEditDesc">{{ 800 - editDescDraft.length }}</span>
         </section>
-        <template v-if="canClearHistory">
+        <template v-if="canEditChannelDescription">
           <div class="bottom" v-if="!isEditDesc">
             <span @click.stop="isEditDesc = true">{{ t('修改') }}</span>
           </div>
