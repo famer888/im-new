@@ -14,6 +14,7 @@ import {
   type ChannelEventReqItem,
 } from '@/api/imChannel'
 import { eventBus } from '@/utils/eventBus'
+import { translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { ConversationType } from '@/types'
 
 interface ChannelNoticeItem {
@@ -62,6 +63,16 @@ function formatTime(ts: number): string {
 
 function showTip(message: string, type: 'success' | 'error' = 'success') {
   eventBus.emit('show-toast', { message, type })
+}
+
+function formatNoticeContent(content: string): string {
+  const raw = String(content || '').trim()
+  if (!raw) return ''
+  // 频道通知要和会话列表/系统通知使用同一套翻译规则，避免右侧列表出现未国际化文案。
+  const translatedNotice = translateGroupNoticeText(raw, t)
+  if (translatedNotice !== raw) return translatedNotice
+  const translated = t(raw)
+  return translated === raw ? raw : translated
 }
 
 function textValue(value: unknown): string {
@@ -443,7 +454,7 @@ onBeforeUnmount(() => {
             <h2>{{ item.channelName }}</h2>
             <span class="time"> · {{ formatTime(item.sendTime) }}</span>
           </div>
-          <p class="line-notify">{{ item.content }}</p>
+          <p class="line-notify">{{ formatNoticeContent(item.content) }}</p>
         </div>
         <div v-if="item.id && item.reqStatus >= 0" class="right-info">
           <template v-if="item.reqStatus === 0">
