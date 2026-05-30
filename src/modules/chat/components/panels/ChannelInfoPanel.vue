@@ -99,6 +99,9 @@ const loadingMembers = ref(false)
 let loadSeq = 0
 const CHANNEL_DETAIL_CACHE_TTL_MS = 60 * 1000
 const CHANNEL_MEMBERS_CACHE_TTL_MS = 60 * 1000
+const CHANNEL_MANAGERS_CACHE_TTL_MS = 60 * 1000
+const managerDataReadyChannelId = ref('')
+const managerPrefetching = ref(false)
 
 const conv = computed(() => chatStore.currentConversation)
 const channel = computed(() => {
@@ -142,8 +145,17 @@ const channelDisturbed = computed(() =>
 const receiveNotifications = computed(() => !channelDisturbed.value)
 const filteredMembers = computed(() => {
   const q = keyword.value.trim().toLowerCase()
-  if (!q) return members.value
-  return members.value.filter((item) => item.name.toLowerCase().includes(q) || item.id.includes(q))
+  const baseList = !q
+    ? members.value
+    : members.value.filter((item) => item.name.toLowerCase().includes(q) || item.id.includes(q))
+  // 对齐老 im 视觉语义：成员区固定“所有者 -> 管理员 -> 其他成员”顺序，避免接口返回顺序导致角色顺位抖动。
+  return baseList
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const roleDiff = memberRoleSortWeight(a.item.memberType) - memberRoleSortWeight(b.item.memberType)
+      return roleDiff !== 0 ? roleDiff : a.index - b.index
+    })
+    .map(({ item }) => item)
 })
 const managerCount = computed(() => managerList.value.length + (managerOwner.value ? 1 : 0))
 
@@ -162,6 +174,12 @@ function responseOk(resp: { code?: number } | null | undefined): boolean {
   return code === 200 || code === 0
 }
 
+function memberRoleSortWeight(memberType: number): number {
+  if (memberType === 1) return 0
+  if (memberType === 2) return 1
+  return 2
+}
+
 function detailCacheKey(id: string): string {
   // 频道详情缓存按账号隔离，避免切换账号后复用到上个账号的频道权限数据。
   return `channel-info:detail:${authStore.uid || 'guest'}:${id}`
@@ -170,6 +188,11 @@ function detailCacheKey(id: string): string {
 function membersCacheKey(id: string): string {
   // 成员列表同样按账号隔离，防止跨账号看到旧成员身份（owner/admin）造成权限误判。
   return `channel-info:members:${authStore.uid || 'guest'}:${id}`
+}
+
+function managersCacheKey(id: string): string {
+  // 管理员列表缓存按账号隔离，避免切号后把上个账号的管理员关系带进来。
+  return `channel-info:managers:${authStore.uid || 'guest'}:${id}`
 }
 
 function readCache<T>(key: string, ttlMs: number): T | null {
@@ -288,6 +311,26 @@ function toFallbackManager(member: ChannelMember): ChannelManager {
   }
 }
 
+function applyManagersFromSource(source: ChannelManager[] | null | undefined, targetChannelId: string) {
+  const parsed = source || []
+  const fallbackOwner = members.value.find((item) => item.memberType === 1)
+  const fallbackAdmins = members.value.filter((item) => item.memberType === 2)
+  const owner = parsed.find((item) => item.memberType === 1)
+    ?? (fallbackOwner ? toFallbackManager(fallbackOwner) : null)
+  const admins = parsed.filter((item) => item.memberType === 2)
+  const ownerId = owner?.id || ''
+  const loginId = String(authStore.uid || '')
+
+  managerOwner.value = owner
+  // 对齐老 im：群主可移除全部管理员；管理员只能移除自己设置的管理员。
+  managerList.value = (admins.length > 0 ? admins : fallbackAdmins.map((item) => toFallbackManager(item)))
+    .map((item) => ({
+      ...item,
+      removeAuthorize: canRemoveManager(item, ownerId, loginId),
+    }))
+  managerDataReadyChannelId.value = targetChannelId
+}
+
 function getMemberStatus(member: ChannelMember): string {
   const contact = contactStore.getContact(member.id)
   // 优先用实时推送的好友在线状态；没有推送时回退到频道成员接口字段。
@@ -355,6 +398,9 @@ async function loadChannelInfo() {
   const targetChannelId = channelId.value
   members.value = []
   loadingMembers.value = false
+  managerOwner.value = null
+  managerList.value = []
+  managerDataReadyChannelId.value = ''
   const cachedDetail = readCache<Record<string, any>>(detailCacheKey(targetChannelId), CHANNEL_DETAIL_CACHE_TTL_MS)
 
   if (cachedDetail) {
@@ -366,6 +412,7 @@ async function loadChannelInfo() {
     syncDisturbFromDetail(cachedDetail, targetChannelId)
     if (shouldLoadMembersByDetail(cachedDetail)) {
       void loadChannelMembers(targetChannelId, seq)
+      void prefetchManagerList()
     }
     return
   }
@@ -387,6 +434,7 @@ async function loadChannelInfo() {
     // 成员列表放到详情渲染后再异步请求，优先保证右侧面板首屏可交互。
     if (shouldLoadMembersByDetail(detailResp.data)) {
       void loadChannelMembers(targetChannelId, seq)
+      void prefetchManagerList()
     }
   } catch (error) {
     console.warn('[ChannelInfoPanel] load channel info failed:', error)
@@ -452,54 +500,72 @@ function closeManagerDialog() {
   removingManagerId.value = ''
 }
 
-async function loadManagerList() {
+async function loadManagerList(options?: { preferCache?: boolean; showLoading?: boolean }) {
   if (!channelId.value) return
-  loadingManagers.value = true
-  managerOwner.value = null
-  managerList.value = []
+  const targetChannelId = channelId.value
+  const preferCache = options?.preferCache ?? true
+  const showLoading = options?.showLoading ?? true
+
+  if (preferCache) {
+    const cachedManagers = readCache<ChannelManager[]>(
+      managersCacheKey(targetChannelId),
+      CHANNEL_MANAGERS_CACHE_TTL_MS,
+    )
+    if (cachedManagers) {
+      applyManagersFromSource(cachedManagers, targetChannelId)
+      return
+    }
+  }
+
+  if (showLoading) {
+    loadingManagers.value = true
+  }
   try {
-    const resp = await getChannelManages({ channelId: channelId.value, pageNum: 1, pageSize: 200 })
+    const resp = await getChannelManages({ channelId: targetChannelId, pageNum: 1, pageSize: 200 })
     const parsed = (resp.data?.rowList || [])
       .map((row) => parseChannelManager(row as Record<string, unknown>))
       .filter((item) => item.id)
-
-    const fallbackOwner = members.value.find((item) => item.memberType === 1)
-    const fallbackAdmins = members.value.filter((item) => item.memberType === 2)
-    const owner = parsed.find((item) => item.memberType === 1)
-      ?? (fallbackOwner ? toFallbackManager(fallbackOwner) : null)
-    const admins = parsed.filter((item) => item.memberType === 2)
-
-    const ownerId = owner?.id || ''
-    const loginId = String(authStore.uid || '')
-    managerOwner.value = owner
-    // 对齐老 im：群主可移除全部管理员；管理员只能移除自己设置的管理员。
-    managerList.value = (admins.length > 0 ? admins : fallbackAdmins.map((item) => toFallbackManager(item)))
-      .map((item) => ({
-        ...item,
-        removeAuthorize: canRemoveManager(item, ownerId, loginId),
-      }))
+    writeCache(managersCacheKey(targetChannelId), parsed)
+    if (channelId.value !== targetChannelId) return
+    applyManagersFromSource(parsed, targetChannelId)
   } catch (error) {
     console.warn('[ChannelInfoPanel] load channel managers failed:', error)
+    if (channelId.value !== targetChannelId) return
     // 管理员接口失败时回退到成员列表，保证“管理员弹窗”至少可展示当前成员角色信息。
-    const fallbackOwner = members.value.find((item) => item.memberType === 1)
-    const fallbackAdmins = members.value.filter((item) => item.memberType === 2)
-    const loginId = String(authStore.uid || '')
-    const ownerId = fallbackOwner?.id || ''
-    managerOwner.value = fallbackOwner ? toFallbackManager(fallbackOwner) : null
-    managerList.value = fallbackAdmins.map((item) => ({
-      ...toFallbackManager(item),
-      ...item,
-      removeAuthorize: canRemoveManager(toFallbackManager(item), ownerId, loginId),
-    }))
+    applyManagersFromSource(null, targetChannelId)
   } finally {
-    loadingManagers.value = false
+    if (showLoading) {
+      loadingManagers.value = false
+    }
+  }
+}
+
+async function prefetchManagerList() {
+  if (!channelId.value || !adminPrivacy.value) return
+  if (managerPrefetching.value) return
+  if (readCache<ChannelManager[]>(managersCacheKey(channelId.value), CHANNEL_MANAGERS_CACHE_TTL_MS)) return
+  managerPrefetching.value = true
+  try {
+    await loadManagerList({ preferCache: false, showLoading: false })
+  } finally {
+    managerPrefetching.value = false
   }
 }
 
 async function openManagerDialog() {
   if (!adminPrivacy.value) return
   managerDialogVisible.value = true
-  await loadManagerList()
+  const currentChannelId = channelId.value
+  const hasReadyData = Boolean(currentChannelId && managerDataReadyChannelId.value === currentChannelId)
+  if (!hasReadyData) {
+    await loadManagerList({ preferCache: true, showLoading: true })
+    return
+  }
+  if (readCache<ChannelManager[]>(managersCacheKey(currentChannelId), CHANNEL_MANAGERS_CACHE_TTL_MS)) {
+    return
+  }
+  // 已有可用数据时改为后台刷新，不阻塞弹窗首屏显示。
+  void loadManagerList({ preferCache: false, showLoading: false })
 }
 
 async function removeManager(item: ChannelManager) {
@@ -510,6 +576,14 @@ async function removeManager(item: ChannelManager) {
     if (!responseOk(resp)) throw new Error(resp?.msg || 'delete channel manager failed')
     showQrToast(t('移除成功'))
     managerList.value = managerList.value.filter((manager) => manager.id !== item.id)
+    if (channelId.value) {
+      // 移除成功后同步更新管理员缓存，避免下次打开弹窗仍展示旧管理员。
+      const cacheRows: ChannelManager[] = [
+        ...(managerOwner.value ? [{ ...managerOwner.value, removeAuthorize: false }] : []),
+        ...managerList.value.map((manager) => ({ ...manager, removeAuthorize: false })),
+      ]
+      writeCache(managersCacheKey(channelId.value), cacheRows)
+    }
     // 弹窗移除成功后同步当前成员列表角色，避免主列表角标滞后。
     members.value = members.value.map((member) =>
       member.id === item.id ? { ...member, memberType: 3 } : member,
@@ -920,7 +994,7 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-if="adminPrivacy" class="manager-title">
-      <button class="manager-entry" type="button" @click="openManagerDialog">
+      <button class="manager-entry" type="button" @mouseenter="prefetchManagerList" @click="openManagerDialog">
         <span>{{ t('管理员') }}</span>
         <span class="arrow">›</span>
       </button>
@@ -945,7 +1019,10 @@ onBeforeUnmount(() => {
             <div class="member-name">{{ member.name || member.id }}</div>
             <div class="member-status">{{ getMemberStatus(member) }}</div>
           </div>
-          <span v-if="roleLabel(member.memberType)" class="role-badge">
+          <span
+            v-if="roleLabel(member.memberType)"
+            :class="['role-badge', member.memberType === 1 ? 'owner' : 'admin']"
+          >
             {{ roleLabel(member.memberType) }}
           </span>
         </li>
@@ -1267,9 +1344,16 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   padding: 2px 8px;
   border-radius: 9px;
-  background: #3369fe;
   color: #fff;
   font-size: 12px;
+
+  &.owner {
+    background: #3369fe;
+  }
+
+  &.admin {
+    background: #fb9203;
+  }
 }
 
 .channelManageDialog {
