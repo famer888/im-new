@@ -194,6 +194,7 @@
   "已删除的消息": "Deleted messages",
   "总计": "total",
   "管理员": "administrator",
+  "由{name}设置为管理员": "Set as administrator by {name}",
   "阅后即焚": "Burn after reading",
   "加入黑名单": "Block contact",
   "删除联系人": "Delete contact",

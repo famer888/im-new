@@ -296,9 +296,21 @@ function canRemoveManager(manager: ChannelManager, ownerId: string, loginId: str
   return manager.setterUid === loginId
 }
 
+function formatManagerSetterText(rawText: string): string {
+  const text = String(rawText || '').trim()
+  if (!text) return ''
+  // 管理员来源文案由服务端下发中文模板，前端按“由{name}设置为管理员”做最小解析并走 i18n。
+  const match = text.match(/^由(.+?)设置为管理员$/)
+  if (match) {
+    const name = String(match[1] || '').trim()
+    if (name) return t('由{name}设置为管理员', { name })
+  }
+  return text
+}
+
 function getManagerExtraText(member: ChannelManager): string {
   if (member.memberType === 1) return getMemberStatus(member)
-  if (member.setterText.trim()) return member.setterText
+  if (member.setterText.trim()) return formatManagerSetterText(member.setterText)
   return getMemberStatus(member)
 }
 
@@ -805,7 +817,7 @@ function copyAlias() {
   if (!alias.value) return
   const textToCopy = `@${alias.value}`
   navigator.clipboard.writeText(textToCopy).then(() => {
-    toastMessage.value = '复制成功'
+    toastMessage.value = t('复制成功')
     if (toastTimer.value) clearTimeout(toastTimer.value)
     toastTimer.value = window.setTimeout(() => {
       toastMessage.value = ''
