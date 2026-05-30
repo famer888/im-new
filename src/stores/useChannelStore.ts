@@ -531,7 +531,10 @@ export const useChannelStore = defineStore('channel', () => {
     if (isChannelRemoved(id) && !options.allowRemoved) return
     if (options.allowRemoved) unmarkChannelRemoved(activeUid, id)
     const index = channels.value.findIndex((item) => item.id === id)
+    const prev = index >= 0 ? channels.value[index] : null
+    // patch 常是“部分字段更新”（如仅更新 isDisturb）；先合并旧值再 normalize，避免把未传字段误置为默认值影响权限判断。
     const next = normalizeChannel({
+      ...(prev || {}),
       ...patch,
       id,
       channelId: id,

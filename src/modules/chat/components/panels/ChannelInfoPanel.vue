@@ -146,11 +146,13 @@ function responseOk(resp: { code?: number } | null | undefined): boolean {
 }
 
 function detailCacheKey(id: string): string {
-  return `channel-info:detail:${id}`
+  // 频道详情缓存按账号隔离，避免切换账号后复用到上个账号的频道权限数据。
+  return `channel-info:detail:${authStore.uid || 'guest'}:${id}`
 }
 
 function membersCacheKey(id: string): string {
-  return `channel-info:members:${id}`
+  // 成员列表同样按账号隔离，防止跨账号看到旧成员身份（owner/admin）造成权限误判。
+  return `channel-info:members:${authStore.uid || 'guest'}:${id}`
 }
 
 function readCache<T>(key: string, ttlMs: number): T | null {
