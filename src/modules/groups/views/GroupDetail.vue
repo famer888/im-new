@@ -205,8 +205,13 @@ function handleMemberClick(member: GroupMember) {
     .member-item {
       margin-right: 10px;
       text-align: center;
-      width: 50px;
+      min-width: 50px;
+      width: max-content;
+      max-width: 128px;
       cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       .nick-name {
         margin-top: 6px;
         font-size: 12px;
@@ -224,6 +229,8 @@ function handleMemberClick(member: GroupMember) {
 
 
 .member-identity {
+  display: inline-block;
+  max-width: 100%;
   font-size: 12px;
   color: #fff;
   padding: 2px 6px;
@@ -232,6 +239,8 @@ function handleMemberClick(member: GroupMember) {
   margin-top: 6px;
   flex-shrink: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .member-master {
