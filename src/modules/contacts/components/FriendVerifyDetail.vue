@@ -99,6 +99,16 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
+/**
+ * 详情页与列表保持同一条国际化规则：替换后端可能返回的中文“验证：”前缀，
+ * 保证所有语言下前缀一致。
+ */
+function formatVerifyMessage(message: string) {
+  const raw = String(message || '').trim()
+  const normalized = raw.replace(/^验证[：:]\s*/u, '')
+  return normalized ? `${t('验证')}： ${normalized}` : `${t('验证')}：`
+}
+
 function joinBlackList(op: 6 | 7) {
   if (working.value) return
   pendingBlacklistOp.value = op
@@ -196,7 +206,7 @@ async function passVerify() {
       </div>
       <div class="info-msg">
         <div class="tip">系统提示：请求添加好友</div>
-        <p class="msg">{{ info.msg }}</p>
+        <p class="msg">{{ formatVerifyMessage(info.msg) }}</p>
       </div>
       <div class="footer">
         <div

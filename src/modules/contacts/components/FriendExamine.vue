@@ -130,6 +130,16 @@ function handleDetailBack() {
   selectedRecord.value = null
 }
 
+/**
+ * 对齐旧 im 的申请文案展示：后端可能回传中文“验证：”前缀，这里统一替换为当前语言前缀，
+ * 避免越南语/英文界面里混入中文。
+ */
+function formatVerifyMessage(message: string) {
+  const raw = String(message || '').trim()
+  const normalized = raw.replace(/^验证[：:]\s*/u, '')
+  return normalized ? `${t('验证')}： ${normalized}` : `${t('验证')}：`
+}
+
 /** 与 im new-friend-examine-list verifyClose 一致：关闭后刷新申请列表并同步通讯录 */
 async function handleDetailClose() {
   showDetail.value = false
@@ -174,7 +184,7 @@ async function handleDetailClose() {
                     <div class="examine-name">{{ req.nickname || req.uid }}</div>
                     <span v-if="req.bfMyBlack" class="black-tag">{{ t('已拉黑') }}</span>
                   </div>
-                  <div class="examine-msg">{{ req.message }}</div>
+                  <div class="examine-msg">{{ formatVerifyMessage(req.message) }}</div>
                 </div>
               </div>
               <div class="examine-actions">
@@ -206,7 +216,7 @@ async function handleDetailClose() {
                   </div>
                   <span v-if="req.bfMyBlack" class="black-tag">{{ t('已拉黑') }}</span>
                 </div>
-                <div class="examine-msg">{{ req.message }}</div>
+                <div class="examine-msg">{{ formatVerifyMessage(req.message) }}</div>
               </div>
               <span v-if="req.status === 'accepted'" class="status-text accepted">{{ t('已同意') }}</span>
               <span v-else class="status-text rejected">{{ t('已拒绝') }}</span>
