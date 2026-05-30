@@ -581,8 +581,16 @@ export const useChannelStore = defineStore('channel', () => {
       throw new Error(resp?.msg || 'channel detail request failed')
     }
     if (!resp.data) return getChannel(id) || null
-    if (Number(resp.data.memberType ?? 0) < 0) {
+    if (Number(resp.data.memberType ?? 0) <= 0) {
+      // 对齐旧 im `deleteChat`：频道详情判定为非成员（未加入/已退出/被移出）时，
+      // 必须同步删除频道会话（内存 + 本地库），避免历史列表残留“可加入频道”旧会话。
       await removeChannel(activeUid, id)
+      if (activeUid) {
+        const { useChatStore } = await import('@/stores/useChatStore')
+        await useChatStore().deleteConversation(activeUid, `2_${id}`).catch((e) => {
+          console.warn('[ChannelStore] delete channel conversation after non-member detail failed:', e)
+        })
+      }
       return null
     }
 
