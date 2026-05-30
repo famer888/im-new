@@ -142,6 +142,9 @@ const showChannelJoinButton = computed(() => {
 const hasChannelPublishAuthority = computed(() => {
   const channel = currentChannel.value
   if (!channel) return true
+  // 对齐老 im：频道主/管理员应始终可输入。部分线路偶发不返回 adminPrivacy 时，按成员身份兜底避免误判成只读。
+  const memberType = Number(channel.memberType ?? -1)
+  if (memberType === 1 || memberType === 2) return true
   const adminPrivacy = Number(channel.adminPrivacy ?? 0)
   return adminPrivacy > 0 && (adminPrivacy & 2) !== 0
 })
