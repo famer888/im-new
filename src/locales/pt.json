@@ -240,6 +240,7 @@
   "群二维码默认文件名": "QR-Grupo-{id}",
   "频道二维码": "Código QR do Canal",
   "频道二维码默认文件名": "QR-Canal-{id}",
+  "通过二维码邀请": "Convidar via código QR",
   "二维码长期有效": "O código QR é válido permanentemente",
   "重置二维码": "Resetar Código QR",
   "二维码链接异常": "Link do código QR está anormal",
