@@ -335,9 +335,10 @@ async function handleDetailClose() {
 }
 
 .btn-accept {
-  width: 66px;
+  min-width: 66px;
+  width: auto;
   height: 24px;
-  padding: 0;
+  padding: 0 10px;
   line-height: 24px;
   background: #3369fe;
   color: #fff;
@@ -345,10 +346,14 @@ async function handleDetailClose() {
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .status-text {
-  width: 66px;
+  min-width: 66px;
+  width: auto;
+  padding: 0 10px;
   height: 24px;
   border: 1px solid #b9babe;
   display: flex;
@@ -358,5 +363,7 @@ async function handleDetailClose() {
   font-size: 14px;
   border-radius: 4px;
   flex-shrink: 0;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 </style>
