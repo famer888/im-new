@@ -286,6 +286,8 @@
   "入群审核中，您无法重复操作": "Group join request is pending. You cannot repeat this operation.",
   "加入群聊": "Join Group Chat",
   "加入频道": "Join Channel",
+  "您已加入频道": "You have joined this channel",
+  "你已加入频道": "You have joined this channel",
   "进入频道": "Enter Channel",
   "正在获取频道权限...": "Getting channel permissions...",
   "频道权限获取失败，请稍后重试": "Failed to get channel permissions. Please try again later.",
