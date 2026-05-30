@@ -5,6 +5,7 @@ import QrcodeVue from 'qrcode.vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChannelStore } from '@/stores/useChannelStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType, MessageType } from '@/types'
@@ -14,6 +15,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
+import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { shouldShowChannelShareInfo } from './channelShareVisibility'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import codeIcon from '@/assets/images/chat/code.png'
@@ -24,12 +26,15 @@ interface ChannelMember {
   name: string
   avatar: string
   memberType: number
+  online?: boolean
+  createTime?: number
 }
 
 const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const channelStore = useChannelStore()
+const contactStore = useContactStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
 
@@ -189,6 +194,37 @@ function shouldLoadMembersByDetail(data: Record<string, any> | null | undefined)
   return Number(data?.adminPrivacy ?? 0) > 0
 }
 
+// 统一把不同接口形态的在线字段转成 boolean，避免 "0"/"1"/true/false 混用导致误判。
+function normalizeOnlineFlag(value: unknown): boolean | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (value === 1) return true
+    if (value === 0) return false
+    return undefined
+  }
+  const text = String(value).trim().toLowerCase()
+  if (text === 'true' || text === '1') return true
+  if (text === 'false' || text === '0') return false
+  return undefined
+}
+
+function normalizeTimestampMs(value: unknown): number | undefined {
+  const num = Number(value ?? 0)
+  if (!Number.isFinite(num) || num <= 0) return undefined
+  // 兼容部分线路返回秒级时间戳，统一转成毫秒用于“xx前在线”文案。
+  return num < 1e12 ? Math.trunc(num * 1000) : Math.trunc(num)
+}
+
+function getMemberStatus(member: ChannelMember): string {
+  const contact = contactStore.getContact(member.id)
+  // 优先用实时推送的好友在线状态；没有推送时回退到频道成员接口字段。
+  const online = typeof contact?.online === 'boolean' ? contact.online : member.online
+  if (online) return t('在线')
+  const lastActiveMs = contact?.onlineStatusUpdateTime ?? member.createTime
+  return formatLastActiveText(lastActiveMs, t)
+}
+
 async function loadChannelMembers(targetChannelId: string, seq: number) {
   if (!targetChannelId || seq !== loadSeq) return
   const cachedMembers = readCache<ChannelMember[]>(membersCacheKey(targetChannelId), CHANNEL_MEMBERS_CACHE_TTL_MS)
@@ -205,11 +241,25 @@ async function loadChannelMembers(targetChannelId: string, seq: number) {
     const parsedMembers = rows.map((raw) => {
       const user = raw.userInfoDTO || raw
       const id = String(user.uid ?? user.id ?? raw.uid ?? raw.id ?? '')
+      // 兼容 onLineStatus / online 两套字段名，按“用户信息优先、原始行兜底”合并。
+      const online =
+        normalizeOnlineFlag((user as Record<string, unknown>).onLineStatus)
+        ?? normalizeOnlineFlag((raw as Record<string, unknown>).onLineStatus)
+        ?? normalizeOnlineFlag((user as Record<string, unknown>).online)
+        ?? normalizeOnlineFlag((raw as Record<string, unknown>).online)
+      // 兼容 createTime / lastTime，两者都可能作为“最后活跃时间”返回。
+      const createTime =
+        normalizeTimestampMs((user as Record<string, unknown>).createTime)
+        ?? normalizeTimestampMs((raw as Record<string, unknown>).createTime)
+        ?? normalizeTimestampMs((user as Record<string, unknown>).lastTime)
+        ?? normalizeTimestampMs((raw as Record<string, unknown>).lastTime)
       return {
         id,
         name: String(user.name || user.nickName || user.nickname || id),
         avatar: String(user.icon || raw.icon || ''),
         memberType: Number(raw.memberType ?? raw.type ?? raw.role ?? 3),
+        online,
+        createTime,
       }
     }).filter((item) => item.id)
     members.value = parsedMembers
@@ -741,7 +791,7 @@ onBeforeUnmount(() => {
           />
           <div class="member-info">
             <div class="member-name">{{ member.name || member.id }}</div>
-            <div class="member-status">在线</div>
+            <div class="member-status">{{ getMemberStatus(member) }}</div>
           </div>
           <span v-if="roleLabel(member.memberType)" class="role-badge">
             {{ roleLabel(member.memberType) }}
