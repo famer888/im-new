@@ -3289,10 +3289,10 @@ onBeforeUnmount(() => {
     @dragover="handleDragOver"
   >
     <div v-if="showChannelPermissionLoadingTip" class="shutup-tip channel-state-tip">
-      正在获取频道权限...
+      {{ t('正在获取频道权限...') }}
     </div>
     <div v-else-if="showChannelPermissionErrorTip" class="shutup-tip channel-state-tip">
-      频道权限获取失败，请稍后重试
+      {{ t('频道权限获取失败，请稍后重试') }}
     </div>
     <div v-else-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
       {{ t('该频道已禁用') }}
