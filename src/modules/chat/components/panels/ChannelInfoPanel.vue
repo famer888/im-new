@@ -523,8 +523,8 @@ async function loadManagerList(options?: { preferCache?: boolean; showLoading?: 
   try {
     const resp = await getChannelManages({ channelId: targetChannelId, pageNum: 1, pageSize: 200 })
     const parsed = (resp.data?.rowList || [])
-      .map((row) => parseChannelManager(row as Record<string, unknown>))
-      .filter((item) => item.id)
+      .map((row: unknown) => parseChannelManager(row as Record<string, unknown>))
+      .filter((item: ChannelManager) => item.id)
     writeCache(managersCacheKey(targetChannelId), parsed)
     if (channelId.value !== targetChannelId) return
     applyManagersFromSource(parsed, targetChannelId)
@@ -617,6 +617,21 @@ function roleLabel(memberType: number): string {
   if (memberType === 1) return t('所有者')
   if (memberType === 2) return t('管理员')
   return ''
+}
+
+function openMemberProfile(member: ChannelMember) {
+  if (!member.id) return
+  // 与群成员列表保持一致：点击成员行直接打开资料弹窗，并把基础资料透传给弹窗首屏展示。
+  uiStore.openMemberInfo(
+    member.id,
+    '',
+    [member.id, member.name].filter(Boolean),
+    {
+      userId: member.id,
+      nickname: member.name || member.id,
+      avatar: member.avatar || '',
+    },
+  )
 }
 
 // 频道简介入口始终可打开，编辑能力在弹窗内按 canEditChannelDescription 单独限制。
@@ -1008,7 +1023,7 @@ onBeforeUnmount(() => {
 
       <div v-if="loadingMembers" class="member-loading">{{ t('加载中') }}...</div>
       <ul v-else class="member-list">
-        <li v-for="member in filteredMembers" :key="member.id">
+        <li v-for="member in filteredMembers" :key="member.id" @click="openMemberProfile(member)">
           <TextAvatar
             :name="member.name || member.id"
             :src="member.avatar || null"
@@ -1040,7 +1055,7 @@ onBeforeUnmount(() => {
           <div class="title">{{ t('管理员') }}（{{ managerCount }}/50）</div>
           <div v-if="loadingManagers" class="member-list loading">{{ t('加载中') }}...</div>
           <div v-else class="member-list">
-            <div v-if="managerOwner" class="member-item cursor">
+            <div v-if="managerOwner" class="member-item cursor" @click="openMemberProfile(managerOwner)">
               <TextAvatar
                 class="member-avatar"
                 :name="managerOwner.name || managerOwner.id"
@@ -1062,6 +1077,7 @@ onBeforeUnmount(() => {
               :key="member.id"
               class="member-item cursor"
               :class="{ 'has-remove-btn': member.removeAuthorize }"
+              @click="openMemberProfile(member)"
             >
               <TextAvatar
                 class="member-avatar"
@@ -1312,6 +1328,7 @@ onBeforeUnmount(() => {
     height: 50px;
     display: flex;
     align-items: center;
+    cursor: pointer;
   }
 }
 

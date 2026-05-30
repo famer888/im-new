@@ -159,6 +159,37 @@ export interface ChannelUsersResp {
   }
 }
 
+export interface ChannelManageListResp {
+  code: number
+  msg?: string
+  data?: {
+    rowList?: Array<{
+      uid?: number | string
+      id?: number | string
+      type?: number
+      memberType?: number
+      setterUid?: number | string
+      setterName?: string
+      setterNickName?: string
+      setter?: string
+      userInfoDTO?: {
+        uid?: number | string
+        id?: number | string
+        nickName?: string
+        nickname?: string
+        name?: string
+        icon?: string
+        onLineStatus?: boolean | number | string
+        online?: boolean | number | string
+        createTime?: number | string
+        lastTime?: number | string
+      }
+    }>
+    total?: number
+    adminNumMax?: number
+  }
+}
+
 export interface ChannelUpdateMemberResp {
   code: number
   msg?: string
@@ -307,11 +338,26 @@ export async function getChannelUsers(data: {
   return requestChannelJson<ChannelUsersResp>('/channel/channelMember/pageChannelNormalMember', data)
 }
 
+export async function getChannelManages(data: {
+  channelId: number | string
+  pageNum: number
+  pageSize: number
+}): Promise<ChannelManageListResp> {
+  return requestChannelJson<ChannelManageListResp>('/channel/channelAdminRight/pageAdmin', data)
+}
+
 export async function updateMember(data: {
   channelId: number | string
   isDisturb: boolean | number
 }): Promise<ChannelUpdateMemberResp> {
   return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelMember/updateMember', data)
+}
+
+export async function deleteChannelManage(data: {
+  channelId: number | string
+  uid: number | string
+}): Promise<ChannelUpdateMemberResp> {
+  return requestChannelJson<ChannelUpdateMemberResp>('/channel/channelAdminRight/delete', data)
 }
 
 export async function updateChannel(data: {
