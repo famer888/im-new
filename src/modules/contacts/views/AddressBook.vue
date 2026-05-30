@@ -125,6 +125,10 @@ const groupedContacts = computed((): GroupedContacts[] => {
   })
 })
 
+const visibleChannelsInAddressBook = computed(() => (
+  channelStore.channels.filter((channel) => isJoinedChannelForAddressBook(channel))
+))
+
 const bookRows = computed((): BookRow[] => {
   const rows: BookRow[] = [
     {
@@ -151,7 +155,7 @@ const bookRows = computed((): BookRow[] => {
   })
 
   if (channelExpanded.value) {
-    for (const channel of channelStore.channels) {
+    for (const channel of visibleChannelsInAddressBook.value) {
       rows.push({ key: `channel-${channel.id}`, type: 'channel', channel })
     }
 
@@ -258,6 +262,12 @@ function getContactDisplayName(contact: ContactItem) {
 
 function getChannelDisplayName(channel: ChannelItem) {
   return channel.channelName || channel.name || channel.id || ''
+}
+
+function isJoinedChannelForAddressBook(channel: ChannelItem): boolean {
+  const memberType = Number(channel.memberType ?? -1)
+  // 仅把 memberType=0 视为“未加入频道”，其余状态都不按“是否本人创建”过滤。
+  return memberType !== 0
 }
 
 function sanitizeName(value: string | null | undefined) {
