@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { emit, listen } from '@tauri-apps/api/event'
+import { emit, emitTo, listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import closeIcon from '@/assets/images/notification-popup/close.png'
@@ -123,7 +123,10 @@ onMounted(async () => {
 async function handleClick() {
   if (data.value) {
     const win = getCurrentWindow()
-    await emit('notification:click', { conversationId: data.value.conversationId })
+    const conversationId = data.value.conversationId
+    // 对齐旧 im 的“通知窗定向派发到主窗”：优先发给 main，失败再走全局兜底。
+    await emitTo('main', 'notification:click', { conversationId })
+      .catch(() => emit('notification:click', { conversationId }))
     await win.close()
   }
 }

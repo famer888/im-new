@@ -847,7 +847,8 @@ export async function setupTauriListeners() {
 
     const chatStore = useChatStore()
     const [convTypeRaw, convTargetId = ''] = conversationId.split('_')
-    if (Number(convTypeRaw) === 2 && convTargetId) {
+    const convType = Number(convTypeRaw)
+    if (convType === 2 && convTargetId) {
       const channelStore = useChannelStore()
       // 系统通知点开频道会话时，不等待详情接口，先恢复窗口和会话焦点。
       void channelStore.ensureChannelDetailReady(convTargetId)
@@ -858,9 +859,13 @@ export async function setupTauriListeners() {
         currentConversationId: chatStore.currentConversationId || '',
       })
     }
-    chatStore.setCurrentConversation(conversationId)
     const openedNotificationModule = await openNotificationModuleByConversationId(conversationId)
     if (!openedNotificationModule) {
+      if ([0, 1, 2].includes(convType) && convTargetId) {
+        // 对齐旧 im：通知点击后先确保会话条目存在，再切到该会话，避免边界时机点开空白聊天区。
+        chatStore.ensureConversation(convType, convTargetId)
+      }
+      chatStore.setCurrentConversation(conversationId)
       const uiStore = useUIStore()
       uiStore.setDetailView('chat')
     }
