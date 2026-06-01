@@ -258,6 +258,7 @@ pub fn send_private_message(
     flag: i64,
     snapchat_time: i32,
 ) -> Result<(), SendError> {
+    const OFFICIAL_ACCOUNT_TARGET_ID: &str = "9900";
     let friend_uid: i64 = friend_uid_str.parse().map_err(|_| {
         SendError::InvalidId(format!("friend_uid '{}' not numeric", friend_uid_str))
     })?;
@@ -280,10 +281,13 @@ pub fn send_private_message(
         .map(|(v, k)| (v as i32, k));
 
     let is_file_helper = friend_uid_str == FILE_HELPER_TARGET_ID;
+    // 对齐前端会话语义：官方号 9900 可能没有可用好友公钥，发送时允许走明文 content 分支。
+    let is_official_account = friend_uid_str == OFFICIAL_ACCOUNT_TARGET_ID;
     let is_functional_message = msg_type == 12 || msg_type == 18;
     if friend_app_key.is_none()
         && friend_web_key.is_none()
         && !is_file_helper
+        && !is_official_account
         && !is_functional_message
     {
         return Err(SendError::MissingFriendKey(friend_uid_str.to_string()));

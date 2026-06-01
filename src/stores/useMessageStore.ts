@@ -4,6 +4,7 @@ import {
   CHANNEL_NOTIFICATION_TARGET_ID,
   GROUP_NOTIFICATION_TARGET_ID,
   isFileHelperTargetId,
+  isOfficialAccountTargetId,
   useChatStore,
 } from './useChatStore'
 import { useAuthStore } from './useAuthStore'
@@ -1485,7 +1486,13 @@ export const useMessageStore = defineStore('message', () => {
         updateMessageStatus(optimisticId, -1)
         throw e
       }
-    } else if (convType === 0 && targetId && msgType !== 12 && msgType !== 18) {
+    } else if (
+      convType === 0
+      && targetId
+      && !isOfficialAccountTargetId(targetId)
+      && msgType !== 12
+      && msgType !== 18
+    ) {
       try {
         const stepStartedAt = performance.now()
         if (isSingleVideo) {
