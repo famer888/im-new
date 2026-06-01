@@ -219,6 +219,8 @@ export const useChannelStore = defineStore('channel', () => {
   function normalizeChannel(item: any): Channel {
     const id = textValue(item.id ?? item.channelId)
     const status = Number(item.status ?? 0)
+    // 兼容服务端字段差异：部分链路返回 member_type（下划线）而不是 memberType（驼峰）。
+    const rawMemberType = item.memberType ?? item.member_type
     const name = pickChannelName(id, [item.name, item.channelName])
     const channelName = pickChannelName(id, [item.channelName, item.name])
     return {
@@ -234,9 +236,9 @@ export const useChannelStore = defineStore('channel', () => {
       isDisable: toBool(item.isDisable ?? item.is_disable, status === 3),
       adminPrivacy: Number(item.adminPrivacy ?? 0),
       isDisturb: toBool(item.isDisturb ?? item.is_disturb ?? false),
-      memberType: item.memberType === undefined || item.memberType === null
+      memberType: rawMemberType === undefined || rawMemberType === null || rawMemberType === ''
         ? null
-        : Number(item.memberType),
+        : Number(rawMemberType),
       alias: item.alias ?? null,
       remark: item.remark ?? null,
       link: item.link ?? null,
@@ -581,7 +583,10 @@ export const useChannelStore = defineStore('channel', () => {
       throw new Error(resp?.msg || 'channel detail request failed')
     }
     if (!resp.data) return getChannel(id) || null
-    if (Number(resp.data.memberType ?? 0) <= 0) {
+    const detailData = resp.data as any
+    const rawMemberType = detailData.memberType ?? detailData.member_type
+    const hasMemberType = rawMemberType !== undefined && rawMemberType !== null && rawMemberType !== ''
+    if (hasMemberType && Number(rawMemberType) <= 0) {
       // 对齐旧 im `deleteChat`：频道详情判定为非成员（未加入/已退出/被移出）时，
       // 必须同步删除频道会话（内存 + 本地库），避免历史列表残留“可加入频道”旧会话。
       await removeChannel(activeUid, id)
