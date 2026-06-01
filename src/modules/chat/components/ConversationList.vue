@@ -195,12 +195,29 @@ function isHiddenOnlyGroupEventConversation(conv: Conversation): boolean {
   return String(extra?.source || '') === 'group-event'
 }
 
-function isEmptyGroupConversationPreview(conv: Conversation): boolean {
-  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+function hasMeaningfulDigestText(raw: string | null | undefined): boolean {
+  // 兼容历史脏数据：零宽字符不应算作“有摘要”。
+  return raw ? raw.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0 : false
+}
+
+function hasMeaningfulLoadedHistory(conv: Conversation): boolean {
+  const latest = getLoadedLatestVisibleMessage(conv)
+  if (!latest) return false
+  // 仅有空内容/0时间的占位消息不算历史，避免“点开联系人后空会话残留在最近记录”。
+  return Number(latest.sendTime || 0) > 0 || hasMeaningfulDigestText(getMessageDigest(latest))
+}
+
+function isConversationWithoutHistory(conv: Conversation): boolean {
+  // 对齐旧 im：仅因“点开联系人”创建的空会话不应污染最近记录；
+  // 但有草稿/未读等待处理内容时必须保留可见。
+  if (isFileHelperTargetId(conv.targetId)) return false
+  if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  if (isChannelNotificationConversation(conv)) return false
   if (shouldShowDraft(conv)) return false
+  if (Number(conv.unreadCount || 0) > 0) return false
   if (Number(conv.lastMsgTime || 0) > 0) return false
-  if (String(conv.lastMsgDigest || '').trim()) return false
-  return !getLoadedLatestVisibleMessage(conv)
+  if (hasMeaningfulDigestText(conv.lastMsgDigest || '')) return false
+  return !hasMeaningfulLoadedHistory(conv)
 }
 
 const contactIdSet = computed(() => new Set(contactStore.contacts.map((contact) => contact.id)))
@@ -222,7 +239,7 @@ const normalConversations = computed(() =>
       && !isPendingInviteConversationPreview(c)
       && !isSuspiciousPlaceholderGroupConversation(c)
       && !isHiddenOnlyGroupEventConversation(c)
-      && !isEmptyGroupConversationPreview(c),
+      && !isConversationWithoutHistory(c),
   ),
 )
 
@@ -234,7 +251,7 @@ const archivedConversations = computed(() =>
       && !isPendingInviteConversationPreview(c)
       && !isSuspiciousPlaceholderGroupConversation(c)
       && !isHiddenOnlyGroupEventConversation(c)
-      && !isEmptyGroupConversationPreview(c),
+      && !isConversationWithoutHistory(c),
   ),
 )
 
