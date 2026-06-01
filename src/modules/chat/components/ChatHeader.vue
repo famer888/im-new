@@ -282,7 +282,7 @@ async function saveRemark() {
 
   const prevStored = contact?.remark || null
   try {
-    await updateContacts({
+    const res = await updateContacts({
       op: proto.ContactsOperator.REMARK,
       param: {
         contactsId: Number(targetId),
@@ -290,6 +290,11 @@ async function saveRemark() {
         noteName: val === '' ? '' : val,
       },
     })
+    // 与旧 im 的接口语义对齐：errCode=0/200 都算成功；失败时不能只改本地 UI。
+    const errCode = Number((res as any)?.commonResult?.errCode ?? 200)
+    if (errCode !== 200 && errCode !== 0) {
+      throw new Error((res as any)?.commonResult?.errMsg || String(errCode))
+    }
     if (contact) {
       contactStore.patchContact(contact.id, { remark: val || null })
     } else {
@@ -311,7 +316,7 @@ async function saveRemark() {
     } else {
       remarkDraft.value = title.value || OFFICIAL_ACCOUNT_NAME
     }
-    showToast(t('操作失败'), 'error')
+    showToast((e as Error)?.message || t('操作失败'), 'error')
   }
 }
 

@@ -5,6 +5,7 @@ import { useContactStore } from '@/stores/useContactStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import Toast from '@/components/Toast.vue'
 import { updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
 import editIcon from '@/assets/images/message/edit-icon.png'
@@ -25,6 +26,9 @@ const editingDepict = ref(false)
 const savingRemark = ref(false)
 const savingDepict = ref(false)
 const copyToastVisible = ref(false)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 let copyToastTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(contact, (val) => {
@@ -66,6 +70,12 @@ async function handleCopyId() {
   }
 }
 
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
+}
+
 async function saveRemark() {
   if (!contact.value || savingRemark.value) return
   const targetId = contact.value.id
@@ -86,16 +96,21 @@ async function saveRemark() {
         noteName: nextRemark,
       },
     })
-    const { errCode, errMsg } = (res as any)?.commonResult || {}
-    if (errCode == 200) {
+    // 对齐旧 im：服务端成功码既可能是 200，也可能是 0。
+    const errCode = Number((res as any)?.commonResult?.errCode ?? 200)
+    const errMsg = String((res as any)?.commonResult?.errMsg || '').trim()
+    if (errCode === 200 || errCode === 0) {
       contactStore.patchContact(targetId, { remark: nextRemark || null })
       editingRemark.value = false
+      showToast(t('修改成功'), 'success')
     } else {
       remarkDraft.value = currentRemark
+      showToast(errMsg || t('操作失败'), 'error')
       console.warn('[FriendDetail] update remark failed:', errMsg || errCode)
     }
   } catch (error) {
     remarkDraft.value = currentRemark
+    showToast((error as Error)?.message || t('操作失败'), 'error')
     console.warn('[FriendDetail] update remark failed:', error)
   } finally {
     savingRemark.value = false
@@ -122,16 +137,21 @@ async function saveDepict() {
         depict: nextDepict,
       },
     })
-    const { errCode, errMsg } = (res as any)?.commonResult || {}
-    if (errCode == 200) {
+    // 对齐旧 im：服务端成功码既可能是 200，也可能是 0。
+    const errCode = Number((res as any)?.commonResult?.errCode ?? 200)
+    const errMsg = String((res as any)?.commonResult?.errMsg || '').trim()
+    if (errCode === 200 || errCode === 0) {
       contactStore.patchContact(targetId, { depict: nextDepict || null })
       editingDepict.value = false
+      showToast(t('修改成功'), 'success')
     } else {
       depictDraft.value = currentDepict
+      showToast(errMsg || t('操作失败'), 'error')
       console.warn('[FriendDetail] update depict failed:', errMsg || errCode)
     }
   } catch (error) {
     depictDraft.value = currentDepict
+    showToast((error as Error)?.message || t('操作失败'), 'error')
     console.warn('[FriendDetail] update depict failed:', error)
   } finally {
     savingDepict.value = false
@@ -208,6 +228,11 @@ async function saveDepict() {
       </div>
     </div>
     <div v-if="copyToastVisible" class="copy-toast">{{ t('复制成功') }}</div>
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </div>
 </template>
 

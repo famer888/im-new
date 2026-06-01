@@ -183,8 +183,11 @@ async function handleNicknameSave() {
         ops: [proto.UserOperator.NICK_NAME],
       })
       const commonResult = response.commonResult
-      if (commonResult?.errCode === 200) {
+      // 对齐旧 im：昵称修改成功后必须有明确成功提示，且兼容 errCode=0/200。
+      const errCode = Number(commonResult?.errCode ?? 200)
+      if (errCode === 200 || errCode === 0) {
         authStore.updateProfile({ nickname: nextName })
+        showToast($t('修改成功'))
       } else {
         // 昵称更新失败时保留编辑态并展示后端原因，避免用户误以为前端仅支持固定长度。
         nicknameDraft.value = authStore.nickname || ''

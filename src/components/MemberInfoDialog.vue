@@ -7,6 +7,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import Toast from '@/components/Toast.vue'
 import { contactsRelation, findContactsList, updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { eventBus } from '@/utils/eventBus'
@@ -79,6 +80,9 @@ const addVerifyMessage = ref('')
 const sendingAdd = ref(false)
 const remarkInputRef = ref<HTMLInputElement | null>(null)
 const depictInputRef = ref<HTMLInputElement | null>(null)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
 
 watch(visible, (val) => {
   if (val) {
@@ -99,6 +103,12 @@ watch(addVerifyMessage, (value) => {
 
 function close() {
   uiStore.closeMemberInfo()
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
 }
 
 function truncateVerifyMessage(value: string) {
@@ -147,16 +157,21 @@ async function saveRemark() {
         noteName: newRemark,
       },
     })
-    const { errCode, errMsg } = (res as any)?.commonResult || {}
-    if (errCode == 200) {
+    // 对齐旧 im：服务端成功码既可能是 200，也可能是 0。
+    const errCode = Number((res as any)?.commonResult?.errCode ?? 200)
+    const errMsg = String((res as any)?.commonResult?.errMsg || '').trim()
+    if (errCode === 200 || errCode === 0) {
       contactStore.patchContact(userId.value, { remark: newRemark || null })
       editingRemark.value = false
+      showToast(t('修改成功'), 'success')
     } else {
       remarkDraft.value = currentRemark
+      showToast(errMsg || t('操作失败'), 'error')
       console.warn('[MemberInfoDialog] update remark failed:', errMsg || errCode)
     }
   } catch (error) {
     remarkDraft.value = currentRemark
+    showToast((error as Error)?.message || t('操作失败'), 'error')
     console.warn('[MemberInfoDialog] update remark failed:', error)
   } finally {
     savingRemark.value = false
@@ -182,16 +197,21 @@ async function saveDepict() {
           depict: newDepict,
         },
       })
-      const { errCode, errMsg } = (res as any)?.commonResult || {}
-      if (errCode == 200) {
+      // 对齐旧 im：服务端成功码既可能是 200，也可能是 0。
+      const errCode = Number((res as any)?.commonResult?.errCode ?? 200)
+      const errMsg = String((res as any)?.commonResult?.errMsg || '').trim()
+      if (errCode === 200 || errCode === 0) {
         contactStore.patchContact(userId.value, { depict: newDepict || null })
         editingDepict.value = false
+        showToast(t('修改成功'), 'success')
       } else {
         depictDraft.value = currentDepict
+        showToast(errMsg || t('操作失败'), 'error')
         console.warn('[MemberInfoDialog] update depict failed:', errMsg || errCode)
       }
     } catch (error) {
       depictDraft.value = currentDepict
+      showToast((error as Error)?.message || t('操作失败'), 'error')
       console.warn('[MemberInfoDialog] update depict failed:', error)
     } finally {
       savingDepict.value = false
@@ -401,6 +421,11 @@ async function handleConfirmAdd() {
         </div>
       </div>
     </div>
+    <Toast
+      v-model:visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </Teleport>
 </template>
 
