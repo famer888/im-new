@@ -22,7 +22,8 @@ const activeIndex = ref(0)
 const itemRefs = ref<HTMLElement[]>([])
 
 const members = computed(() => {
-  const list = groupStore.getMembers(props.groupId)
+  // @成员候选里隐藏当前登录用户，避免出现“@自己”的无效选择。
+  const list = groupStore.getMembers(props.groupId).filter((member) => member.userId !== authStore.uid)
   if (!search.value.trim()) return list
   const kw = search.value.toLowerCase()
   return list.filter((m) => m.nickname?.toLowerCase().includes(kw) || m.userId.includes(kw))
