@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 
@@ -17,16 +18,23 @@ const emit = defineEmits<{
 
 const groupStore = useGroupStore()
 const authStore = useAuthStore()
+const contactStore = useContactStore()
 const search = ref('')
 const activeIndex = ref(0)
 const itemRefs = ref<HTMLElement[]>([])
+
+function getMemberDisplayName(member: GroupMember): string {
+  // @成员展示名与旧 im 一致：优先显示好友备注名，没有备注再回退昵称和 uid。
+  if (member.userId === 'all') return member.nickname || member.userId
+  return contactStore.getDisplayName(member.userId) || member.nickname || member.userId
+}
 
 const members = computed(() => {
   // @成员候选里隐藏当前登录用户，避免出现“@自己”的无效选择。
   const list = groupStore.getMembers(props.groupId).filter((member) => member.userId !== authStore.uid)
   if (!search.value.trim()) return list
   const kw = search.value.toLowerCase()
-  return list.filter((m) => m.nickname?.toLowerCase().includes(kw) || m.userId.includes(kw))
+  return list.filter((m) => getMemberDisplayName(m).toLowerCase().includes(kw) || m.userId.includes(kw))
 })
 
 const atAllItem = computed<GroupMember>(() => ({
@@ -58,7 +66,7 @@ watch([() => props.visible, search, selectableMembers], () => {
 })
 
 function handleSelect(member: GroupMember) {
-  emit('select', { uid: member.userId, name: member.nickname || member.userId })
+  emit('select', { uid: member.userId, name: getMemberDisplayName(member) })
   emit('update:visible', false)
 }
 
@@ -107,13 +115,13 @@ defineExpose({ handleKeyboard })
         >
           <TextAvatar
             class="member-avatar"
-            :name="member.userId === 'all' ? '@' : (member.nickname || member.userId)"
+            :name="member.userId === 'all' ? '@' : getMemberDisplayName(member)"
             :src="member.avatar"
             :avatar-type="member.userId === 'all' ? 'text' : 'friend'"
             :size="32"
           />
           <h2>
-            <span class="name">{{ member.nickname || member.userId }}</span>
+            <span class="name">{{ getMemberDisplayName(member) }}</span>
           </h2>
           <span v-if="member.userId !== 'all' && member.role === 0" class="role-tag owner">群主</span>
           <span v-else-if="member.role === 1" class="role-tag admin">管理员</span>
