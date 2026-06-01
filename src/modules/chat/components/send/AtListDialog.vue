@@ -60,8 +60,34 @@ watch(() => props.keyword, (v) => {
   search.value = v || ''
 }, { immediate: true })
 
-watch([() => props.visible, search, selectableMembers], () => {
+watch(() => props.visible, (visible) => {
+  if (!visible) return
   activeIndex.value = 0
+  void scrollActiveIntoView()
+})
+
+watch(search, () => {
+  activeIndex.value = 0
+  void scrollActiveIntoView()
+})
+
+watch(selectableMembers, (next, prev) => {
+  if (!props.visible) return
+  if (!next.length) {
+    activeIndex.value = 0
+    return
+  }
+
+  // 候选列表被在线状态推送等外部数据刷新时，按 uid 保持当前选中，避免光标自动跳回首项。
+  const previousActiveUid = prev?.[activeIndex.value]?.userId
+  if (!previousActiveUid) {
+    activeIndex.value = Math.min(activeIndex.value, next.length - 1)
+    void scrollActiveIntoView()
+    return
+  }
+
+  const nextIndex = next.findIndex((member) => member.userId === previousActiveUid)
+  activeIndex.value = nextIndex >= 0 ? nextIndex : 0
   void scrollActiveIntoView()
 })
 
