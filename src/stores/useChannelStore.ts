@@ -201,6 +201,11 @@ export const useChannelStore = defineStore('channel', () => {
     return value === undefined || value === null ? '' : String(value).trim()
   }
 
+  function isValidChannelId(id: string): boolean {
+    // 频道协议里的 channelId 是数字；过滤掉历史脏数据里的“频道名当 ID”，避免通讯录展示异常条目。
+    return /^\d+$/.test(id)
+  }
+
   function meaningfulChannelName(id: string, value: unknown): string | null {
     const text = textValue(value)
     if (!text || text === id) return null
@@ -286,7 +291,7 @@ export const useChannelStore = defineStore('channel', () => {
     for (const list of lists) {
       for (const item of list) {
         const id = String(item.id || item.channelId || '')
-        if (!id) continue
+        if (!id || !isValidChannelId(id)) continue
         map.set(id, mergeChannelRecord(map.get(id), { ...item, id, channelId: id }))
       }
     }
@@ -307,7 +312,8 @@ export const useChannelStore = defineStore('channel', () => {
 
       for (const conv of conversations) {
         if (conv.type !== 2) continue
-        const channelId = String(conv.targetId || '')
+        const channelId = String(conv.targetId || '').trim()
+        if (!isValidChannelId(channelId)) continue
         if (!channelId || fallbackSeen.has(channelId)) continue
         fallbackSeen.add(channelId)
         fallbackChannels.push(normalizeChannel({
@@ -341,7 +347,8 @@ export const useChannelStore = defineStore('channel', () => {
         try {
           const localRows = await tauriInvoke<any[]>('get_channels', { uid })
           localChannels = Array.isArray(localRows)
-            ? filterRemovedChannels(localRows.map((item) => normalizeChannel(item)), uid)
+            // 历史版本可能把异常会话 ID 写进 channels 表，这里只保留合法频道 ID。
+            ? filterRemovedChannels(localRows.map((item) => normalizeChannel(item)).filter((item) => isValidChannelId(item.id)), uid)
             : []
           channelDebug('local get_channels done', {
             rawCount: Array.isArray(localRows) ? localRows.length : -1,
@@ -438,7 +445,7 @@ export const useChannelStore = defineStore('channel', () => {
         apiSucceeded = true
         for (const item of list) {
           const id = String(item.channelId || (item as ChannelListItem & { id?: string | number }).id || '')
-          if (!id || seen.has(id) || isChannelRemoved(id, uid) || !isJoinedChannel(item)) continue
+          if (!id || !isValidChannelId(id) || seen.has(id) || isChannelRemoved(id, uid) || !isJoinedChannel(item)) continue
           seen.add(id)
           allChannels.push(normalizeChannel(item))
         }
@@ -528,7 +535,7 @@ export const useChannelStore = defineStore('channel', () => {
     options: { allowRemoved?: boolean; uid?: string } = {},
   ) {
     const id = String(channelId || '').trim()
-    if (!id) return
+    if (!id || !isValidChannelId(id)) return
     if (options.uid) activeUid = options.uid
     if (isChannelRemoved(id) && !options.allowRemoved) return
     if (options.allowRemoved) unmarkChannelRemoved(activeUid, id)
