@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
@@ -102,12 +102,13 @@ const imageData = computed((): {
   thumbnailUrl: string
   name: string
   localPath: string
+  fileKey: string
   width: number
   height: number
   size: number
 } => {
   const raw = (props.message.content ?? '').trim()
-  if (!raw) return { url: '', thumbnailUrl: '', name: '', localPath: '', width: 0, height: 0, size: 0 }
+  if (!raw) return { url: '', thumbnailUrl: '', name: '', localPath: '', fileKey: '', width: 0, height: 0, size: 0 }
 
   try {
     const parsed = JSON.parse(raw)
@@ -128,6 +129,7 @@ const imageData = computed((): {
       thumbnailUrl,
       name,
       localPath,
+      fileKey: String(parsed.fileKey || parsed.file_key || '').trim(),
       width: Number(parsed.width || 0),
       height: Number(parsed.height || 0),
       size: Number(parsed.size || parsed.fileSize || 0),
@@ -142,6 +144,7 @@ const imageData = computed((): {
       thumbnailUrl: normalizedThumbUrl || normalizedUrl,
       name: '',
       localPath: '',
+      fileKey: '',
       width: 0,
       height: 0,
       size: Number(size || 0),
@@ -224,7 +227,15 @@ const imageBoxStyle = computed(() => {
     height: `${height}px`,
   }
 })
-const fileKey = computed(() => String(extraData.value.fileKey || extraData.value.file_key || '').trim())
+const fileKey = computed(() =>
+  // 单聊/频道常把 fileKey 放在 content；这里和视频消息保持一致，避免只读 extra 导致无法解密下载。
+  normalizeResolvedFileKey(
+    imageData.value.fileKey ||
+      extraData.value.fileKey ||
+      extraData.value.file_key ||
+      '',
+  ).trim(),
+)
 const attachmentKey = computed(() =>
   String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
 )
@@ -233,6 +244,26 @@ const groupId = computed(() => {
   if (extraGroupId) return extraGroupId
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
+})
+const privateAttachmentCandidates = computed(() => {
+  const extra = extraData.value
+  const candidates = Array.isArray(extra.cipherCandidates)
+    ? extra.cipherCandidates
+        .map((candidate: any) => ({
+          version: Number(candidate?.version || extra.version || 1),
+          source: String(candidate?.source || extra.source || ''),
+          attachmentKey: String(candidate?.attachmentKey || candidate?.attachment_key || ''),
+        }))
+        .filter((candidate: { attachmentKey: string }) => !!candidate.attachmentKey)
+    : []
+  if (attachmentKey.value && candidates.length === 0) {
+    candidates.push({
+      version: Number(extra.version || 1),
+      source: String(extra.source || ''),
+      attachmentKey: attachmentKey.value,
+    })
+  }
+  return candidates
 })
 const imageCacheKey = computed(() => [
   props.message.id || '',
@@ -331,13 +362,19 @@ async function openPreview() {
       import('@tauri-apps/api/core'),
       import('@tauri-apps/api/window') as Promise<any>,
     ])
+    // 与旧版行为对齐：预览窗先携带可用 fileKey，便于“默认应用打开”优先走本地下载链路而不是前端 fetch 转存。
+    const resolvedFileKey = await resolveFileKey()
     const bounds = await getMediaWindowBounds(windowApi)
+    const remoteOriginalUrl = isRemoteImageSrc(imageData.value.url) ? imageData.value.url : ''
 
     mediaViewerState.send({
       title: '图片',
       mediaType: 'image',
       src: previewSrc.value,
       filePath: localFilePath.value || null,
+      originalUrl: remoteOriginalUrl,
+      fileKey: resolvedFileKey,
+      fileName: imageData.value.name || '',
       width: imageData.value.width || undefined,
       height: imageData.value.height || undefined,
     })
@@ -468,6 +505,25 @@ async function getImageSavePath(join: (...paths: string[]) => Promise<string>, b
 
 async function resolveFileKey(): Promise<string> {
   if (fileKey.value) return fileKey.value
+  const plainAttachmentKey = normalizeResolvedFileKey(attachmentKey.value)
+  if (plainAttachmentKey) return plainAttachmentKey
+
+  const conversationId = String(props.message.conversationId || '')
+  if (conversationId.startsWith('0_')) {
+    const senderId = String(props.message.senderId || '').trim()
+    for (const candidate of privateAttachmentCandidates.value) {
+      // 单聊附件可能只带 attachmentKey，需要先解出真实 fileKey 才能下载/默认应用打开。
+      const resolved = await resolvePrivateAttachmentFileKey({
+        uid: authStore.uid,
+        senderId,
+        version: candidate.version,
+        source: candidate.source,
+        attachmentKey: candidate.attachmentKey,
+      })
+      if (resolved) return resolved
+    }
+  }
+
   if (!attachmentKey.value || !groupId.value) return ''
 
   try {

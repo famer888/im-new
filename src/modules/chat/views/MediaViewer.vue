@@ -1161,8 +1161,13 @@ async function openWithDefaultApp() {
   }
   if ((window as any).__TAURI_INTERNALS__ && !isLocalLikePath(target)) {
     try {
-      // blob/data 源没有真实磁盘路径，Windows 默认应用无法直接接收；先落盘再打开。
-      target = await ensureLocalImageForDefaultApp()
+      const downloadedImage = await downloadImageForDefaultApp({ silent: true })
+      if (downloadedImage) {
+        target = downloadedImage
+      } else {
+        // blob/data 源没有真实磁盘路径，Windows 默认应用无法直接接收；先落盘再打开。
+        target = await ensureLocalImageForDefaultApp()
+      }
     } catch (error) {
       console.warn('[media-viewer] fallback save image for default app failed:', error)
       target = ''
@@ -1179,6 +1184,91 @@ async function openWithDefaultApp() {
   } catch (error) {
     console.warn('[media-viewer] openWithDefaultApp failed:', error)
   }
+}
+
+function defaultImageFileName(): string {
+  const explicit = String(payload.value?.fileName || payload.value?.title || '').trim()
+  if (explicit) return normalizeImageFileName(explicit)
+  const source = String(payload.value?.originalUrl || payload.value?.src || '').split('?')[0]
+  if (!source) return 'image.png'
+  try {
+    return normalizeImageFileName(pathBaseName(decodeURIComponent(new URL(source).pathname)))
+  } catch {
+    return normalizeImageFileName(pathBaseName(source))
+  }
+}
+
+function hashForDefaultOpen(value: string): string {
+  let hash = 5381
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(i)
+  }
+  return Math.abs(hash >>> 0).toString(16)
+}
+
+async function downloadImageForDefaultApp(options: { silent?: boolean } = {}): Promise<string> {
+  if (!(window as any).__TAURI_INTERNALS__ || isVideo.value || isFile.value) return ''
+  const url = String(payload.value?.originalUrl || payload.value?.src || '').trim()
+  if (!/^https?:\/\//i.test(url)) return ''
+  const key = String(payload.value?.fileKey || '').trim()
+  const [{ appDataDir, join }, { listen }] = await Promise.all([
+    import('@tauri-apps/api/path'),
+    import('@tauri-apps/api/event'),
+  ])
+  const baseDir = await appDataDir()
+  // 使用稳定 key 复用本地缓存，避免每次“默认打开”都重新下载，行为上对齐旧版“秒开”体验。
+  const stableId = `media-viewer-image-${hashForDefaultOpen(`${url}|${key}|${defaultImageFileName()}`)}`
+  const savePath = await join(baseDir, 'image-cache', 'default-open', stableId, defaultImageFileName())
+  const doneEvent = `file:done:${stableId}`
+  const errorEvent = `file:error:${stableId}`
+  return new Promise(async (resolve) => {
+    let settled = false
+    let timeout = 0
+    const listeners: Array<() => void> = []
+    const cleanup = () => {
+      window.clearTimeout(timeout)
+      listeners.forEach((stop) => stop())
+    }
+    timeout = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (!options.silent) showToast('图片准备超时，请稍后重试', 'error')
+      resolve('')
+    }, 20000)
+    listeners.push(await listen(doneEvent, (event: any) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(String(event?.payload?.filePath || event?.payload?.file_path || savePath))
+    }))
+    listeners.push(await listen(errorEvent, (event: any) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (!options.silent) {
+        showToast(`图片准备失败：${event?.payload?.error || '未知错误'}`, 'error')
+      }
+      resolve('')
+    }))
+    try {
+      await invoke('download_file', {
+        url,
+        fileKey: key,
+        savePath,
+        msgId: stableId,
+        logTag: 'image-default-open',
+        emitDataUrl: false,
+      })
+    } catch (error) {
+      if (settled) return
+      settled = true
+      cleanup()
+      const detail = error instanceof Error ? error.message : String(error || '未知错误')
+      if (!options.silent) showToast(`图片准备失败：${detail}`, 'error')
+      resolve('')
+    }
+  })
 }
 
 function defaultVideoFileName(): string {
