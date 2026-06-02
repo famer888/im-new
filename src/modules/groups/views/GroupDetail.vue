@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -9,32 +9,66 @@ import { getGroupDetail } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { eventBus } from '@/utils/eventBus'
 
+// 群详情接口只做短期内存缓存，既减少重复 groupDetail 请求，也避免长期展示过期群资料。
+const GROUP_DETAIL_CACHE_TTL_MS = 30 * 1000
+const groupDetailCache = new Map<string, { valid: boolean; checkedAt: number; groupPatch?: Record<string, any> }>()
+const groupDetailRequestMap = new Map<string, Promise<boolean>>()
+
 const props = defineProps<{ groupId: string }>()
 const { t } = useI18n()
 const groupStore = useGroupStore()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
+const loadingMembers = ref(false)
 
 const group = computed(() => groupStore.getGroup(props.groupId))
 
 /** 与老项目 im/details/group.vue 一致：store 已按 role 排序，截取前 8 人展示 */
 const previewMembers = computed(() => groupStore.getMembers(props.groupId).slice(0, 8))
 const displayedMemberCount = computed(() => group.value?.memberCount || previewMembers.value.length)
+const showMemberLoading = computed(() => loadingMembers.value && previewMembers.value.length === 0)
 
 watch(
   () => props.groupId,
   (groupId) => {
-    if (!groupId || !authStore.uid) return
-    void groupStore.loadMembers(authStore.uid, groupId, { previewOnly: true })
+    if (!groupId || !authStore.uid) {
+      loadingMembers.value = false
+      return
+    }
+    void loadPreviewMembers(groupId)
     void refreshGroupDetail(groupId)
   },
   { immediate: true },
 )
 
+let memberLoadSeq = 0
+
+async function loadPreviewMembers(groupId: string) {
+  const normalizedId = String(groupId || '').trim()
+  const uid = authStore.uid
+  if (!normalizedId || !uid) return
+
+  const seq = ++memberLoadSeq
+  const hasCachedMembers = groupStore.getMembers(normalizedId).length > 0
+  // 只有成员框没有可展示缓存时才露出 loading；有缓存则直接展示，避免切回群详情时闪烁。
+  loadingMembers.value = !hasCachedMembers
+  try {
+    await groupStore.loadMembers(uid, normalizedId, { previewOnly: true })
+  } finally {
+    // 快速切换群时只允许最后一次请求关闭当前 loading，避免旧请求回包覆盖新群状态。
+    if (seq === memberLoadSeq && props.groupId === normalizedId) {
+      loadingMembers.value = false
+    }
+  }
+}
+
 async function handleInvalidGroup(groupId: string) {
   const normalizedId = String(groupId || '').trim()
   if (!normalizedId) return
+  if (authStore.uid) {
+    groupDetailCache.delete(getGroupDetailCacheKey(authStore.uid, normalizedId))
+  }
   const conversationId = `1_${normalizedId}`
   // 无效群要同时退出详情视图并清掉当前会话，避免页面继续停留在“资料不可用”状态。
   if (uiStore.detailView === 'group-detail') {
@@ -49,34 +83,79 @@ async function handleInvalidGroup(groupId: string) {
   }
 }
 
-async function refreshGroupDetail(groupId: string): Promise<boolean> {
-  try {
-    const detail = await getGroupDetail({ groupId })
-    const detailCode = Number((detail as any)?.commonResult?.errCode ?? 200)
-    const groupBase = (detail as any)?.group
-    // 详情接口失败或无群对象时，按无效群处理并从列表移除，避免继续进入空群会话。
-    if ((detailCode !== 0 && detailCode !== 200) || !groupBase) {
-      await handleInvalidGroup(groupId)
-      return false
-    }
-    // 详情接口比本地缓存更新；打开群资料时回填名称和人数，避免缺失时显示数字 ID 或 0 人。
-    groupStore.upsertGroup({
-      id: groupId,
-      name: groupBase.name ?? groupBase.groupName,
-      avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar,
-      ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
-      memberCount: Number(groupBase.memberCount ?? 0),
-      groupAliasName: groupBase.groupAliasName ?? null,
-    })
-    return true
-  } catch (error) {
-    console.error('[GroupDetail] refresh group detail failed:', error)
-    return false
+function getGroupDetailCacheKey(uid: string, groupId: string) {
+  return `${uid}:${groupId}`
+}
+
+function getCachedGroupDetail(cacheKey: string) {
+  const cached = groupDetailCache.get(cacheKey)
+  if (!cached) return null
+  if (Date.now() - cached.checkedAt > GROUP_DETAIL_CACHE_TTL_MS) {
+    groupDetailCache.delete(cacheKey)
+    return null
+  }
+  return cached
+}
+
+function buildGroupPatch(groupId: string, groupBase: Record<string, any>) {
+  return {
+    id: groupId,
+    name: groupBase.name ?? groupBase.groupName,
+    avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar,
+    ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
+    memberCount: Number(groupBase.memberCount ?? 0),
+    groupAliasName: groupBase.groupAliasName ?? null,
   }
 }
 
+async function refreshGroupDetail(groupId: string, options: { forceRemote?: boolean } = {}): Promise<boolean> {
+  const normalizedId = String(groupId || '').trim()
+  if (!normalizedId) return false
+  const cacheKey = getGroupDetailCacheKey(String(authStore.uid || ''), normalizedId)
+
+  if (!options.forceRemote) {
+    const cached = getCachedGroupDetail(cacheKey)
+    if (cached) {
+      // 详情页重复打开同一群时先复用同账号短期缓存，减少 groupDetail 重复请求并保持旧 im 的可见信息。
+      if (cached.valid && cached.groupPatch) {
+        groupStore.upsertGroup(cached.groupPatch)
+      }
+      return cached.valid
+    }
+  }
+
+  const existingRequest = groupDetailRequestMap.get(cacheKey)
+  if (existingRequest) return existingRequest
+
+  const request = (async () => {
+    try {
+      const detail = await getGroupDetail({ groupId: normalizedId })
+      const detailCode = Number((detail as any)?.commonResult?.errCode ?? 200)
+      const groupBase = (detail as any)?.group
+      // 详情接口失败或无群对象时，按无效群处理并从列表移除，避免继续进入空群会话。
+      if ((detailCode !== 0 && detailCode !== 200) || !groupBase) {
+        await handleInvalidGroup(normalizedId)
+        return false
+      }
+      const groupPatch = buildGroupPatch(normalizedId, groupBase)
+      // 详情接口比本地缓存更新；打开群资料时回填名称和人数，避免缺失时显示数字 ID 或 0 人。
+      groupStore.upsertGroup(groupPatch)
+      groupDetailCache.set(cacheKey, { valid: true, checkedAt: Date.now(), groupPatch })
+      return true
+    } catch (error) {
+      console.error('[GroupDetail] refresh group detail failed:', error)
+      return false
+    }
+  })().finally(() => {
+    groupDetailRequestMap.delete(cacheKey)
+  })
+
+  groupDetailRequestMap.set(cacheKey, request)
+  return request
+}
+
 async function startChat() {
-  const available = await refreshGroupDetail(props.groupId)
+  const available = await refreshGroupDetail(props.groupId, { forceRemote: true })
   if (!available) {
     eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
     return
@@ -115,36 +194,42 @@ function handleMemberClick(member: GroupMember) {
 
       <div class="user-des">
         <div class="memberList">
-        <div
-          v-for="m in previewMembers"
-          :key="m.userId"
-          class="member-item"
-          @click="handleMemberClick(m)"
-        >
-          <TextAvatar
-            :name="m.nickname || m.userId"
-            :src="m.avatar"
-            avatar-type="friend"
-            :size="35"
-            rounded
-          />
-          <div class="nick-name" :title="m.nickname || m.userId">
-            {{ m.nickname || m.userId }}
+          <div v-if="showMemberLoading" class="member-loading">
+            <span class="member-loading-spinner"></span>
+            <span>{{ t('加载中') }}</span>
           </div>
-          <div
-            v-if="m.role === 0"
-            class="member-identity member-master"
-          >
-            {{ t('群主') }}
-          </div>
-          <div
-            v-else-if="m.role === 1"
-            class="member-identity"
-          >
-            {{ t('管理员') }}
-          </div>
+          <template v-else>
+            <div
+              v-for="m in previewMembers"
+              :key="m.userId"
+              class="member-item"
+              @click="handleMemberClick(m)"
+            >
+              <TextAvatar
+                :name="m.nickname || m.userId"
+                :src="m.avatar"
+                avatar-type="friend"
+                :size="35"
+                rounded
+              />
+              <div class="nick-name" :title="m.nickname || m.userId">
+                {{ m.nickname || m.userId }}
+              </div>
+              <div
+                v-if="m.role === 0"
+                class="member-identity member-master"
+              >
+                {{ t('群主') }}
+              </div>
+              <div
+                v-else-if="m.role === 1"
+                class="member-identity"
+              >
+                {{ t('管理员') }}
+              </div>
+            </div>
+          </template>
         </div>
-      </div>
       </div>
 
       <div class="primaryBtn small" @click="startChat">
@@ -202,6 +287,23 @@ function handleMemberClick(member: GroupMember) {
     min-height: 77px;
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
+    .member-loading {
+      min-height: 77px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #999;
+    }
+    .member-loading-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #e5e5e5;
+      border-top-color: #3369fe;
+      border-radius: 50%;
+      animation: member-loading-spin 0.8s linear infinite;
+    }
     .member-item {
       margin-right: 10px;
       text-align: center;
@@ -224,6 +326,12 @@ function handleMemberClick(member: GroupMember) {
         user-select: text;
       }
     }
+  }
+}
+
+@keyframes member-loading-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
