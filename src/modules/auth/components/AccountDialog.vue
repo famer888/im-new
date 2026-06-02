@@ -226,8 +226,11 @@ onBeforeUnmount(() => {
 <style lang="scss" scoped>
 .account-dialog {
   box-sizing: border-box;
-  width: 350px;
-  height: 265px;
+  min-width: 350px;
+  width: max-content;
+  max-width: calc(100vw - 160px);
+  min-height: 265px;
+  height: auto;
   padding: 40px;
   background: #fff;
   border: 1px solid #999;
@@ -247,7 +250,8 @@ onBeforeUnmount(() => {
 }
 
 .dialog-title {
-  width: 205px;
+  flex: 1;
+  min-width: 0;
   height: 55px;
   margin: 0 0 0 10px;
   line-height: 55px;
@@ -262,21 +266,26 @@ onBeforeUnmount(() => {
 .dialog-row {
   display: flex;
   align-items: center;
-  height: 30px;
-  line-height: 30px;
+  min-height: 30px;
+  line-height: 20px;
   margin: 0;
   color: #333;
   font-size: 14px;
 
   > span {
     display: inline-block;
-    width: 37px;
+    flex: 0 0 auto;
+    min-width: 37px;
+    width: auto;
+    max-width: 90px;
     margin-right: 5px;
     font-size: 14px;
     color: #666;
+    overflow-wrap: anywhere;
   }
 
   > i {
+    min-width: 0;
     font-style: normal;
   }
 }
@@ -293,6 +302,7 @@ onBeforeUnmount(() => {
 
 .nickname-text {
   display: inline-block;
+  flex: 0 1 auto;
   max-width: 200px;
   white-space: nowrap;
   overflow: hidden;
@@ -300,7 +310,8 @@ onBeforeUnmount(() => {
 }
 
 .nickname-input {
-  width: 200px;
+  flex: 1;
+  min-width: 0;
   height: 24px;
   padding: 0;
   border: none;
@@ -337,7 +348,9 @@ onBeforeUnmount(() => {
 .export-db {
   display: flex;
   align-items: center;
-  height: 20px;
+  flex-wrap: nowrap;
+  min-height: 20px;
+  height: auto;
   margin-top: 10px;
 
   > input {
@@ -359,6 +372,7 @@ onBeforeUnmount(() => {
 
   > button {
     display: inline-block;
+    flex: 0 0 auto;
     height: 22px;
     line-height: 22px;
     padding: 0 13px;
@@ -379,6 +393,7 @@ onBeforeUnmount(() => {
 
 .tips {
   position: relative;
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
   margin-left: 5px;
@@ -404,6 +419,8 @@ onBeforeUnmount(() => {
   left: 0;
   bottom: 22px;
   display: none;
+  width: max-content;
+  max-width: 420px;
   padding: 10px;
   border: 1px solid rgba(0, 0, 0, 0.15);
   box-shadow: 0 2px 2px 0 rgba(0, 0, 0, 0.14), 0 3px 1px -2px rgba(0, 0, 0, 0.2), 0 1px 5px 0 rgba(0, 0, 0, 0.12);
@@ -413,7 +430,7 @@ onBeforeUnmount(() => {
 
   > p {
     margin: 0;
-    white-space: nowrap;
+    white-space: normal;
     color: #3369fe;
     font-size: 12px;
   }
