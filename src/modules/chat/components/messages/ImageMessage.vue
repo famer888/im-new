@@ -166,12 +166,14 @@ const localSourcePath = computed(() => {
   return ''
 })
 const thumbnailUrl = computed(() => toDisplayImageSrc(imageData.value.thumbnailUrl || imageData.value.url || ''))
+// 仅自己的图片优先用本地预览，避免影响别人发来的远端下载/解密流程。
 const isOwnImageMessage = computed(() => {
   const type = Number(props.message.msgType)
   return (type === 1 || type === 9)
     && String(props.message.senderId || '') === String(authStore.uid || '')
 })
 const localPreviewSrc = computed(() => localSourcePath.value ? toDisplayImageSrc(localSourcePath.value) : '')
+// 有本地路径时先显示本地资源，规避 Tauri WebView 对 blob: 图片的加载限制。
 const shouldUseLocalPreview = computed(() => isOwnImageMessage.value && Boolean(localPreviewSrc.value))
 const downloadUrl = computed(() => {
   const original = imageData.value.url

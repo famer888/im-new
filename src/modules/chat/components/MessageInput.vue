@@ -1559,6 +1559,7 @@ async function openDroppedFilePaths(paths: string[]) {
       })
       items.forEach((item, index) => {
         const path = imageMetas[index]?.path
+        // 拖拽图片会先读成普通 File，这里把原始路径补回去，供桌面端本地预览和拖拽打开使用。
         if (path) imageFilesByPath.set(path, attachLocalPathToFile(clipboardPayloadToFile(item), path))
       })
       terminalLog('[file-send] read dropped image paths done', {

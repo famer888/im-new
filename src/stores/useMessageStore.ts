@@ -321,6 +321,7 @@ function mergeSingleImageLocalPreviewContent(
   incomingContent: string | null | undefined,
   previousContent: string | null | undefined,
 ): string | null {
+  // 只合并单聊图片的本地预览字段，避免把本机 localPath 写进协议发送内容或影响群/频道消息。
   const incoming = parseImageContentObject(incomingContent)
   const previous = parseImageContentObject(previousContent)
   if (!incoming || !previous) return null
