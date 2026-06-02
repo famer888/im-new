@@ -166,6 +166,13 @@ const localSourcePath = computed(() => {
   return ''
 })
 const thumbnailUrl = computed(() => toDisplayImageSrc(imageData.value.thumbnailUrl || imageData.value.url || ''))
+const isOwnImageMessage = computed(() => {
+  const type = Number(props.message.msgType)
+  return (type === 1 || type === 9)
+    && String(props.message.senderId || '') === String(authStore.uid || '')
+})
+const localPreviewSrc = computed(() => localSourcePath.value ? toDisplayImageSrc(localSourcePath.value) : '')
+const shouldUseLocalPreview = computed(() => isOwnImageMessage.value && Boolean(localPreviewSrc.value))
 const downloadUrl = computed(() => {
   const original = imageData.value.url
   const thumbnail = thumbnailUrl.value
@@ -276,11 +283,20 @@ const imageCacheKey = computed(() => [
   attachmentKey.value || '',
 ].join('|'))
 
-watch([thumbnailUrl, downloadUrl, localSourcePath, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder], () => {
+watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
   localFilePath.value = ''
+  if (shouldUseLocalPreview.value) {
+    // 自己刚发送的图片保留本地预览，避免发送成功后重新回到桌面端不可加载的 blob: 源。
+    cleanupDownloadEvents()
+    localFilePath.value = localSourcePath.value
+    activeSrc.value = localPreviewSrc.value
+    materializeDataImageForDrag()
+    markLoadedIfImageAlreadyComplete()
+    return
+  }
   if (isOwnSingleImageUploadPlaceholder.value) {
     // 发送中的本地图片也先渲染缩略图，避免仅显示灰色加载蒙层。
     cleanupDownloadEvents()
@@ -339,8 +355,31 @@ function markLoadedIfImageAlreadyComplete() {
   })
 }
 
+function fallbackFromLocalPreviewError(): boolean {
+  if (!shouldUseLocalPreview.value || activeSrc.value !== localPreviewSrc.value) return false
+  if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
+    // 本地原图被移动/删除时，回到现有远端下载解密链路，避免永久显示“图片加载失败”。
+    localFilePath.value = ''
+    activeSrc.value = ''
+    isLoaded.value = false
+    loadError.value = false
+    downloadAndDecryptImage()
+    return true
+  }
+  const remoteUrl = imageData.value.url
+  if (remoteUrl && activeSrc.value !== remoteUrl) {
+    activeSrc.value = remoteUrl
+    localFilePath.value = ''
+    isLoaded.value = false
+    loadError.value = false
+    return true
+  }
+  return false
+}
+
 function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
+  if (fallbackFromLocalPreviewError()) return
   const originalUrl = imageData.value.url
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
     activeSrc.value = originalUrl

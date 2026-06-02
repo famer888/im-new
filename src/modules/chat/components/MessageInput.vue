@@ -20,6 +20,7 @@ import { proto } from '@/api/request'
 import { aesEncrypt } from '@/utils/crypto'
 import { getOssUploadCandidates, reportOssUploadCandidateFailure } from '@/utils/ossUploadDomains'
 import type { OssUploadCandidate } from '@/utils/ossUploadDomains'
+import { toDisplaySrc } from '@/utils/resourcePath'
 import EmojiPicker from './send/EmojiPicker.vue'
 import AtListDialog from './send/AtListDialog.vue'
 import CreateLinkDialog from './send/CreateLinkDialog.vue'
@@ -1558,7 +1559,7 @@ async function openDroppedFilePaths(paths: string[]) {
       })
       items.forEach((item, index) => {
         const path = imageMetas[index]?.path
-        if (path) imageFilesByPath.set(path, clipboardPayloadToFile(item))
+        if (path) imageFilesByPath.set(path, attachLocalPathToFile(clipboardPayloadToFile(item), path))
       })
       terminalLog('[file-send] read dropped image paths done', {
         elapsedMs: Math.round(performance.now() - imageReadStartedAt),
@@ -1740,6 +1741,23 @@ function getImageSize(src: string): Promise<{ width: number; height: number }> {
   })
 }
 
+async function resolveLocalImagePreviewSrc(file: File, previewUrlOverride?: string): Promise<string> {
+  const override = String(previewUrlOverride || '').trim()
+  if (override) return override
+
+  const localPath = getLocalFilePath(file)
+  if ((window as any).__TAURI_INTERNALS__) {
+    if (localPath) {
+      // 桌面端优先从本地路径派生可渲染地址，避免 WebView 把 blob: 当成本地资源拦截。
+      return toDisplaySrc(localPath)
+    }
+    // 粘贴截图等没有磁盘路径的图片用 data URL 兜底，避免发送占位依赖 blob:。
+    return fileToDataURL(file)
+  }
+
+  return URL.createObjectURL(file)
+}
+
 async function appendLocalImagePreview(
   file: File,
   fileKey: string,
@@ -1753,10 +1771,16 @@ async function appendLocalImagePreview(
   const uid = authStore.uid
   if (!conversationId || !uid) return null
 
-  const previewUrl = String(options?.previewUrlOverride || '').trim() || URL.createObjectURL(file)
+  const localPath = getLocalFilePath(file)
+  const previewUrl = await resolveLocalImagePreviewSrc(file, options?.previewUrlOverride)
   const { width, height } = await getImageSize(previewUrl)
   const optimisticId = createOptimisticImageId()
-  const extra = withReadBurnExtra({ fileKey, uploadPending: true, imageTraceId: trace.id })
+  const extra = withReadBurnExtra({
+    fileKey,
+    uploadPending: true,
+    imageTraceId: trace.id,
+    ...(localPath ? { local: localPath, localPath } : {}),
+  })
   messageStore.appendMessage(conversationId, {
     id: optimisticId,
     customMsgId: optimisticId,
@@ -1771,6 +1795,7 @@ async function appendLocalImagePreview(
       size: file.size,
       name: file.name,
       fileKey,
+      ...(localPath ? { local: localPath, localPath } : {}),
     }),
     sendTime: Date.now(),
     status: 0,
@@ -1786,6 +1811,7 @@ async function appendLocalImagePreview(
     size: file.size,
     msgType: options?.msgType ?? MessageType.Image,
     previewScheme: previewUrl.split(':')[0] || 'unknown',
+    hasLocalPath: Boolean(localPath),
   })
   return { url: previewUrl, width, height, optimisticId }
 }

@@ -304,6 +304,40 @@ function imageContentSummary(content: string | null | undefined) {
   }
 }
 
+function parseImageContentObject(content: string | null | undefined): Record<string, unknown> | null {
+  const raw = String(content ?? '').trim()
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function mergeSingleImageLocalPreviewContent(
+  incomingContent: string | null | undefined,
+  previousContent: string | null | undefined,
+): string | null {
+  const incoming = parseImageContentObject(incomingContent)
+  const previous = parseImageContentObject(previousContent)
+  if (!incoming || !previous) return null
+
+  const previousLocalPath = String(
+    previous.localPath || previous.local_path || previous.filePath || previous.file_path || previous.local || '',
+  ).trim()
+  if (!previousLocalPath) return null
+
+  // 单聊图片发送成功后保留本地预览路径，但让远端 url/fileKey 继续来自发送结果。
+  return JSON.stringify({
+    ...incoming,
+    local: String(previous.local || previousLocalPath),
+    localPath: previousLocalPath,
+  })
+}
+
 function videoContentSummary(content: string | null | undefined) {
   const raw = String(content ?? '')
   let parsed: Record<string, unknown> | null = null
@@ -1860,18 +1894,25 @@ export const useMessageStore = defineStore('message', () => {
       const incomingDiceResult = getDiceResultFromContent(message.content)
       const previousDiceResult = getDiceResultFromContent(previous.content)
       const incomingHasContent = String(message.content ?? '').trim().length > 0
+      const mergedSingleImageContent = isSingleImageMessage(conversationId, message.msgType)
+        ? mergeSingleImageLocalPreviewContent(message.content, previous.content)
+        : null
+      let nextContent = message.content
+      if (mergedSingleImageContent) {
+        nextContent = mergedSingleImageContent
+      } else if (
+        (previous.msgType === 12 || message.msgType === 12)
+        && incomingDiceResult <= 0
+        && previousDiceResult > 0
+      ) {
+        nextContent = previous.content
+      } else if (!incomingHasContent && (previous.msgType === 18 || message.msgType === 18) && previous.content) {
+        nextContent = previous.content
+      }
       next[existIndex] = {
         ...previous,
         ...message,
-        content: (
-          (previous.msgType === 12 || message.msgType === 12)
-          && incomingDiceResult <= 0
-          && previousDiceResult > 0
-        )
-          ? previous.content
-          : (!incomingHasContent && (previous.msgType === 18 || message.msgType === 18) && previous.content)
-            ? previous.content
-            : message.content,
+        content: nextContent,
         extra: message.extra ?? previous.extra,
         quoteMessage: message.quoteMessage ?? previous.quoteMessage,
         snapchatTime: message.snapchatTime ?? previous.snapchatTime,
