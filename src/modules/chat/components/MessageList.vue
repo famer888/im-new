@@ -5,7 +5,8 @@ import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { attachDateSeparators, type MessageListEntry } from '@/utils/chatMessageDate'
-import { isMessageEligibleForUnreadAnchor, isMessageVisibleInTimeline } from '@/utils/chatUnreadVisibility'
+import { isMessageVisibleInTimeline } from '@/utils/chatUnreadVisibility'
+import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import MessageItem from './MessageItem.vue'
 import readBurnBackUrl from '@/assets/images/chat/read-burn-back.png'
 
@@ -94,18 +95,37 @@ const unreadFloatCountText = computed(() =>
   unreadFloatCount.value > 99 ? '99+' : String(unreadFloatCount.value),
 )
 
+function isMessageEligibleForUnreadSnapshotAnchor(message: Message): boolean {
+  const uid = String(authStore.uid || '')
+  if (!isMessageVisibleInTimeline(props.conversationId, message, uid)) return false
+  if (String(message.senderId || '') === uid) return false
+  if (message.msgType === 6) return false
+  if (message.msgType === 8 && !isGroupIntroNoticeMessage(message)) return false
+  return true
+}
+
 /**
  * 对齐旧 im：未读分隔条必须锚到一条真实消息（旧逻辑用 unreadID/unreadMsgID）。
- * 只凭 unreadCount 反推位置会在消息未加载/未落库时误显示一条孤立的「未读消息」。
+ * 进入会话会立刻 markAsRead，所以这里使用进入时的 ID 快照，不再依赖 message.readStatus。
  */
 const unreadDividerIndex = computed(() => {
   if (effectiveUnreadCount.value <= 0) return -1
   const ids = unreadMessageIdSet.value
-  if (ids.size === 0) return -1
-  return sortedMessages.value.findIndex((message) =>
-    isMessageEligibleForUnreadAnchor(props.conversationId, message, String(authStore.uid || ''))
-    && (ids.has(String(message.id || '')) || ids.has(String(message.customMsgId || ''))),
-  )
+  if (ids.size > 0) {
+    const idx = sortedMessages.value.findIndex((message) =>
+      isMessageEligibleForUnreadSnapshotAnchor(message)
+      && (ids.has(String(message.id || '')) || ids.has(String(message.customMsgId || ''))),
+    )
+    if (idx >= 0) return idx
+  }
+
+  // 兜底对齐旧 im 的 count 跳转：快照 ID 暂不可用时，用最后 N 条可见的对方消息估算第一条未读。
+  const count = Math.max(0, Number(effectiveUnreadCount.value || 0))
+  if (count <= 0) return -1
+  const candidates = sortedMessages.value
+    .map((message, index) => ({ message, index }))
+    .filter((item) => isMessageEligibleForUnreadSnapshotAnchor(item.message))
+  return candidates.length >= count ? candidates[candidates.length - count].index : -1
 })
 
 /**
@@ -223,6 +243,7 @@ let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
 let isProgrammaticScroll = false
 let resizePinRaf: number | null = null
 let topAutoLoadArmed = true
+let unreadFloatNavigating = false
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)
@@ -546,16 +567,18 @@ function handleItemResize(messageId: string, height: number) {
   })
 }
 
-function scrollToRow(key: string) {
+function scrollToRow(key: string): boolean {
   const container = containerRef.value
-  if (!container) return
+  if (!container) return false
   const rows = Array.from(container.querySelectorAll<HTMLElement>('.message-row'))
   const target = rows.find((row) =>
     row.dataset.rowKey === key || row.dataset.rowCustomKey === key,
   )
   if (target) {
     container.scrollTop = target.offsetTop
+    return true
   }
+  return false
 }
 
 /** 点击「未读消息」条后隐藏，并吸底避免虚拟列表少一行后视口错位 */
@@ -569,14 +592,39 @@ function onUnreadBannerClick() {
 }
 
 /** 点击右侧未读数量浮层：跳到第一条未读锚点并隐藏浮层，保留分隔条供用户确认位置。 */
-function onUnreadFloatClick() {
-  const divIdx = unreadDividerIndex.value
-  if (divIdx < 0) return
-  unreadFloatDismissed.value = true
-  stickToBottom.value = false
-  void nextTick(() => {
-    scrollToRow(`unread-${divIdx}`)
-  })
+async function ensureUnreadDividerForNavigation(): Promise<number> {
+  const convId = props.conversationId
+  const uid = String(authStore.uid || '')
+  let divIdx = unreadDividerIndex.value
+  if (divIdx >= 0 || !convId || !uid) return divIdx
+
+  // 对齐旧 im 点击跳转：目标未读不在当前页时，先补加载历史，再移动到锚点。
+  for (let i = 0; i < 8 && messageStore.hasMore(convId); i++) {
+    await messageStore.loadOlderMessages(uid, convId, { silent: true })
+    await nextTick()
+    divIdx = unreadDividerIndex.value
+    if (divIdx >= 0) return divIdx
+  }
+  return divIdx
+}
+
+async function onUnreadFloatClick() {
+  if (unreadFloatNavigating) return
+  unreadFloatNavigating = true
+  try {
+    stickToBottom.value = false
+    const divIdx = await ensureUnreadDividerForNavigation()
+    if (divIdx < 0) return
+    unreadFloatDismissed.value = true
+    await nextTick()
+    for (let i = 0; i < 3; i++) {
+      if (scrollToRow(`unread-${divIdx}`)) break
+      await nextTick()
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
+    }
+  } finally {
+    unreadFloatNavigating = false
+  }
 }
 </script>
 
