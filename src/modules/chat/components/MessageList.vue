@@ -694,7 +694,7 @@ async function onUnreadFloatClick() {
       @mousedown.stop.prevent
       @click.stop="onUnreadFloatClick"
     >
-      <span class="unread-float-icon" aria-hidden="true"></span>
+      <img class="unread-float-icon" src="@/assets/images/message/arrow-up-double-line.png" alt="" />
       <span class="unread-float-count">{{ unreadFloatCountText }}</span>{{ $t('条未读消息') }}
     </button>
 
@@ -827,14 +827,15 @@ async function onUnreadFloatClick() {
   height: 32px;
   padding: 0 12px;
   border: 1px solid #e5e5e5;
-  border-right: 0;
   border-radius: 16px 0 0 16px;
   background: #1681ef;
   color: #fff;
+  font-family: inherit;
   font-size: 12px;
-  line-height: 30px;
+  line-height: 32px;
+  appearance: none;
   cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   z-index: 10;
   display: flex;
   align-items: center;
@@ -846,35 +847,16 @@ async function onUnreadFloatClick() {
 }
 
 .unread-float-icon {
-  position: relative;
-  width: 14px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   margin-right: 4px;
   flex: 0 0 auto;
-
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    left: 3px;
-    width: 7px;
-    height: 7px;
-    border-top: 2px solid #fff;
-    border-left: 2px solid #fff;
-    transform: rotate(45deg);
-  }
-
-  &::before {
-    top: 1px;
-  }
-
-  &::after {
-    top: 6px;
-  }
 }
 
 .unread-float-count {
-  margin: 0 4px;
+  margin:0 4px;
+  font-size: 12px;
+  color: #fff;
 }
 
 .scroll-bottom-btn {
