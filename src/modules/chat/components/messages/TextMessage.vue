@@ -704,8 +704,10 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
 
 const contentSegments = computed<ContentSegment[]>(() => {
   const rawContent = props.message.content ?? ''
+  // 对齐旧 im 的文本拆分表现：保留正文内部换行，但去掉末尾空白行，避免单行消息被尾部换行撑高。
+  const displayContent = rawContent.replace(/[ \t\u00a0]*[\r\n]+[ \t\u00a0]*$/g, '')
   // 仅针对推流地址展示：把“推流地址：”和 rtmp:// 之间空白改成不可换行空格，强制同一行显示。
-  const content = rawContent.replace(
+  const content = displayContent.replace(
     /(推流地址[：:])[\s\u2028\u2029]+(rtmps?:\/\/)/gi,
     '$1\u00A0$2',
   )
@@ -997,8 +999,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   }
 
   > .content-text {
-    padding-right: 12px;
-    padding-bottom: 18px;
+    padding-right: 75px;
     line-height: 22px;
     white-space: pre-wrap;
     letter-spacing: 0.5px;
@@ -1055,7 +1056,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
   }
 
   &.channel > .content-text {
-    padding-right: 12px;
+    padding-right: 75px;
   }
 }
 
