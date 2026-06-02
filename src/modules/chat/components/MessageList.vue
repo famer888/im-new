@@ -64,11 +64,14 @@ const entriesWithDate = computed(() =>
 
 /** 用户点击「未读消息」条后隐藏（对齐旧 im 点击消失） */
 const unreadBannerDismissed = ref(false)
+/** 右侧未读数量浮层独立隐藏：点击跳转后保留中间分隔条，行为对齐旧 im 的 initialUnreadCount。 */
+const unreadFloatDismissed = ref(false)
 
 watch(
   () => props.conversationId,
   () => {
     unreadBannerDismissed.value = false
+    unreadFloatDismissed.value = false
   },
 )
 
@@ -81,6 +84,15 @@ const effectiveUnreadCount = computed(() => {
 const unreadMessageIdSet = computed(() => new Set(
   (props.unreadMessageIds ?? []).map((id) => String(id || '')).filter(Boolean),
 ))
+
+const unreadFloatCount = computed(() => {
+  if (unreadFloatDismissed.value) return 0
+  return Math.max(0, Number(effectiveUnreadCount.value || 0))
+})
+
+const unreadFloatCountText = computed(() =>
+  unreadFloatCount.value > 99 ? '99+' : String(unreadFloatCount.value),
+)
 
 /**
  * 对齐旧 im：未读分隔条必须锚到一条真实消息（旧逻辑用 unreadID/unreadMsgID）。
@@ -549,9 +561,21 @@ function scrollToRow(key: string) {
 /** 点击「未读消息」条后隐藏，并吸底避免虚拟列表少一行后视口错位 */
 function onUnreadBannerClick() {
   unreadBannerDismissed.value = true
+  unreadFloatDismissed.value = true
   stickToBottom.value = true
   void nextTick(() => {
     void flushScrollToBottom()
+  })
+}
+
+/** 点击右侧未读数量浮层：跳到第一条未读锚点并隐藏浮层，保留分隔条供用户确认位置。 */
+function onUnreadFloatClick() {
+  const divIdx = unreadDividerIndex.value
+  if (divIdx < 0) return
+  unreadFloatDismissed.value = true
+  stickToBottom.value = false
+  void nextTick(() => {
+    scrollToRow(`unread-${divIdx}`)
   })
 }
 </script>
@@ -614,6 +638,17 @@ function onUnreadBannerClick() {
       </div>
 
     </div>
+
+    <button
+      v-if="unreadFloatCount > 0"
+      class="unread-float-btn"
+      type="button"
+      @mousedown.stop.prevent
+      @click.stop="onUnreadFloatClick"
+    >
+      <span class="unread-float-icon" aria-hidden="true"></span>
+      <span class="unread-float-count">{{ unreadFloatCountText }}</span>{{ $t('条未读消息') }}
+    </button>
 
     <button
       v-if="!isAtBottom"
@@ -735,6 +770,63 @@ function onUnreadBannerClick() {
     white-space: nowrap;
     pointer-events: none;
   }
+}
+
+.unread-float-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #e5e5e5;
+  border-right: 0;
+  border-radius: 16px 0 0 16px;
+  background: #1681ef;
+  color: #fff;
+  font-size: 12px;
+  line-height: 30px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+
+  &:hover {
+    background: #327cc5;
+  }
+}
+
+.unread-float-icon {
+  position: relative;
+  width: 14px;
+  height: 12px;
+  margin-right: 4px;
+  flex: 0 0 auto;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    width: 7px;
+    height: 7px;
+    border-top: 2px solid #fff;
+    border-left: 2px solid #fff;
+    transform: rotate(45deg);
+  }
+
+  &::before {
+    top: 1px;
+  }
+
+  &::after {
+    top: 6px;
+  }
+}
+
+.unread-float-count {
+  margin: 0 4px;
 }
 
 .scroll-bottom-btn {
