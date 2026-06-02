@@ -181,6 +181,10 @@ export const useChannelStore = defineStore('channel', () => {
     return Number(item.memberType) >= 0
   }
 
+  function isConfirmedJoinedChannel(item: Channel): boolean {
+    return item.memberType !== null && Number(item.memberType) > 0
+  }
+
   function filterRemovedChannels(list: Channel[], uid = activeUid): Channel[] {
     const removed = getRemovedChannelIds(uid)
     if (removed.size === 0) return list
@@ -463,15 +467,24 @@ export const useChannelStore = defineStore('channel', () => {
 
     if (apiSucceeded) {
       const apiChannels = filterRemovedChannels(allChannels, uid)
+      const apiIds = new Set(apiChannels.map((item) => String(item.id || item.channelId || '')))
+      const trustedSeedChannels = [
+        ...(seed?.conversationChannels || []),
+        ...(seed?.localChannels || []),
+      ].filter((item) => {
+        const id = String(item.id || item.channelId || '')
+        return apiIds.has(id) || isConfirmedJoinedChannel(item)
+      })
+      // 远端列表成功时以远端成员关系为准；只保留实时加入确认过的本地兜底，避免旧缓存把邀请/通知频道混进通讯录。
       const nextChannels = filterRemovedChannels(mergeChannelsById(
-        seed?.conversationChannels || [],
-        seed?.localChannels || [],
+        trustedSeedChannels,
         apiChannels,
       ), uid)
       channelDebug('API channelList result', {
         collectedCount: allChannels.length,
         apiFilteredCount: apiChannels.length,
         mergedCount: nextChannels.length,
+        trustedSeedCount: trustedSeedChannels.length,
         seedConversationCount: seed?.conversationChannels?.length || 0,
         seedLocalCount: seed?.localChannels?.length || 0,
       })

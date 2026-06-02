@@ -68,11 +68,8 @@ function showTip(message: string, type: 'success' | 'error' = 'success') {
 function formatNoticeContent(content: string): string {
   const raw = String(content || '').trim()
   if (!raw) return ''
-  // 频道通知要和会话列表/系统通知使用同一套翻译规则，避免右侧列表出现未国际化文案。
-  const translatedNotice = translateGroupNoticeText(raw, t)
-  if (translatedNotice !== raw) return translatedNotice
-  const translated = t(raw)
-  return translated === raw ? raw : translated
+  // 频道通知很多是服务端拼好的动态句子，不再直接当 i18n key 查找，避免邀请/权限通知刷屏警告。
+  return translateGroupNoticeText(raw, t)
 }
 
 function textValue(value: unknown): string {

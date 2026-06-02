@@ -106,6 +106,12 @@ function getFiniteGroupRole(value: unknown): number | null {
   return Number.isFinite(role) ? role : null
 }
 
+function getFiniteChannelMemberType(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const memberType = Number(value)
+  return Number.isFinite(memberType) ? memberType : null
+}
+
 function getGroupEventActorId(extra: any): string {
   return String(
     extra?.fromUid
@@ -1477,16 +1483,25 @@ export async function setupTauriListeners() {
 
         const channelId = String(extra?.channelId || convId.split('_')[1] || '')
         if (!channelId) continue
+        const eventType = Number(extra?.eventType ?? -1)
+        const joinOperateType = Number(extra?.subscriberOperateType ?? -1)
+        const pushedMemberType = getFiniteChannelMemberType(extra?.memberType)
+        const cachedChannel = channelStore.getChannel(channelId)
+        const cachedMemberType = getFiniteChannelMemberType(cachedChannel?.memberType)
+        const isConfirmedJoinEvent = eventType === 2 && joinOperateType === 0
+        const isConfirmedJoinedMember = pushedMemberType !== null && pushedMemberType > 0
+        // 对齐旧 im：只有确认加入/仍是成员的频道事件才进入频道列表，避免邀请和普通通知污染通讯录频道数据。
+        if (!isConfirmedJoinEvent && !isConfirmedJoinedMember) continue
         const channelName = String(extra?.channelName || channelStore.getChannel(channelId)?.channelName || channelId)
         channelStore.patchChannel(channelId, {
           id: channelId,
           channelId,
           name: channelName,
           channelName,
-          avatar: String(extra?.icon || '') || channelStore.getChannel(channelId)?.avatar || null,
-          icon: String(extra?.icon || '') || channelStore.getChannel(channelId)?.icon || null,
-          logoColor: String(extra?.logoColor || '') || channelStore.getChannel(channelId)?.logoColor || null,
-          memberType: Number(extra?.memberType ?? channelStore.getChannel(channelId)?.memberType ?? 9),
+          avatar: String(extra?.icon || '') || cachedChannel?.avatar || null,
+          icon: String(extra?.icon || '') || cachedChannel?.icon || null,
+          logoColor: String(extra?.logoColor || '') || cachedChannel?.logoColor || null,
+          memberType: (pushedMemberType !== null && pushedMemberType > 0) ? pushedMemberType : (cachedMemberType ?? 9),
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         }, { allowRemoved: true, uid: currentUid })
       }
