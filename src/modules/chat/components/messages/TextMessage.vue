@@ -72,7 +72,7 @@ interface ExtraLinkRange {
 
 type AliasTarget =
   | { type: 'member'; context: string; profile: MemberInfoProfile }
-  | { type: 'joined-group' }
+  | { type: 'joined-group'; target: AddGroupTarget }
   | { type: 'add-group'; target: AddGroupTarget }
   | { type: 'channel'; channel: Record<string, any> }
   | { type: 'private-channel'; channel: Record<string, any> }
@@ -468,6 +468,23 @@ function parseGroupTargetFromAlias(raw: any): AddGroupTarget | null {
   }
 }
 
+function isAliasGroupMember(raw: any): boolean {
+  const gd = raw?.groupDetail || raw?.groupAlias || raw
+  const gb = gd?.groupBase || gd?.groupBaseResp || gd
+  const flags = [
+    raw?.bfMember,
+    raw?.bfGroupMember,
+    raw?.member,
+    gd?.bfMember,
+    gd?.bfGroupMember,
+    gd?.member,
+    gb?.bfMember,
+    gb?.bfGroupMember,
+    gb?.member,
+  ]
+  return flags.some((value) => value === true || Number(value) === 1)
+}
+
 function parseMemberProfile(raw: any): MemberInfoProfile | null {
   const detail = raw?.targetUser || raw?.userDetail || raw?.contactsDetailBase || raw
   const user = detail?.userInfo || detail?.userInfoBaseResp || detail
@@ -491,6 +508,14 @@ async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise
     await groupStore.loadGroups(authStore.uid)
   }
   return Boolean(groupStore.getGroup(groupId))
+}
+
+async function isAlreadyInChannel(channelId: string, serverMember: boolean): Promise<boolean> {
+  if (serverMember || channelStore.getChannel(channelId)) return true
+  if (authStore.uid && channelStore.channels.length === 0) {
+    await channelStore.loadChannels(authStore.uid)
+  }
+  return Boolean(channelStore.getChannel(channelId))
 }
 
 function openGroupConversation(target: AddGroupTarget) {
@@ -560,15 +585,16 @@ function readChannelNumber(raw: any, camelKey: string, snakeKey: string): number
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function canOpenChannelDirectly(raw: any): boolean {
+async function canOpenChannelDirectly(raw: any): Promise<boolean> {
+  const channelId = normalizeChannelId(raw)
   const memberType = readChannelNumber(raw, 'memberType', 'member_type')
   if (memberType !== null) {
-    // 服务端明确返回 memberType=0 时表示当前账号未加入；不能先开会话，否则详情校准会删除会话造成闪跳。
-    return memberType > 0
+    // 别名接口可能只返回当前链路的 memberType；本地已加入时仍要直接跳会话，避免误弹加入窗口。
+    return memberType > 0 || (channelId ? await isAlreadyInChannel(channelId, false) : false)
   }
 
   const linkType = readChannelNumber(raw, 'linkType', 'link_type')
-  return linkType === null || linkType === 0
+  return (channelId ? await isAlreadyInChannel(channelId, false) : false) || linkType === null || linkType === 0
 }
 
 function parseChannelTarget(raw: any): AddChannelTarget | null {
@@ -639,7 +665,7 @@ async function openChannelInviteLink(href: string, showInvalidToast: boolean): P
     return false
   }
   if (channelLink?.data) {
-    if (canOpenChannelDirectly(channelLink.data)) {
+    if (await canOpenChannelDirectly(channelLink.data)) {
       openChannelConversation(channelLink.data)
     } else {
       openAddChannelDialog(channelLink.data)
@@ -705,7 +731,7 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
       const searchType = Number(aliasResp.data.searchType)
       const channelInfo = aliasResp.data.channelInfo
       if (searchType === 2 && channelInfo) {
-        return canOpenChannelDirectly(channelInfo)
+        return await canOpenChannelDirectly(channelInfo)
           ? { type: 'channel', channel: channelInfo as Record<string, any> }
           : { type: 'private-channel', channel: channelInfo as Record<string, any> }
       }
@@ -723,8 +749,8 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
 
     const groupTarget = parseGroupTargetFromAlias(resp)
     if (groupTarget) {
-      if (groupTarget.id === groupId || (await isAlreadyInGroup(groupTarget.id, false))) {
-        return { type: 'joined-group' }
+      if (groupTarget.id === groupId || (await isAlreadyInGroup(groupTarget.id, isAliasGroupMember(resp)))) {
+        return { type: 'joined-group', target: groupTarget }
       }
 
       return { type: 'add-group', target: groupTarget }
@@ -755,7 +781,7 @@ async function openRemoteAliasTarget(
   if (target.type === 'member') {
     uiStore.openMemberInfo(target.profile.userId, groupId, [target.context, target.profile.nickname], target.profile)
   } else if (target.type === 'joined-group') {
-    eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
+    openGroupConversation(target.target)
   } else if (target.type === 'add-group') {
     uiStore.setAddGroupTarget(target.target)
     uiStore.setRightPanel('none')

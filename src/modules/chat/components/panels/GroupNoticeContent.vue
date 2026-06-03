@@ -5,16 +5,18 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
-import { useUIStore, type AddChannelTarget, type AddGroupTarget } from '@/stores/useUIStore'
+import { useUIStore, type AddChannelTarget, type AddGroupTarget, type MemberInfoProfile } from '@/stores/useUIStore'
 import { eventBus } from '@/utils/eventBus'
 import { ConversationType } from '@/types'
 import {
+  groupOrUserDetail,
   groupQrUrlFromShortLink,
   queryGroupLink,
   type GroupDetailFromQrCodeResp,
 } from '@/api/imBase'
 import {
   isChannelLink,
+  searchAliasContent,
   type ChannelLinkResp,
 } from '@/api/imChannel'
 
@@ -40,7 +42,9 @@ const emit = defineEmits<{
   (e: 'navigated'): void
 }>()
 const resolvingLinkKeys = ref(new Set<string>())
+const resolvingMentionKeys = ref(new Set<string>())
 const openingLinkKeys = new Set<string>()
+const openingMentionKeys = new Set<string>()
 
 type NoticeSegment =
   | { type: 'text'; text: string }
@@ -52,12 +56,21 @@ interface MentionCandidate {
   memberId: string
 }
 
+type AliasTarget =
+  | { type: 'member'; context: string; profile: MemberInfoProfile }
+  | { type: 'joined-group'; target: AddGroupTarget }
+  | { type: 'add-group'; target: AddGroupTarget }
+  | { type: 'channel'; channel: Record<string, any> }
+  | { type: 'private-channel'; channel: Record<string, any> }
+  | { type: 'missing' }
+
 const LINK_FORBIDDEN_CHARS = '\\s"\'<>\\u4e00-\\u9fa5\\u3000-\\u303F\\uFF00-\\uFFEF\\u2000-\\u206F'
 const LINK_SAFE_END_CHAR = `[^${LINK_FORBIDDEN_CHARS}\\.,;:?!()\\[\\]{}]`
 const LINK_AT_START_REGEX = new RegExp(
   `^((?:(?:https?)://|www\\.)[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR})`,
   'i',
 )
+const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 
 const members = computed(() => props.groupId ? groupStore.getMembers(props.groupId) : [])
 const isEmpty = computed(() => !String(props.content || '').trim())
@@ -274,12 +287,73 @@ function parseGroupTarget(groupInfo: GroupDetailFromQrCodeResp): AddGroupTarget 
   }
 }
 
+function parseGroupTargetFromAlias(raw: any): AddGroupTarget | null {
+  const gd = raw?.groupDetail || raw?.groupAlias || raw
+  const gb = gd?.groupBase || gd?.groupBaseResp || gd
+  const id = String(gb?.groupId ?? gb?.id ?? '').trim()
+  if (!id) return null
+
+  return {
+    id,
+    name: String(gb.name ?? gb.groupName ?? ''),
+    avatar: String(gb.pic ?? gb.icon ?? gb.avatar ?? ''),
+    memberCount: Number(gb.memberCount ?? gb.member_count ?? 0),
+    groupAliasName: String(gb.groupAliasName ?? gb.groupAlias ?? ''),
+    ownerId: gb.hostId == null ? null : String(gb.hostId),
+    addToken: String(raw?.addToken ?? gd?.addToken ?? gb?.addToken ?? ''),
+    bfJoinCheck: Boolean(gb?.bfJoinCheck ?? gd?.bfJoinCheck ?? raw?.bfJoinCheck ?? false),
+    joinSource: 'alias',
+  }
+}
+
+function isAliasGroupMember(raw: any): boolean {
+  const gd = raw?.groupDetail || raw?.groupAlias || raw
+  const gb = gd?.groupBase || gd?.groupBaseResp || gd
+  const flags = [
+    raw?.bfMember,
+    raw?.bfGroupMember,
+    raw?.member,
+    gd?.bfMember,
+    gd?.bfGroupMember,
+    gd?.member,
+    gb?.bfMember,
+    gb?.bfGroupMember,
+    gb?.member,
+  ]
+  return flags.some((value) => value === true || Number(value) === 1)
+}
+
+function parseMemberProfile(raw: any): MemberInfoProfile | null {
+  const detail = raw?.targetUser || raw?.userDetail || raw?.contactsDetailBase || raw
+  const user = detail?.userInfo || detail?.userInfoBaseResp || detail
+  const userId = String(user?.uid ?? user?.id ?? '').trim()
+  if (!userId) return null
+
+  return {
+    userId,
+    nickname: String(user?.nickName ?? user?.nickname ?? ''),
+    avatar: String(user?.icon ?? user?.avatar ?? ''),
+    remark: user?.friendRelation?.remarkName ?? detail?.name ?? detail?.remarkName ?? null,
+    depict: detail?.depict ?? user?.depict ?? null,
+    addToken: String(detail?.addToken ?? raw?.addToken ?? ''),
+    isFriend: Boolean(user?.friendRelation?.bfFriend ?? detail?.bfFriend ?? false),
+  }
+}
+
 async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise<boolean> {
   if (serverMember || groupStore.getGroup(groupId)) return true
   if (authStore.uid && groupStore.groups.length === 0) {
     await groupStore.loadGroups(authStore.uid)
   }
   return Boolean(groupStore.getGroup(groupId))
+}
+
+async function isAlreadyInChannel(channelId: string, serverMember: boolean): Promise<boolean> {
+  if (serverMember || channelStore.getChannel(channelId)) return true
+  if (authStore.uid && channelStore.channels.length === 0) {
+    await channelStore.loadChannels(authStore.uid)
+  }
+  return Boolean(channelStore.getChannel(channelId))
 }
 
 function openGroupConversation(target: AddGroupTarget) {
@@ -348,14 +422,16 @@ function readChannelNumber(raw: any, camelKey: string, snakeKey: string): number
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function canOpenChannelDirectly(raw: any): boolean {
+async function canOpenChannelDirectly(raw: any): Promise<boolean> {
+  const channelId = normalizeChannelId(raw)
   const memberType = readChannelNumber(raw, 'memberType', 'member_type')
   if (memberType !== null) {
-    return memberType > 0
+    // 别名接口可能只返回当前链路的 memberType；本地已加入时仍要直接跳会话，避免误弹加入窗口。
+    return memberType > 0 || (channelId ? await isAlreadyInChannel(channelId, false) : false)
   }
 
   const linkType = readChannelNumber(raw, 'linkType', 'link_type')
-  return linkType === null || linkType === 0
+  return (channelId ? await isAlreadyInChannel(channelId, false) : false) || linkType === null || linkType === 0
 }
 
 function openChannelConversation(raw: any): boolean {
@@ -450,7 +526,7 @@ async function openChannelInviteLink(href: string): Promise<boolean> {
     return false
   }
   if (channelLink?.data) {
-    if (canOpenChannelDirectly(channelLink.data)) {
+    if (await canOpenChannelDirectly(channelLink.data)) {
       openChannelConversation(channelLink.data)
     } else {
       openAddChannelDialog(channelLink.data)
@@ -490,6 +566,96 @@ function isLinkResolving(segment: Extract<NoticeSegment, { type: 'link' }>): boo
   return resolvingLinkKeys.value.has(linkResolvingKey(segment))
 }
 
+function aliasTargetCacheKey(label: string, groupId: string): string {
+  return `${groupId}:${label.replace(/^@+/, '').trim()}`
+}
+
+function setMentionResolving(key: string, resolving: boolean) {
+  const next = new Set(resolvingMentionKeys.value)
+  if (resolving) next.add(key)
+  else next.delete(key)
+  resolvingMentionKeys.value = next
+}
+
+function isMentionResolving(segment: Extract<NoticeSegment, { type: 'mention' }>): boolean {
+  return resolvingMentionKeys.value.has(aliasTargetCacheKey(segment.text, props.groupId))
+}
+
+async function resolveRemoteAliasTarget(label: string): Promise<AliasTarget> {
+  const context = label.replace(/^@+/, '').trim()
+  if (!context) return { type: 'missing' }
+
+  // 对齐聊天消息里的 @ 行为：未知 @ 先查别名，避免把群/频道别名误当成成员资料打开。
+  try {
+    const aliasResp = await searchAliasContent({ fromUid: authStore.uid || 0, content: context })
+    if (Number(aliasResp?.code ?? 0) === 200 && aliasResp?.data) {
+      const searchType = Number(aliasResp.data.searchType)
+      const channelInfo = aliasResp.data.channelInfo
+      if (searchType === 2 && channelInfo) {
+        return await canOpenChannelDirectly(channelInfo)
+          ? { type: 'channel', channel: channelInfo as Record<string, any> }
+          : { type: 'private-channel', channel: channelInfo as Record<string, any> }
+      }
+    }
+  } catch (error) {
+    console.warn('[GroupNoticeContent] searchAliasContent failed, fallback to groupOrUserDetail:', error)
+  }
+
+  try {
+    const resp = await groupOrUserDetail({ fromUid: authStore.uid || 0, context })
+    const profile = parseMemberProfile(resp)
+    if (profile) {
+      return { type: 'member', context, profile }
+    }
+
+    const groupTarget = parseGroupTargetFromAlias(resp)
+    if (groupTarget) {
+      if (groupTarget.id === props.groupId || (await isAlreadyInGroup(groupTarget.id, isAliasGroupMember(resp)))) {
+        return { type: 'joined-group', target: groupTarget }
+      }
+
+      return { type: 'add-group', target: groupTarget }
+    }
+  } catch (error) {
+    console.warn('[GroupNoticeContent] groupOrUserDetail failed:', error)
+  }
+
+  return { type: 'missing' }
+}
+
+async function openRemoteAliasTarget(label: string): Promise<AliasTarget> {
+  const key = aliasTargetCacheKey(label, props.groupId)
+  let request = aliasTargetCache.get(key)
+  if (!request) {
+    request = resolveRemoteAliasTarget(label).catch((error) => {
+      aliasTargetCache.delete(key)
+      throw error
+    })
+    aliasTargetCache.set(key, request)
+  }
+
+  const target = await request
+  if (target.type === 'member') {
+    uiStore.openMemberInfo(target.profile.userId, props.groupId, [target.context, target.profile.nickname], target.profile)
+  } else if (target.type === 'joined-group') {
+    openGroupConversation(target.target)
+    emit('navigated')
+  } else if (target.type === 'add-group') {
+    uiStore.setAddGroupTarget(target.target)
+    uiStore.setRightPanel('none')
+    uiStore.openAddGroupDialog()
+    emit('navigated')
+  } else if (target.type === 'channel') {
+    openChannelConversation(target.channel)
+  } else if (target.type === 'private-channel') {
+    openAddChannelDialog(target.channel)
+  } else {
+    aliasTargetCache.delete(key)
+    eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
+  }
+  return target
+}
+
 function findMemberBySegment(segment: Extract<NoticeSegment, { type: 'mention' }>): GroupMember | undefined {
   if (segment.memberId) {
     return members.value.find((member) => member.userId === segment.memberId)
@@ -501,28 +667,42 @@ function findMemberBySegment(segment: Extract<NoticeSegment, { type: 'mention' }
   )
 }
 
-function handleMentionClick(segment: Extract<NoticeSegment, { type: 'mention' }>) {
+async function handleMentionClick(segment: Extract<NoticeSegment, { type: 'mention' }>) {
   if (!props.clickable) return
   const cleanLabel = segment.text.replace(/^@+/, '').trim()
   if (!cleanLabel || cleanLabel === '所有人' || cleanLabel === '全体成员') return
+  const openingKey = aliasTargetCacheKey(cleanLabel, props.groupId)
+  if (openingMentionKeys.has(openingKey)) return
+  openingMentionKeys.add(openingKey)
 
-  const member = findMemberBySegment(segment)
-  if (member) {
-    uiStore.openMemberInfo(
-      member.userId,
-      props.groupId,
-      [cleanLabel, member.nickname || '', member.userId].filter(Boolean),
-      {
-        userId: member.userId,
-        nickname: member.nickname || member.userId,
-        avatar: member.avatar || '',
-      },
-    )
-    return
+  try {
+    const member = findMemberBySegment(segment)
+    if (member) {
+      uiStore.openMemberInfo(
+        member.userId,
+        props.groupId,
+        [cleanLabel, member.nickname || '', member.userId].filter(Boolean),
+        {
+          userId: member.userId,
+          nickname: member.nickname || member.userId,
+          avatar: member.avatar || '',
+        },
+      )
+      return
+    }
+
+    const slowTimer = window.setTimeout(() => {
+      setMentionResolving(openingKey, true)
+    }, 350)
+    try {
+      await openRemoteAliasTarget(cleanLabel)
+    } finally {
+      window.clearTimeout(slowTimer)
+      setMentionResolving(openingKey, false)
+    }
+  } finally {
+    openingMentionKeys.delete(openingKey)
   }
-
-  // 旧 im 会把未知 @ 文本继续交给成员/别名逻辑处理；这里保留候选名，交由资料卡按当前群上下文兜底解析。
-  uiStore.openMemberInfo(cleanLabel, props.groupId, [cleanLabel])
 }
 
 async function handleLinkClick(event: MouseEvent, segment: Extract<NoticeSegment, { type: 'link' }>) {
@@ -560,7 +740,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<NoticeSegment
       <template v-for="(segment, index) in segments" :key="index">
         <span
           v-if="segment.type === 'mention'"
-          class="notice-mention"
+          :class="['notice-mention', { resolving: isMentionResolving(segment) }]"
           role="button"
           tabindex="0"
           @click.stop="handleMentionClick(segment)"
