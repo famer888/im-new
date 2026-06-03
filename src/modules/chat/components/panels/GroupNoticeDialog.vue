@@ -9,6 +9,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import AppSwitch from '@/components/AppSwitch.vue'
 import Toast from '@/components/Toast.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import GroupNoticeContent from './GroupNoticeContent.vue'
 import { getGroupDetail, groupUpdate } from '@/api/imBase'
 
 const { t: $t } = useI18n()
@@ -295,10 +296,14 @@ async function handleSendNotice(notifyAll: boolean) {
           maxlength="800"
           :placeholder="$t('请输入内容')"
         />
-        <div v-else class="notice-view">
-          <div v-if="noticeText" class="content">{{ noticeText }}</div>
-          <div v-else class="empty">{{ $t('无简介') }}</div>
-        </div>
+        <GroupNoticeContent
+          v-else
+          class="notice-view"
+          :content="noticeText"
+          :group-id="props.groupId"
+          height="203px"
+          @navigated="emit('close')"
+        />
         <span v-if="loginIsHost && !isHistoryView && isEdit">{{ 800 - noticeText.length }}</span>
       </section>
       
@@ -357,7 +362,7 @@ async function handleSendNotice(notifyAll: boolean) {
     transform: translate(-50%, -50%);
     padding: 10px 16px;
     border-radius: 8px;
-    width: 520px;
+    width: 438px;
     box-sizing: border-box;
 
     > picture {
@@ -454,19 +459,6 @@ async function handleSendNotice(notifyAll: boolean) {
         background-color: rgb(245, 245, 245);
         border-radius: 8px;
         overflow-y: auto;
-        
-        .content {
-          font-size: 14px;
-          color: #787878;
-          line-height: 20px;
-          white-space: pre-wrap;
-          word-wrap: break-word;
-        }
-        
-        .empty {
-          color: #d3d1d1;
-          font-size: 14px;
-        }
       }
 
       > span {

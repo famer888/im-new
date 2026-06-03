@@ -14,6 +14,7 @@ import Toast from '@/components/Toast.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import GroupQRCode from './GroupQRCode.vue'
 import GroupNoticeDialog from './GroupNoticeDialog.vue'
+import GroupNoticeContent from './GroupNoticeContent.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 import RemoveMemberDialog from '@/modules/groups/components/RemoveMemberDialog.vue'
 import { eventBus } from '@/utils/eventBus'
@@ -36,7 +37,6 @@ const groupAliasName = ref('')
 const notice = ref('')
 const inviteShortLink = ref('')
 const clearMsgTypeList = ref<string[]>([])
-const noticePreview = computed(() => notice.value.trim())
 // 群详情异步回填前，先显示“加载中”，避免右侧出现空别名或裸 @。
 const groupAliasDisplayText = computed(() => {
   const alias = groupAliasName.value.trim()
@@ -586,8 +586,12 @@ function handleOnlineTime(member: any) {
             <h3>{{ t('群简介') }}</h3>
             <img class="arrow" src="@/assets/images/common/right-arrow-a.png" />
           </div>
-          <p class="notice-preview" v-if="noticePreview">{{ noticePreview }}</p>
-          <p class="notice-preview empty" v-else>{{ t('无简介') }}</p>
+          <GroupNoticeContent
+            class="notice-preview"
+            :content="notice"
+            :group-id="conv.targetId"
+            compact
+          />
         </div>
 
         <!-- 配置列表 (同 im config-list.vue) -->
@@ -1013,20 +1017,8 @@ function handleOnlineTime(member: any) {
   }
 
   .notice-preview {
-    margin: 0;
-    font-size: 13px;
-    line-height: 20px;
+    max-height: 40px;
     min-height: 20px;
-    color: #999;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-
-    &.empty {
-      color: #ccc;
-    }
   }
 }
 

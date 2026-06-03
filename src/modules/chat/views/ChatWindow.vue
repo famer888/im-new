@@ -24,6 +24,7 @@ import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import GroupNoticeDialog from '../components/panels/GroupNoticeDialog.vue'
+import GroupNoticeContent from '../components/panels/GroupNoticeContent.vue'
 import lockIcon from '@/assets/images/message/lock.png'
 import dropFileIcon from '@/assets/images/file/file-icon.png'
 import topNoticeArrowIcon from '@/assets/images/headNav/jt-icon.png'
@@ -503,7 +504,12 @@ onBeforeUnmount(() => {
         <span>{{ t('群简介') }}</span>
         <img :src="topNoticeArrowIcon" alt="" />
       </h2>
-      <p>{{ latestGroupIntroNotice.notice }}</p>
+      <GroupNoticeContent
+        class="group-top-notice-content"
+        :content="latestGroupIntroNotice.notice"
+        :group-id="latestGroupIntroNotice.groupId"
+        @navigated="handleCloseTopGroupNotice"
+      />
       <button type="button" @click.stop="handleCloseTopGroupNotice">{{ t('知道了') }}</button>
     </div>
     <MessageList
@@ -653,12 +659,11 @@ onBeforeUnmount(() => {
     }
   }
 
-  > p {
+  .group-top-notice-content {
     margin: 5px 0 0;
     overflow: hidden;
     text-overflow: ellipsis;
     word-wrap: break-word;
-    white-space: pre-wrap;
     line-height: 20px;
     max-height: 190px;
     color: #333;
