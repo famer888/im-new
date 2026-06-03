@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGroupStore } from '@/stores/useGroupStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -40,6 +40,8 @@ const submitting = ref(false)
 const loginIsHost = ref(false)
 const editUser = ref<any>(null)
 const memberType = ref(-1)
+const publisherNameEl = ref<HTMLElement | null>(null)
+const publisherNameOverflow = ref(false)
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -67,6 +69,12 @@ function showConfirm(title: string, content: string, action: () => void) {
   confirmContent.value = content
   confirmAction.value = action
   confirmVisible.value = true
+}
+
+function updatePublisherNameOverflow() {
+  const el = publisherNameEl.value
+  // 只有昵称真实被省略时才显示悬停提示，避免短昵称也弹出重复内容。
+  publisherNameOverflow.value = Boolean(el && el.scrollWidth > el.clientWidth + 1)
 }
 
 function handleConfirm() {
@@ -170,9 +178,14 @@ watch(
     resetToast()
     if (!visible) return
     void loadNoticeDetail()
+    void nextTick(updatePublisherNameOverflow)
   },
   { immediate: true },
 )
+
+watch(displayUserName, () => {
+  void nextTick(updatePublisherNameOverflow)
+})
 
 function handleActivateEdit() {
   isEdit.value = true
@@ -278,7 +291,10 @@ async function handleSendNotice(notifyAll: boolean) {
           :size="35"
           rounded
         />
-        <h2>{{ displayUserName }}</h2>
+        <div class="publisher-name-wrap" :aria-label="displayUserName" @mouseenter="updatePublisherNameOverflow">
+          <h2 ref="publisherNameEl">{{ displayUserName }}</h2>
+          <span v-if="publisherNameOverflow" class="publisher-title-tooltip">{{ displayUserName }}</span>
+        </div>
         <span
           v-if="(loginIsHost || showBadge) && displayUserLabel"
           :class="{
@@ -397,19 +413,55 @@ async function handleSendNotice(notifyAll: boolean) {
         margin-right: 10px;
       }
 
-      > h2 {
+      > .publisher-name-wrap {
         display: block;
-        flex: 1;
+        flex: 0 1 auto;
         min-width: 0;
+        position: relative;
+
+        > h2 {
+          display: block;
+          margin: 0;
+          padding: 0;
+          line-height: 30px;
+          font-size: 14px;
+          font-weight: 600;
+          color: #333;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+      }
+
+      .publisher-title-tooltip {
+        position: absolute;
+        left: calc(100% + 8px);
+        top: 50%;
+        z-index: 3;
+        display: block;
+        width: max-content;
+        max-width: 360px;
         margin: 0;
-        padding: 0;
-        line-height: 30px;
-        font-size: 14px;
-        font-weight: 600;
+        padding: 2px 7px;
+        border: 1px solid #bfbfbf;
+        border-radius: 2px;
+        background: #e6e6e6;
+        box-shadow: 0 2px 7px rgba(0, 0, 0, 0.18);
+        line-height: 16px;
+        font-size: 12px;
+        font-weight: 400;
         color: #333;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        word-break: break-all;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(-50%);
+        pointer-events: none;
+      }
+
+      > .publisher-name-wrap:hover .publisher-title-tooltip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(-50%);
       }
 
       > span {

@@ -75,6 +75,8 @@ const editorMenuVisible = ref(false)
 const editorMenuX = ref(0)
 const editorMenuY = ref(0)
 const savedSelection = ref<Range | null>(null)
+const editorUndoStack = ref<EditorHistoryEntry[]>([])
+const editorRedoStack = ref<EditorHistoryEntry[]>([])
 const selectedLinkText = ref('')
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -239,6 +241,7 @@ const FILE_ENCRYPT_CHUNK_SIZE = 102400
 const VISIBLE_TRAILING_SPACE = '\u00a0'
 const EDITOR_EMOJI_CARET_ANCHOR = '\u200b'
 const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg'])
+const EDITOR_HISTORY_LIMIT = 80
 const emojiMap = emojiObj as Record<string, string>
 
 interface AtSendCandidate {
@@ -255,6 +258,11 @@ interface AtSendUser {
   userId: string
   nickName: string
   name: string
+}
+
+interface EditorHistoryEntry {
+  text: string
+  caretOffset: number
 }
 
 interface UploadedImagePayload {
@@ -812,6 +820,42 @@ function setEditorText(text: string) {
   }
 }
 
+function captureEditorHistoryEntry(): EditorHistoryEntry {
+  return {
+    text: serializeEditorContent(),
+    caretOffset: getCaretTextOffset(),
+  }
+}
+
+function isSameEditorHistoryEntry(a: EditorHistoryEntry | null | undefined, b: EditorHistoryEntry | null | undefined): boolean {
+  return Boolean(a && b && a.text === b.text && a.caretOffset === b.caretOffset)
+}
+
+function pushEditorUndoEntry(entry: EditorHistoryEntry) {
+  const stack = editorUndoStack.value
+  if (isSameEditorHistoryEntry(stack[stack.length - 1], entry)) return
+  stack.push(entry)
+  if (stack.length > EDITOR_HISTORY_LIMIT) stack.shift()
+}
+
+function resetEditorHistory() {
+  editorUndoStack.value = []
+  editorRedoStack.value = []
+}
+
+function recordEditorChangeStart() {
+  // contenteditable 的程序插入没有可靠的现代原生撤销 API，统一记录修改前状态供桌面快捷键回退。
+  pushEditorUndoEntry(captureEditorHistoryEntry())
+  editorRedoStack.value = []
+}
+
+function applyEditorHistoryEntry(entry: EditorHistoryEntry) {
+  setEditorTextAndCaret(entry.text, entry.caretOffset)
+  showAtList.value = false
+  atKeyword.value = ''
+  saveEditorSelection()
+}
+
 function currentDraftText() {
   const text = normalizeEditorText(content.value)
   return text.trim() ? text : null
@@ -827,9 +871,11 @@ function restoreDraft(conversationId: string) {
   if (draft) {
     requestAnimationFrame(() => {
       setEditorTextAndCaret(draft, draft.length)
+      resetEditorHistory()
     })
   } else {
     setEditorText('')
+    resetEditorHistory()
   }
   chatStore.setDraft(conversationId, null)
 }
@@ -1044,9 +1090,11 @@ async function handleSend() {
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
   if (convId.value) chatStore.setDraft(convId.value, null)
+  resetEditorHistory()
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (handleEditorHistoryShortcut(e)) return
   if (handleEditorEmojiDeleteKey(e)) return
 
   if (e.key === 'Escape') {
@@ -1113,6 +1161,34 @@ function handleInput() {
     content.value = serializeEditorContent()
   }
   updateAtListFromCaret()
+}
+
+function handleBeforeInput() {
+  recordEditorChangeStart()
+}
+
+function handleEditorHistoryShortcut(event: KeyboardEvent): boolean {
+  const key = event.key.toLowerCase()
+  const isUndo = key === 'z' && (event.ctrlKey || event.metaKey) && !event.shiftKey
+  const isRedo = (key === 'y' && (event.ctrlKey || event.metaKey))
+    || (key === 'z' && (event.ctrlKey || event.metaKey) && event.shiftKey)
+  if (event.altKey || (!isUndo && !isRedo)) return false
+
+  event.preventDefault()
+  event.stopPropagation()
+  if (isUndo) {
+    const previous = editorUndoStack.value.pop()
+    if (!previous) return true
+    const current = captureEditorHistoryEntry()
+    if (!isSameEditorHistoryEntry(previous, current)) editorRedoStack.value.push(current)
+    applyEditorHistoryEntry(previous)
+  } else {
+    const next = editorRedoStack.value.pop()
+    if (!next) return true
+    pushEditorUndoEntry(captureEditorHistoryEntry())
+    applyEditorHistoryEntry(next)
+  }
+  return true
 }
 
 function saveEditorSelection() {
@@ -1186,6 +1262,7 @@ function removeEditorEmojiNode(emojiNode: HTMLImageElement): boolean {
   const parent = emojiNode.parentNode
   if (!parent) return false
 
+  recordEditorChangeStart()
   const offset = getChildNodeIndex(parent, emojiNode)
   const caretNode = emojiNode.nextSibling
   emojiNode.remove()
@@ -1404,6 +1481,56 @@ function setEditorTextAndCaret(text: string, caretOffset: number) {
   placeCaretAtTextOffset(caretOffset)
 }
 
+function createEditorNodesFromText(text: string): Node[] {
+  const nodes: Node[] = []
+  const tokenPattern = /\[[^\]]+\]/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  const appendPlainText = (value: string) => {
+    const parts = value.split('\n')
+    parts.forEach((part, index) => {
+      if (part) nodes.push(document.createTextNode(part))
+      if (index < parts.length - 1) nodes.push(document.createElement('br'))
+    })
+  }
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    const emoji = match[0]
+    if (!getEditorEmojiSrc(emoji)) continue
+
+    appendPlainText(text.slice(lastIndex, match.index))
+    nodes.push(createEditorEmojiNode(emoji), createEditorEmojiCaretNode())
+    lastIndex = match.index + emoji.length
+  }
+
+  appendPlainText(text.slice(lastIndex))
+  return nodes
+}
+
+function placeCaretAfterInsertedNode(node: Node) {
+  const selection = window.getSelection()
+  const range = document.createRange()
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    range.setStart(node, node.textContent?.length ?? 0)
+  } else {
+    const parent = node.parentNode
+    const index = parent ? Array.prototype.indexOf.call(parent.childNodes, node) : -1
+    if (parent && index >= 0) {
+      range.setStart(parent, index + 1)
+    } else if (editorRef.value) {
+      range.selectNodeContents(editorRef.value)
+      range.collapse(false)
+    }
+  }
+
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  savedSelection.value = range.cloneRange()
+}
+
 function insertPlainTextAtSelection(text: string) {
   if (!text) return
 
@@ -1411,12 +1538,34 @@ function insertPlainTextAtSelection(text: string) {
   const editor = editorRef.value
   const selection = window.getSelection()
   const range = selection?.rangeCount ? selection.getRangeAt(0) : null
-  const offsets = range ? getEditorRangeTextOffsets(range) : null
+  if (editor && (!range || !editor.contains(range.commonAncestorContainer))) {
+    placeCaretAtTextOffset(getEditorText().length)
+  }
+
+  const nextSelection = window.getSelection()
+  const nextRange = nextSelection?.rangeCount ? nextSelection.getRangeAt(0) : null
+  const offsets = nextRange ? getEditorRangeTextOffsets(nextRange) : null
   const currentText = getEditorText()
   const start = offsets?.start ?? currentText.length
   const end = offsets?.end ?? start
-  const nextText = `${currentText.slice(0, start)}${text}${currentText.slice(end)}`
-  setEditorTextAndCaret(nextText, start + text.length)
+
+  recordEditorChangeStart()
+  const activeSelection = window.getSelection()
+  const activeRange = activeSelection?.rangeCount ? activeSelection.getRangeAt(0) : null
+  if (editor && activeRange && editor.contains(activeRange.commonAncestorContainer)) {
+    activeRange.deleteContents()
+    const fragment = document.createDocumentFragment()
+    const nodes = createEditorNodesFromText(text)
+    nodes.forEach(node => fragment.appendChild(node))
+    const lastNode = nodes[nodes.length - 1]
+    activeRange.insertNode(fragment)
+    if (lastNode) placeCaretAfterInsertedNode(lastNode)
+    content.value = serializeEditorContent()
+  } else {
+    const nextText = `${currentText.slice(0, start)}${text}${currentText.slice(end)}`
+    setEditorTextAndCaret(nextText, start + text.length)
+  }
+
   showAtList.value = false
   atKeyword.value = ''
 }
@@ -1727,6 +1876,7 @@ function handleEmojiSelect(emoji: string) {
   restoreEditorSelection()
   const editor = editorRef.value
   if (!editor) {
+    recordEditorChangeStart()
     content.value += emoji
     showEmoji.value = false
     return
@@ -1740,6 +1890,7 @@ function handleEmojiSelect(emoji: string) {
     range.collapse(false)
   }
 
+  recordEditorChangeStart()
   range.deleteContents()
   const emojiNode = createEditorEmojiNode(emoji)
   const caretNode = createEditorEmojiCaretNode()
@@ -1785,6 +1936,7 @@ function handleAtSelect(member: { uid: string; name: string }) {
   const name = member.name.replace(/^@+/, '')
   const insertText = `@${name}${VISIBLE_TRAILING_SPACE}`
 
+  recordEditorChangeStart()
   if (!atRange) {
     const text = getEditorText()
     setEditorTextAndCaret(`${text}${insertText}`, text.length + insertText.length)
@@ -3571,6 +3723,7 @@ onBeforeUnmount(() => {
           class="editor"
           contenteditable="true"
           :placeholder="inputPlaceholder"
+          @beforeinput="handleBeforeInput"
           @input="handleInput"
           @keydown="handleKeydown"
           @paste="handlePaste"
