@@ -36,6 +36,15 @@ const sanitizedHtml = computed(() => {
     line-height: 22px;
     letter-spacing: 0.5px;
     word-break: break-all;
+    // App 根节点默认禁用选择；富文本消息正文同样保留拖选复制能力。
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+
+    :deep(*) {
+      user-select: text;
+      -webkit-user-select: text;
+    }
 
     :deep(a) {
       color: #3369fe;

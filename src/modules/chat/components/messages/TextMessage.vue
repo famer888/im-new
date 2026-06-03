@@ -1030,7 +1030,6 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
         <span
           v-if="segment.type === 'at'"
           :class="['at-mention', { resolving: isAtResolving(segment) }]"
-          @pointerdown.left.stop.prevent="handleAtClick(segment)"
           @click.stop="handleAtClick(segment)"
         >
           {{ segment.text }}
@@ -1079,6 +1078,15 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
     white-space: pre-wrap;
     letter-spacing: 0.5px;
     font-size: 14px;
+    // App 根节点默认禁用选择；消息正文需要恢复旧 im 的拖选复制能力。
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+
+    * {
+      user-select: text;
+      -webkit-user-select: text;
+    }
 
     .at-mention,
     .text-link {

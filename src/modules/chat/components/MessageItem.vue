@@ -177,6 +177,21 @@ const showAvatar = computed(
 const showReadBurnFire = computed(() => Boolean(props.message.deleteSeconds))
 let itemResizeObserver: ResizeObserver | null = null
 
+function getSelectedTextInside(node: EventTarget | null): string {
+  if (!(node instanceof HTMLElement)) return ''
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return ''
+
+  // 只接受当前消息气泡内的选区，避免右键时误复制页面其它位置选中的文字。
+  for (let i = 0; i < selection.rangeCount; i += 1) {
+    const range = selection.getRangeAt(i)
+    if (range.intersectsNode(node)) {
+      return selection.toString()
+    }
+  }
+  return ''
+}
+
 function handleContextMenu(e: MouseEvent, options?: { isAvatar?: boolean }) {
   if (uiStore.selectionMode) return
   e.preventDefault()
@@ -208,6 +223,7 @@ function handleContextMenu(e: MouseEvent, options?: { isAvatar?: boolean }) {
     content: props.message.content,
     extra: props.message.extra,
     senderName: senderName.value,
+    selectedText: isAvatarMenu ? '' : getSelectedTextInside(e.currentTarget),
     imageSrc,
     imagePath,
   })

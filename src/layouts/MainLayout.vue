@@ -1876,7 +1876,9 @@ async function copyImageToClipboard(src: string) {
 }
 
 async function copyMessageText(data: Record<string, unknown>) {
-  const text = normalizeCopyTextContent(data.content, parseMessageExtra(data))
+  // 选中消息局部文字后右键复制时，优先复制选区；未选中时保持复制整条消息。
+  const selectedText = String(data.selectedText || '')
+  const text = selectedText || normalizeCopyTextContent(data.content, parseMessageExtra(data))
   await writeTextClipboard(text)
 }
 
