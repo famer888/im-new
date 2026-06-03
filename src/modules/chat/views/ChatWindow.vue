@@ -18,7 +18,7 @@ import {
   isGroupIntroNoticeMessage,
   type GroupIntroNoticePayload,
 } from '@/utils/groupIntroNotice'
-import { isMessageEligibleForUnreadAnchor } from '@/utils/chatUnreadVisibility'
+import { isMessageEligibleForUnreadAnchor, isMessageVisibleInTimeline } from '@/utils/chatUnreadVisibility'
 import { isPendingGroupInviteChatMessage } from '@/utils/notificationNavigation'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
@@ -182,14 +182,32 @@ function collectUnreadCandidates(convId: string, uid: string): Message[] {
   )
 }
 
-function collectEligibleUnreadMessageIds(convId: string, uid: string): string[] {
+function collectEligibleUnreadMessageIds(convId: string, uid: string, limit = 0): string[] {
   const ids = new Set<string>()
-  for (const message of collectUnreadCandidates(convId, uid)) {
-    if (!isMessageEligibleForUnreadAnchor(convId, message, uid)) continue
+  const candidates = collectUnreadCandidates(convId, uid)
+    .filter((message) => isMessageEligibleForUnreadAnchor(convId, message, uid))
+  const scopedCandidates = limit > 0 && candidates.length > limit
+    ? candidates.slice(candidates.length - limit)
+    : candidates
+  for (const message of scopedCandidates) {
     if (message.id) ids.add(String(message.id))
     if (message.customMsgId) ids.add(String(message.customMsgId))
   }
   return [...ids]
+}
+
+function isMessageEligibleForUnreadCountFallback(convId: string, message: Message, uid: string): boolean {
+  if (!isMessageVisibleInTimeline(convId, message, uid)) return false
+  if (String(message.senderId || '') === uid) return false
+  if (message.msgType === 6) return false
+  if (message.msgType === 8 && !isGroupIntroNoticeMessage(message)) return false
+  return true
+}
+
+function collectUnreadCountFallbackCandidates(convId: string, uid: string): Message[] {
+  return messageStore.getMessages(convId).filter((message) =>
+    isMessageEligibleForUnreadCountFallback(convId, message, uid),
+  )
 }
 
 async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
@@ -202,18 +220,28 @@ async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
 
   let pageLoads = 0
   while (conversationId.value === convId) {
-    const eligibleIds = collectEligibleUnreadMessageIds(convId, uid)
+    const unreadCandidates = collectUnreadCandidates(convId, uid)
+    const eligibleIds = collectEligibleUnreadMessageIds(convId, uid, targetUnreadCount)
+    const fallbackCandidates = collectUnreadCountFallbackCandidates(convId, uid)
     if (eligibleIds.length > 0) {
+      // 群聊可能残留更早的 readStatus=0；只保留本次未读数范围内的最后 N 条，避免锚点跳到过早历史。
       sessionUnreadMessageIds.value = eligibleIds
       return
     }
 
-    const inspectedUnreadCount = collectUnreadCandidates(convId, uid).length
+    const inspectedUnreadCount = unreadCandidates.length
+    const fallbackCandidateCount = fallbackCandidates.length
+    if (fallbackCandidateCount >= targetUnreadCount) {
+      // 群聊历史消息不一定保留 readStatus=0；保留未读数，让 MessageList 按最后 N 条可见对方消息兜底定位。
+      sessionUnreadMessageIds.value = []
+      return
+    }
+
     const exhaustedHistory = !messageStore.hasMore(convId)
     // 未读锚点补齐只做有限页数扫描，避免进入会话时长时间“加载中”。
     if (exhaustedHistory || inspectedUnreadCount >= targetUnreadCount || pageLoads >= 6) {
       sessionUnreadMessageIds.value = []
-      sessionInitialUnread.value = 0
+      sessionInitialUnread.value = Math.min(targetUnreadCount, fallbackCandidateCount)
       return
     }
 

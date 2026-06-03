@@ -253,9 +253,22 @@ let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
 let isProgrammaticScroll = false
 let resizePinRaf: number | null = null
 let topAutoLoadArmed = true
+let programmaticScrollSeq = 0
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)
+}
+
+function setProgrammaticScrollTop(el: HTMLElement, top: number) {
+  // 程序定位和后续微调都不应触发“滚到顶部加载历史”，否则未读锚点会被新插入的历史消息挤走。
+  const seq = ++programmaticScrollSeq
+  isProgrammaticScroll = true
+  el.scrollTop = top
+  requestAnimationFrame(() => {
+    if (programmaticScrollSeq === seq) {
+      isProgrammaticScroll = false
+    }
+  })
 }
 
 function setBottomState(el: HTMLElement) {
@@ -281,6 +294,7 @@ function cancelScrollAnimation() {
     clearTimeout(scrollAnimationTimer)
     scrollAnimationTimer = null
   }
+  programmaticScrollSeq += 1
   isProgrammaticScroll = false
 }
 
@@ -288,12 +302,8 @@ function scrollToBottomImmediate() {
   const el = containerRef.value
   if (!el) return
   cancelScrollAnimation()
-  isProgrammaticScroll = true
-  el.scrollTop = getBottomScrollTop(el)
+  setProgrammaticScrollTop(el, getBottomScrollTop(el))
   setBottomState(el)
-  requestAnimationFrame(() => {
-    isProgrammaticScroll = false
-  })
 }
 
 function scrollToBottomAnimated(steps = 12) {
@@ -327,7 +337,8 @@ function scrollToBottomAnimated(steps = 12) {
 function shouldHoldForInitialUnreadScroll(): boolean {
   return !initialUnreadAutoScrollDone.value
     && !unreadBannerDismissed.value
-    && effectiveUnreadCount.value > 0
+    // 只有多条历史未读才需要跳到分隔条；单条未读保持置底，避免新消息被推到输入框下方。
+    && effectiveUnreadCount.value > 1
 }
 
 /** 用容器真实 scrollHeight 多次对齐底部，抵消虚拟列表首屏估算高度偏小导致的「停在顶部空白」 */
@@ -350,6 +361,13 @@ async function scrollUnreadBannerIntoView(options: { fallbackToBottom?: boolean 
     return false
   }
   await nextTick()
+  // 未读定位开始前就关闭吸底，并取消上一帧排队的尺寸置底，避免图片/气泡 resize 把位置抢回底部。
+  isAtBottom.value = false
+  stickToBottom.value = false
+  if (resizePinRaf !== null) {
+    cancelAnimationFrame(resizePinRaf)
+    resizePinRaf = null
+  }
   let moved = false
   for (let i = 0; i < 4; i++) {
     moved = scrollToRow(`unread-${divIdx}`) || moved
@@ -361,7 +379,7 @@ async function scrollUnreadBannerIntoView(options: { fallbackToBottom?: boolean 
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
   const el = containerRef.value
   if (el) {
-    el.scrollTop = Math.max(0, el.scrollTop - 20)
+    setProgrammaticScrollTop(el, Math.max(0, el.scrollTop - 20))
   }
   // 定位到历史未读后必须关闭吸底，避免首屏图片/文件加载完成后 ResizeObserver 又拉到最新消息。
   isAtBottom.value = false
@@ -411,7 +429,7 @@ function handleScroll() {
     // 重新离开顶部后再允许下一次自动分页，避免在阈值附近反复触发导致“长期加载中”。
     topAutoLoadArmed = true
   }
-  if (scrollTop < 100 && props.hasMore && !props.loading && topAutoLoadArmed) {
+  if (scrollTop < 100 && props.hasMore && !props.loading && topAutoLoadArmed && !isProgrammaticScroll) {
     // 顶部触发历史分页时，明确关闭吸底，避免分页结束后被 loading watcher 拉回底部。
     stickToBottom.value = false
     topAutoLoadArmed = false
@@ -458,7 +476,7 @@ watch(
   async (n, prev) => {
     if (n === prev) return
     if (props.loading || props.messages.length === 0) return
-    if ((n ?? 0) <= 0) {
+    if ((n ?? 0) <= 1) {
       initialUnreadAutoScrollDone.value = true
       if (stickToBottom.value) await flushScrollToBottom()
       return
@@ -469,8 +487,12 @@ watch(
 
 watch(
   () => (props.unreadMessageIds ?? []).join('|'),
-  async () => {
+  async (ids, prevIds) => {
     if (props.loading || props.messages.length === 0) return
+    if (ids && ids !== prevIds && effectiveUnreadCount.value > 1 && !unreadBannerDismissed.value) {
+      // 未读 ID 可能晚于 count 兜底到达；ID 到达后必须重新校正一次，避免分隔条停在过早的估算位置。
+      initialUnreadAutoScrollDone.value = false
+    }
     await tryInitialUnreadAutoScroll()
   },
 )
@@ -595,7 +617,7 @@ watch(
       }
       const el = containerRef.value
       if (el) {
-        el.scrollTop = Math.max(0, el.scrollTop - 50)
+        setProgrammaticScrollTop(el, Math.max(0, el.scrollTop - 50))
       }
       searchStore.setSearchMessageHighlight(targetMessageId)
     }
@@ -628,7 +650,7 @@ function scrollToRow(key: string): boolean {
     row.dataset.rowKey === key || row.dataset.rowCustomKey === key,
   )
   if (target) {
-    container.scrollTop = target.offsetTop
+    setProgrammaticScrollTop(container, target.offsetTop)
     return true
   }
   return false
