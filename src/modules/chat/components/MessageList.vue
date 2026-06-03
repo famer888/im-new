@@ -67,12 +67,15 @@ const entriesWithDate = computed(() =>
 const unreadBannerDismissed = ref(false)
 /** 右侧未读数量浮层独立隐藏：点击跳转后保留中间分隔条，行为对齐旧 im 的 initialUnreadCount。 */
 const unreadFloatDismissed = ref(false)
+/** 每次进入会话只自动定位一次未读分隔条，避免后续图片高度变化反复抢滚动位置。 */
+const initialUnreadAutoScrollDone = ref(false)
 
 watch(
   () => props.conversationId,
   () => {
     unreadBannerDismissed.value = false
     unreadFloatDismissed.value = false
+    initialUnreadAutoScrollDone.value = false
   },
 )
 
@@ -315,6 +318,37 @@ function scrollToBottomAnimated(steps = 12) {
   tick(Math.max(1, steps))
 }
 
+function getVisibleUnreadDividerRow(): HTMLElement | null {
+  const container = containerRef.value
+  const divIdx = unreadDividerIndex.value
+  if (!container || divIdx < 0) return null
+  return Array.from(container.querySelectorAll<HTMLElement>('.message-row'))
+    .find((row) => row.dataset.rowKey === `unread-${divIdx}`) ?? null
+}
+
+function isRowVisibleInContainer(row: HTMLElement, container: HTMLElement): boolean {
+  const rowTop = row.offsetTop
+  const rowBottom = rowTop + row.offsetHeight
+  return rowBottom > container.scrollTop && rowTop < container.scrollTop + container.clientHeight
+}
+
+function dismissUnreadFloatIfDividerVisible() {
+  if (unreadFloatDismissed.value || effectiveUnreadCount.value <= 0) return
+  const container = containerRef.value
+  const row = getVisibleUnreadDividerRow()
+  if (!container || !row) return
+  // 对齐旧 im：初始未读锚点进入可视区后，清掉右侧上箭头统计，只保留中间分隔条。
+  if (isRowVisibleInContainer(row, container)) {
+    unreadFloatDismissed.value = true
+  }
+}
+
+function shouldHoldForInitialUnreadScroll(): boolean {
+  return !initialUnreadAutoScrollDone.value
+    && !unreadBannerDismissed.value
+    && effectiveUnreadCount.value > 0
+}
+
 /** 用容器真实 scrollHeight 多次对齐底部，抵消虚拟列表首屏估算高度偏小导致的「停在顶部空白」 */
 async function flushScrollToBottom() {
   await nextTick()
@@ -326,21 +360,42 @@ async function flushScrollToBottom() {
 }
 
 /** 有未读时优先滚到「未读消息」条，便于看到分割交互（与旧 im 一致） */
-async function scrollUnreadBannerIntoView() {
+async function scrollUnreadBannerIntoView(options: { fallbackToBottom?: boolean } = {}): Promise<boolean> {
   const divIdx = unreadDividerIndex.value
   if (divIdx < 0) {
-    await flushScrollToBottom()
-    return
+    if (options.fallbackToBottom !== false) {
+      await flushScrollToBottom()
+    }
+    return false
   }
   await nextTick()
-  scrollToRow(`unread-${divIdx}`)
-  await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  let moved = false
+  for (let i = 0; i < 4; i++) {
+    moved = scrollToRow(`unread-${divIdx}`) || moved
+    if (moved) break
+    await nextTick()
+    await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  }
+  if (!moved) return false
   await new Promise<void>((r) => requestAnimationFrame(() => r()))
   const el = containerRef.value
   if (el) {
     el.scrollTop = Math.max(0, el.scrollTop - 20)
   }
+  // 定位到历史未读后必须关闭吸底，避免首屏图片/文件加载完成后 ResizeObserver 又拉到最新消息。
+  isAtBottom.value = false
   stickToBottom.value = false
+  dismissUnreadFloatIfDividerVisible()
+  return true
+}
+
+async function tryInitialUnreadAutoScroll(): Promise<boolean> {
+  if (!shouldHoldForInitialUnreadScroll()) return false
+  const moved = await scrollUnreadBannerIntoView({ fallbackToBottom: false })
+  if (moved) {
+    initialUnreadAutoScrollDone.value = true
+  }
+  return moved
 }
 
 async function pinToLatest(smooth = true) {
@@ -384,6 +439,7 @@ function handleScroll() {
   }
 
   setTimeDayMsgThrottled()
+  dismissUnreadFloatIfDividerVisible()
 }
 
 watch(
@@ -396,11 +452,9 @@ watch(
     clearNewMessageTip()
     const list = sortedMessages.value
     lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
-    if (effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0) {
-      await scrollUnreadBannerIntoView()
-    } else {
-      await flushScrollToBottom()
-    }
+    if (await tryInitialUnreadAutoScroll()) return
+    if (shouldHoldForInitialUnreadScroll()) return
+    await flushScrollToBottom()
   },
   { immediate: true },
 )
@@ -410,11 +464,8 @@ watch(
   async (loading) => {
     if (loading) return
     if (props.messages.length === 0) return
-    const hasUnread = effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0
-    if (hasUnread) {
-      await scrollUnreadBannerIntoView()
-      return
-    }
+    if (await tryInitialUnreadAutoScroll()) return
+    if (shouldHoldForInitialUnreadScroll()) return
     if (!stickToBottom.value) return
     await flushScrollToBottom()
   },
@@ -426,9 +477,20 @@ watch(
   async (n, prev) => {
     if (n === prev) return
     if (props.loading || props.messages.length === 0) return
-    if ((n ?? 0) <= 0 || unreadBannerDismissed.value) return
-    if (unreadDividerIndex.value < 0) return
-    await scrollUnreadBannerIntoView()
+    if ((n ?? 0) <= 0) {
+      initialUnreadAutoScrollDone.value = true
+      if (stickToBottom.value) await flushScrollToBottom()
+      return
+    }
+    await tryInitialUnreadAutoScroll()
+  },
+)
+
+watch(
+  () => (props.unreadMessageIds ?? []).join('|'),
+  async () => {
+    if (props.loading || props.messages.length === 0) return
+    await tryInitialUnreadAutoScroll()
   },
 )
 
@@ -439,6 +501,9 @@ watch(
     const latestId = list.length > 0 ? list[list.length - 1].id : ''
     const prevLatestId = lastMessageId.value
     lastMessageId.value = latestId
+
+    if (await tryInitialUnreadAutoScroll()) return
+    if (shouldHoldForInitialUnreadScroll()) return
 
     const appendedNewMessage = !!latestId && latestId !== prevLatestId
     const latestMessage = list.length > 0 ? list[list.length - 1] : null
@@ -468,11 +533,9 @@ onMounted(async () => {
   lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
   stickToBottom.value = true
   if (list.length > 0) {
-    if (effectiveUnreadCount.value > 0 && unreadDividerIndex.value >= 0) {
-      await scrollUnreadBannerIntoView()
-    } else {
-      await flushScrollToBottom()
-    }
+    if (await tryInitialUnreadAutoScroll()) return
+    if (shouldHoldForInitialUnreadScroll()) return
+    await flushScrollToBottom()
   }
 })
 
@@ -585,6 +648,7 @@ function scrollToRow(key: string): boolean {
 function onUnreadBannerClick() {
   unreadBannerDismissed.value = true
   unreadFloatDismissed.value = true
+  initialUnreadAutoScrollDone.value = true
   stickToBottom.value = true
   void nextTick(() => {
     void flushScrollToBottom()
@@ -616,6 +680,7 @@ async function onUnreadFloatClick() {
     const divIdx = await ensureUnreadDividerForNavigation()
     if (divIdx < 0) return
     unreadFloatDismissed.value = true
+    initialUnreadAutoScrollDone.value = true
     await nextTick()
     for (let i = 0; i < 3; i++) {
       if (scrollToRow(`unread-${divIdx}`)) break
