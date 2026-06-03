@@ -11,7 +11,7 @@ const isSelf = computed(() => props.message.senderId === authStore.uid)
 const sanitizedHtml = computed(() => {
   return DOMPurify.sanitize(props.message.content ?? '', {
     ALLOWED_TAGS: ['b', 'i', 'u', 'a', 'br', 'p', 'span', 'div', 'img', 'strong', 'em'],
-    ALLOWED_ATTR: ['href', 'src', 'alt', 'class', 'style', 'target'],
+    ALLOWED_ATTR: ['href', 'src', 'alt', 'class', 'style', 'target', 'type'],
   })
 })
 </script>
