@@ -503,8 +503,22 @@ function openChannelConversation(raw: any): boolean {
   return true
 }
 
+function readChannelNumber(raw: any, camelKey: string, snakeKey: string): number | null {
+  const value = raw?.[camelKey] ?? raw?.[snakeKey]
+  if (value === undefined || value === null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function canOpenChannelDirectly(raw: any): boolean {
-  return !Number(raw?.linkType || 0) || Boolean(Number(raw?.memberType || 0))
+  const memberType = readChannelNumber(raw, 'memberType', 'member_type')
+  if (memberType !== null) {
+    // 服务端明确返回 memberType=0 时表示当前账号未加入；不能先开会话，否则详情校准会删除会话造成闪跳。
+    return memberType > 0
+  }
+
+  const linkType = readChannelNumber(raw, 'linkType', 'link_type')
+  return linkType === null || linkType === 0
 }
 
 function parseChannelTarget(raw: any): AddChannelTarget | null {

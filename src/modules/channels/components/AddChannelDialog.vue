@@ -39,8 +39,18 @@ const joinedChannel = computed(() => {
   const id = target.value?.id || target.value?.channelId || ''
   return id ? channelStore.getChannel(id) : undefined
 })
+const targetMemberType = computed(() => Number(target.value?.memberType || 0))
+const joinedChannelMemberType = computed(() => Number(joinedChannel.value?.memberType || 0))
+function hasExplicitNonMember(channel: { memberType?: number | null } | null | undefined): boolean {
+  return channel?.memberType !== undefined && channel?.memberType !== null && Number(channel.memberType) <= 0
+}
+const canEnterChannel = computed(() => {
+  // 本地可能残留 memberType=0 的频道资料；明确未加入时不能当成已加入频道。
+  if (hasExplicitNonMember(target.value) || hasExplicitNonMember(joinedChannel.value)) return false
+  return targetMemberType.value > 0 || joinedChannelMemberType.value > 0 || Boolean(joinedChannel.value)
+})
 const buttonText = computed(() => {
-  if (joinedChannel.value || Number(target.value?.memberType || 0)) return t('进入频道')
+  if (canEnterChannel.value) return t('进入频道')
   if (joining.value) return t('加入中...')
   return t('加入频道')
 })
@@ -79,7 +89,6 @@ function upsertAndOpenChannel(joined = false) {
   const current = target.value
   const id = current?.id || current?.channelId || ''
   if (!current || !id) return
-  const currentMemberType = Number(current.memberType || 0)
 
   channelStore.patchChannel(id, {
     ...current,
@@ -89,7 +98,7 @@ function upsertAndOpenChannel(joined = false) {
     channelName: current.channelName || current.name || id,
     avatar: current.avatar || current.icon || null,
     icon: current.icon || current.avatar || null,
-    memberType: joined ? 3 : (currentMemberType > 0 ? current.memberType : joinedChannel.value?.memberType ?? 1),
+    memberType: joined ? 3 : (targetMemberType.value > 0 ? current.memberType : joinedChannel.value?.memberType ?? 1),
     updatedAt: Date.now(),
   }, { allowRemoved: true })
   // 加入后可能拿到更高权限，强刷一次详情；仍保持非阻塞，避免“进入频道”按钮延迟。
@@ -112,7 +121,7 @@ async function handleJoinChannel() {
   const current = target.value
   if (!current || joinDisabled.value) return
 
-  if (joinedChannel.value || Number(current.memberType || 0)) {
+  if (canEnterChannel.value) {
     upsertAndOpenChannel()
     return
   }
