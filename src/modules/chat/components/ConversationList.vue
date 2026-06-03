@@ -515,8 +515,29 @@ function isHiddenGroupNoticeDigest(digest: string): boolean {
   return raw === HIDDEN_GROUP_NOTICE_TEXT
 }
 
+function decodeDigestHtmlEntities(value: string): string {
+  if (!value.includes('&')) return value
+  const textarea = document.createElement('textarea')
+  textarea.innerHTML = value
+  return textarea.value
+}
+
+function normalizeDigestPlainText(value: string): string {
+  if (!/<\/?[a-z][\s\S]*>/i.test(value)) return decodeDigestHtmlEntities(value)
+
+  // 会话列表只展示摘要：富文本里的链接、样式标签都降级成普通文字，链接高亮仅保留在聊天窗口正文。
+  return decodeDigestHtmlEntities(value
+    .replace(/<img\b[^>]*>/gi, `[${t('图片')}]`)
+    .replace(/<video\b[^>]*>[\s\S]*?<\/video>/gi, `[${t('视频')}]`)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(?:p|div|h[1-6]|li|tr)>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim())
+}
+
 function formatDigestText(digest: string): string {
-  const raw = digest.trim()
+  const raw = normalizeDigestPlainText(digest.trim())
   if (!raw) return ''
   const translated = translateKnownDigest(raw)
   if (translated !== raw) return translated
@@ -1634,6 +1655,13 @@ onBeforeUnmount(() => {
 .digest-text {
   color: #999;
   font-size: 12px;
+}
+
+.conv-digest :deep(a) {
+  color: #999;
+  text-decoration: none;
+  cursor: default;
+  pointer-events: none;
 }
 
 .conv-digest-emoji {
