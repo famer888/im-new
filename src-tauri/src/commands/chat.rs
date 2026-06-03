@@ -776,6 +776,51 @@ fn read_user_id(value: &serde_json::Value) -> Option<i64> {
     })
 }
 
+fn read_at_uids(extra: &serde_json::Value) -> Vec<i64> {
+    fn push_unique(result: &mut Vec<i64>, seen: &mut HashSet<i64>, value: &serde_json::Value) {
+        let uid = value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()));
+        if let Some(uid) = uid {
+            if seen.insert(uid) {
+                result.push(uid);
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    // 新前端优先传 atUids；兼容旧 im/历史消息结构时再从 atUsers 里提取 uid。
+    if let Some(items) = extra
+        .get("atUids")
+        .or_else(|| extra.get("at_uids"))
+        .and_then(|value| value.as_array())
+    {
+        for item in items {
+            push_unique(&mut result, &mut seen, item);
+        }
+    }
+
+    if result.is_empty() {
+        if let Some(items) = extra
+            .get("atUsers")
+            .or_else(|| extra.get("at_users"))
+            .and_then(|value| value.as_array())
+        {
+            for item in items {
+                for key in ["uid", "userId", "id"] {
+                    if let Some(value) = item.get(key) {
+                        push_unique(&mut result, &mut seen, value);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
 #[tauri::command]
 pub async fn send_message(
     app: AppHandle,
@@ -819,6 +864,8 @@ pub async fn send_message(
     let group_notice_id = json_i64(&extra_value, &["noticeId", "notice_id"]).unwrap_or_default();
     let group_notice_show_notify =
         json_bool(&extra_value, &["showNotify", "show_notify", "bfAll"]).unwrap_or(false);
+    // 前端按旧 im 生成 atUids；这里透传给 WS protobuf，保证服务端能识别真正被 @ 的成员。
+    let at_uids = read_at_uids(&extra_value);
     let extra_json = match extra_value {
         serde_json::Value::Null => None,
         value => Some(value.to_string()),
@@ -896,7 +943,7 @@ pub async fn send_message(
                 &request.content,
                 now,
                 client_flag,
-                Vec::new(),
+                at_uids.clone(),
             ) {
                 error!(
                     "send_group_text failed conversation={} err={}",
@@ -952,7 +999,7 @@ pub async fn send_message(
                 &request.content,
                 now,
                 client_flag,
-                Vec::new(),
+                at_uids.clone(),
             ) {
                 error!(
                     "send_channel_text failed conversation={} err={}",
@@ -999,7 +1046,7 @@ pub async fn send_message(
                 &request.content,
                 now,
                 client_flag,
-                Vec::new(),
+                at_uids.clone(),
             ) {
                 error!(
                     "send_group_message failed conversation={} msg_type={} err={}",
@@ -1046,7 +1093,7 @@ pub async fn send_message(
                 &request.content,
                 now,
                 client_flag,
-                Vec::new(),
+                at_uids.clone(),
             ) {
                 error!(
                     "send_channel_message failed conversation={} msg_type={} err={}",

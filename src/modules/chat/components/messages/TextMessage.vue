@@ -58,6 +58,12 @@ interface MentionCandidate {
   memberId: string
 }
 
+interface MessageAtUser {
+  uid: string
+  nickName: string
+  name: string
+}
+
 interface ExtraLinkRange {
   location: number
   length: number
@@ -110,25 +116,69 @@ const groupMembers = computed(() =>
   messageGroupId.value ? groupStore.getMembers(messageGroupId.value) : [],
 )
 
+function pushMentionCandidate(list: MentionCandidate[], seen: Set<string>, labelName: string, memberId: string) {
+  const cleanName = String(labelName || '').trim().replace(/^@+/, '')
+  if (!cleanName || !memberId) return
+  const label = `@${cleanName}`
+  if (label === '@' || seen.has(label)) return
+  seen.add(label)
+  list.push({ label, memberId })
+}
+
+function readMessageAtUsers(rawExtra: unknown): MessageAtUser[] {
+  // atUsers 是旧 im 兼容字段：正文里保存真实昵称，本地展示时用它恢复备注名。
+  const extra = parseMessageExtraObject(rawExtra)
+  const rawAtUsers = Array.isArray(extra?.atUsers) ? extra.atUsers : []
+  return rawAtUsers
+    .map((item) => {
+      const raw = item as Record<string, unknown>
+      const uid = String(raw.uid ?? raw.userId ?? raw.id ?? '').trim()
+      const localRemark = uid ? String(contactStore.getContact(uid)?.remark || '').trim() : ''
+      return {
+        uid,
+        nickName: String(raw.nickName ?? raw.nickname ?? '').trim(),
+        name: String(raw.name ?? localRemark).trim(),
+      }
+    })
+    .filter((item) => item.uid && (item.nickName || item.name))
+}
+
 const mentionCandidates = computed<MentionCandidate[]>(() => {
   const seen = new Set<string>()
   const result: MentionCandidate[] = []
 
+  // 先使用消息自带 atUsers，确保历史消息/远端消息能按发送时的完整备注高亮。
+  for (const atUser of readMessageAtUsers(props.message.extra)) {
+    pushMentionCandidate(result, seen, atUser.name || atUser.nickName, atUser.uid)
+    pushMentionCandidate(result, seen, atUser.nickName, atUser.uid)
+  }
+
+  // 再用当前群成员和本地通讯录兜底，支持没有 atUsers 的旧消息点击 @。
   for (const member of groupMembers.value) {
-    const names = [member.nickname, member.userId]
-      .map((name) => String(name || '').trim())
-      .filter(Boolean)
+    const contact = contactStore.getContact(member.userId)
+    const names = [contact?.remark, member.nickname, contact?.nickname, member.userId]
 
     for (const name of names) {
-      const label = `@${name.replace(/^@+/, '')}`
-      if (label === '@' || seen.has(label)) continue
-      seen.add(label)
-      result.push({ label, memberId: member.userId })
+      pushMentionCandidate(result, seen, String(name || ''), member.userId)
     }
   }
 
   return result.sort((a, b) => b.label.length - a.label.length)
 })
+
+function replaceAtDisplayNames(content: string, rawExtra: unknown): string {
+  const usersWithRemark = readMessageAtUsers(rawExtra)
+    .filter((item) => item.nickName && item.name)
+    .sort((a, b) => b.nickName.length - a.nickName.length)
+  if (!usersWithRemark.length || !content.includes('@')) return content
+
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const nameMap = new Map(usersWithRemark.map((item) => [item.nickName, item.name]))
+  const pattern = usersWithRemark.map((item) => escapeRegExp(item.nickName)).join('|')
+  const atMentionReg = new RegExp(`@(${pattern})(?=$|[\\s@])`, 'g')
+  // 对齐旧 im：消息正文保存真实昵称，本地展示时再替换为好友备注。
+  return content.replace(atMentionReg, (_, nickName: string) => `@${nameMap.get(nickName) || nickName}`)
+}
 
 function isMentionBoundary(char: string): boolean {
   return !char || /\s/.test(char) || /[,.!?;:，。！？；：、)）\]】>》]/.test(char)
@@ -726,7 +776,8 @@ async function openRemoteAliasTarget(
 const contentSegments = computed<ContentSegment[]>(() => {
   const rawContent = props.message.content ?? ''
   // 对齐旧 im 的文本拆分表现：保留正文内部换行，但去掉末尾空白行，避免单行消息被尾部换行撑高。
-  const displayContent = rawContent.replace(/[ \t\u00a0]*[\r\n]+[ \t\u00a0]*$/g, '')
+  const displayContent = replaceAtDisplayNames(rawContent, props.message.extra)
+    .replace(/[ \t\u00a0]*[\r\n]+[ \t\u00a0]*$/g, '')
   // 仅针对推流地址展示：把“推流地址：”和 rtmp:// 之间空白改成不可换行空格，强制同一行显示。
   const content = displayContent.replace(
     /(推流地址[：:])[\s\u2028\u2029]+(rtmps?:\/\/)/gi,

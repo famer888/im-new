@@ -241,6 +241,22 @@ const EDITOR_EMOJI_CARET_ANCHOR = '\u200b'
 const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg'])
 const emojiMap = emojiObj as Record<string, string>
 
+interface AtSendCandidate {
+  uid: string
+  matchName: string
+  nickName: string
+  remarkName: string
+  atUid: number
+}
+
+interface AtSendUser {
+  id: string
+  uid: string
+  userId: string
+  nickName: string
+  name: string
+}
+
 interface UploadedImagePayload {
   url: string
   thumbnailUrl: string
@@ -1017,7 +1033,13 @@ async function handleSend() {
   }
 
   if (text) {
-    emit('send', text, MessageType.Text, withReadBurnExtra(Object.keys(extra).length > 0 ? extra : undefined))
+    const atPayload = isGroup.value && !isFileHelperChat.value
+      ? buildTextAtPayload(text)
+      : { content: text, atUids: [], atUsers: [] }
+    const textExtra = atPayload.atUids.length > 0
+      ? { ...extra, atUids: atPayload.atUids, atUsers: atPayload.atUsers }
+      : extra
+    emit('send', atPayload.content, MessageType.Text, withReadBurnExtra(Object.keys(textExtra).length > 0 ? textExtra : undefined))
   }
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
@@ -1237,6 +1259,108 @@ function getEditorText(): string {
 
 function normalizeEditorText(value: string): string {
   return value.replace(/\u00a0/g, ' ')
+}
+
+function isAtMentionBoundary(char: string): boolean {
+  return !char || /\s/.test(char) || char === '@'
+}
+
+// 同一个成员可能同时命中备注、群昵称和 uid，发送前先按 uid+名称去重。
+function pushUniqueAtCandidate(list: AtSendCandidate[], seen: Set<string>, candidate: AtSendCandidate) {
+  const key = `${candidate.uid}:${candidate.matchName}`
+  if (!candidate.matchName || seen.has(key)) return
+  seen.add(key)
+  list.push(candidate)
+}
+
+function buildAtSendCandidates(): AtSendCandidate[] {
+  const candidates: AtSendCandidate[] = []
+  const seen = new Set<string>()
+
+  // 只有群主/管理员允许 @全体成员，避免普通成员发送出服务端不认可的 -1。
+  const current = groupStore.getMembers(groupId.value).find(member => member.userId === authStore.uid)
+  if (current?.role === 0 || current?.role === 1) {
+    pushUniqueAtCandidate(candidates, seen, {
+      uid: '-1',
+      matchName: '全体成员',
+      nickName: '全体成员',
+      remarkName: '',
+      atUid: -1,
+    })
+  }
+
+  for (const member of groupStore.getMembers(groupId.value)) {
+    if (member.userId === authStore.uid) continue
+    const contact = contactStore.getContact(member.userId)
+    const nickName = String(member.nickname || contact?.nickname || member.userId || '').trim()
+    const remarkName = String(contact?.remark || '').trim()
+    // 发送时允许用户输入备注名、群昵称或 uid；备注命中后会在正文里转回真实群昵称。
+    const names = [remarkName, nickName, member.userId]
+      .map((name) => String(name || '').trim().replace(/^@+/, ''))
+      .filter(Boolean)
+
+    for (const matchName of names) {
+      pushUniqueAtCandidate(candidates, seen, {
+        uid: member.userId,
+        matchName,
+        nickName: nickName || member.userId,
+        remarkName,
+        atUid: Number(member.userId),
+      })
+    }
+  }
+
+  return candidates
+    .filter((candidate) => Number.isFinite(candidate.atUid))
+    .sort((a, b) => b.matchName.length - a.matchName.length)
+}
+
+function buildTextAtPayload(text: string): { content: string; atUids: number[]; atUsers: AtSendUser[] } {
+  // 逐字符扫描而不是按空格切词，保证“备注 名 - b”这类带空格备注也能完整匹配。
+  const candidates = buildAtSendCandidates()
+  const selected = new Map<string, AtSendCandidate>()
+  let content = ''
+  let index = 0
+
+  while (index < text.length) {
+    if (text.charAt(index) !== '@') {
+      content += text.charAt(index)
+      index += 1
+      continue
+    }
+
+    const candidate = candidates.find((item) => (
+      text.startsWith(item.matchName, index + 1)
+      && isAtMentionBoundary(text.charAt(index + 1 + item.matchName.length))
+    ))
+
+    if (!candidate) {
+      content += text.charAt(index)
+      index += 1
+      continue
+    }
+
+    // 对齐旧 im：发出的正文使用真实昵称，备注名只放在 atUsers 里供本地展示替换。
+    const sendName = candidate.remarkName && candidate.matchName === candidate.remarkName
+      ? candidate.nickName
+      : candidate.matchName
+    content += `@${sendName}`
+    selected.set(candidate.uid, candidate)
+    index += 1 + candidate.matchName.length
+  }
+
+  const selectedList = Array.from(selected.values())
+  return {
+    content,
+    atUids: selectedList.map((item) => item.atUid),
+    atUsers: selectedList.map((item) => ({
+      id: item.uid,
+      uid: item.uid,
+      userId: item.uid,
+      nickName: item.nickName,
+      name: item.remarkName,
+    })),
+  }
 }
 
 function getCaretTextOffset(): number {
