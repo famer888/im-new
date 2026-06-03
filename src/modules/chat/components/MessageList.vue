@@ -65,8 +65,6 @@ const entriesWithDate = computed(() =>
 
 /** 用户点击「未读消息」条后隐藏（对齐旧 im 点击消失） */
 const unreadBannerDismissed = ref(false)
-/** 右侧未读数量浮层独立隐藏：点击跳转后保留中间分隔条，行为对齐旧 im 的 initialUnreadCount。 */
-const unreadFloatDismissed = ref(false)
 /** 每次进入会话只自动定位一次未读分隔条，避免后续图片高度变化反复抢滚动位置。 */
 const initialUnreadAutoScrollDone = ref(false)
 
@@ -74,7 +72,6 @@ watch(
   () => props.conversationId,
   () => {
     unreadBannerDismissed.value = false
-    unreadFloatDismissed.value = false
     initialUnreadAutoScrollDone.value = false
   },
 )
@@ -88,15 +85,6 @@ const effectiveUnreadCount = computed(() => {
 const unreadMessageIdSet = computed(() => new Set(
   (props.unreadMessageIds ?? []).map((id) => String(id || '')).filter(Boolean),
 ))
-
-const unreadFloatCount = computed(() => {
-  if (unreadFloatDismissed.value) return 0
-  return Math.max(0, Number(effectiveUnreadCount.value || 0))
-})
-
-const unreadFloatCountText = computed(() =>
-  unreadFloatCount.value > 99 ? '99+' : String(unreadFloatCount.value),
-)
 
 function isMessageEligibleForUnreadSnapshotAnchor(message: Message): boolean {
   const uid = String(authStore.uid || '')
@@ -154,6 +142,24 @@ const rowsForList = computed((): ChatListRow[] => {
 function messageRenderKey(message: Message): string {
   return String(message.customMsgId || message.id)
 }
+
+function getMessageRenderKey(message: Message | null | undefined): string {
+  if (!message) return ''
+  return messageRenderKey(message)
+}
+
+const latestMessageSignature = computed(() => {
+  const latest = sortedMessages.value[sortedMessages.value.length - 1]
+  if (!latest) return ''
+  // 群聊发送回执会原地替换 id/status/sendTime，长度不变也必须重新执行置底判断。
+  return [
+    getMessageRenderKey(latest),
+    latest.senderId || '',
+    latest.sendTime || 0,
+    latest.status ?? '',
+    latest.readStatus ?? '',
+  ].join('|')
+})
 
 /** 与旧 im `floatDate` / `floatDateVisible`：滚动时顶部固定提示当前所处日期 */
 const floatDate = ref('')
@@ -240,13 +246,13 @@ const isAtBottom = ref(true)
 /** 进入会话 / 首屏加载：吸底；用户上滑看历史后为 false，避免加载更多后跳回底部 */
 const stickToBottom = ref(true)
 const lastMessageId = ref<string>('')
+const lastLatestMessageStatus = ref<number | null>(null)
 const newMessageCount = ref(0)
 const latestNewMessageKey = ref('')
 let scrollAnimationTimer: ReturnType<typeof setTimeout> | null = null
 let isProgrammaticScroll = false
 let resizePinRaf: number | null = null
 let topAutoLoadArmed = true
-let unreadFloatNavigating = false
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)
@@ -318,31 +324,6 @@ function scrollToBottomAnimated(steps = 12) {
   tick(Math.max(1, steps))
 }
 
-function getVisibleUnreadDividerRow(): HTMLElement | null {
-  const container = containerRef.value
-  const divIdx = unreadDividerIndex.value
-  if (!container || divIdx < 0) return null
-  return Array.from(container.querySelectorAll<HTMLElement>('.message-row'))
-    .find((row) => row.dataset.rowKey === `unread-${divIdx}`) ?? null
-}
-
-function isRowVisibleInContainer(row: HTMLElement, container: HTMLElement): boolean {
-  const rowTop = row.offsetTop
-  const rowBottom = rowTop + row.offsetHeight
-  return rowBottom > container.scrollTop && rowTop < container.scrollTop + container.clientHeight
-}
-
-function dismissUnreadFloatIfDividerVisible() {
-  if (unreadFloatDismissed.value || effectiveUnreadCount.value <= 0) return
-  const container = containerRef.value
-  const row = getVisibleUnreadDividerRow()
-  if (!container || !row) return
-  // 对齐旧 im：初始未读锚点进入可视区后，清掉右侧上箭头统计，只保留中间分隔条。
-  if (isRowVisibleInContainer(row, container)) {
-    unreadFloatDismissed.value = true
-  }
-}
-
 function shouldHoldForInitialUnreadScroll(): boolean {
   return !initialUnreadAutoScrollDone.value
     && !unreadBannerDismissed.value
@@ -385,7 +366,6 @@ async function scrollUnreadBannerIntoView(options: { fallbackToBottom?: boolean 
   // 定位到历史未读后必须关闭吸底，避免首屏图片/文件加载完成后 ResizeObserver 又拉到最新消息。
   isAtBottom.value = false
   stickToBottom.value = false
-  dismissUnreadFloatIfDividerVisible()
   return true
 }
 
@@ -439,7 +419,6 @@ function handleScroll() {
   }
 
   setTimeDayMsgThrottled()
-  dismissUnreadFloatIfDividerVisible()
 }
 
 watch(
@@ -451,7 +430,9 @@ watch(
     topAutoLoadArmed = true
     clearNewMessageTip()
     const list = sortedMessages.value
-    lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
+    const latest = list[list.length - 1]
+    lastMessageId.value = getMessageRenderKey(latest)
+    lastLatestMessageStatus.value = latest ? Number(latest.status || 0) : null
     if (await tryInitialUnreadAutoScroll()) return
     if (shouldHoldForInitialUnreadScroll()) return
     await flushScrollToBottom()
@@ -495,27 +476,34 @@ watch(
 )
 
 watch(
-  () => props.messages.length,
+  () => latestMessageSignature.value,
   async () => {
     const list = sortedMessages.value
-    const latestId = list.length > 0 ? list[list.length - 1].id : ''
+    const latestMessage = list.length > 0 ? list[list.length - 1] : null
+    const latestId = getMessageRenderKey(latestMessage)
     const prevLatestId = lastMessageId.value
+    const prevLatestStatus = lastLatestMessageStatus.value
     lastMessageId.value = latestId
+    lastLatestMessageStatus.value = latestMessage ? Number(latestMessage.status || 0) : null
 
     if (await tryInitialUnreadAutoScroll()) return
     if (shouldHoldForInitialUnreadScroll()) return
 
     const appendedNewMessage = !!latestId && latestId !== prevLatestId
-    const latestMessage = list.length > 0 ? list[list.length - 1] : null
     const appendedSelfMessage = appendedNewMessage && latestMessage?.senderId === authStore.uid
-    if (appendedNewMessage && (stickToBottom.value || appendedSelfMessage)) {
+    // 对齐旧 im：自己发送的消息收到回执后仍保持在最新位置，但不打断用户查看历史里的普通已读更新。
+    const confirmedLatestSelfMessage = !appendedNewMessage
+      && latestMessage?.senderId === authStore.uid
+      && prevLatestStatus === 0
+      && Number(latestMessage.status || 0) !== 0
+    if ((appendedNewMessage && (stickToBottom.value || appendedSelfMessage)) || confirmedLatestSelfMessage) {
       clearNewMessageTip()
       await pinToLatest()
       return
     }
 
     if (appendedNewMessage && prevLatestId) {
-      const prevIdx = list.findIndex((item) => item.id === prevLatestId)
+      const prevIdx = list.findIndex((item) => getMessageRenderKey(item) === prevLatestId)
       const appended = prevIdx >= 0 ? list.slice(prevIdx + 1) : [list[list.length - 1]]
       const visibleIncoming = appended.filter(isVisibleIncomingMessage)
       if (visibleIncoming.length > 0) {
@@ -530,7 +518,9 @@ watch(
 
 onMounted(async () => {
   const list = sortedMessages.value
-  lastMessageId.value = list.length > 0 ? list[list.length - 1].id : ''
+  const latest = list[list.length - 1]
+  lastMessageId.value = getMessageRenderKey(latest)
+  lastLatestMessageStatus.value = latest ? Number(latest.status || 0) : null
   stickToBottom.value = true
   if (list.length > 0) {
     if (await tryInitialUnreadAutoScroll()) return
@@ -647,49 +637,11 @@ function scrollToRow(key: string): boolean {
 /** 点击「未读消息」条后隐藏，并吸底避免虚拟列表少一行后视口错位 */
 function onUnreadBannerClick() {
   unreadBannerDismissed.value = true
-  unreadFloatDismissed.value = true
   initialUnreadAutoScrollDone.value = true
   stickToBottom.value = true
   void nextTick(() => {
     void flushScrollToBottom()
   })
-}
-
-/** 点击右侧未读数量浮层：跳到第一条未读锚点并隐藏浮层，保留分隔条供用户确认位置。 */
-async function ensureUnreadDividerForNavigation(): Promise<number> {
-  const convId = props.conversationId
-  const uid = String(authStore.uid || '')
-  let divIdx = unreadDividerIndex.value
-  if (divIdx >= 0 || !convId || !uid) return divIdx
-
-  // 对齐旧 im 点击跳转：目标未读不在当前页时，先补加载历史，再移动到锚点。
-  for (let i = 0; i < 8 && messageStore.hasMore(convId); i++) {
-    await messageStore.loadOlderMessages(uid, convId, { silent: true })
-    await nextTick()
-    divIdx = unreadDividerIndex.value
-    if (divIdx >= 0) return divIdx
-  }
-  return divIdx
-}
-
-async function onUnreadFloatClick() {
-  if (unreadFloatNavigating) return
-  unreadFloatNavigating = true
-  try {
-    stickToBottom.value = false
-    const divIdx = await ensureUnreadDividerForNavigation()
-    if (divIdx < 0) return
-    unreadFloatDismissed.value = true
-    initialUnreadAutoScrollDone.value = true
-    await nextTick()
-    for (let i = 0; i < 3; i++) {
-      if (scrollToRow(`unread-${divIdx}`)) break
-      await nextTick()
-      await new Promise<void>((r) => requestAnimationFrame(() => r()))
-    }
-  } finally {
-    unreadFloatNavigating = false
-  }
 }
 </script>
 
@@ -751,18 +703,6 @@ async function onUnreadFloatClick() {
       </div>
 
     </div>
-
-    <button
-      v-if="unreadFloatCount > 0"
-      class="unread-float-btn"
-      type="button"
-      @mousedown.stop.prevent
-      @click.stop="onUnreadFloatClick"
-    >
-      <img class="unread-float-icon" src="@/assets/images/message/arrow-up-double-line.png" alt="" />
-      <span class="unread-float-count">{{ unreadFloatCountText }}</span>{{ $t('条未读消息') }}
-    </button>
-
     <button
       v-if="!isAtBottom"
       class="scroll-bottom-btn"
@@ -883,45 +823,6 @@ async function onUnreadFloatClick() {
     white-space: nowrap;
     pointer-events: none;
   }
-}
-
-.unread-float-btn {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid #e5e5e5;
-  border-radius: 16px 0 0 16px;
-  background: #1681ef;
-  color: #fff;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 32px;
-  appearance: none;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-
-  &:hover {
-    background: #327cc5;
-  }
-}
-
-.unread-float-icon {
-  width: 16px;
-  height: 16px;
-  margin-right: 4px;
-  flex: 0 0 auto;
-}
-
-.unread-float-count {
-  margin:0 4px;
-  font-size: 12px;
-  color: #fff;
 }
 
 .scroll-bottom-btn {
