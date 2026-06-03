@@ -24,9 +24,10 @@ const activeIndex = ref(0)
 const itemRefs = ref<HTMLElement[]>([])
 
 function getMemberDisplayName(member: GroupMember): string {
-  // @成员展示名与旧 im 一致：优先显示好友备注名，没有备注再回退昵称和 uid。
   if (member.userId === 'all') return member.nickname || member.userId
-  return contactStore.getDisplayName(member.userId) || member.nickname || member.userId
+  const contact = contactStore.getContact(member.userId)
+  // @成员展示名与旧 im 一致：好友优先用备注/昵称；非好友不能让 getDisplayName 的 uid 兜底盖掉群昵称。
+  return contact?.remark || contact?.nickname || member.nickname || member.userId
 }
 
 const members = computed(() => {
