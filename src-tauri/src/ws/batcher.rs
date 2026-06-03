@@ -286,6 +286,22 @@ fn is_subscriber_remove_event(
     is_subscriber_remove_notice_text(notice_content)
 }
 
+fn channel_removed_reason(
+    event_type: i32,
+    subscriber_operate_type: Option<i32>,
+    channel_operate_type: Option<i32>,
+) -> Option<&'static str> {
+    // 对齐旧 im：退出/解散/注销都要删除本地频道会话，但不等同于一定要生成可见通知。
+    if event_type == 2 && subscriber_operate_type == Some(2) {
+        return Some("subscriber-remove");
+    }
+    match channel_operate_type {
+        Some(4) => Some("dissolved"),
+        Some(7) => Some("cancelled"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod private_decode_tests {
     use super::*;
@@ -344,6 +360,32 @@ mod private_decode_tests {
     #[test]
     fn normal_channel_notice_should_not_be_treated_as_remove() {
         assert!(!is_subscriber_remove_event(2, Some(0), "您已加入频道"));
+    }
+
+    #[test]
+    fn subscriber_remove_should_emit_channel_removed_event() {
+        assert_eq!(
+            channel_removed_reason(2, Some(2), None),
+            Some("subscriber-remove")
+        );
+    }
+
+    #[test]
+    fn dissolved_channel_should_emit_channel_removed_event() {
+        assert_eq!(channel_removed_reason(1, None, Some(4)), Some("dissolved"));
+    }
+
+    #[test]
+    fn cancelled_channel_should_emit_channel_removed_event() {
+        assert_eq!(channel_removed_reason(1, None, Some(7)), Some("cancelled"));
+    }
+
+    #[test]
+    fn normal_channel_event_should_not_emit_channel_removed_event() {
+        assert_eq!(channel_removed_reason(2, Some(0), None), None);
+        assert_eq!(channel_removed_reason(2, Some(1), None), None);
+        assert_eq!(channel_removed_reason(1, None, Some(5)), None);
+        assert_eq!(channel_removed_reason(1, None, Some(6)), None);
     }
 }
 
@@ -1968,6 +2010,27 @@ impl MessageBatcher {
             format!("channel-event-{}-{}", event.channel_id, timestamp)
         };
         let mut out = Vec::new();
+
+        if event.channel_id > 0 {
+            if let Some(reason) = channel_removed_reason(
+                event.event_type,
+                subscriber_info.map(|item| item.operate_type),
+                channel_info.map(|item| item.operate_type),
+            ) {
+                // 频道退出/解散/注销要立刻同步给前端删除本地会话；可见通知仍只依赖服务端 channel_notice_msg。
+                let _ = self.app_handle.emit(
+                    "channel:removed",
+                    serde_json::json!({
+                        "channelId": event.channel_id.to_string(),
+                        "channelName": channel_info
+                            .map(|item| item.channel_name.clone())
+                            .unwrap_or_default(),
+                        "icon": channel_info.map(|item| item.icon.clone()).unwrap_or_default(),
+                        "reason": reason,
+                    }),
+                );
+            }
+        }
 
         if let Some(notice) = event.channel_notice_msg.as_ref() {
             if notice.is_notice {

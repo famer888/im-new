@@ -470,6 +470,76 @@ const hiddenOnlyBatchByConversation = new Map<string, {
   previous: Conversation | null
   expiresAt: number
 }>()
+// 频道移除后，Rust 落库可能还会异步推 conv:update；短时间屏蔽该会话，避免左侧列表闪回。
+const CHANNEL_REMOVED_UPDATE_BLOCK_MS = 5 * 60 * 1000
+const removedChannelConversationBlockById = new Map<string, number>()
+
+// Rust 只发内部状态事件；频道通知是否可见仍由服务端 channelNoticeMsg 决定。
+type ChannelRemovedPayload = {
+  channelId?: string | number
+  channelName?: string
+  icon?: string
+  reason?: 'subscriber-remove' | 'dissolved' | 'cancelled' | string
+}
+
+function getChannelConversationId(channelId: string | number | null | undefined): string {
+  const id = String(channelId ?? '').trim()
+  return id ? `2_${id}` : ''
+}
+
+function pruneRemovedChannelConversationBlocks(now = Date.now()) {
+  for (const [conversationId, expiresAt] of removedChannelConversationBlockById) {
+    if (expiresAt <= now) removedChannelConversationBlockById.delete(conversationId)
+  }
+}
+
+function blockRemovedChannelConversation(channelId: string | number | null | undefined) {
+  const conversationId = getChannelConversationId(channelId)
+  if (!conversationId) return
+  // 防止同批消息落库后的 conv:update 把刚删除的频道会话重新塞回左侧列表。
+  removedChannelConversationBlockById.set(conversationId, Date.now() + CHANNEL_REMOVED_UPDATE_BLOCK_MS)
+}
+
+function unblockRemovedChannelConversation(channelId: string | number | null | undefined) {
+  const conversationId = getChannelConversationId(channelId)
+  if (!conversationId) return
+  removedChannelConversationBlockById.delete(conversationId)
+}
+
+function isBlockedRemovedChannelConversation(conversationId: string): boolean {
+  pruneRemovedChannelConversationBlocks()
+  return removedChannelConversationBlockById.has(conversationId)
+}
+
+function isChannelRemovalBatchMessage(message: any): boolean {
+  const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {}
+  const source = String(extra?.source || '')
+  const subscriberOperateType = Number(extra?.subscriberOperateType ?? -1)
+  // 兼容旧批次：移除事件可能是显式 channel-remove，也可能是 channel-notice + operateType=2。
+  return source === 'channel-remove' || (source === 'channel-notice' && subscriberOperateType === 2)
+}
+
+function collectRemovedChannelIdsFromBatch(messages: any[]): Set<string> {
+  const ids = new Set<string>()
+  for (const message of messages) {
+    if (!isChannelRemovalBatchMessage(message)) continue
+    const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {}
+    const channelId = String(extra?.channelId || '').trim()
+    if (channelId) ids.add(channelId)
+  }
+  return ids
+}
+
+function filterMessagesForRemovedChannels(messages: any[], removedChannelIds: Set<string>): any[] {
+  if (removedChannelIds.size === 0) return messages
+  // 同批里移除事件后面的频道消息不能继续入内存/落库，否则会重新 ensure 出频道会话。
+  return messages.filter((message) => {
+    const conversationId = String(message?.conversationId ?? message?.conversation_id ?? '')
+    if (!conversationId.startsWith('2_')) return true
+    const channelId = conversationId.split('_')[1] || ''
+    return !removedChannelIds.has(channelId)
+  })
+}
 
 function getMessageSendTime(message: any): number {
   const value = Number(message?.sendTime ?? message?.send_time ?? 0)
@@ -542,6 +612,47 @@ function rememberHiddenOnlyBatchConversations(messages: any[], visibleMessages: 
       previous: chatStore.conversations.find((conv) => conv.id === convId) ?? null,
       expiresAt,
     })
+  }
+}
+
+async function removeLocalChannelConversation(payload: ChannelRemovedPayload, source: string) {
+  const channelId = String(payload?.channelId ?? '').trim()
+  if (!channelId) return
+
+  const authStore = useAuthStore()
+  const chatStore = useChatStore()
+  const channelStore = useChannelStore()
+  const currentUid = String(authStore.uid || '')
+  const channelConvId = getChannelConversationId(channelId)
+  const wasCurrentChannel = chatStore.currentConversationId === channelConvId
+  const cachedChannel = channelStore.getChannel(channelId)
+
+  // 先保留一份频道展示信息，再删除频道；频道通知页面还需要用这些信息展示历史移除通知。
+  blockRemovedChannelConversation(channelId)
+  if (payload.channelName || payload.icon || cachedChannel) {
+    channelStore.patchChannel(channelId, {
+      id: channelId,
+      channelId,
+      name: payload.channelName || cachedChannel?.name || cachedChannel?.channelName || channelId,
+      channelName: payload.channelName || cachedChannel?.channelName || cachedChannel?.name || channelId,
+      avatar: payload.icon || cachedChannel?.avatar || null,
+      icon: payload.icon || cachedChannel?.icon || null,
+      logoColor: cachedChannel?.logoColor || null,
+    })
+  }
+  await channelStore.removeChannel(currentUid, channelId)
+  if (currentUid) {
+    await chatStore.deleteConversation(currentUid, channelConvId).catch((err: unknown) => {
+      console.warn('[channel] delete removed channel conversation failed:', { channelId, source, err })
+    })
+  }
+
+  if (wasCurrentChannel) {
+    // 当前正停留在被移除频道时，旧 im 会退出该会话；这里同步关闭聊天详情和右侧面板。
+    chatStore.setCurrentConversation(null)
+    const uiStore = useUIStore()
+    uiStore.setRightPanel('none')
+    uiStore.setDetailView('none')
   }
 }
 
@@ -897,6 +1008,10 @@ export async function setupTauriListeners() {
     contactStore.setNewFriendReqTotal(Number(event.payload?.total || 0), String(authStore.uid || ''))
   })
 
+  listen<ChannelRemovedPayload>('channel:removed', async (event) => {
+    await removeLocalChannelConversation(event.payload || {}, 'channel:removed')
+  })
+
   listen<ForceLogoutPayload>('auth:force-logout', async (event) => {
     if (forceLogoutHandling) return
     forceLogoutHandling = true
@@ -1050,7 +1165,7 @@ export async function setupTauriListeners() {
     }
 
     if (filtered.length > 0) {
-      const normalized: any[] = filtered.filter((m: any) => !isPendingGroupReqChatMessage(m))
+      let normalized: any[] = filtered.filter((m: any) => !isPendingGroupReqChatMessage(m))
       if (authStore.uid) {
         const uid = String(authStore.uid)
         try {
@@ -1299,8 +1414,14 @@ export async function setupTauriListeners() {
 
       const chatStore = useChatStore()
       const groupStore = useGroupStore()
-      const channelStore = useChannelStore()
-      const locallyConsumedGroupRemovalMessageKeys = new Set<string>()
+  const channelStore = useChannelStore()
+  const locallyConsumedGroupRemovalMessageKeys = new Set<string>()
+  const removedChannelIdsInBatch = collectRemovedChannelIdsFromBatch(normalized)
+  for (const channelId of removedChannelIdsInBatch) {
+    await removeLocalChannelConversation({ channelId }, 'msg:batch')
+  }
+  // 删除频道后再过滤同批频道消息，防止 batchAppendMessages/upsert_incoming_messages 把会话加回来。
+  normalized = filterMessagesForRemovedChannels(normalized, removedChannelIdsInBatch)
       const groupEventMessages = normalized.filter((m: any) => {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
         const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
@@ -1458,24 +1579,18 @@ export async function setupTauriListeners() {
         if (source === 'channel-remove' || (source === 'channel-notice' && subscriberOperateType === 2)) {
           const channelId = String(extra?.channelId || '')
           if (channelId) {
-            const channelConvId = `2_${channelId}`
-            const wasCurrentChannel = chatStore.currentConversationId === channelConvId
             const cachedChannel = channelStore.getChannel(channelId)
             if (m.extra && typeof m.extra === 'object' && cachedChannel) {
               m.extra.channelName = m.extra.channelName || cachedChannel.channelName || cachedChannel.name || ''
               m.extra.icon = m.extra.icon || cachedChannel.icon || cachedChannel.avatar || ''
               m.extra.logoColor = m.extra.logoColor || cachedChannel.logoColor || ''
             }
-            await channelStore.removeChannel(currentUid, channelId)
-            await chatStore.deleteConversation(currentUid, channelConvId).catch((err: unknown) => {
-              console.warn('[channel] delete removed channel conversation failed:', { channelId, err })
-            })
-            if (wasCurrentChannel) {
-              chatStore.setCurrentConversation(null)
-              const uiStore = useUIStore()
-              uiStore.setRightPanel('none')
-              uiStore.setDetailView('none')
-            }
+            await removeLocalChannelConversation({
+              channelId,
+              channelName: String(m.extra?.channelName || ''),
+              icon: String(m.extra?.icon || ''),
+              reason: 'subscriber-remove',
+            }, 'msg:batch-notice')
           }
           continue
         }
@@ -1492,6 +1607,8 @@ export async function setupTauriListeners() {
         const isConfirmedJoinedMember = pushedMemberType !== null && pushedMemberType > 0
         // 对齐旧 im：只有确认加入/仍是成员的频道事件才进入频道列表，避免邀请和普通通知污染通讯录频道数据。
         if (!isConfirmedJoinEvent && !isConfirmedJoinedMember) continue
+        // 明确重新加入后允许后续会话更新恢复该频道。
+        unblockRemovedChannelConversation(channelId)
         const channelName = String(extra?.channelName || channelStore.getChannel(channelId)?.channelName || channelId)
         channelStore.patchChannel(channelId, {
           id: channelId,
@@ -1719,6 +1836,10 @@ export async function setupTauriListeners() {
     const payload: any = event.payload || {}
     const conversationId = String(payload?.id ?? '')
     const lastMsgTime = Number(payload?.lastMsgTime ?? payload?.last_msg_time ?? 0)
+    // 本地刚处理完频道移除时，忽略随后到达的会话落库更新，直到明确重新加入再解除屏蔽。
+    if (isBlockedRemovedChannelConversation(conversationId)) {
+      return
+    }
     if (logoutClearedHistoryAt > 0 && lastMsgTime > 0 && lastMsgTime <= logoutClearedHistoryAt) {
       return
     }
