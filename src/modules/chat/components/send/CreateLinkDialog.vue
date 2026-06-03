@@ -1,37 +1,39 @@
 <template>
-  <div v-if="visible" class="create-link-dialog">
-    <div class="dialog-mask" @click="handleClose" />
-    <div class="dialog-body">
-      <div class="dialog-header">
-        <span>{{ $t('创建链接') }}</span>
-        <span class="close-btn" @click="handleClose">✕</span>
-      </div>
-      <div class="dialog-content">
-        <div class="form-item">
-          <label>{{ $t('链接文本') }}</label>
-          <div
-            ref="linkTextRef"
-            contenteditable="true"
-            class="link-text-input"
-            :textContent="selectText"
-          />
+  <Teleport to="body">
+    <div v-if="visible" class="create-link-dialog">
+      <div class="dialog-mask" @click="handleClose" />
+      <div class="dialog-body">
+        <div class="dialog-header">
+          <span>{{ $t('创建链接') }}</span>
+          <span class="close-btn" @click="handleClose">✕</span>
         </div>
-        <div class="form-item">
-          <label>{{ $t('链接地址') }}</label>
-          <input
-            v-model="linkValue"
-            type="text"
-            :placeholder="$t('请输入链接地址')"
-            class="link-url-input"
-          />
+        <div class="dialog-content">
+          <div class="form-item">
+            <label>{{ $t('链接文本') }}</label>
+            <div
+              ref="linkTextRef"
+              contenteditable="true"
+              class="link-text-input"
+              :textContent="selectText"
+            />
+          </div>
+          <div class="form-item">
+            <label>{{ $t('链接地址') }}</label>
+            <input
+              v-model="linkValue"
+              type="text"
+              :placeholder="$t('请输入链接地址')"
+              class="link-url-input"
+            />
+          </div>
         </div>
-      </div>
-      <div class="dialog-footer">
-        <button class="btn-cancel" @click="handleClose">{{ $t('取消') }}</button>
-        <button class="btn-primary" @click="handleConfirm">{{ $t('确定') }}</button>
+        <div class="dialog-footer">
+          <button class="btn-cancel" @click="handleClose">{{ $t('取消') }}</button>
+          <button class="btn-primary" @click="handleConfirm">{{ $t('确定') }}</button>
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
