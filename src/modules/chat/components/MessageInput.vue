@@ -1799,7 +1799,8 @@ function handleAtSelect(member: { uid: string; name: string }) {
 }
 
 function handleLinkConfirm(data: { linkText: string; linkValue: string; selectText?: string }) {
-  const linkHtml = `<a href="${data.linkValue}" target="_blank">${data.linkText}</a>`
+  // 对齐旧 im：自定义创建的文本链接需要带 customLink 标记，后续展示/跳转逻辑依赖这个 type。
+  const linkHtml = `<a href="${data.linkValue}" type="customLink" target="_blank">${data.linkText}</a>`
   restoreEditorSelection()
   const selection = window.getSelection()
   if (selection && selection.rangeCount > 0 && data.selectText) {
