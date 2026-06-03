@@ -672,7 +672,11 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
   return { type: 'missing' }
 }
 
-async function openRemoteAliasTarget(label: string, groupId: string) {
+async function openRemoteAliasTarget(
+  label: string,
+  groupId: string,
+  options: { suppressMissingToast?: boolean } = {},
+): Promise<AliasTarget> {
   const key = aliasTargetCacheKey(label, groupId)
   let request = aliasTargetCache.get(key)
   if (!request) {
@@ -698,8 +702,11 @@ async function openRemoteAliasTarget(label: string, groupId: string) {
     openAddChannelDialog(target.channel)
   } else {
     aliasTargetCache.delete(key)
-    eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
+    if (!options.suppressMissingToast) {
+      eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
+    }
   }
+  return target
 }
 
 const contentSegments = computed<ContentSegment[]>(() => {
@@ -821,6 +828,18 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
       : findMentionMember(segment.text, members)
 
     if (!member) {
+      const slowTimer = window.setTimeout(() => {
+        setMentionResolving(openingKey, true)
+      }, 350)
+      try {
+        // 对齐旧 im：非群成员 @ 文本先按别名查询，避免把频道别名误当成用户 ID 打开资料卡。
+        const remoteTarget = await openRemoteAliasTarget(cleanLabel, groupId, { suppressMissingToast: Boolean(groupId) })
+        if (remoteTarget.type !== 'missing') return
+      } finally {
+        window.clearTimeout(slowTimer)
+        setMentionResolving(openingKey, false)
+      }
+
       const localFriend = resolveMentionLocalFriend(cleanLabel)
       if (localFriend) {
         // 群聊里的 @ 文本可能是备注/昵称，先映射到好友 uid 再打开，确保展示“发送消息”入口。
@@ -831,15 +850,6 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
         // 对齐“点击头像”逻辑：群内 @ 未命中本地成员缓存时，先按 uid 直开成员信息，避免误走远端别名导致“未找到”。
         uiStore.openMemberInfo(cleanLabel, groupId, [cleanLabel])
         return
-      }
-      const slowTimer = window.setTimeout(() => {
-        setMentionResolving(openingKey, true)
-      }, 350)
-      try {
-        await openRemoteAliasTarget(cleanLabel, groupId)
-      } finally {
-        window.clearTimeout(slowTimer)
-        setMentionResolving(openingKey, false)
       }
       return
     }
