@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getGroupContactList, getGroupMemberList, getGroupMemberListV2, groupMemberOnLineStatusList } from '@/api/imBase'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const MEMBER_PREVIEW_COUNT = 8
@@ -361,11 +363,16 @@ export const useGroupStore = defineStore('group', () => {
   function normalizeMember(item: any, groupId: string): GroupMember {
     const user = item.user || {}
     const userOnlineStatus = user.userOnOrOffline || item.userOnOrOffline || {}
+    const userId = String(item.userId ?? item.user_id ?? user.uid ?? '')
+    const contact = useContactStore().getContact(userId)
+    const authStore = useAuthStore()
+    const isSelf = userId && String(authStore.uid || '') === userId
     return {
       groupId: String(item.groupId ?? item.group_id ?? groupId),
-      userId: String(item.userId ?? item.user_id ?? user.uid ?? ''),
-      nickname: item.nickname ?? user.nickName ?? null,
-      avatar: item.avatar ?? item.icon ?? user.icon ?? null,
+      userId,
+      // 对齐旧 im：群成员资料缺字段时，用好友备注/头像和当前账号资料补齐首屏展示。
+      nickname: item.nickname ?? user.nickName ?? contact?.remark ?? contact?.nickname ?? (isSelf ? authStore.nickname : null) ?? null,
+      avatar: item.avatar ?? item.icon ?? user.icon ?? contact?.avatar ?? (isSelf ? authStore.avatar : null) ?? null,
       role: Number(item.role ?? item.type ?? 0),
       online:
         typeof item.online === 'boolean'

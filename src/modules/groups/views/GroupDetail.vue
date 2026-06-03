@@ -30,12 +30,13 @@ const displayedMemberCount = computed(() => group.value?.memberCount || previewM
 const showMemberLoading = computed(() => loadingMembers.value && previewMembers.value.length === 0)
 
 watch(
-  () => props.groupId,
-  (groupId) => {
-    if (!groupId || !authStore.uid) {
+  () => [props.groupId, authStore.uid] as const,
+  ([groupId, uid]) => {
+    if (!groupId || !uid) {
       loadingMembers.value = false
       return
     }
+    // 登录态可能晚于详情页恢复；同时监听 uid，避免首次跳过后成员头像区一直为空。
     void loadPreviewMembers(groupId)
     void refreshGroupDetail(groupId)
   },
