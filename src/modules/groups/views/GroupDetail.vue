@@ -21,6 +21,7 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
 const loadingMembers = ref(false)
+const sendingMessage = ref(false)
 
 const group = computed(() => groupStore.getGroup(props.groupId))
 
@@ -157,15 +158,22 @@ async function refreshGroupDetail(groupId: string, options: { forceRemote?: bool
 }
 
 async function startChat() {
-  const available = await refreshGroupDetail(props.groupId, { forceRemote: true })
-  if (!available) {
-    eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
-    return
+  if (sendingMessage.value) return
+  // 点击后保持按钮 loading，避免慢接口期间重复触发群详情校验和会话跳转。
+  sendingMessage.value = true
+  try {
+    const available = await refreshGroupDetail(props.groupId, { forceRemote: true })
+    if (!available) {
+      eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
+      return
+    }
+    const conv = chatStore.ensureConversation(1, props.groupId)
+    chatStore.setCurrentConversation(conv.id)
+    uiStore.setSidebarTab('chats')
+    uiStore.setDetailView('chat')
+  } finally {
+    sendingMessage.value = false
   }
-  const conv = chatStore.ensureConversation(1, props.groupId)
-  chatStore.setCurrentConversation(conv.id)
-  uiStore.setSidebarTab('chats')
-  uiStore.setDetailView('chat')
 }
 
 function handleMemberClick(member: GroupMember) {
@@ -234,8 +242,11 @@ function handleMemberClick(member: GroupMember) {
         </div>
       </div>
 
-      <div class="primaryBtn small" @click="startChat">
-        {{ t('发送消息') }}
+      <div
+        class="primaryBtn small"
+        @click="startChat"
+      >
+        {{ sendingMessage ? t('进入中') : t('发送消息') }}
       </div>
     </div>
     <div v-else class="empty-hint">群资料暂不可用</div>
