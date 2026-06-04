@@ -185,6 +185,13 @@ export const useChannelStore = defineStore('channel', () => {
     return item.memberType !== null && Number(item.memberType) > 0
   }
 
+  function isPublicChannel(item: any): boolean {
+    const rawLinkType = item?.linkType ?? item?.link_type
+    if (rawLinkType === undefined || rawLinkType === null || rawLinkType === '') return true
+    const linkType = Number(rawLinkType)
+    return !Number.isFinite(linkType) || linkType !== 1
+  }
+
   function filterRemovedChannels(list: Channel[], uid = activeUid): Channel[] {
     const removed = getRemovedChannelIds(uid)
     if (removed.size === 0) return list
@@ -606,9 +613,9 @@ export const useChannelStore = defineStore('channel', () => {
     const detailData = resp.data as any
     const rawMemberType = detailData.memberType ?? detailData.member_type
     const hasMemberType = rawMemberType !== undefined && rawMemberType !== null && rawMemberType !== ''
-    if (hasMemberType && Number(rawMemberType) <= 0) {
+    if (hasMemberType && Number(rawMemberType) <= 0 && !isPublicChannel(detailData)) {
       // 对齐旧 im `deleteChat`：频道详情判定为非成员（未加入/已退出/被移出）时，
-      // 必须同步删除频道会话（内存 + 本地库），避免历史列表残留“可加入频道”旧会话。
+      // 私密频道仍同步删除会话；公开频道保留会话并在输入区展示“加入频道”。
       await removeChannel(activeUid, id)
       if (activeUid) {
         const { useChatStore } = await import('@/stores/useChatStore')

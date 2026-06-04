@@ -557,6 +557,7 @@ function openChannelConversation(raw: any): boolean {
   const channelId = normalizeChannelId(raw)
   if (!channelId) return false
 
+  // 公开频道可能此前因未加入被本地标记移除；用户点击入口时要恢复快照才能显示加入按钮。
   channelStore.patchChannel(channelId, {
     ...raw,
     id: channelId,
@@ -566,7 +567,7 @@ function openChannelConversation(raw: any): boolean {
     avatar: raw?.icon ?? raw?.avatar ?? null,
     icon: raw?.icon ?? raw?.avatar ?? null,
     updatedAt: Date.now(),
-  })
+  }, { allowRemoved: true })
   // 从消息内容进入频道时先开会话，权限和成员身份在后台校准。
   void channelStore.ensureChannelDetailReady(channelId)
 
@@ -585,16 +586,20 @@ function readChannelNumber(raw: any, camelKey: string, snakeKey: string): number
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function isPublicChannelTarget(raw: any): boolean {
+  const linkType = readChannelNumber(raw, 'linkType', 'link_type')
+  return linkType === null || linkType !== 1
+}
+
 async function canOpenChannelDirectly(raw: any): Promise<boolean> {
   const channelId = normalizeChannelId(raw)
   const memberType = readChannelNumber(raw, 'memberType', 'member_type')
   if (memberType !== null) {
-    // 别名接口可能只返回当前链路的 memberType；本地已加入时仍要直接跳会话，避免误弹加入窗口。
-    return memberType > 0 || (channelId ? await isAlreadyInChannel(channelId, false) : false)
+    // 对齐旧 im：公开频道即使未加入也直接进入会话，由输入区展示“加入频道”。
+    return memberType > 0 || isPublicChannelTarget(raw) || (channelId ? await isAlreadyInChannel(channelId, false) : false)
   }
 
-  const linkType = readChannelNumber(raw, 'linkType', 'link_type')
-  return (channelId ? await isAlreadyInChannel(channelId, false) : false) || linkType === null || linkType === 0
+  return (channelId ? await isAlreadyInChannel(channelId, false) : false) || isPublicChannelTarget(raw)
 }
 
 function parseChannelTarget(raw: any): AddChannelTarget | null {
