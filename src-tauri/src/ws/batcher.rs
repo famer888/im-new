@@ -338,6 +338,21 @@ mod private_decode_tests {
     }
 
     #[test]
+    fn private_attachment_key_falls_back_to_other_source() {
+        let crypto = crate::crypto::CryptoEngine::new();
+        let friend_id = "10086";
+        let file_key = "image-file-key";
+        let encrypted =
+            crate::crypto::aes::encrypt_message(file_key.as_bytes(), "0123456789abcdef").unwrap();
+        crypto.set_friend_key(friend_id, 1, "app", "0123456789abcdef".to_string());
+
+        let resolved =
+            decrypt_friend_attachment_key(&crypto, friend_id, 1, "web", &hex::encode(encrypted));
+
+        assert_eq!(resolved.as_deref(), Some(file_key));
+    }
+
+    #[test]
     fn subscriber_remove_without_notice_should_not_emit_fallback_message() {
         assert!(!should_emit_subscriber_remove_fallback(2, Some(2), 1001, false));
     }
@@ -438,18 +453,36 @@ fn decrypt_friend_attachment_key(
     }
 
     let data = hex::decode(raw).ok()?;
-    crypto
-        .decrypt_friend_message(friend_id, version, source, &data)
-        .or_else(|_| {
-            let key = crypto
-                .get_latest_friend_key(friend_id, source)
-                .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
-            crate::crypto::aes::decrypt_message(&data, &key)
-        })
-        .ok()
-        .and_then(|plain| String::from_utf8(plain).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let mut sources = vec![source];
+    // 私聊图片正文候选和 attachmentKey 偶尔会落在不同端字段，先按正文 source 试，再兼容另一端。
+    if source == "web" {
+        sources.push("app");
+    } else if source == "app" {
+        sources.push("web");
+    }
+
+    for src in sources {
+        let decrypted = crypto
+            .decrypt_friend_message(friend_id, version, src, &data)
+            .or_else(|_| {
+                // 服务端回推可能带旧版本号；指定版本解不开时，用该端最新 key 再试一次。
+                let key = crypto
+                    .get_latest_friend_key(friend_id, src)
+                    .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                crate::crypto::aes::decrypt_message(&data, &key)
+            });
+        let Some(file_key) = decrypted
+            .ok()
+            .and_then(|plain| String::from_utf8(plain).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        return Some(file_key);
+    }
+
+    None
 }
 
 fn fallback_plain_file_key(attachment_key: &str) -> Option<String> {

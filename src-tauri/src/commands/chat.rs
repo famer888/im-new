@@ -1749,15 +1749,27 @@ pub fn decrypt_private_attachment_key(
         .as_deref()
         .map(str::trim)
         .filter(|s| *s == "web" || *s == "app");
-    let source_orders: Vec<&str> = if let Some(src) = preferred_source {
-        vec![src]
-    } else {
-        vec!["web", "app"]
+    let source_orders: Vec<&str> = match preferred_source {
+        // PC 互发图片时服务端字段可能让正文 source 与附件 key source 不完全一致；
+        // 保留首选 source，同时兜底另一个端，避免把加密 OSS 文件当普通图片直连。
+        Some("web") => vec!["web", "app"],
+        Some("app") => vec!["app", "web"],
+        _ => vec!["web", "app"],
     };
 
     let mut last_err: Option<String> = None;
     for src in source_orders {
-        match crypto.decrypt_friend_message(&sender_id, ver, src, &data) {
+        let decrypted = crypto
+            .decrypt_friend_message(&sender_id, ver, src, &data)
+            .or_else(|err| {
+                last_err = Some(err.to_string());
+                // 历史或跨端消息可能携带旧版本号，指定版本失败后再用该端最新 key 兜底解附件 key。
+                let key = crypto
+                    .get_latest_friend_key(&sender_id, src)
+                    .ok_or(crate::crypto::CryptoError::KeyNotFound)?;
+                crate::crypto::aes::decrypt_message(&data, &key)
+            });
+        match decrypted {
             Ok(plain) => {
                 return String::from_utf8(plain)
                     .map(|value| value.trim().to_string())
