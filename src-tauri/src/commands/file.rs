@@ -2832,7 +2832,10 @@ pub async fn reveal_file_in_directory(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         hidden_windows_command("explorer.exe")
-            .arg(format!("/select,{}", file_path.to_string_lossy()))
+            // Windows Explorer 对 `/select,<path>` 的整段引号解析不稳定；
+            // 路径含空格时拆开传参，才能对齐 Electron showItemInFolder 的定位行为。
+            .arg("/select,")
+            .arg(&file_path)
             .spawn()
             .map_err(|e| format!("reveal file failed: {}", e))?;
         return Ok(());
