@@ -9,22 +9,22 @@ import { getOpenChatSignedApiHeaders } from './request'
 import { getRuntimePlatform } from '@/utils/runtimePlatform'
 import { ungzip } from 'pako'
 
-let cachedPackagedMacRuntime: boolean | null = null
+let cachedPackagedDesktopProxyRuntime: boolean | null = null
 
-async function isTauriPackagedMacRuntime(): Promise<boolean> {
-  if (cachedPackagedMacRuntime !== null) return cachedPackagedMacRuntime
+async function isTauriPackagedDesktopProxyRuntime(): Promise<boolean> {
+  if (cachedPackagedDesktopProxyRuntime !== null) return cachedPackagedDesktopProxyRuntime
   if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
-    cachedPackagedMacRuntime = false
-    return cachedPackagedMacRuntime
+    cachedPackagedDesktopProxyRuntime = false
+    return cachedPackagedDesktopProxyRuntime
   }
   if (!import.meta.env.PROD) {
-    cachedPackagedMacRuntime = false
-    return cachedPackagedMacRuntime
+    cachedPackagedDesktopProxyRuntime = false
+    return cachedPackagedDesktopProxyRuntime
   }
-  // 复用项目统一的平台判定，避免各处重复维护 UA 规则导致端差异。
+  // 复用项目统一的平台判定，Windows/macOS 打包端都走 Tauri 代理，避免 WebView 对二进制频道协议的差异。
   const platform = await getRuntimePlatform()
-  cachedPackagedMacRuntime = platform === 'macos'
-  return cachedPackagedMacRuntime
+  cachedPackagedDesktopProxyRuntime = platform === 'macos' || platform === 'windows'
+  return cachedPackagedDesktopProxyRuntime
 }
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -275,8 +275,8 @@ async function requestChannelJson<T>(path: string, data: Record<string, unknown>
   // 频道接口不是 protobuf，而是“固定头 + AES(JSON)”这一条老协议，不能复用通用 requestProto。
   const packet = encodePacketWithAesJson(data, API_CONFIG.secretKey)
 
-  // 先仅对 mac 打包端启用代理转发，避免影响已稳定的 Windows 打包链路。
-  if (await isTauriPackagedMacRuntime()) {
+  // 频道别名和频道详情都依赖这条二进制协议；桌面打包端统一交给主进程发送，避免端侧 fetch 差异。
+  if (await isTauriPackagedDesktopProxyRuntime()) {
     const { invoke } = await import('@tauri-apps/api/core')
     const result = await invoke<{
       ok: boolean

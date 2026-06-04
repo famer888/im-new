@@ -938,8 +938,7 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
         return
       }
       if (groupId) {
-        // 对齐“点击头像”逻辑：群内 @ 未命中本地成员缓存时，先按 uid 直开成员信息，避免误走远端别名导致“未找到”。
-        uiStore.openMemberInfo(cleanLabel, groupId, [cleanLabel])
+        // 对齐旧 im：群内未知 @ 文本只走别名查询；未命中时不按原文本强开资料卡，避免频道别名误弹用户信息。
         return
       }
       return
