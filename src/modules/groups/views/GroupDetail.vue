@@ -29,6 +29,9 @@ const previewMembers = computed(() => groupStore.getMembers(props.groupId).slice
 const displayedMemberCount = computed(() => group.value?.memberCount || previewMembers.value.length)
 const showMemberLoading = computed(() => loadingMembers.value && previewMembers.value.length === 0)
 
+// immediate watcher 首次执行会同步调用成员加载，序号必须先初始化，避免首次进群详情时加载流程中断。
+let memberLoadSeq = 0
+
 watch(
   () => [props.groupId, authStore.uid] as const,
   ([groupId, uid]) => {
@@ -42,8 +45,6 @@ watch(
   },
   { immediate: true },
 )
-
-let memberLoadSeq = 0
 
 async function loadPreviewMembers(groupId: string) {
   const normalizedId = String(groupId || '').trim()
