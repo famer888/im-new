@@ -306,7 +306,7 @@
   "你已加入频道": "You have joined this channel",
   "进入频道": "Enter Channel",
   "正在获取频道权限...": "Getting channel permissions...",
-  "频道权限获取失败，请稍后重试": "Failed to get channel permissions. Please try again later.",
+  "频道权限获取失败，请点击重试": "Failed to get channel permissions. Click to retry.",
   "加入中...": "Joining...",
   "聊天": "chat",
   "性别": "Gender",

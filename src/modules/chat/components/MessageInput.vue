@@ -194,6 +194,13 @@ const currentForwardDraftItems = computed(() => (
 ))
 const hasForwardDraft = computed(() => currentForwardDraftItems.value.length > 0)
 
+function handleChannelPermissionRetry() {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Channel) return
+  // 失败态点击后强制重新拉频道详情，恢复当前账号的最新频道权限。
+  void channelStore.ensureChannelDetailReady(conv.targetId, { force: true })
+}
+
 watch(
   () => chatStore.currentConversation?.type === ConversationType.Channel ? chatStore.currentConversation.targetId : '',
   (channelId) => {
@@ -3738,9 +3745,14 @@ onBeforeUnmount(() => {
     <div v-if="showChannelPermissionLoadingTip" class="shutup-tip channel-state-tip">
       {{ t('正在获取频道权限...') }}
     </div>
-    <div v-else-if="showChannelPermissionErrorTip" class="shutup-tip channel-state-tip">
-      {{ t('频道权限获取失败，请稍后重试') }}
-    </div>
+    <button
+      v-else-if="showChannelPermissionErrorTip"
+      class="shutup-tip channel-state-tip channel-permission-retry"
+      type="button"
+      @click="handleChannelPermissionRetry"
+    >
+      {{ t('频道权限获取失败，请点击重试') }}
+    </button>
     <div v-else-if="showChannelDisabledTip" class="shutup-tip channel-state-tip">
       {{ t('该频道已禁用') }}
     </div>
@@ -4112,6 +4124,13 @@ onBeforeUnmount(() => {
 
 .channel-state-tip {
   color: #333;
+}
+
+.channel-permission-retry {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .channel-notify-toggle {
