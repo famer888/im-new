@@ -21,6 +21,7 @@ import restoreIcon from '@/assets/windows_control_icons/restore-w-30.png'
 
 const { t } = useI18n()
 const payload = ref<MediaViewerPayload | null>(null)
+const imageRef = ref<HTMLImageElement | null>(null)
 const videoRef = ref<HTMLVideoElement | null>(null)
 const filePreviewRef = ref<HTMLElement | null>(null)
 const isMaximized = ref(false)
@@ -1455,6 +1456,67 @@ function rotateImage() {
   rotation.value += 90
 }
 
+/** 计算媒体按 contain 规则放进容器后的真实显示矩形。 */
+function containedRect(container: DOMRect, mediaWidth: number, mediaHeight: number): DOMRect | null {
+  if (!container.width || !container.height || !mediaWidth || !mediaHeight) return null
+  // 图片/视频用 object-fit: contain 展示，点击命中要按实际可见内容区域判断。
+  const containerRatio = container.width / container.height
+  const mediaRatio = mediaWidth / mediaHeight
+  const width = mediaRatio > containerRatio ? container.width : container.height * mediaRatio
+  const height = mediaRatio > containerRatio ? container.width / mediaRatio : container.height
+  return new DOMRect(
+    container.left + (container.width - width) / 2,
+    container.top + (container.height - height) / 2,
+    width,
+    height,
+  )
+}
+
+/** 判断当前点击坐标是否落在指定矩形内。 */
+function pointInRect(event: MouseEvent, rect: DOMRect): boolean {
+  return (
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom
+  )
+}
+
+/** 获取当前图片/视频在预览舞台里的真实可见内容区域。 */
+function currentMediaContentRect(stage: HTMLElement): DOMRect | null {
+  if (isVideo.value) {
+    const video = videoRef.value
+    // 视频元数据没加载完成时，先用消息携带的宽高兜底，避免遮罩点击暂时失效。
+    const width = video?.videoWidth || Number(payload.value?.width || 0)
+    const height = video?.videoHeight || Number(payload.value?.height || 0)
+    return containedRect(stage.getBoundingClientRect(), width, height)
+  }
+
+  if (!imageSrc.value || isFile.value) return null
+  const image = imageRef.value
+  let width = image?.naturalWidth || Number(payload.value?.width || 0)
+  let height = image?.naturalHeight || Number(payload.value?.height || 0)
+  if (Math.abs(rotation.value / 90) % 2 === 1) {
+    // 旋转 90/270 度后可见占位宽高互换，遮罩命中区域也要同步。
+    const rotatedWidth = height
+    height = width
+    width = rotatedWidth
+  }
+  return containedRect(stage.getBoundingClientRect(), width, height)
+}
+
+/** 处理预览舞台点击：只在点到媒体内容外的遮罩空白时关闭窗口。 */
+async function handleStageClick(event: MouseEvent) {
+  if (!isVideo.value && (isFile.value || !imageSrc.value)) return
+  const stage = event.currentTarget as HTMLElement | null
+  if (!stage) return
+  const mediaRect = currentMediaContentRect(stage)
+  // Telegram 风格：只在点到图片/视频实际显示区域外的遮罩空白时关闭预览。
+  if (mediaRect && !pointInRect(event, mediaRect)) {
+    await closeWindow()
+  }
+}
+
 function handleContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
@@ -1598,6 +1660,7 @@ onUnmounted(() => {
     <div
       class="media-stage"
       :class="{ 'is-video': isVideo, 'is-video-fullscreen': isVideoFullscreen }"
+      @click="handleStageClick"
     >
       <div
         v-if="videoSrc"
@@ -1741,7 +1804,7 @@ onUnmounted(() => {
         class="media-image-wrap"
         :style="{ transform: `rotate(${rotation}deg)` }"
       >
-        <img :src="imageSrc" alt="" class="media-image" />
+        <img ref="imageRef" :src="imageSrc" alt="" class="media-image" />
       </div>
     </div>
 
