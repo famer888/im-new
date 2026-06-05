@@ -1875,8 +1875,28 @@ export async function setupTauriListeners() {
     chatStore.addOrUpdateConversation(event.payload)
   })
 
-  listen<{ messageId: string; conversationId?: string; clear?: number }>('msg:recall', (event) => {
+  listen<{ messageId: string; conversationId?: string; clear?: number | string | boolean }>('msg:recall', (event) => {
     const messageStore = useMessageStore()
+    const chatStore = useChatStore()
+    const conversationId = String(event.payload?.conversationId || '')
+    const clear = event.payload?.clear
+    const shouldClearConversation = clear === true || Number(clear || 0) === 1
+    if (shouldClearConversation && conversationId) {
+      // 其它端发起整会话清空时，只同步清本地，避免再次发送 remote 清空包形成回环。
+      messageStore.clearConversationHistory(conversationId, false)
+        .then(() => {
+          chatStore.updateConversation({
+            id: conversationId,
+            lastMsgDigest: null,
+            lastMsgId: null,
+            unreadCount: 0,
+          })
+        })
+        .catch((error) => {
+          console.warn('[msg:recall] clear local conversation failed:', error)
+        })
+      return
+    }
     const messageId = String(event.payload?.messageId || '')
     if (!messageId || messageId === '-1') return
     messageStore.deleteMessageLocalById(messageId).catch((error) => {

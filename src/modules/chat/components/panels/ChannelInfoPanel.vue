@@ -11,6 +11,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { ConversationType, MessageType } from '@/types'
 import { deleteChannelManage, getChannelDetail, getChannelManages, getChannelUsers, updateMember, updateChannel } from '@/api/imChannel'
 import AppSwitch from '@/components/AppSwitch.vue'
+import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
@@ -97,6 +98,7 @@ const removingManagerId = ref('')
 const toastMessage = ref('')
 const toastTimer = ref<number | null>(null)
 const loadingMembers = ref(false)
+const clearMsgTypeList = ref<string[]>([])
 let loadSeq = 0
 const CHANNEL_DETAIL_CACHE_TTL_MS = 60 * 1000
 const CHANNEL_MEMBERS_CACHE_TTL_MS = 60 * 1000
@@ -486,19 +488,44 @@ async function setChannelReceiveNotifications(receive: boolean) {
   }
 }
 
-async function clearHistory() {
+function openClearDialog() {
   if (!conv.value) return
-  await messageStore.clearConversationHistory(conv.value.id, false)
+  clearMsgTypeList.value = [
+    t('仅清空本地聊天记录'),
+    t('清空本地和对方设备的聊天记录'),
+  ]
+}
+
+async function handleClearSubmit(index: number) {
+  if (index === -1 || !conv.value) {
+    clearMsgTypeList.value = []
+    return
+  }
+  // 第二项沿用现有清空协议，通知其它端同步清空频道消息。
+  const isRemoteDeletion = index === 1
+  const conversationId = conv.value.id
+  clearMsgTypeList.value = []
+  await messageStore.clearConversationHistory(conversationId, isRemoteDeletion)
   chatStore.updateConversation({
-    id: conv.value.id,
+    id: conversationId,
     lastMsgDigest: null,
     lastMsgId: null,
     unreadCount: 0,
   })
 }
 
+function clearHistory() {
+  if (!conv.value) return
+  openClearDialog()
+}
+
 const currentUserMemberType = computed(() => {
-  const currentUserId = authStore.uid
+  const detailMemberType = detail.value.memberType ?? channel.value?.memberType
+  if (detailMemberType !== undefined && detailMemberType !== null && detailMemberType !== '') {
+    return Number(detailMemberType)
+  }
+  // 详情接口未回填身份时，再用成员列表兜底，避免管理员加载前被误判成普通订阅者。
+  const currentUserId = String(authStore.uid || '')
   const currentMember = members.value.find((m) => m.id === currentUserId)
   return currentMember?.memberType ?? 3
 })
@@ -1031,6 +1058,13 @@ onBeforeUnmount(() => {
       </div>
       <button v-if="canClearHistory" class="clear-btn" type="button" @click="clearHistory">{{ t('清空聊天记录') }}</button>
     </section>
+
+    <RadioSelectDialog
+      v-if="clearMsgTypeList.length > 0"
+      :title="t('请选择清空类型')"
+      :radio-text-list="clearMsgTypeList"
+      @submit="handleClearSubmit"
+    />
 
     <section v-if="adminPrivacy" class="manager-title">
       <button class="manager-entry" type="button" @mouseenter="prefetchManagerList" @click="openManagerDialog">

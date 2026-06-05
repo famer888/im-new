@@ -42,7 +42,10 @@ function openClearDialog() {
       t('清空本地和所有成员设备的聊天记录'),
     ]
   } else if (isChannel.value) {
-    clearMsgTypeList.value = [t('仅清空本地聊天记录')]
+    clearMsgTypeList.value = [
+      t('仅清空本地聊天记录'),
+      t('清空本地和对方设备的聊天记录'),
+    ]
   } else {
     clearMsgTypeList.value = [
       t('仅清空本地聊天记录'),
