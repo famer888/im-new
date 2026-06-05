@@ -14,6 +14,7 @@ import AppSwitch from '@/components/AppSwitch.vue'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
+import GroupNoticeContent from './GroupNoticeContent.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { shouldShowChannelShareInfo } from './channelShareVisibility'
@@ -925,7 +926,12 @@ onBeforeUnmount(() => {
         <h4>{{ t('频道简介') }}</h4>
         <span class="arrow">›</span>
       </div>
-      <p>{{ description || t('无简介') }}</p>
+      <GroupNoticeContent
+        class="channel-description-preview"
+        :content="description"
+        group-id=""
+        compact
+      />
     </section>
 
     <!-- 编辑频道简介对话框 -->
@@ -944,7 +950,13 @@ onBeforeUnmount(() => {
             :disabled="!canEditChannelDescription"
           />
           <div v-else :style="{ height: '203px' }">
-            <p :class="['notice-view', { empty: !editDescDraft }]">{{ editDescDraft || t('无简介') }}</p>
+            <GroupNoticeContent
+              class="notice-view"
+              :class="{ empty: !editDescDraft }"
+              :content="editDescDraft"
+              group-id=""
+              height="203px"
+            />
           </div>
           <span v-if="canEditChannelDescription && isEditDesc">{{ 800 - editDescDraft.length }}</span>
         </section>
@@ -1219,12 +1231,13 @@ onBeforeUnmount(() => {
   padding: 10px;
   box-sizing: border-box;
 
-  p {
+  .channel-description-preview {
     margin: 0;
     line-height: 22px;
     color: #787878;
     font-weight: 600;
     word-break: break-word;
+    max-height: 44px;
   }
 }
 

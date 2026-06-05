@@ -70,6 +70,9 @@ const LINK_AT_START_REGEX = new RegExp(
   `^((?:(?:https?)://|www\\.)[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR})`,
   'i',
 )
+const LINK_NO_PREFIX_AT_START_REGEX = new RegExp(
+  `^(([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,6}(?:/[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR}|/)?)`,
+)
 const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 
 const members = computed(() => props.groupId ? groupStore.getMembers(props.groupId) : [])
@@ -126,13 +129,19 @@ function readUnknownMention(content: string, start: number): string {
 }
 
 function detectLinkAtStart(content: string, start: number): { text: string; href: string } | null {
-  const match = content.slice(start).match(LINK_AT_START_REGEX)
-  if (!match) return null
+  const rest = content.slice(start)
+  const match = rest.match(LINK_AT_START_REGEX)
+  // 对齐旧 im channel-notice/view.vue：简介里的裸域名也要按 https 链接展示和打开。
+  const noPrefixMatch = match ? null : rest.match(LINK_NO_PREFIX_AT_START_REGEX)
+  if (!match && !noPrefixMatch) return null
 
-  const url = match[1]
+  const url = (match || noPrefixMatch)![1]
   if (url.startsWith('http') && url.length <= 7) return null
   if (url.startsWith('www.') && url.length <= 5) return null
-  return { text: url, href: url }
+  return {
+    text: url,
+    href: noPrefixMatch ? `https://${url}` : url,
+  }
 }
 
 function pushTextSegment(segments: NoticeSegment[], text: string) {
