@@ -52,6 +52,7 @@ type ContentSegment =
   | { type: 'emoji'; name: string; src: string }
   | { type: 'at'; text: string; memberId?: string }
   | { type: 'link'; text: string; href: string; showConfirm?: boolean }
+  | { type: 'stream-link'; prefix: string; text: string; href: string; showConfirm?: boolean }
 
 interface MentionCandidate {
   label: string
@@ -226,10 +227,11 @@ function pushLinkSegment(segments: ContentSegment[], link: { text: string; href:
   // 对齐产品要求：rtmp:// 前缀仅展示为普通文本，不进入可点击范围。
   const prefix = rtmpPrefixMatch[1]
   const rest = link.text.slice(prefix.length)
-  // 用 Word Joiner 禁止“rtmp://”和后续地址之间换行，确保这一段保持同一行展示。
-  pushTextSegment(segments, `${prefix}\u2060`)
   if (rest) {
-    segments.push({ type: 'link', text: rest, href: link.href, showConfirm: link.showConfirm })
+    // 不再插入不可见字符防换行，避免用户复制到 OBS 时地址被隐藏字符污染。
+    segments.push({ type: 'stream-link', prefix, text: rest, href: link.href, showConfirm: link.showConfirm })
+  } else {
+    pushTextSegment(segments, prefix)
   }
 }
 
@@ -809,11 +811,7 @@ const contentSegments = computed<ContentSegment[]>(() => {
   // 对齐旧 im 的文本拆分表现：保留正文内部换行，但去掉末尾空白行，避免单行消息被尾部换行撑高。
   const displayContent = replaceAtDisplayNames(rawContent, props.message.extra)
     .replace(/[ \t\u00a0]*[\r\n]+[ \t\u00a0]*$/g, '')
-  // 仅针对推流地址展示：把“推流地址：”和 rtmp:// 之间空白改成不可换行空格，强制同一行显示。
-  const content = displayContent.replace(
-    /(推流地址[：:])[\s\u2028\u2029]+(rtmps?:\/\/)/gi,
-    '$1\u00A0$2',
-  )
+  const content = displayContent
   const extraLinkRanges = getExtraLinkRanges(content, props.message.extra)
   // 常规纯文本消息不进入逐字符解析，减少首屏大量文本消息的渲染开销。
   if (content && !extraLinkRanges.length && !/[@\[]|https?:\/\/|rtmps?:\/\/|www\./i.test(content)) {
@@ -960,11 +958,13 @@ function isAtResolving(segment: Extract<ContentSegment, { type: 'at' }>): boolea
   return resolvingMentionKeys.value.has(aliasTargetCacheKey(segment.text, groupId))
 }
 
-function linkResolvingKey(segment: Extract<ContentSegment, { type: 'link' }>): string {
+type LinkLikeSegment = Extract<ContentSegment, { type: 'link' | 'stream-link' }>
+
+function linkResolvingKey(segment: LinkLikeSegment): string {
   return `${props.message.id || props.message.customMsgId || props.message.conversationId}:${segment.href}`
 }
 
-function isLinkResolving(segment: Extract<ContentSegment, { type: 'link' }>): boolean {
+function isLinkResolving(segment: LinkLikeSegment): boolean {
   return resolvingLinkKeys.value.has(linkResolvingKey(segment))
 }
 
@@ -973,7 +973,7 @@ function isStreamLikeLink(rawHref: string): boolean {
   return href.startsWith('rtmp://') || href.startsWith('rtmps://')
 }
 
-function isStreamLinkSegment(segment: Extract<ContentSegment, { type: 'link' }>): boolean {
+function isStreamLinkSegment(segment: LinkLikeSegment): boolean {
   return isStreamLikeLink(segment.href)
 }
 
@@ -992,7 +992,7 @@ async function openExternalLink(rawHref: string) {
   window.open(browserTarget, '_blank')
 }
 
-async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegment, { type: 'link' }>) {
+async function handleLinkClick(event: MouseEvent, segment: LinkLikeSegment) {
   event.preventDefault()
   event.stopPropagation()
 
@@ -1070,6 +1070,12 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
           :src="segment.src"
           :alt="segment.name"
         />
+        <span v-else-if="segment.type === 'stream-link'" class="stream-link-group">
+          <span>{{ segment.prefix }}</span><span
+            :class="['text-link', 'stream-link', { resolving: isLinkResolving(segment) }]"
+            @click.stop="handleLinkClick($event, segment)"
+          >{{ segment.text }}</span>
+        </span>
         <span
           v-else-if="segment.type === 'link'"
           :class="['text-link', { resolving: isLinkResolving(segment), 'stream-link': isStreamLinkSegment(segment) }]"
@@ -1152,6 +1158,10 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<ContentSegmen
 
     .at-mention {
       display: inline-block;
+    }
+
+    .stream-link-group {
+      white-space: nowrap;
     }
 
     .text-link {
