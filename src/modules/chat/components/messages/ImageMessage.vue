@@ -183,6 +183,14 @@ const downloadUrl = computed(() => {
   return ''
 })
 const isVideo = computed(() => props.message.msgType === 3)
+const isChannelSingleImageMessage = computed(() => {
+  const type = Number(props.message.msgType)
+  const isMediaGridSlot = (props.message as unknown as Record<string, unknown>).mediaSlotIndex !== undefined
+  // 频道单图按图片实际宽度收口，避免窄图内容落在 120px 透明区内时看不到外层圆角。
+  return (type === 1 || type === 9)
+    && String(props.message.conversationId || '').startsWith('2_')
+    && !isMediaGridSlot
+})
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
 const dragFileName = computed(() =>
   pathFileName(localFilePath.value) || getImageFileName(downloadUrl.value || imageData.value.url, imageData.value.name),
@@ -224,7 +232,7 @@ const imageBoxStyle = computed(() => {
   const sourceWidth = imageData.value.width || naturalImageWidth.value
   const sourceHeight = imageData.value.height || naturalImageHeight.value
   const height = 150
-  const minWidth = 120
+  const minWidth = isChannelSingleImageMessage.value ? 1 : 120
   const maxWidth = 400
   const ratio = sourceWidth > 0 && sourceHeight > 0
     ? sourceWidth / sourceHeight
@@ -234,6 +242,7 @@ const imageBoxStyle = computed(() => {
   return {
     width: `${width}px`,
     height: `${height}px`,
+    minWidth: `${width}px`,
   }
 })
 const fileKey = computed(() =>
