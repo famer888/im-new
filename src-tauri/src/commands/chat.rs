@@ -864,6 +864,12 @@ pub async fn send_message(
     let group_notice_id = json_i64(&extra_value, &["noticeId", "notice_id"]).unwrap_or_default();
     let group_notice_show_notify =
         json_bool(&extra_value, &["showNotify", "show_notify", "bfAll"]).unwrap_or(false);
+    // 频道多图共用一个附件密钥；旧 im 通过 fileInfos 透传，这里从 extra 传入发送协议层。
+    let medias_caption_file_key = if request.msg_type == 17 {
+        json_string_field(&extra_value, &["fileKey", "file_key"])
+    } else {
+        None
+    };
     // 前端按旧 im 生成 atUids；这里透传给 WS protobuf，保证服务端能识别真正被 @ 的成员。
     let at_uids = read_at_uids(&extra_value);
     let extra_json = match extra_value {
@@ -1083,7 +1089,7 @@ pub async fn send_message(
                 return mark_failed_and_return(e.to_string());
             }
         }
-        (2, 1) | (2, 2) | (2, 3) | (2, 7) | (2, 9) => {
+        (2, 1) | (2, 2) | (2, 3) | (2, 7) | (2, 9) | (2, 17) => {
             if let Err(e) = pipeline::send_channel_message(
                 &ws_mgr,
                 &crypto,
@@ -1094,6 +1100,11 @@ pub async fn send_message(
                 now,
                 client_flag,
                 at_uids.clone(),
+                if request.msg_type == 17 {
+                    medias_caption_file_key.as_deref()
+                } else {
+                    None
+                },
             ) {
                 error!(
                     "send_channel_message failed conversation={} msg_type={} err={}",

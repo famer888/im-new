@@ -314,6 +314,27 @@ interface LocalImagePreview {
   optimisticId: string
 }
 
+interface MediaCaptionPreparedSlot {
+  file: File
+  fileKey: string
+  msgType: MessageType
+  previewUrl: string
+  width: number
+  height: number
+  size: number
+  name: string
+  trace: ImageSendTrace
+}
+
+interface MediaCaptionUploadedSlot {
+  msgType: MessageType
+  url: string
+  thumbnailUrl: string
+  width: number
+  height: number
+  size: number
+}
+
 interface LocalFilePreview {
   optimisticId: string
 }
@@ -2094,6 +2115,126 @@ async function appendLocalImagePreview(
   return { url: previewUrl, width, height, optimisticId }
 }
 
+function buildMediasCaptionSegment(slot: {
+  msgType: MessageType
+  url: string
+  thumbnailUrl: string
+  size: number
+  width?: number
+  height?: number
+}): string {
+  if (slot.msgType === MessageType.DynamicImage) {
+    return `gif:${slot.url}||${slot.thumbnailUrl || slot.url}`
+  }
+  return `image:${slot.url}||${slot.thumbnailUrl || slot.url}||${slot.size || 0}||0`
+}
+
+async function handleChannelMediasCaptionSend(files: File[], caption: string): Promise<boolean> {
+  const conversationId = convId.value
+  const uid = authStore.uid
+  const isChannel = chatStore.currentConversation?.type === ConversationType.Channel
+  const imageFiles = files.filter(file => file.type.startsWith('image/'))
+  if (!isChannel || files.length < 2 || imageFiles.length !== files.length || !conversationId || !uid) return false
+  if (files.some(file => file.size > getFileSizeLimitBytes(file))) return false
+
+  const sharedFileKey = createFileKey()
+  const optimisticId = createOptimisticImageId()
+  const preparedSlots: MediaCaptionPreparedSlot[] = []
+
+  try {
+    for (const file of files) {
+      const trace = createImageTrace()
+      const sendFile = await ensureBlobBackedFile(file, trace)
+      const isGif = /image\/gif$/i.test(sendFile.type) || getFileSuffix(sendFile) === 'gif'
+      const msgType = isGif ? MessageType.DynamicImage : MessageType.Image
+      const previewUrl = await resolveLocalImagePreviewSrc(
+        sendFile,
+        isGif ? await fileToDataURL(sendFile) : '',
+      )
+      const { width, height } = await getImageSize(previewUrl)
+      preparedSlots.push({
+        file: sendFile,
+        fileKey: sharedFileKey,
+        msgType,
+        previewUrl,
+        width,
+        height,
+        size: sendFile.size,
+        name: sendFile.name,
+        trace,
+      })
+    }
+
+    const localContent = preparedSlots
+      .map(slot => buildMediasCaptionSegment({
+        msgType: slot.msgType,
+        url: slot.previewUrl,
+        thumbnailUrl: slot.previewUrl,
+        size: slot.size,
+        width: slot.width,
+        height: slot.height,
+      }))
+      .join('|||') + (caption ? `##caption##${caption}` : '')
+    const extra = withReadBurnExtra({
+      uploadPending: true,
+      mediasCaptionFileKey: sharedFileKey,
+    })
+
+    // 对齐旧 im：频道多图先插入一条 msgType 17 本地预览，上传完成后用同一 customMsgId 替换为远端内容。
+    messageStore.appendMessage(conversationId, {
+      id: optimisticId,
+      customMsgId: optimisticId,
+      conversationId,
+      senderId: uid,
+      msgType: MessageType.MediasCaption,
+      content: localContent,
+      sendTime: Date.now(),
+      status: 0,
+      readStatus: 0,
+      version: 0,
+      isDeleted: false,
+      extra: extra ? JSON.stringify(extra) : null,
+    })
+
+    const uploadedSlots: MediaCaptionUploadedSlot[] = []
+    for (const slot of preparedSlots) {
+      const uploaded = await uploadImageLikeIm(slot.file, {
+        fileKey: slot.fileKey,
+        width: slot.width,
+        height: slot.height,
+        trace: slot.trace,
+        msgType: slot.msgType,
+      })
+      uploadedSlots.push({
+        msgType: slot.msgType,
+        url: uploaded.url,
+        thumbnailUrl: uploaded.thumbnailUrl,
+        width: uploaded.width,
+        height: uploaded.height,
+        size: uploaded.size,
+      })
+    }
+
+    const remoteContent = uploadedSlots
+      .map(buildMediasCaptionSegment)
+      .join('|||') + (caption ? `##caption##${caption}` : '')
+    emit('send', remoteContent, MessageType.MediasCaption, withReadBurnExtra({
+      fileKey: sharedFileKey,
+      __clientMsgId: optimisticId,
+    }))
+    showFilePreview.value = false
+    pendingFiles.value = []
+    return true
+  } catch (error) {
+    console.error('[message-input] channel medias caption send failed:', error)
+    if (optimisticId) messageStore.updateMessageStatus(optimisticId, -1)
+    showToast((error as Error)?.message || t('操作失败'), 'error')
+    showFilePreview.value = false
+    pendingFiles.value = []
+    return true
+  }
+}
+
 function appendLocalVideoPreview(
   file: File,
   fileKey: string,
@@ -3162,6 +3303,8 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
     })),
     textLen: text.length,
   })
+
+  if (await handleChannelMediasCaptionSend(files, text)) return
 
   for (const file of files) {
     if (file.size > getFileSizeLimitBytes(file)) {

@@ -83,6 +83,10 @@ fn decode_content_obj(msg_type: i32, plain: &[u8]) -> String {
             Ok(obj) => animated_game_obj_to_legacy_content(obj),
             Err(_) => String::from_utf8_lossy(plain).to_string(),
         },
+        17 => match im::MediaTextListObj::decode(plain) {
+            Ok(obj) => media_text_list_obj_to_legacy_content(obj),
+            Err(_) => String::from_utf8_lossy(plain).to_string(),
+        },
         _ => match imweb::TextObj::decode(plain) {
             Ok(obj) => obj.content,
             Err(_) => String::from_utf8_lossy(plain).to_string(),
@@ -113,6 +117,7 @@ fn validate_plain_content(msg_type: i32, plain: &[u8], content_md5: &str) -> boo
         8 => imweb::GroupNoticeObj::decode(plain).is_ok(),
         9 => imweb::DynamicImageObj::decode(plain).is_ok(),
         12 => imweb::SetImageObj::decode(plain).is_ok(),
+        17 => im::MediaTextListObj::decode(plain).is_ok(),
         18 => imweb::AnimatedGameObj::decode(plain).is_ok(),
         _ => imweb::TextObj::decode(plain).is_ok(),
     }
@@ -172,6 +177,48 @@ fn video_obj_to_json(obj: imweb::VideoObj) -> String {
         "size": obj.file_size,
     })
     .to_string()
+}
+
+fn media_text_list_obj_to_legacy_content(obj: im::MediaTextListObj) -> String {
+    let segments = obj
+        .objs
+        .into_iter()
+        .filter_map(|media| {
+            let media_type = im::CaptionMediaType::try_from(media.r#type).ok()?;
+            match media_type {
+                im::CaptionMediaType::Image => {
+                    let item = imweb::ImageObj::decode(media.content.as_slice()).ok()?;
+                    Some(format!(
+                        "image:{}||{}||{}||{}",
+                        item.url, item.thumb_url, item.file_size, item.size_type
+                    ))
+                }
+                im::CaptionMediaType::Video => {
+                    let item = imweb::VideoObj::decode(media.content.as_slice()).ok()?;
+                    Some(format!(
+                        "video:{}*P{}||{}||{}||{}||{}",
+                        item.url,
+                        item.thumb_url,
+                        item.duration,
+                        item.file_size,
+                        item.width,
+                        item.height
+                    ))
+                }
+                im::CaptionMediaType::DynamicImage => {
+                    let item = imweb::DynamicImageObj::decode(media.content.as_slice()).ok()?;
+                    Some(format!("gif:{}||{}", item.url, item.thumb_url))
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut content = segments.join("|||");
+    if !obj.caption.trim().is_empty() {
+        content.push_str("##caption##");
+        content.push_str(obj.caption.trim());
+    }
+    content
 }
 
 fn file_obj_to_json(obj: imweb::FileObj) -> String {
@@ -1973,6 +2020,17 @@ impl MessageBatcher {
                 {
                     warn!(
                         "[channel] decrypt failed but raw AnimatedGameObj parsed channel_id={} msg_id={} err={}",
+                        channel_id, cm.msg_id, e
+                    );
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
+                } else if cm.msg_type == 17
+                    && im::MediaTextListObj::decode(cm.content.as_slice()).is_ok()
+                {
+                    warn!(
+                        "[channel] decrypt failed but raw MediaTextListObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e
                     );
                     (

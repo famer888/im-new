@@ -15,7 +15,7 @@ use md5::{Digest, Md5};
 use prost::Message as _;
 
 use crate::crypto::{self, CryptoError};
-use crate::proto::imweb;
+use crate::proto::{im, imweb};
 
 pub mod pipeline;
 
@@ -279,6 +279,66 @@ pub fn encode_video_obj(content: &str) -> Vec<u8> {
     obj.encode_to_vec()
 }
 
+fn strip_medias_caption_ref_suffix(value: &str) -> &str {
+    let end = value.find("-||-type:").unwrap_or(value.len());
+    value[..end].trim()
+}
+
+fn media_caption_payload(segment: &str) -> Option<(im::CaptionMediaType, String)> {
+    let candidates = [
+        ("image:", im::CaptionMediaType::Image),
+        ("video:", im::CaptionMediaType::Video),
+        ("gif:", im::CaptionMediaType::DynamicImage),
+    ];
+    for (marker, media_type) in candidates {
+        if let Some(payload) = segment.strip_prefix(marker) {
+            return Some((media_type, payload.trim().to_string()));
+        }
+        if let Some(index) = segment.find(&format!("||{}", marker)) {
+            return Some((media_type, segment[index + marker.len() + 2..].trim().to_string()));
+        }
+    }
+    None
+}
+
+/// 将频道多图内容编码为旧 im 使用的 MediaTextListObj。
+/// 前端仍保留旧 im 的 `image:...|||gif:...##caption##...` 字符串，发送前在这里转成 protobuf。
+pub fn encode_media_text_list_obj(content: &str) -> Vec<u8> {
+    const CAPTION_SEPARATOR: &str = "##caption##";
+    let raw = content.trim();
+    let (body, caption) = if let Some(index) = raw.find(CAPTION_SEPARATOR) {
+        (
+            strip_medias_caption_ref_suffix(&raw[..index]).to_string(),
+            strip_medias_caption_ref_suffix(&raw[index + CAPTION_SEPARATOR.len()..]).to_string(),
+        )
+    } else {
+        (strip_medias_caption_ref_suffix(raw).to_string(), String::new())
+    };
+
+    let objs = body
+        .split("|||")
+        .filter_map(|segment| {
+            let (media_type, payload) = media_caption_payload(segment.trim())?;
+            let encoded = match media_type {
+                im::CaptionMediaType::Image => encode_image_obj(&payload),
+                im::CaptionMediaType::Video => encode_video_obj(&payload),
+                im::CaptionMediaType::DynamicImage => encode_dynamic_image_obj(&payload),
+            };
+            Some(im::MediaObj {
+                r#type: media_type as i32,
+                content: encoded,
+            })
+        })
+        .collect();
+
+    im::MediaTextListObj {
+        objs,
+        caption,
+        r#ref: None,
+    }
+    .encode_to_vec()
+}
+
 /// 将前端文件内容编码为旧 im 使用的 FileObj protobuf。
 pub fn encode_file_obj(content: &str) -> Vec<u8> {
     let raw = content.trim();
@@ -489,6 +549,7 @@ pub fn encode_content_obj(msg_type: i32, content: &str) -> Vec<u8> {
         7 => encode_file_obj(content),
         8 => encode_group_notice_obj(content, 0, false),
         12 => encode_set_image_obj(content),
+        17 => encode_media_text_list_obj(content),
         18 => encode_animated_game_obj(content),
         _ => encode_text_obj(content),
     }

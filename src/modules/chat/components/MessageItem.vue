@@ -21,6 +21,7 @@ const BusinessCardMessage = defineAsyncComponent(() => import('./messages/Busine
 const DiceMessage = defineAsyncComponent(() => import('./messages/DiceMessage.vue'))
 const PokerMessage = defineAsyncComponent(() => import('./messages/PokerMessage.vue'))
 const RichTextMessage = defineAsyncComponent(() => import('./messages/RichTextMessage.vue'))
+const MediasCaptionMessage = defineAsyncComponent(() => import('./messages/MediasCaptionMessage.vue'))
 const QuoteMessage = defineAsyncComponent(() => import('./messages/QuoteMessage.vue'))
 const RedPacketMessage = defineAsyncComponent(() => import('./messages/RedPacketMessage.vue'))
 const TransferMessage = defineAsyncComponent(() => import('./messages/TransferMessage.vue'))
@@ -46,7 +47,9 @@ const searchStore = useSearchStore()
 const itemRef = ref<HTMLElement | null>(null)
 const isSelf = computed(() => props.message.senderId === authStore.uid)
 const isSelected = computed(() => uiStore.selectedMessageIds.has(props.message.id))
-const shouldRenderMessage = computed(() => !isHiddenMessageType(props.message.msgType))
+// 旧 im 的多图类型可能以字符串 "17" 到达前端；渲染分支先归一化再选择组件。
+const renderMsgType = computed(() => Number(props.message.msgType || 0))
+const shouldRenderMessage = computed(() => !isHiddenMessageType(renderMsgType.value))
 /** 与 im `getCurrentMsgClass` 里 `active`（搜索定位高亮）一致 */
 const isSearchHighlighted = computed(
   () => searchStore.highlightSearchMessageId === props.message.id,
@@ -59,7 +62,7 @@ const senderName = computed(() => {
 })
 
 const messageComponent = computed(() => {
-  switch (props.message.msgType) {
+  switch (renderMsgType.value) {
     case MessageType.Text: return TextMessage
     case MessageType.Image: return ImageMessage
     // DynamicImage still needs the robust local/remote image pipeline here.
@@ -73,6 +76,7 @@ const messageComponent = computed(() => {
     case MessageType.SetImage: return DiceMessage
     case MessageType.AnimatedGame: return PokerMessage
     case MessageType.Html2: return RichTextMessage
+    case MessageType.MediasCaption: return MediasCaptionMessage
     case MessageType.RedPacket:
     case MessageType.RedPacketResult: return RedPacketMessage
     case MessageType.ChatTransfer:
@@ -86,13 +90,13 @@ const messageComponent = computed(() => {
 })
 
 const isSystemMsg = computed(() =>
-  props.message.msgType === MessageType.System ||
-  (props.message.msgType === MessageType.Notice && !isGroupIntroNotice.value),
+  renderMsgType.value === MessageType.System ||
+  (renderMsgType.value === MessageType.Notice && !isGroupIntroNotice.value),
 )
 
 /** 与 `messageComponent` 一致：仅「非纯文本气泡」在外层叠加时间条，其余走 TextMessage 内嵌（含 default 分支） */
 const useOuterTimeOverlay = computed(() => {
-  switch (props.message.msgType) {
+  switch (renderMsgType.value) {
     case MessageType.Image:
     case MessageType.DynamicImage:
     case MessageType.Video:
@@ -103,6 +107,7 @@ const useOuterTimeOverlay = computed(() => {
     case MessageType.SetImage:
     case MessageType.AnimatedGame:
     case MessageType.Html2:
+    case MessageType.MediasCaption:
       return true
     case MessageType.Notice:
       return isGroupIntroNotice.value
@@ -117,9 +122,10 @@ function handleOpenGroupNotice() {
 }
 
 const isImageLikeBubble = computed(() =>
-  props.message.msgType === MessageType.Image ||
-  props.message.msgType === MessageType.DynamicImage ||
-  props.message.msgType === MessageType.Video,
+  renderMsgType.value === MessageType.Image ||
+  renderMsgType.value === MessageType.DynamicImage ||
+  renderMsgType.value === MessageType.MediasCaption ||
+  renderMsgType.value === MessageType.Video,
 )
 
 function getQuoteContentDigest(msgType: number, content: string | null): string {

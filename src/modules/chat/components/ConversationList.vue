@@ -539,6 +539,8 @@ function normalizeDigestPlainText(value: string): string {
 function formatDigestText(digest: string): string {
   const raw = normalizeDigestPlainText(digest.trim())
   if (!raw) return ''
+  // 对齐旧 im：msgType 17 的多图正文是 image/video/gif 片段协议，列表摘要固定显示“多图”。
+  if (/(?:^|\|\|\||\|\|)(?:image|video|gif):/i.test(raw)) return `[${t('多图')}]`
   const translated = translateKnownDigest(raw)
   if (translated !== raw) return translated
   if (raw === '暂不支持该消息类型') return ''
@@ -548,7 +550,7 @@ function formatDigestText(digest: string): string {
     return `[${t('扑克牌')}]`
   }
 
-  const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子|扑克牌)\]$/)
+  const bracketMatch = raw.match(/^\[(图片|语音|视频|名片|文件|骰子|扑克牌|多图)\]$/)
   if (bracketMatch) return `[${t(bracketMatch[1])}]`
 
   try {

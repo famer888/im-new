@@ -186,6 +186,7 @@ pub fn send_channel_message(
     send_time: i64,
     flag: i64,
     at_uids: Vec<i64>,
+    attachment_file_key_override: Option<&str>,
 ) -> Result<(), SendError> {
     let channel_id: i64 = channel_id_str.parse().map_err(|_| {
         SendError::InvalidId(format!("channel_id '{}' not numeric", channel_id_str))
@@ -199,7 +200,12 @@ pub fn send_channel_message(
         .ok_or_else(|| SendError::MissingChannelKey(channel_id_str.to_string()))?;
 
     let content_plain = super::encode_content_obj(msg_type, content);
-    let attachment_file_key = super::extract_attachment_file_key(content);
+    // msgType 17 的共享文件 key 在前端 extra 中；普通附件仍从内容 JSON 里读取。
+    let attachment_file_key = attachment_file_key_override
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .or_else(|| super::extract_attachment_file_key(content));
     let payload = super::build_send_channel_message_req(
         channel_id,
         sender_uid,
@@ -243,6 +249,7 @@ pub fn send_channel_text(
         send_time,
         flag,
         at_uids,
+        None,
     )
 }
 
