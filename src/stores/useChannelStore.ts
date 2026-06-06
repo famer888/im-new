@@ -1,6 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getChannelDetail, getChannelList, type ChannelListItem } from '@/api/imChannel'
+import {
+  handleAuthSessionExpired,
+  isAuthSessionExpiredError,
+  isAuthSessionExpiredResponse,
+} from '@/utils/authSessionExpiry'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -451,6 +456,9 @@ export const useChannelStore = defineStore('channel', () => {
           total: resp?.data?.total ?? null,
         })
         if (code !== 200 && code !== 0) {
+          if (isAuthSessionExpiredResponse(resp)) {
+            void handleAuthSessionExpired('channel-list', resp?.msg || '登录已过期，请重新登录')
+          }
           throw new Error(resp?.msg || 'channel list request failed')
         }
         apiSucceeded = true
@@ -467,6 +475,9 @@ export const useChannelStore = defineStore('channel', () => {
         }
       } catch (e) {
         console.error('[ChannelStore] API loadChannels failed:', e)
+        if (isAuthSessionExpiredError(e)) {
+          void handleAuthSessionExpired('channel-list-error', (e as Error)?.message || '登录已过期，请重新登录')
+        }
         channelDebug('API channelList failed', { pageNum, error: String(e) })
         hasMore = false
       }
@@ -607,6 +618,9 @@ export const useChannelStore = defineStore('channel', () => {
     const resp = await getChannelDetail({ channelId: id })
     const code = Number(resp?.code ?? 200)
     if (code !== 200 && code !== 0) {
+      if (isAuthSessionExpiredResponse(resp)) {
+        void handleAuthSessionExpired('channel-detail', resp?.msg || '登录已过期，请重新登录')
+      }
       throw new Error(resp?.msg || 'channel detail request failed')
     }
     if (!resp.data) return getChannel(id) || null

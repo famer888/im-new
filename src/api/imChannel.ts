@@ -71,8 +71,37 @@ function encodePacketWithAesJson(data: unknown, aesKey: string): Uint8Array {
   return concatUint8Arrays(header, length, encrypted)
 }
 
+function tryParsePlainJsonResponse(bytes: Uint8Array): { ok: true; value: any } | { ok: false } {
+  try {
+    const text = new TextDecoder().decode(bytes).trim()
+    if (!text || (text[0] !== '{' && text[0] !== '[')) return { ok: false }
+    return { ok: true, value: JSON.parse(quoteLargeIntegerIds(text)) }
+  } catch {
+    return { ok: false }
+  }
+}
+
+function isLegacyAesJsonPacket(raw: Uint8Array): boolean {
+  if (raw.length < 6) return false
+  const head = raw[0]
+  const flag = raw[1]
+  return (head === 0xC0 || head === 0xC1) && (flag === 0x80 || flag === 0xC0)
+}
+
+function byteHead(bytes: Uint8Array, length = 8): string {
+  return Array.from(bytes.slice(0, length))
+    .map((item) => item.toString(16).padStart(2, '0'))
+    .join(' ')
+}
+
 function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
   const raw = new Uint8Array(buffer)
+  if (!isLegacyAesJsonPacket(raw)) {
+    const plainJson = tryParsePlainJsonResponse(raw)
+    if (plainJson.ok) return plainJson.value
+    throw new Error(`channel api response is not legacy packet: bytes=${raw.byteLength}, head=${byteHead(raw)}`)
+  }
+
   let encrypted = raw.slice(6)
 
   // 老 im 的频道接口响应有时会走 gzip 压缩，这里要和 requestAxios 的兼容行为保持一致。
@@ -84,9 +113,19 @@ function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
     }
   }
 
-  const plain = aesDecrypt(encrypted, aesKey)
-  const json = new TextDecoder().decode(plain)
-  return JSON.parse(quoteLargeIntegerIds(json))
+  try {
+    const plain = aesDecrypt(encrypted, aesKey)
+    const json = new TextDecoder().decode(plain)
+    return JSON.parse(quoteLargeIntegerIds(json))
+  } catch (error) {
+    // 对齐旧 im requestAxios：频道网关偶发返回普通 JSON 错误体时，不继续按 AES 包解密。
+    const fullPlainJson = tryParsePlainJsonResponse(raw)
+    if (fullPlainJson.ok) return fullPlainJson.value
+    const bodyPlainJson = tryParsePlainJsonResponse(raw.slice(6))
+    if (bodyPlainJson.ok) return bodyPlainJson.value
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`channel api encrypted response decode failed: ${message}; bytes=${raw.byteLength}, head=${byteHead(raw)}`)
+  }
 }
 
 function quoteLargeIntegerIds(json: string): string {
@@ -295,7 +334,7 @@ async function requestChannelJson<T>(path: string, data: Record<string, unknown>
       throw new Error(`HTTP ${Number(result?.status || 0)}${result?.error ? `; ${result.error}` : ''}`)
     }
     const buf = decodeBase64ToArrayBuffer(result.bodyBase64 || '')
-    if (buf.byteLength < 6) {
+    if (buf.byteLength === 0) {
       throw new Error(`channel api response too short: ${buf.byteLength}`)
     }
     return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
@@ -311,7 +350,7 @@ async function requestChannelJson<T>(path: string, data: Record<string, unknown>
     throw new Error(`HTTP ${res.status}`)
   }
   const buf = await res.arrayBuffer()
-  if (buf.byteLength < 6) {
+  if (buf.byteLength === 0) {
     throw new Error(`channel api response too short: ${buf.byteLength}`)
   }
   return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T

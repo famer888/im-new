@@ -52,6 +52,7 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
+import { handleAuthSessionExpired } from '@/utils/authSessionExpiry'
 import { ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { toDisplaySrc, toFsPath } from '@/utils/resourcePath'
@@ -425,9 +426,12 @@ onMounted(async () => {
           const installCode = authStore.wsConnectConfig?.installCode || getOrCreateInstallCode()
           if (wsUrl && aesKey) {
             await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid })
-          } else {
+          } else if (uid) {
             networkStore.setWsStatus('disconnected')
             console.warn('[ws] skipped connect: missing ws config')
+            // 桌面端存在 uid 但缺少 WS 凭据时，说明登录态已残缺；主动回登录页，避免停在半登录状态。
+            await handleAuthSessionExpired('missing-ws-config', '登录已过期，请重新登录')
+            return
           }
         }
       } catch (err) {
