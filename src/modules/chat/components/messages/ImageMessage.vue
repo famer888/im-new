@@ -614,6 +614,21 @@ async function downloadAndDecryptImage() {
     const id = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
     const savePath = await getImageSavePath(join, baseDir, id, getImageFileName(url, imageData.value.name))
     localFilePath.value = savePath
+    const cachedSrc = toDisplayImageSrc(savePath)
+    const hasCachedFile = await invoke<boolean>('file_exists', { path: savePath }).catch(() => false)
+    if (token !== downloadToken) return
+    if (hasCachedFile && cachedSrc) {
+      // 历史图片已经解密落盘时直接复用本地文件，避免切换会话后闪回下载蒙层。
+      activeSrc.value = cachedSrc
+      loadError.value = false
+      isLoaded.value = true
+      setCachedImage(imageCacheKey.value, {
+        src: cachedSrc,
+        localFilePath: savePath,
+      })
+      markLoadedIfImageAlreadyComplete()
+      return
+    }
     const doneEvent = `file:done:${id}`
     const errorEvent = `file:error:${id}`
 
