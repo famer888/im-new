@@ -77,7 +77,17 @@ $border-radius-badge: 10px;
 $border-radius-round: 20px;
 
 // Font
-$font-family: 'PingFang SC', 'Noto Sans SC', 'Roboto', -apple-system, sans-serif;
+$font-family:
+  'PingFangSC-Regular',
+  'PingFang SC',
+  'NotoSansSC-Regular',
+  'Microsoft YaHei',
+  'Roboto-Regular',
+  'Apple Color Emoji',
+  'Segoe UI Emoji',
+  'Segoe UI Symbol',
+  'Noto Color Emoji',
+  sans-serif;
 $font-size-xs: 11px;
 $font-size-sm: 12px;
 $font-size-base: 14px;

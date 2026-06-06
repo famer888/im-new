@@ -80,10 +80,15 @@ const scanMaskText = computed(() => {
 function normalizeWsUrl(input: string): string {
   const raw = (input || '').trim()
   if (!raw) return ''
+  if (/^ws:\/\/[^/]+:443(?:\/|$)/i.test(raw)) {
+    // 修复旧缓存/旧归一化写入的 ws://*:443；443 生产 webSession 需要按 TLS WebSocket 连接。
+    return `wss://${raw.slice('ws://'.length)}`
+  }
   if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw
   if (raw.startsWith('https://')) return `wss://${raw.slice('https://'.length)}`
   if (raw.startsWith('http://')) return `ws://${raw.slice('http://'.length)}`
-  return `ws://${raw}`
+  // 对齐旧 im 登录域名检查：生产 webSession 裸域名默认按 TLS WebSocket 连接，避免 443 被误连成明文 ws。
+  return `wss://${raw}`
 }
 
 function inferSessionWsUrl(baseUrl: string): string {

@@ -1,13 +1,20 @@
 @font-face {
-  font-family: 'Roboto';
-  src: local('Roboto-Regular');
+  font-family: 'Roboto-Regular';
+  src: url('../fonts/Roboto-Regular.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
 }
 
 @font-face {
-  font-family: 'NotoSansSC';
-  src: local('NotoSansSC-Regular');
+  font-family: 'NotoSansSC-Regular';
+  src: url('../fonts/NotoSansSC-Regular.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'PingFangSC-Regular';
+  src: url('../fonts/PingFangSC-Regular.ttf') format('truetype');
   font-weight: normal;
   font-style: normal;
 }
