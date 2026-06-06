@@ -35,11 +35,6 @@ const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.6
 const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
 const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
 const API_BASE_URL_KEY = 'api-base-url'
-const LOGIN_ONLY_BASE_HOSTS = new Set([
-  'a1.uuds.xyz',
-  'blo.yimengwh.xyz',
-  'openchat-loginv2.evanth.xyz',
-])
 
 function normalizeBrandId(input?: string): '45' | '55' | '97' {
   const value = String(input || '').trim()
@@ -110,11 +105,18 @@ function normalizeHttpBaseUrl(value: string): string {
   }
 }
 
+// 登录域名不能作为业务 baseUrl 持久化；从当前环境 login_v2 池判断，避免 test 包写死线上 host。
 export function isLoginOnlyBaseUrl(value: string): boolean {
   try {
     const host = new URL(String(value || '').trim()).host.toLowerCase()
-    // openchat-loginv2 是登录域名族，不能持久化成登录后的业务 baseUrl。
-    return LOGIN_ONLY_BASE_HOSTS.has(host) || host.startsWith('openchat-loginv2.')
+    return host.startsWith('openchat-loginv2.')
+      || getAllDomains('login_v2').some(item => {
+        try {
+          return new URL(String(item.domain || '').trim()).host.toLowerCase() === host
+        } catch {
+          return false
+        }
+      })
   } catch {
     return false
   }

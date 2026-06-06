@@ -25,6 +25,10 @@ esac
 echo "Running beforeBuildCommand with TAURI_BUILD_MODE=$TAURI_BUILD_MODE"
 
 cd "$ROOT_DIR"
-# 对齐 F10：打包前尝试刷新 domains.json 快照；失败不阻塞构建，继续用仓库内已有快照兜底。
-node ./scripts/prefetch-domain-snapshot.mjs --mode "$TAURI_BUILD_MODE" || true
+# 对齐 F10：test/prod 包必须使用对应环境快照；预发暂无基准快照，仍保留失败不阻塞。
+if [[ "$TAURI_BUILD_MODE" == "production" || "$TAURI_BUILD_MODE" == "test" ]]; then
+  node ./scripts/prefetch-domain-snapshot.mjs --mode "$TAURI_BUILD_MODE"
+else
+  node ./scripts/prefetch-domain-snapshot.mjs --mode "$TAURI_BUILD_MODE" || true
+fi
 exec "${BUILD_CMD[@]}"

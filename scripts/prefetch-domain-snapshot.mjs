@@ -53,6 +53,25 @@ function loadModeEnv(rootDir, mode) {
   return env
 }
 
+// 打包脚本里 prod/production 都代表生产环境，这里统一成 Vite 使用的 production。
+function normalizeEnvMode(mode) {
+  const normalized = String(mode || '').trim()
+  return normalized === 'prod' ? 'production' : normalized
+}
+
+// 将命令行 mode 和 .env 里的环境名统一成快照环境，避免 prod/test 共用 domains.json。
+function normalizeSnapshotMode(mode, config) {
+  const normalizedMode = normalizeEnvMode(mode).toLowerCase()
+  if (normalizedMode === 'production' || normalizedMode === 'test' || normalizedMode === 'uat') {
+    return normalizedMode
+  }
+  const normalizedEnv = normalizeEnvMode(config?.envName || '').toLowerCase()
+  if (normalizedEnv === 'production' || normalizedEnv === 'test' || normalizedEnv === 'uat') {
+    return normalizedEnv
+  }
+  return normalizedMode || 'production'
+}
+
 function resolveConfig(envMap) {
   const read = (key, fallback = '') => {
     const fromProcess = process.env[key]
@@ -78,6 +97,96 @@ function resolveConfig(envMap) {
     packName: read('VITE_APP_PACKNAME', read('VITE_APP_BRAND_ID', '97')),
     envName: read('VITE_APP_ENV', 'unknown'),
   }
+}
+
+// 生产构建要走强校验；mode 或 VITE_APP_ENV 任一标记为 prod 都按生产处理。
+function isProductionSnapshotMode(mode, config) {
+  const normalizedMode = String(mode || '').trim().toLowerCase()
+  const normalizedEnv = String(config?.envName || '').trim().toLowerCase()
+  return normalizedMode === 'production'
+    || normalizedMode === 'prod'
+    || normalizedEnv === 'production'
+    || normalizedEnv === 'prod'
+}
+
+const TEST_SNAPSHOT_EXPECTED_DOMAIN_PATTERNS = [
+  /test-biz/i,
+  /test-webbiz/i,
+  /test-gateway/i,
+  /test-domain-api/i,
+  /backup_url\/test/i,
+  /domain_api_backup.*test/i,
+  /68chat\.co/i,
+]
+
+const PROD_SNAPSHOT_BLOCKED_DOMAIN_PATTERNS = [
+  /test-biz/i,
+  /test-webbiz/i,
+  /test-gateway/i,
+  /test-domain-api/i,
+  /backup_url\/test/i,
+  /domain_api_backup.*test/i,
+  /68chat\.co/i,
+]
+
+// 从快照里找出命中特征的域名，用于给校验失败输出具体污染来源。
+function findSnapshotDomain(snapshot, patterns) {
+  const domainDtoList = Array.isArray(snapshot?.domainDtoList) ? snapshot.domainDtoList : []
+  for (const entry of domainDtoList) {
+    const domainUrl = String(entry?.domainUrl || '').trim()
+    if (!domainUrl) continue
+    if (patterns.some(pattern => pattern.test(domainUrl))) {
+      return domainUrl
+    }
+  }
+  return ''
+}
+
+// 写入或恢复快照前按目标环境校验，防止线上包混入测试域名、测试包误用线上快照。
+function assertSnapshotMatchesMode(snapshot, snapshotMode, context) {
+  if (snapshotMode === 'production') {
+    const blockedDomain = findSnapshotDomain(snapshot, PROD_SNAPSHOT_BLOCKED_DOMAIN_PATTERNS)
+    if (blockedDomain) {
+      throw new Error(`production domains snapshot contains test domain (${context}): ${blockedDomain}`)
+    }
+    return
+  }
+
+  if (snapshotMode === 'test') {
+    const expectedDomain = findSnapshotDomain(snapshot, TEST_SNAPSHOT_EXPECTED_DOMAIN_PATTERNS)
+    if (!expectedDomain) {
+      throw new Error(`test domains snapshot does not contain test domain (${context})`)
+    }
+  }
+}
+
+function getActiveSnapshotPath(rootDir) {
+  return path.join(rootDir, 'scripts', 'domains.json')
+}
+
+function getBaselineSnapshotPath(rootDir, snapshotMode) {
+  return path.join(rootDir, 'scripts', 'domain-snapshots', `domains.${snapshotMode}.json`)
+}
+
+function readSnapshotFile(filePath) {
+  const text = fs.readFileSync(filePath, 'utf8')
+  return {
+    filePath,
+    snapshot: JSON.parse(text),
+  }
+}
+
+// 拉取失败时恢复仓库内基准快照，让 test/prod 构建仍然使用各自固定域名池。
+function restoreBaselineSnapshot(rootDir, snapshotMode) {
+  const baselinePath = getBaselineSnapshotPath(rootDir, snapshotMode)
+  if (!fs.existsSync(baselinePath)) {
+    throw new Error(`missing ${snapshotMode} domains baseline: ${baselinePath}`)
+  }
+
+  const { snapshot } = readSnapshotFile(baselinePath)
+  // 构建前按目标环境恢复快照，避免 test/prod 共用同一个 domains.json 时互相污染。
+  assertSnapshotMatchesMode(snapshot, snapshotMode, baselinePath)
+  return writeSnapshotFile(rootDir, snapshot)
 }
 
 function getHeaderClientVersion(versionName, appVer) {
@@ -366,7 +475,7 @@ async function fetchDomainSnapshot(config, tokenData) {
 }
 
 function writeSnapshotFile(rootDir, snapshot) {
-  const filePath = path.join(rootDir, 'scripts', 'domains.json')
+  const filePath = getActiveSnapshotPath(rootDir)
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8')
   return filePath
@@ -376,11 +485,18 @@ async function main() {
   const { mode } = parseArgs(process.argv.slice(2))
   const scriptDir = path.dirname(fileURLToPath(import.meta.url))
   const rootDir = path.resolve(scriptDir, '..')
-  const envMap = loadModeEnv(rootDir, mode)
+  const envMode = normalizeEnvMode(mode)
+  const envMap = loadModeEnv(rootDir, envMode)
   const config = resolveConfig(envMap)
+  const snapshotMode = normalizeSnapshotMode(mode, config)
 
   if (String(process.env.DOMAIN_SNAPSHOT_PREFETCH || '1') === '0') {
-    console.log('[domains] skip prefetch: DOMAIN_SNAPSHOT_PREFETCH=0')
+    const filePath = restoreBaselineSnapshot(rootDir, snapshotMode)
+    console.log('[domains] skip prefetch, restored baseline domains snapshot', {
+      mode,
+      snapshotMode,
+      filePath,
+    })
     return
   }
 
@@ -401,10 +517,13 @@ async function main() {
       const retryTokenData = await fetchClientToken(root, config)
       snapshot = await fetchDomainSnapshot(config, retryTokenData)
     }
+    // 写入前按目标环境校验，避免接口异常返回其它环境域名后污染打包输入。
+    assertSnapshotMatchesMode(snapshot, snapshotMode, mode)
     const filePath = writeSnapshotFile(rootDir, snapshot)
 
     console.log('[domains] snapshot updated before build', {
       mode,
+      snapshotMode,
       env: config.envName,
       total: snapshot.domainDtoList.length,
       baseApi: config.baseApi,
@@ -412,6 +531,28 @@ async function main() {
       filePath,
     })
   } catch (error) {
+    try {
+      const filePath = restoreBaselineSnapshot(rootDir, snapshotMode)
+      console.warn('[domains] snapshot prefetch failed, restored baseline domains snapshot', {
+        mode,
+        snapshotMode,
+        message: error instanceof Error ? error.message : String(error),
+        filePath,
+      })
+      return
+    } catch (validationError) {
+      const fallbackMessage = validationError instanceof Error ? validationError.message : String(validationError)
+      if (isProductionSnapshotMode(mode, config) || snapshotMode === 'test') {
+        console.error('[domains] snapshot prefetch failed and no safe baseline is available', {
+          mode,
+          snapshotMode,
+          prefetchMessage: error instanceof Error ? error.message : String(error),
+          fallbackMessage,
+        })
+        process.exitCode = 1
+        return
+      }
+    }
     // 构建前快照拉取失败时保留旧文件，避免因为外部网络抖动阻塞打包。
     console.warn('[domains] snapshot prefetch failed, keep previous domains.json', {
       mode,
