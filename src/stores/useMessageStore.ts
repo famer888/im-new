@@ -43,6 +43,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+const MAX_WS_CONNECT_CANDIDATES = 8
+const WS_CONNECT_STATUS_CHECK_COUNT = 20
+const WS_CONNECT_STATUS_CHECK_DELAY_MS = 150
+
 function recordSendDiagnosticTrace(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
   try {
     const raw = localStorage.getItem('last-send-diagnostic-trace')
@@ -66,19 +70,26 @@ function messageUsesWsSend(convType: number, msgType: number): boolean {
 function normalizeWsUrl(input: string): string {
   const raw = (input || '').trim()
   if (!raw) return ''
+  if (/^ws:\/\/[^/]+:443(?:\/|$)/i.test(raw)) {
+    // 修复旧缓存/旧归一化写入的 ws://*:443；443 生产 webSession 需要按 TLS WebSocket 连接。
+    return `wss://${raw.slice('ws://'.length)}`
+  }
   if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw
   if (raw.startsWith('https://')) return `wss://${raw.slice('https://'.length)}`
   if (raw.startsWith('http://')) return `ws://${raw.slice('http://'.length)}`
-  return `ws://${raw}`
+  // 对齐旧 im 登录域名检查：生产 webSession 裸域名默认按 TLS WebSocket 连接，避免 443 被误连成明文 ws。
+  return `wss://${raw}`
 }
 
-async function resolveWsConnectConfig(): Promise<{
+interface WsConnectConfig {
   wsUrl: string
   aesKey: string
   sessionId: string
   installCode: string
   uid: string
-}> {
+}
+
+async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
   const authStore = useAuthStore()
   let wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
   let aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
@@ -144,6 +155,30 @@ async function resolveWsConnectConfig(): Promise<{
     installCode,
     uid,
   }
+}
+
+async function resolveWsConnectCandidates(): Promise<WsConnectConfig[]> {
+  const primary = await resolveWsConnectConfig()
+  const urls = [primary.wsUrl]
+
+  try {
+    const { collectAllDomainUrls } = await import('@/api/imDomain')
+    urls.push(...await collectAllDomainUrls('webSession'))
+  } catch {
+    // 动态域名接口失败时仍保留登录态保存的 wsUrl 作为兜底。
+  }
+
+  // 对齐老 im 的重连行为：每次重连都从 webSession 域名池换候选，避免卡死在单个坏地址。
+  const normalizedUrls = [...new Set(
+    urls
+      .map(url => normalizeWsUrl(url))
+      .filter(Boolean),
+  )].slice(0, MAX_WS_CONNECT_CANDIDATES)
+
+  return normalizedUrls.map(wsUrl => ({
+    ...primary,
+    wsUrl,
+  }))
 }
 
 export interface QuoteMessageInfo {
@@ -687,19 +722,42 @@ export const useMessageStore = defineStore('message', () => {
     const status = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
     if (status === 'connected') return
 
-    const { wsUrl, aesKey, sessionId, installCode, uid } = await resolveWsConnectConfig()
-    if (!wsUrl || !aesKey) {
+    const candidates = await resolveWsConnectCandidates()
+    if (!candidates[0]?.wsUrl || !candidates[0]?.aesKey) {
       throw new Error('[ws] connect config missing (wsUrl/aesKey)')
     }
 
     if (!pendingWsConnect) {
       pendingWsConnect = (async () => {
-        console.warn('[ws] ensureWsConnected: reconnecting...', { status, wsUrl })
-        await tauriInvoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid })
-        for (let i = 0; i < 20; i++) {
-          const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
-          if (s === 'connected') return
-          await sleep(150)
+        for (const [index, candidate] of candidates.entries()) {
+          const currentStatus = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
+          if (currentStatus === 'connected') return
+
+          // Tauri 的重连循环会固定当前 URL；切换候选前先断开，才能真正换到下一个 webSession。
+          if (currentStatus !== 'disconnected') {
+            await tauriInvoke('disconnect_ws').catch(() => undefined)
+            await sleep(80)
+          }
+
+          console.warn('[ws] ensureWsConnected: reconnecting...', {
+            status: currentStatus,
+            wsUrl: candidate.wsUrl,
+            candidateIndex: index + 1,
+            candidateTotal: candidates.length,
+          })
+          await tauriInvoke('connect_ws', {
+            url: candidate.wsUrl,
+            aesKey: candidate.aesKey,
+            sessionId: candidate.sessionId,
+            installCode: candidate.installCode,
+            uid: candidate.uid,
+          })
+
+          for (let i = 0; i < WS_CONNECT_STATUS_CHECK_COUNT; i++) {
+            const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
+            if (s === 'connected') return
+            await sleep(WS_CONNECT_STATUS_CHECK_DELAY_MS)
+          }
         }
         throw new Error('[ws] reconnect timeout: status did not become connected')
       })().finally(() => {

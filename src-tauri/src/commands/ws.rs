@@ -2,6 +2,22 @@ use tauri::State;
 
 use crate::ws::WsManager;
 
+fn normalize_ws_url(url: &str) -> String {
+    let trimmed = url.trim();
+    // 兼容旧前端缓存：生产 webSession 的 443 端口必须按 TLS WebSocket 连接，否则会出现 invalid HTTP version。
+    if trimmed.starts_with("ws://") {
+        let without_scheme = &trimmed["ws://".len()..];
+        if without_scheme
+            .split('/')
+            .next()
+            .is_some_and(|host| host.ends_with(":443"))
+        {
+            return format!("wss://{}", without_scheme);
+        }
+    }
+    trimmed.to_string()
+}
+
 #[tauri::command]
 pub async fn connect_ws(
     ws_mgr: State<'_, WsManager>,
@@ -11,6 +27,7 @@ pub async fn connect_ws(
     install_code: Option<String>,
     uid: Option<String>,
 ) -> Result<(), String> {
+    let url = normalize_ws_url(&url);
     tracing::info!(
         target: "ws",
         "connect_ws called url={} aes_key_len={}",

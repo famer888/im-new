@@ -62,8 +62,8 @@ function getSessionIdFromStorage(): string {
   return ''
 }
 
+// 打包态默认回灌构建前准备好的 domains.json，test/prod 由脚本先恢复对应快照。
 function shouldUsePreloadedSnapshot(): boolean {
-  // 对齐老 im：生产包默认回灌 domains.json；即便 VITE_APP_ENV 暂时不是 prod，也以构建态 PROD 兜底。
   return Boolean(import.meta.env.PROD) || isProdEnv() || String(import.meta.env.VITE_DOMAIN_SNAPSHOT_FORCE || '') === '1'
 }
 
@@ -71,7 +71,9 @@ function getEnvName(): string {
   return String(import.meta.env.VITE_APP_ENV || 'default').trim().toLowerCase() || 'default'
 }
 
-const STORAGE_KEY = `domain-pool-cache:${getEnvName()}`
+const ENV_NAME = getEnvName()
+const IS_PROD_ENV = ENV_NAME === 'prod' || ENV_NAME === 'production'
+const STORAGE_KEY = `domain-pool-cache:${ENV_NAME}`
 const RAW_PREPARED_WEB_BIZ_DOMAIN = String(
   import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co',
 ).trim()
@@ -79,51 +81,25 @@ const RAW_PREPARED_DOMAIN_API = String(
   import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co',
 ).trim()
 
-const PROD_PRELOADED_DOMAIN_POOL: Record<string, string[]> = {
-  webBiz: [
-    'https://webbiz.imono.xyz',
-    'https://webbiz-b.imono.xyz',
-  ],
-  webSession: [
-    'wss://webwss.jstoyo.com',
-  ],
-  ossEndpoint: [
-    'https://dymain.lchaizhilian.xyz',
-    'https://dymain.kindem.xyz',
-    'https://dymain.weifa.xyz',
-  ],
-  login_v2: [
-    'https://openchat-loginv2.uorme.xyz',
-    'https://openchat-loginv2.yanzong.top',
-    'https://openchat-loginv2.sjhbf.xyz',
-    'https://openchat-loginv2.jiangfj0516.top',
-    'https://openchat-loginv2.tiankaixin.xyz',
-    'https://openchat-loginv2.dxcsx.top',
-    'https://openchat-loginv2.cssy828.top',
-    'https://openchat-loginv2.ddsvr2022.xyz',
-    'https://openchat-loginv2.spike0101.xyz',
-  ],
-}
+const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = IS_PROD_ENV
+  ? {
+      // 生产的完整线上域名池来自 domains.json，这里只保留当前环境入口兜底。
+      webBiz: [
+        RAW_PREPARED_WEB_BIZ_DOMAIN,
+      ],
+      domain: [
+        RAW_PREPARED_DOMAIN_API,
+      ],
+    }
+  : {
+      webBiz: [
+        RAW_PREPARED_WEB_BIZ_DOMAIN,
+      ],
+      domain: [
+        RAW_PREPARED_DOMAIN_API,
+      ],
+    }
 
-const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = {
-  // 对齐老 im：webBiz/domain 预埋域名保持业务/域名接口各自独立，不把 login_v2 混进业务请求池。
-  webBiz: [
-    RAW_PREPARED_WEB_BIZ_DOMAIN,
-  ],
-  login_v2: [
-    'https://blo.yimengwh.xyz',
-    'https://openchat-loginv2.evanth.xyz',
-    'https://a1.uuds.xyz',
-  ],
-  domain: [
-    RAW_PREPARED_DOMAIN_API,
-    'https://a1.uuds.xyz',
-  ],
-}
-
-const PROD_PRELOADED_DOMAIN_SET = new Set(
-  Object.values(PROD_PRELOADED_DOMAIN_POOL).flat(),
-)
 const DOMAIN_SOURCE_RANK: Record<DomainSource, number> = {
   dynamic: 0,
   prepared: 1,
@@ -137,13 +113,11 @@ const MODULE_CODE_ALIAS_MAP: Record<string, string> = {
 }
 
 function isProdEnv(): boolean {
-  const env = getEnvName()
-  return env === 'prod' || env === 'production'
+  return IS_PROD_ENV
 }
 
 function shouldAcceptDomainForEnv(domain: string): boolean {
-  // test/uat 环境不能复用生产预埋域名，避免旧缓存或动态接口污染登录前兜底顺序。
-  return isProdEnv() || !PROD_PRELOADED_DOMAIN_SET.has(domain)
+  return isProdEnv() || Boolean(domain)
 }
 
 function uniqDomains(urls: string[]): string[] {
@@ -163,7 +137,6 @@ function isPreparedSeedDomain(moduleCode: string, domain: string): boolean {
   const normalizedModuleCode = normalizeModuleCode(moduleCode)
   const prepared = [
     ...(DIRECT_FALLBACK_DOMAINS[normalizedModuleCode] || []),
-    ...(PROD_PRELOADED_DOMAIN_POOL[normalizedModuleCode] || []),
   ]
   return prepared.includes(domain)
 }
@@ -187,13 +160,11 @@ function sortDomainItems(items: DomainItem[]): DomainItem[] {
   })
 }
 
+// 只按登录域名族归类，具体线上/test host 交给当前环境快照提供。
 function isLoginOnlyDomain(domain: string): boolean {
   try {
     const host = new URL(String(domain || '').trim()).host.toLowerCase()
-    return host === 'a1.uuds.xyz'
-      || host === 'blo.yimengwh.xyz'
-      || host === 'openchat-loginv2.evanth.xyz'
-      || host.startsWith('openchat-loginv2.')
+    return host.startsWith('openchat-loginv2.')
   } catch {
     return false
   }
@@ -347,10 +318,6 @@ function seedFallbackDomains() {
   for (const [moduleCode, urls] of Object.entries(DIRECT_FALLBACK_DOMAINS)) {
     mergeDomains(moduleCode, urls, 'prepared')
   }
-  if (!isProdEnv()) return
-  for (const [moduleCode, urls] of Object.entries(PROD_PRELOADED_DOMAIN_POOL)) {
-    mergeDomains(moduleCode, urls, 'prepared')
-  }
 }
 
 function normalizeSnapshotModuleCode(moduleCode: string): string {
@@ -360,6 +327,7 @@ function normalizeSnapshotModuleCode(moduleCode: string): string {
   return normalized
 }
 
+// 打包后把构建脚本准备好的 domains.json 回灌进域名池，确保包内域名跟目标环境一致。
 function applyPreloadedDomainSnapshot() {
   if (!shouldUsePreloadedSnapshot()) return
   const snapshot = preloadedDomainSnapshot as { domainDtoList?: Array<{ domainUrl?: string, moduleCode?: string, priority?: number }> }
@@ -370,16 +338,29 @@ function applyPreloadedDomainSnapshot() {
   const items: DomainItem[] = []
   for (const [index, entry] of domainDtoList.entries()) {
     const domain = String(entry?.domainUrl || '').trim()
-    const moduleCode = normalizeSnapshotModuleCode(String(entry?.moduleCode || ''))
+    const rawModuleCode = String(entry?.moduleCode || '')
+    const moduleCode = normalizeSnapshotModuleCode(rawModuleCode)
     if (!domain || !moduleCode) continue
+    const priority = Number.isFinite(Number(entry?.priority)) ? Number(entry?.priority) : index
     items.push({
       domain,
       moduleCode,
       status: 'normal',
       source: 'prepared',
-      priority: Number.isFinite(Number(entry?.priority)) ? Number(entry?.priority) : index,
+      priority,
       lastCheck: now,
     })
+    // 旧快照里 login 模块会归到 webBiz，同时也要进入 login_v2 池供扫码登录兜底。
+    if (normalizeModuleCode(rawModuleCode) === 'login' || normalizeModuleCode(rawModuleCode) === 'login_v2') {
+      items.push({
+        domain,
+        moduleCode: 'login_v2',
+        status: 'normal',
+        source: 'prepared',
+        priority,
+        lastCheck: now,
+      })
+    }
   }
 
   if (!items.length) return
