@@ -53,7 +53,7 @@ import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { handleAuthSessionExpired } from '@/utils/authSessionExpiry'
-import { ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
@@ -690,7 +690,11 @@ function messageSupportsImageSave(data: Record<string, unknown>): boolean {
 
 function messageSupportsVideoFileActions(data: Record<string, unknown>): boolean {
   const conversationType = chatStore.currentConversation?.type
-  return (conversationType === ConversationType.Friend || conversationType === ConversationType.Group)
+  return (
+    conversationType === ConversationType.Friend ||
+    conversationType === ConversationType.Group ||
+    conversationType === ConversationType.Channel
+  )
     && Number(data.msgType) === MessageType.Video
     && Boolean(getVideoFileSource(data).url)
 }
@@ -1123,18 +1127,25 @@ function normalizeVideoUrl(value: unknown): string {
   return raw
 }
 
-function getVideoFileSource(data: Record<string, unknown>): { url: string; fileKey: string; fileName: string } {
+function getVideoFileSource(data: Record<string, unknown>): {
+  url: string
+  fileKey: string
+  attachmentKey: string
+  fileName: string
+} {
   const extra = parseMessageExtra(data)
   const rawContent = String(data.content || '').trim()
   let url = ''
   let fileName = ''
   let fileKey = String(extra.fileKey || extra.file_key || '').trim()
+  let attachmentKey = String(extra.attachmentKey || extra.attachment_key || '').trim()
 
   try {
     const parsed = JSON.parse(rawContent) as Record<string, unknown>
     url = normalizeVideoUrl(parsed.url || parsed.fileUrl || parsed.path || '')
     fileName = String(parsed.name || parsed.fileName || parsed.file_name || '').trim()
     fileKey = String(parsed.fileKey || parsed.file_key || fileKey).trim()
+    attachmentKey = String(parsed.attachmentKey || parsed.attachment_key || attachmentKey).trim()
   } catch {
     const [head = ''] = rawContent.split('||')
     const [legacyUrl = ''] = head.split('*P')
@@ -1154,6 +1165,7 @@ function getVideoFileSource(data: Record<string, unknown>): { url: string; fileK
   return {
     url,
     fileKey,
+    attachmentKey,
     fileName: sanitizeMediaFileName(fileName || String(data.messageId || 'video')),
   }
 }
@@ -1223,6 +1235,22 @@ function addSaveExtensionGuard(fileName: string, extension: string): string {
   const lastDotIndex = normalized.lastIndexOf('.')
   if (lastDotIndex <= 0) return `${normalized}${SAVE_EXTENSION_GUARD}`
   return `${normalized.slice(0, lastDotIndex)}${SAVE_EXTENSION_GUARD}${normalized.slice(lastDotIndex)}`
+}
+
+function stripKnownExtension(fileName: string, extension: string): string {
+  const ext = extension.startsWith('.') ? extension : `.${extension}`
+  return fileName.toLowerCase().endsWith(ext.toLowerCase())
+    ? fileName.slice(0, -ext.length)
+    : fileName
+}
+
+function addSaveBaseNameGuard(fileName: string, extension: string): string {
+  const baseName = stripKnownExtension(ensureVideoSaveExtension(fileName, extension), extension)
+  return `${baseName}${SAVE_EXTENSION_GUARD}`
+}
+
+function hasSaveExtensionGuard(filePath: string): boolean {
+  return filePath.includes(SAVE_EXTENSION_GUARD)
 }
 
 function stripSaveExtensionGuard(filePath: string): string {
@@ -1408,13 +1436,14 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
   const source = getVideoFileSource(data)
   const url = source.url
   if (!url || isBlobOrDataUrl(url)) throw new Error('video source unavailable')
+  const fileKey = await resolveVideoMessageKey(data)
 
   videoMenuLog('ensure local file start', {
     messageId: String(data.messageId || data.msgId || ''),
     urlHead: url.slice(0, 160),
     fileName: source.fileName,
-    hasFileKey: Boolean(source.fileKey),
-    fileKeyLen: source.fileKey.length,
+    hasFileKey: Boolean(fileKey),
+    fileKeyLen: fileKey.length,
     isRemote: isRemoteUrl(url),
   })
 
@@ -1456,14 +1485,14 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
       videoMenuLog('candidate download start', {
         candidateHead: candidate.slice(0, 160),
         savePath,
-        encrypted: Boolean(source.fileKey),
+        encrypted: Boolean(fileKey),
       })
-      if (source.fileKey) {
+      if (fileKey) {
         const menuChannel = buildContextMenuDownloadChannel(data, 'video')
         const requestState = registerContextMenuDownloadRequest(menuChannel)
         await waitForDownloadFile(
           candidate,
-          source.fileKey,
+          fileKey,
           savePath,
           menuChannel,
           requestState,
@@ -1491,13 +1520,39 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
   throw lastError instanceof Error ? lastError : new Error('video download failed')
 }
 
+// 记录本次会话里视频消息“另存为”的实际目标，避免打开目录回到内部缓存文件名。
+const videoSavedPathByMessageKey = new Map<string, string>()
+
+function videoSavedPathKey(data?: Record<string, unknown>): string {
+  return String(data?.messageId || data?.msgId || data?.customMsgId || '').trim()
+}
+
+function rememberSavedVideoPath(data: Record<string, unknown> | undefined, filePath: string) {
+  const key = videoSavedPathKey(data)
+  const normalizedPath = String(filePath || '').trim()
+  if (!key || !normalizedPath) return
+  videoSavedPathByMessageKey.set(key, normalizedPath)
+}
+
+async function resolveRememberedVideoPath(data: Record<string, unknown>): Promise<string> {
+  const key = videoSavedPathKey(data)
+  if (!key) return ''
+
+  const rememberedPath = String(videoSavedPathByMessageKey.get(key) || '').trim()
+  if (!rememberedPath) return ''
+  if (await tauriFileExists(rememberedPath)) return rememberedPath
+
+  videoSavedPathByMessageKey.delete(key)
+  return ''
+}
+
 async function saveVideoAs(data: Record<string, unknown>) {
   if (!(window as any).__TAURI_INTERNALS__) return
   const { save } = await import('@tauri-apps/plugin-dialog')
   const suggestedName = suggestedVideoSaveName(data)
   const extension = videoExtFromUrl(suggestedName)
   const defaultFileName = isMacOS()
-    ? addSaveExtensionGuard(suggestedName, extension)
+    ? addSaveBaseNameGuard(suggestedName, extension)
     : ensureVideoSaveExtension(suggestedName, extension)
   let defaultPath = defaultFileName
   if (isMacOS()) {
@@ -1516,8 +1571,15 @@ async function saveVideoAs(data: Record<string, unknown>) {
   })
   if (!selectedPath) return
 
+  const didUseGuardedPath = isMacOS() && hasSaveExtensionGuard(selectedPath)
+  const selectedAlreadyHasExtension = selectedPath.toLowerCase().endsWith(extension.toLowerCase())
   const finalPath = ensureVideoSaveExtension(stripSaveExtensionGuard(selectedPath), extension)
-  if (await tauriFileExists(finalPath)) {
+  // macOS 原生 save 面板会在带扩展名的同名路径上抢先弹系统 Replace；
+  // 默认用不带扩展名的 guard 名称返回路径，再由应用内覆盖弹窗接管同名确认。
+  const needsOverwriteConfirm = isMacOS() && !didUseGuardedPath && selectedAlreadyHasExtension
+    ? false
+    : await tauriFileExists(finalPath)
+  if (needsOverwriteConfirm) {
     const confirmed = await promptImageOverwrite(finalPath)
     if (!confirmed) return
   }
@@ -1527,6 +1589,8 @@ async function saveVideoAs(data: Record<string, unknown>) {
     sourcePath: localPath,
     targetPath: finalPath,
   })
+  // 对齐旧 im：另存为成功后，“打开目录”应定位用户刚保存的新视频文件。
+  rememberSavedVideoPath(data, finalPath)
   showToast(t('保存成功'))
 }
 
@@ -1537,7 +1601,8 @@ async function openVideoDirectory(data: Record<string, unknown>) {
     contentHead: String(data.content || '').slice(0, 260),
   })
   showToast('正在准备视频文件')
-  const filePath = await ensureVideoLocalFile(data)
+  const rememberedPath = await resolveRememberedVideoPath(data)
+  const filePath = rememberedPath || await ensureVideoLocalFile(data)
   videoMenuLog('reveal video directory', { filePath })
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('reveal_file_in_directory', { path: filePath })
@@ -1559,28 +1624,82 @@ function getMessageGroupId(data: Record<string, unknown>): string {
   return conversationId.startsWith('1_') ? conversationId.split('_')[1] || '' : ''
 }
 
-async function resolveFileMessageKey(data: Record<string, unknown>): Promise<string> {
-  const source = getFileMessageSource(data)
+function getMessageChannelId(data: Record<string, unknown>): string {
+  const extra = parseMessageExtra(data)
+  const extraChannelId = String(extra.channelId || extra.channel_id || '').trim()
+  if (extraChannelId) return extraChannelId
+  const conversationId = String(data.conversationId || chatStore.currentConversationId || '')
+  return conversationId.startsWith('2_') ? conversationId.split('_')[1] || '' : ''
+}
+
+async function resolveVideoMessageKey(data: Record<string, unknown>): Promise<string> {
+  const source = getVideoFileSource(data)
   if (source.fileKey) return source.fileKey
   const plainAttachmentKey = fallbackPlainFileKey(source.attachmentKey)
   if (plainAttachmentKey) return plainAttachmentKey
 
   const groupId = getMessageGroupId(data)
-  if (!source.attachmentKey || !groupId) return ''
+  const channelId = getMessageChannelId(data)
+  if (!source.attachmentKey || (!groupId && !channelId)) return ''
 
   try {
-    if (authStore.uid) {
+    if (groupId && authStore.uid) {
       await ensureGroupRelKey(String(authStore.uid), groupId)
+      const { invoke } = await import('@tauri-apps/api/core')
+      return await invoke<string>('decrypt_group_incoming', {
+        groupId,
+        ciphertextHex: source.attachmentKey,
+        msgType: 0,
+      })
     }
+    if (channelId && authStore.uid) {
+      await ensureChannelRelKey(String(authStore.uid), channelId)
+      const { invoke } = await import('@tauri-apps/api/core')
+      return await invoke<string>('decrypt_channel_incoming', {
+        channelId,
+        ciphertextHex: source.attachmentKey,
+        msgType: 0,
+      })
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+async function decryptAttachmentKeyForConversation(data: Record<string, unknown>, attachmentKey: string): Promise<string> {
+  const groupId = getMessageGroupId(data)
+  const channelId = getMessageChannelId(data)
+  if (!attachmentKey || (!groupId && !channelId)) return ''
+
+  try {
     const { invoke } = await import('@tauri-apps/api/core')
-    return await invoke<string>('decrypt_group_incoming', {
-      groupId,
-      ciphertextHex: source.attachmentKey,
+    if (groupId) {
+      if (authStore.uid) await ensureGroupRelKey(String(authStore.uid), groupId)
+      return await invoke<string>('decrypt_group_incoming', {
+        groupId,
+        ciphertextHex: attachmentKey,
+        msgType: 0,
+      })
+    }
+
+    if (authStore.uid) await ensureChannelRelKey(String(authStore.uid), channelId)
+    return await invoke<string>('decrypt_channel_incoming', {
+      channelId,
+      ciphertextHex: attachmentKey,
       msgType: 0,
     })
   } catch {
     return ''
   }
+}
+
+async function resolveFileMessageKey(data: Record<string, unknown>): Promise<string> {
+  const source = getFileMessageSource(data)
+  if (source.fileKey) return source.fileKey
+  const plainAttachmentKey = fallbackPlainFileKey(source.attachmentKey)
+  if (plainAttachmentKey) return plainAttachmentKey
+  return decryptAttachmentKeyForConversation(data, source.attachmentKey)
 }
 
 async function waitForOfficeFileDownload(
@@ -1661,6 +1780,32 @@ function suggestedFileSaveName(data: Record<string, unknown>): string {
   return `${name}.${source.ext}`
 }
 
+// 记录本次会话里文件消息“另存为”的实际目标，避免打开目录回到内部缓存文件名。
+const officeFileSavedPathByMessageKey = new Map<string, string>()
+
+function officeFileSavedPathKey(data?: Record<string, unknown>): string {
+  return String(data?.messageId || data?.msgId || data?.customMsgId || '').trim()
+}
+
+function rememberSavedOfficeFilePath(data: Record<string, unknown> | undefined, filePath: string) {
+  const key = officeFileSavedPathKey(data)
+  const normalizedPath = String(filePath || '').trim()
+  if (!key || !normalizedPath) return
+  officeFileSavedPathByMessageKey.set(key, normalizedPath)
+}
+
+async function resolveRememberedOfficeFilePath(data: Record<string, unknown>): Promise<string> {
+  const key = officeFileSavedPathKey(data)
+  if (!key) return ''
+
+  const rememberedPath = String(officeFileSavedPathByMessageKey.get(key) || '').trim()
+  if (!rememberedPath) return ''
+  if (await tauriFileExists(rememberedPath)) return rememberedPath
+
+  officeFileSavedPathByMessageKey.delete(key)
+  return ''
+}
+
 async function resolveOfficeFileCachePath(data: Record<string, unknown>): Promise<string> {
   const source = getFileMessageSource(data)
   const { appDataDir, join } = await import('@tauri-apps/api/path')
@@ -1700,7 +1845,7 @@ async function saveOfficeFileAs(data: Record<string, unknown>) {
   const suggestedName = suggestedFileSaveName(data)
   const extension = source.ext
   const defaultFileName = isMacOS()
-    ? addSaveExtensionGuard(suggestedName, extension)
+    ? addSaveBaseNameGuard(suggestedName, extension)
     : ensureFileSaveExtension(suggestedName, extension)
   let defaultPath = defaultFileName
   if (isMacOS()) {
@@ -1719,8 +1864,17 @@ async function saveOfficeFileAs(data: Record<string, unknown>) {
   })
   if (!selectedPath) return
 
+  const didUseGuardedPath = isMacOS() && hasSaveExtensionGuard(selectedPath)
+  const selectedAlreadyHasExtension = extension
+    ? selectedPath.toLowerCase().endsWith(`.${extension}`.toLowerCase())
+    : false
   const finalPath = ensureFileSaveExtension(stripSaveExtensionGuard(selectedPath), extension)
-  if (await tauriFileExists(finalPath)) {
+  // macOS 普通文件和视频一样：默认不让原生 save 面板先按扩展名做同名判断；
+  // 拿到路径后再补扩展名，并统一走应用内覆盖确认弹窗。
+  const needsOverwriteConfirm = isMacOS() && !didUseGuardedPath && selectedAlreadyHasExtension
+    ? false
+    : await tauriFileExists(finalPath)
+  if (needsOverwriteConfirm) {
     const confirmed = await promptImageOverwrite(finalPath)
     if (!confirmed) return
   }
@@ -1730,11 +1884,14 @@ async function saveOfficeFileAs(data: Record<string, unknown>) {
     sourcePath: localPath,
     targetPath: finalPath,
   })
+  // 对齐旧 im：另存为成功后，“打开目录”应定位用户刚保存的新文件，而不是内部下载缓存。
+  rememberSavedOfficeFilePath(data, finalPath)
   showToast(t('保存成功'))
 }
 
 async function openOfficeFileDirectory(data: Record<string, unknown>) {
-  const filePath = await ensureOfficeFileLocalFile(data)
+  const rememberedPath = await resolveRememberedOfficeFilePath(data)
+  const filePath = rememberedPath || await ensureOfficeFileLocalFile(data)
   const { invoke } = await import('@tauri-apps/api/core')
   await invoke('reveal_file_in_directory', { path: filePath })
 }

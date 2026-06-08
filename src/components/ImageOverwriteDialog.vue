@@ -96,11 +96,11 @@ onBeforeUnmount(() => {
 }
 
 .overwrite-dialog {
-  width: 260px;
+  width: 264px;
   box-sizing: border-box;
-  padding: 18px 14px 14px;
+  padding: 18px 16px 14px;
   border-radius: 10px;
-  background: rgba(224, 224, 223);
+  background: rgb(224, 224, 223);
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18);
   text-align: center;
 }
@@ -118,20 +118,24 @@ onBeforeUnmount(() => {
 }
 
 .overwrite-title {
-  margin: 0;
-  color: #2c2f36;
+  max-width: 220px;
+  margin: 0 auto;
+  color: rgb(51, 51, 51);
   font-size: 14px;
-  font-weight: 600;
-  line-height: 1.5;
-  word-break: break-word;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 
 .overwrite-description {
-  margin: 10px 0 0;
-  color:rgba(133, 137, 144);
+  margin: 10px auto 0;
+  max-width: 220px;
+  color: rgb(133, 137, 144);
   font-size: 12px;
   line-height: 1.55;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 
 .overwrite-actions {
@@ -156,7 +160,7 @@ onBeforeUnmount(() => {
 }
 
 .overwrite-btn-confirm {
-  color: #ff4d4f;
+  color: rgb(255, 59, 48);
 }
 
 .overwrite-modal-enter-active,
