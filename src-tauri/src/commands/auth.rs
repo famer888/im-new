@@ -190,6 +190,10 @@ pub fn start_active_login_monitor(app: tauri::AppHandle) {
 
             forget_current_process_login(Some(&uid));
             warn!(
+                "[AUTH-DIAG][auth.rs] active login lock uid={} was replaced by another process, forcing local logout",
+                uid
+            );
+            warn!(
                 "active login lock uid={} was replaced by another process, forcing local logout",
                 uid
             );
@@ -336,6 +340,14 @@ pub async fn login(
     win_mgr: State<'_, WindowManager>,
     request: LoginRequest,
 ) -> Result<SessionInfo, String> {
+    info!(
+        "[AUTH-DIAG][auth.rs] login requested uid={} has_session_id={} has_ws_url={} has_aes_key={} install_code_len={}",
+        request.uid.trim(),
+        !request.session_id.trim().is_empty(),
+        !request.ws_url.trim().is_empty(),
+        !request.aes_key.trim().is_empty(),
+        request.install_code.trim().len()
+    );
     acquire_active_login_lock(&app, &request)?;
 
     let uid = request.uid.trim();
@@ -356,6 +368,11 @@ pub async fn login(
         source_id: request.source_id,
     };
     *CURRENT_SESSION.write() = Some(session.clone());
+    info!(
+        "[AUTH-DIAG][auth.rs] login stored uid={} has_session_id={}",
+        session.uid.trim(),
+        !session.session_id.trim().is_empty()
+    );
 
     Ok(session)
 }
@@ -369,6 +386,7 @@ pub async fn logout(
     ws_mgr: State<'_, crate::ws::WsManager>,
     uid: Option<String>,
 ) -> Result<(), String> {
+    info!("[AUTH-DIAG][auth.rs] logout requested uid={:?}", uid);
     info!("logout requested uid={:?}", uid);
     ws_mgr.disconnect().await;
     release_active_login_lock(&app, uid.as_deref());

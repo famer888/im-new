@@ -13,7 +13,7 @@ case "$TAURI_BUILD_MODE" in
     BUILD_CMD=(pnpm build:uat)
     ;;
   production)
-    BUILD_CMD=(pnpm build)
+    BUILD_CMD=(bash -c 'pnpm exec vue-tsc --noEmit && pnpm exec vite build --mode production')
     ;;
   *)
     echo "Unknown TAURI_BUILD_MODE: $TAURI_BUILD_MODE" >&2

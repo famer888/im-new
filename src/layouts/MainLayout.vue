@@ -52,7 +52,6 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
-import { handleAuthSessionExpired } from '@/utils/authSessionExpiry'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { toDisplaySrc, toFsPath } from '@/utils/resourcePath'
@@ -428,10 +427,11 @@ onMounted(async () => {
             await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid })
           } else if (uid) {
             networkStore.setWsStatus('disconnected')
-            console.warn('[ws] skipped connect: missing ws config')
-            // 桌面端存在 uid 但缺少 WS 凭据时，说明登录态已残缺；主动回登录页，避免停在半登录状态。
-            await handleAuthSessionExpired('missing-ws-config', '登录已过期，请重新登录')
-            return
+            console.warn('[AUTH-DIAG][ws] skipped connect: missing ws config', {
+              uid,
+              hasSessionId: !!sessionId,
+            })
+            // 对齐老 im：登录态由 sessionId/account 缓存维持，WS 配置缺失只阻断长连接，不能主动清登录态回登录页。
           }
         }
       } catch (err) {

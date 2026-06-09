@@ -117,7 +117,31 @@ function isProdEnv(): boolean {
 }
 
 function shouldAcceptDomainForEnv(domain: string): boolean {
-  return isProdEnv() || Boolean(domain)
+  const raw = String(domain || '').trim()
+  if (!raw) return false
+  if (!isProdEnv()) return true
+  // 线上包不能继续消费历史缓存或远端下发里的测试域名，否则登录重试会被导到 test 服务。
+  return isDomainCompatibleWithProd(raw)
+}
+
+function getDomainHost(domain: string): string {
+  const raw = String(domain || '').trim()
+  if (!raw) return ''
+  try {
+    return new URL(raw).host.toLowerCase()
+  } catch {
+    try {
+      return new URL(`https://${raw}`).host.toLowerCase()
+    } catch {
+      return raw.toLowerCase()
+    }
+  }
+}
+
+function isDomainCompatibleWithProd(domain: string): boolean {
+  const host = getDomainHost(domain)
+  if (!host) return false
+  return !/(^|[.-])(test|stage|dev|uat|sit)[.-]/i.test(host)
 }
 
 function uniqDomains(urls: string[]): string[] {

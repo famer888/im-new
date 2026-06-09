@@ -72,6 +72,7 @@ if [[ -n "$TAURI_TARGET" ]]; then
 else
   echo "Building macOS release artifacts for native host target"
 fi
+echo "[AUTH-DIAG][build] macOS mode=$TAURI_BUILD_MODE app=$APP_NAME identifier=$PKG_IDENTIFIER bundles=$TAURI_BUNDLES releaseDir=$RELEASE_DIST_DIR"
 
 CARGO_TARGET_DIR="$BUILD_TARGET_DIR" pnpm tauri "${TAURI_ARGS[@]}"
 

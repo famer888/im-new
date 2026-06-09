@@ -95,8 +95,8 @@ function isDesktopLocalDevOrigin(): boolean {
 }
 
 function shouldUseViteDevProxy(): boolean {
-  // 仅在 Vite 开发模式下使用相对代理路径，避免打包环境 localhost 误判成 dev 代理。
-  return !!import.meta.env.DEV && isDesktopLocalDevOrigin()
+  // 仅浏览器开发态使用相对代理；Tauri 开发态请求会交给 Rust 主进程，必须保持完整 http(s) URL。
+  return !!import.meta.env.DEV && !isTauri() && isDesktopLocalDevOrigin()
 }
 
 function normalizeDeviceOsName(value: string): string {
@@ -185,7 +185,7 @@ function appendUatAlternateProtocol(base: string, list: string[]): void {
 }
 
 function getDomainApiCandidates(): string[] {
-  // 对齐老 im 桌面开发体验：本地调试时统一走 Vite 代理，避免 WebView 对真实域名请求触发 CORS 报错。
+  // 浏览器本地调试走 Vite 代理；Tauri 本地调试走真实域名 + 主进程代理，避免 relative URL 报错。
   if (shouldUseViteDevProxy()) return ['/domain-api']
   if (!isTauri()) return [getDomainUrl()]
   const normal = getOrderedDomainUrls('domain', { includeError: false })
@@ -211,7 +211,7 @@ function getDomainApiCandidates(): string[] {
 }
 
 function getClientTokenCandidates(preferredBase?: string): string[] {
-  // 本地开发态下 clientToken 也固定走 /api 代理，避免轮询备用域名时刷屏 CORS 错误。
+  // 浏览器本地调试固定走 /api；Tauri 本地调试不能使用相对路径。
   if (shouldUseViteDevProxy()) return [getBaseUrl()]
   if (!isTauri()) return [preferredBase || getBaseUrl()]
 

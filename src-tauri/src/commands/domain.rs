@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -6,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::State;
-use base64::{engine::general_purpose, Engine as _};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -134,7 +135,9 @@ pub fn get_first_normal_domain(
 
 fn resolve_domain_snapshot_path() -> PathBuf {
     if let Ok(project_root) = std::env::var("OCS_PROJECT_ROOT") {
-        return PathBuf::from(project_root).join("scripts").join("domains.json");
+        return PathBuf::from(project_root)
+            .join("scripts")
+            .join("domains.json");
     }
 
     if let Ok(current_dir) = std::env::current_dir() {
@@ -148,7 +151,9 @@ fn resolve_domain_snapshot_path() -> PathBuf {
 pub fn save_list_domain_snapshot(payload: SaveDomainSnapshotPayload) -> SaveDomainSnapshotResult {
     let file_path = resolve_domain_snapshot_path();
     let file_path_text = file_path.to_string_lossy().to_string();
-    let response = payload.response.unwrap_or_else(|| Value::Object(Default::default()));
+    let response = payload
+        .response
+        .unwrap_or_else(|| Value::Object(Default::default()));
 
     // 对齐老 im：调试态 listDomain 快照写回 scripts/domains.json，供生产预载兜底回灌。
     let write_result = (|| -> Result<(), String> {
@@ -216,6 +221,10 @@ pub async fn proxy_http_text(request: ProxyHttpRequest) -> Result<ProxyHttpRespo
     let parsed = parse_http_url(&request.url)?;
     let method = normalize_http_method(request.method.as_deref());
     ensure_proxy_method_allowed(&request.purpose, &method)?;
+    info!(
+        "[AUTH-DIAG][domain.rs] proxy_http_text start purpose={:?} method={} url={}",
+        request.purpose, method, request.url
+    );
 
     let reqwest_method = reqwest::Method::from_bytes(method.as_bytes())
         .map_err(|e| format!("invalid method {}: {}", method, e))?;
@@ -234,8 +243,10 @@ pub async fn proxy_http_text(request: ProxyHttpRequest) -> Result<ProxyHttpRespo
             req = req.header(header_key, value);
         }
     }
-    if matches!(reqwest_method, reqwest::Method::POST | reqwest::Method::PUT | reqwest::Method::PATCH)
-    {
+    if matches!(
+        reqwest_method,
+        reqwest::Method::POST | reqwest::Method::PUT | reqwest::Method::PATCH
+    ) {
         if let Some(body) = request.body {
             req = req.body(body);
         }
@@ -255,6 +266,15 @@ pub async fn proxy_http_text(request: ProxyHttpRequest) -> Result<ProxyHttpRespo
             .map_err(|e| format!("read response text failed: {}", e))?
     };
     let ok = (200..300).contains(&status);
+    info!(
+        "[AUTH-DIAG][domain.rs] proxy_http_text done purpose={:?} method={} url={} status={} ok={} body_len={}",
+        request.purpose,
+        method,
+        request.url,
+        status,
+        ok,
+        body.len()
+    );
 
     Ok(ProxyHttpResponse {
         ok,
@@ -282,6 +302,12 @@ pub async fn proxy_http_binary(
     let body = general_purpose::STANDARD
         .decode(request.body_base64.trim())
         .map_err(|e| format!("decode binary request body failed: {}", e))?;
+    info!(
+        "[AUTH-DIAG][domain.rs] proxy_http_binary start method={} url={} request_body_len={}",
+        method,
+        request.url,
+        body.len()
+    );
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
@@ -315,7 +341,7 @@ pub async fn proxy_http_binary(
             .chars()
             .take(300)
             .collect::<String>();
-        tracing::warn!(
+        warn!(
             target: "proxy-http-binary",
             "proxy_http_binary failed status={} url={} body_head={}",
             status,
@@ -323,6 +349,14 @@ pub async fn proxy_http_binary(
             body_preview
         );
     }
+    info!(
+        "[AUTH-DIAG][domain.rs] proxy_http_binary done method={} url={} status={} ok={} response_body_len={}",
+        method,
+        request.url,
+        status,
+        ok,
+        bytes.len()
+    );
 
     Ok(ProxyHttpBinaryResponse {
         ok,
@@ -331,7 +365,10 @@ pub async fn proxy_http_binary(
         error: if ok {
             None
         } else {
-            Some(format!("proxy request failed: HTTP {} url={}", status, request.url))
+            Some(format!(
+                "proxy request failed: HTTP {} url={}",
+                status, request.url
+            ))
         },
     })
 }
@@ -353,11 +390,9 @@ pub async fn fetch_url_text(url: String) -> Result<String, String> {
     })
     .await?;
     if !result.ok {
-        return Err(
-            result
-                .error
-                .unwrap_or_else(|| format!("fetch url failed: HTTP {}", result.status)),
-        );
+        return Err(result
+            .error
+            .unwrap_or_else(|| format!("fetch url failed: HTTP {}", result.status)));
     }
     Ok(result.body)
 }

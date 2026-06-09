@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getUserInfo } from '@/api/imBase'
-import { setBaseUrl } from '@/api/config'
+import { API_CONFIG, setBaseUrl } from '@/api/config'
 import { clearActiveSessionContext, setActiveSessionContext } from '@/api/sessionContext'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 
@@ -51,7 +51,8 @@ interface InitSessionOptions {
 const ACCOUNT_LIST_KEY = 'login-account-list'
 const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'
-const WS_CONNECT_KEY = 'ws-connect-config'
+const LEGACY_WS_CONNECT_KEY = 'ws-connect-config'
+const WS_CONNECT_KEY = `${LEGACY_WS_CONNECT_KEY}:${API_CONFIG.env}:${API_CONFIG.brandId}`
 
 function normalizeWsUrl(input: string): string {
   const raw = (input || '').trim()
@@ -81,6 +82,32 @@ function resolveCurrentUidForLogout(
   if (accountWithSession?.id) return String(accountWithSession.id)
 
   return String(accounts[0]?.id || '').trim()
+}
+
+function isWsConnectConfigCompatibleWithEnv(wsUrl: string): boolean {
+  const raw = String(wsUrl || '').trim()
+  if (!raw) return false
+  if (API_CONFIG.env === 'prod' || API_CONFIG.env === 'production') {
+    try {
+      const parsed = new URL(raw)
+      return parsed.protocol === 'wss:' && !/(^|[.-])(test|stage|dev|uat|sit)[.-]/i.test(parsed.host.toLowerCase())
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
+function authDiag(message: string, data?: Record<string, unknown>) {
+  console.warn(`[AUTH-DIAG][authStore] ${message}`, data || {})
+}
+
+function safeUrlHost(value: string): string {
+  try {
+    return new URL(String(value || '').trim()).host
+  } catch {
+    return ''
+  }
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -130,17 +157,53 @@ export const useAuthStore = defineStore('auth', () => {
   function loadWsConnectConfig() {
     try {
       const stored = localStorage.getItem(WS_CONNECT_KEY)
-      if (!stored) return
+      if (!stored) {
+        const legacyStored = localStorage.getItem(LEGACY_WS_CONNECT_KEY)
+        if (!legacyStored) return
+        const legacyParsed = JSON.parse(legacyStored) as Partial<WsConnectConfig>
+        if (legacyParsed.wsUrl && legacyParsed.aesKey && isWsConnectConfigCompatibleWithEnv(normalizeWsUrl(legacyParsed.wsUrl))) {
+          wsConnectConfig.value = {
+            wsUrl: normalizeWsUrl(legacyParsed.wsUrl),
+            aesKey: String(legacyParsed.aesKey).trim(),
+            installCode: String(legacyParsed.installCode || '').trim() || getOrCreateInstallCode(),
+          }
+          localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(wsConnectConfig.value))
+          localStorage.removeItem(LEGACY_WS_CONNECT_KEY)
+          authDiag('migrated ws config from legacy key', {
+            storageKey: WS_CONNECT_KEY,
+            wsHost: safeUrlHost(wsConnectConfig.value.wsUrl),
+            hasAesKey: !!wsConnectConfig.value.aesKey,
+          })
+        } else {
+          authDiag('ignored incompatible legacy ws config', {
+            env: API_CONFIG.env,
+            wsUrl: legacyParsed.wsUrl || '',
+          })
+        }
+        return
+      }
       const parsed = JSON.parse(stored) as Partial<WsConnectConfig>
-      if (parsed.wsUrl && parsed.aesKey) {
+      if (parsed.wsUrl && parsed.aesKey && isWsConnectConfigCompatibleWithEnv(normalizeWsUrl(parsed.wsUrl))) {
         wsConnectConfig.value = {
           wsUrl: normalizeWsUrl(parsed.wsUrl),
           aesKey: String(parsed.aesKey).trim(),
           installCode: String(parsed.installCode || '').trim() || getOrCreateInstallCode(),
         }
+        authDiag('loaded ws config', {
+          storageKey: WS_CONNECT_KEY,
+          wsHost: safeUrlHost(wsConnectConfig.value.wsUrl),
+          hasAesKey: !!wsConnectConfig.value.aesKey,
+        })
+      } else {
+        localStorage.removeItem(WS_CONNECT_KEY)
+        authDiag('removed incompatible ws config', {
+          env: API_CONFIG.env,
+          wsUrl: parsed.wsUrl || '',
+        })
       }
     } catch {
       wsConnectConfig.value = null
+      authDiag('failed to parse ws config')
     }
   }
 
@@ -152,6 +215,11 @@ export const useAuthStore = defineStore('auth', () => {
     }
     wsConnectConfig.value = normalized
     localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(normalized))
+    authDiag('saved ws config', {
+      storageKey: WS_CONNECT_KEY,
+      wsHost: safeUrlHost(normalized.wsUrl),
+      hasAesKey: !!normalized.aesKey,
+    })
   }
 
   function clearWsConnectConfig() {
@@ -219,6 +287,13 @@ export const useAuthStore = defineStore('auth', () => {
 
     loadAccounts()
     loadWsConnectConfig()
+    authDiag('init session start', {
+      isTauri: isTauri(),
+      restoreSession,
+      autoLogin,
+      fallbackToCachedAccount,
+      accountCount: accounts.value.length,
+    })
 
     // If session was already set (e.g. by login()), skip restore
     if (session.value) return
@@ -232,6 +307,11 @@ export const useAuthStore = defineStore('auth', () => {
             if (result.uid) {
               setSession(result)
               localStorage.setItem(CURRENT_UID_KEY, result.uid)
+              authDiag('restored tauri session', {
+                uid: result.uid,
+                hasSessionId: !!result.sessionId,
+                hasWsConfig: !!wsConnectConfig.value,
+              })
               return
             }
           }
@@ -259,9 +339,15 @@ export const useAuthStore = defineStore('auth', () => {
               if (result.uid) {
                 setSession(result)
                 localStorage.setItem(CURRENT_UID_KEY, result.uid)
+                authDiag('auto login restored from account', {
+                  uid: result.uid,
+                  hasSessionId: !!result.sessionId,
+                  hasWsConfig: !!wsConnectConfig.value,
+                })
               }
             } catch {
               console.warn('[auth] auto-login blocked or failed')
+              authDiag('auto login failed')
               return
             }
           }
@@ -279,10 +365,16 @@ export const useAuthStore = defineStore('auth', () => {
               sourceId: account.sourceId,
             })
             localStorage.setItem(CURRENT_UID_KEY, account.id)
+            authDiag('fallback restored from cached account', {
+              uid: account.id,
+              hasSessionId: !!account.sessionId,
+              hasWsConfig: !!wsConnectConfig.value,
+            })
           }
         }
       } catch {
         console.error('Failed to init session')
+        authDiag('init session failed')
       }
     } else {
       // Browser mode: restore session from localStorage
@@ -319,6 +411,13 @@ export const useAuthStore = defineStore('auth', () => {
     sourceId?: string
     sessionId?: string
   }) {
+    authDiag('login start', {
+      uid: request.uid || '',
+      sessionHost: safeUrlHost(request.sessionUrl),
+      wsHost: safeUrlHost(normalizeWsUrl(request.wsUrl)),
+      hasSessionId: !!request.sessionId,
+      hasAesKey: !!request.aesKey,
+    })
     if (request.sessionUrl) {
       setBaseUrl(request.sessionUrl)
     }
@@ -374,6 +473,10 @@ export const useAuthStore = defineStore('auth', () => {
           },
         })
       } catch (error) {
+        authDiag('tauri login invoke failed', {
+          uid: optimisticSession.uid,
+          message: error instanceof Error ? error.message : String(error),
+        })
         if (previousUid) {
           localStorage.setItem(CURRENT_UID_KEY, previousUid)
         } else {
@@ -404,6 +507,11 @@ export const useAuthStore = defineStore('auth', () => {
           icon: result.avatar,
           sessionId: result.sessionId,
           sourceId: result.sourceId,
+        })
+        authDiag('login done', {
+          uid: result.uid,
+          hasSessionId: !!result.sessionId,
+          hasWsConfig: !!wsConnectConfig.value,
         })
       }
       return result
@@ -465,6 +573,13 @@ export const useAuthStore = defineStore('auth', () => {
     const previousWsConfig = wsConnectConfig.value
     const accountIndex = accounts.value.findIndex(a => a.id === currentUid)
     const previousAccount = accountIndex >= 0 ? { ...accounts.value[accountIndex] } : null
+    authDiag('logout start', {
+      uid: currentUid,
+      keepHistoryOnLogout,
+      preserveLoginCache,
+      hasSession: !!previousSession,
+      hasWsConfig: !!previousWsConfig,
+    })
 
     setSession(null)
     clearActiveSessionContext(currentUid)
@@ -502,6 +617,10 @@ export const useAuthStore = defineStore('auth', () => {
           saveAccounts()
         }
         console.warn('[auth] logout invoke failed:', error)
+        authDiag('logout invoke failed', {
+          uid: currentUid,
+          message: error instanceof Error ? error.message : String(error),
+        })
       }
     } else if (!keepHistoryOnLogout && currentUid) {
       localStorage.removeItem(`${currentUid}-conversations`)

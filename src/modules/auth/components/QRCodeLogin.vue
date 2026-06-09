@@ -271,6 +271,10 @@ function handleLastAvatarError() {
   lastAvatarLoadError.value = true
 }
 
+function qrDiag(message: string, data?: Record<string, unknown>) {
+  console.warn(`[AUTH-DIAG][QRCode] ${message}`, data || {})
+}
+
 async function handleGetQrCodeUrl() {
   const requestSeq = ++qrRequestSeq
   const baseUrl = currentBaseUrl.value
@@ -281,6 +285,11 @@ async function handleGetQrCodeUrl() {
   isScanCancelled.value = false
   qrCodeUrlError.value = false
   isOutTime.value = false
+  qrDiag('get QR code start', {
+    baseUrl,
+    domainIndex: urlIndex.value,
+    domainCount: domainList.value.length,
+  })
 
   try {
     let resolvedQrBaseUrl = baseUrl
@@ -300,6 +309,12 @@ async function handleGetQrCodeUrl() {
     const errCode = Number(res?.commonResult?.errCode || 0)
     if (errCode && errCode !== 200) {
       console.error('[QRCode] Server error:', res.commonResult?.errMsg)
+      qrDiag('get QR code server error', {
+        baseUrl,
+        resolvedQrBaseUrl,
+        errCode,
+        errMsg: res.commonResult?.errMsg || '',
+      })
       isLoading.value = false
       // 与老 im 一致：当前域名失败后切到下一个域名重试
       if (retryNextDomain()) return
@@ -311,6 +326,13 @@ async function handleGetQrCodeUrl() {
       activateResolvedBaseUrl(resolvedQrBaseUrl)
       hasLoadedFirstQr.value = true
       loginToken.value = res.token
+      qrDiag('get QR code done', {
+        baseUrl,
+        resolvedQrBaseUrl,
+        hasToken: true,
+        tokenLen: String(res.token).length,
+        officialUrl: officialUrl.value,
+      })
       // 注意：与老 im 一致——*不* 用 res.officialUrl 覆盖当前包的固定官网域名。
       // 二维码必须保持 `{brand}chat.com?token=X&imQrCodeType=2` 格式。
 
@@ -323,6 +345,10 @@ async function handleGetQrCodeUrl() {
       }, 1500)
     } else {
       // 与老 im 一致：token 无效也尝试切换域名
+      qrDiag('get QR code missing token', {
+        baseUrl,
+        resolvedQrBaseUrl,
+      })
       if (retryNextDomain()) return
       hasLoadedFirstQr.value = true
       qrCodeUrlError.value = true
@@ -330,6 +356,10 @@ async function handleGetQrCodeUrl() {
   } catch (err) {
     if (requestSeq !== qrRequestSeq) return
     console.error('[QRCode] Failed to get QR code URL:', err)
+    qrDiag('get QR code failed', {
+      baseUrl,
+      message: err instanceof Error ? err.message : String(err),
+    })
     isLoading.value = false
 
     if (retryNextDomain()) return
@@ -357,6 +387,13 @@ async function handleIsLoginGet() {
   const device = getDeviceConfig()
   const baseUrl = activeQrBaseUrl.value || currentBaseUrl.value
   let resolvedLoginBaseUrl = baseUrl
+  qrDiag('isLogin poll start', {
+    baseUrl,
+    hasToken: !!loginToken.value,
+    tokenLen: String(loginToken.value || '').length,
+    sysMacLen: String(device.sysMac || '').length,
+    sysModel: device.sysModel || '',
+  })
 
   try {
     const res = await getIsLogin({
@@ -367,12 +404,26 @@ async function handleIsLoginGet() {
       resolvedLoginBaseUrl = resolvedBaseUrl
     })
     activateResolvedBaseUrl(resolvedLoginBaseUrl)
+    qrDiag('isLogin poll done', {
+      baseUrl,
+      resolvedLoginBaseUrl,
+      uid: res?.uid ? String(res.uid) : '',
+      loginStatus: res?.loginStatus,
+      hasSessionId: !!res?.sessionId,
+      hasSessionUrl: !!res?.urls?.session,
+    })
 
     // 与老 im 一致：扫码登录成功仅以 uid > 0 为准
     if (res && res.uid && Number(res.uid) > 0) {
       const loginId = String(res.uid)
       clearTimers()
       const sessionBaseUrl = getBusinessSessionBaseUrl(resolvedLoginBaseUrl)
+      qrDiag('login success emit', {
+        uid: loginId,
+        sessionBaseUrl,
+        wsUrl: normalizeWsUrl(res.urls?.session || '') || inferSessionWsUrl(sessionBaseUrl),
+        hasSessionId: !!res.sessionId,
+      })
 
       emit('login-success', {
         sessionUrl: sessionBaseUrl,
@@ -399,7 +450,11 @@ async function handleIsLoginGet() {
         handleIsLoginGet()
       }, 1500)
     }
-  } catch {
+  } catch (error) {
+    qrDiag('isLogin poll failed', {
+      baseUrl,
+      message: error instanceof Error ? error.message : String(error),
+    })
     loginPollingTimer = setTimeout(() => {
       if (isOutTime.value || qrCodeUrlError.value) return
       handleIsLoginGet()

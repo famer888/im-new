@@ -17,8 +17,8 @@ function isWindowsRuntime(): boolean {
 }
 
 function shouldUseViteDevProxy(): boolean {
-  // 只在 Vite 开发模式启用相对代理路径，避免打包环境误走 `/api` 导致主进程 URL 解析失败。
-  return !!import.meta.env.DEV && isDesktopLocalDevOrigin()
+  // 只在纯浏览器开发模式启用相对代理；Tauri 开发态也会走主进程代理，不能把 `/api` 交给 Rust。
+  return !!import.meta.env.DEV && !isTauri() && isDesktopLocalDevOrigin()
 }
 
 function getDomainPoolFirstNormalDomain(): string {
@@ -34,7 +34,7 @@ function getDomainPoolFirstNormalDomain(): string {
 const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
 const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
 const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
-const API_BASE_URL_KEY = 'api-base-url'
+const ENV_NAME = String(import.meta.env.VITE_APP_ENV || 'test').trim().toLowerCase() || 'test'
 
 function normalizeBrandId(input?: string): '45' | '55' | '97' {
   const value = String(input || '').trim()
@@ -49,6 +49,8 @@ export function getBrandDisplayName(input?: string): string {
 const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)
 const BRAND_DISPLAY_NAME = getBrandDisplayName(BRAND_ID)
 const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID}chat.com`).trim()
+const LEGACY_API_BASE_URL_KEY = 'api-base-url'
+const API_BASE_URL_KEY = `${LEGACY_API_BASE_URL_KEY}:${ENV_NAME}:${BRAND_ID}`
 
 /** 对齐老 im 55.1.7.0：请求签名与 clientInfo 默认 packageCode 为 5520 */
 export const OPEN_CHAT_PACKAGE_CODE = 5520
@@ -76,7 +78,7 @@ export const API_CONFIG = {
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
   rawDomainUrl: RAW_DOMAIN_URL,
   rawOpenChatDomain: RAW_OPEN_CHAT_DOMAIN,
-  env: import.meta.env.VITE_APP_ENV || 'test',
+  env: ENV_NAME,
   brandId: BRAND_ID,
   brandDisplayName: BRAND_DISPLAY_NAME,
   officialUrl: OFFICIAL_URL,
@@ -89,7 +91,23 @@ function getStoredBaseUrl(): string {
       localStorage.removeItem(API_BASE_URL_KEY)
       return ''
     }
-    return stored
+    if (stored) {
+      if (isStoredBaseUrlCompatibleWithEnv(stored)) return stored
+      localStorage.removeItem(API_BASE_URL_KEY)
+      return ''
+    }
+
+    const legacyStored = normalizeHttpBaseUrl(localStorage.getItem(LEGACY_API_BASE_URL_KEY) || '')
+    if (!legacyStored || isLoginOnlyBaseUrl(legacyStored)) return ''
+    if (!isStoredBaseUrlCompatibleWithEnv(legacyStored)) {
+      localStorage.removeItem(LEGACY_API_BASE_URL_KEY)
+      return ''
+    }
+
+    // 对齐老 im 的 domains_${env} 语义：旧未分环境 key 只在确认属于当前环境时迁移，避免 test/prod 互相污染。
+    localStorage.setItem(API_BASE_URL_KEY, legacyStored)
+    localStorage.removeItem(LEGACY_API_BASE_URL_KEY)
+    return legacyStored
   } catch {
     return ''
   }
@@ -102,6 +120,18 @@ function normalizeHttpBaseUrl(value: string): string {
     return `${parsed.protocol}//${parsed.host}`
   } catch {
     return ''
+  }
+}
+
+function isStoredBaseUrlCompatibleWithEnv(value: string): boolean {
+  try {
+    const host = new URL(String(value || '').trim()).host.toLowerCase()
+    if (ENV_NAME === 'prod' || ENV_NAME === 'production') {
+      return !/(^|[.-])(test|stage|dev|uat|sit)[.-]/i.test(host)
+    }
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -126,12 +156,12 @@ let dynamicBaseUrl = getStoredBaseUrl()
 
 function getFirstNormalWebBizBaseUrl(): string {
   const normal = getAllDomains('webBiz')
-    .find(item => item.status !== 'error' && !isLoginOnlyBaseUrl(item.domain))
+    .find(item => item.status !== 'error' && !isLoginOnlyBaseUrl(item.domain) && isStoredBaseUrlCompatibleWithEnv(item.domain))
     ?.domain
   if (normal) return normalizeHttpBaseUrl(normal)
 
   const fallback = getAllDomains('webBiz')
-    .find(item => !isLoginOnlyBaseUrl(item.domain))
+    .find(item => !isLoginOnlyBaseUrl(item.domain) && isStoredBaseUrlCompatibleWithEnv(item.domain))
     ?.domain
   return normalizeHttpBaseUrl(fallback || '')
 }
@@ -146,12 +176,13 @@ function isMarkedErrorWebBizBaseUrl(value: string): boolean {
 function isUsableWebBizBaseUrl(value: string): boolean {
   const normalized = normalizeHttpBaseUrl(value)
   if (!normalized || isLoginOnlyBaseUrl(normalized)) return false
+  if (!isStoredBaseUrlCompatibleWithEnv(normalized)) return false
   return !isMarkedErrorWebBizBaseUrl(normalized)
 }
 
 function persistDynamicBaseUrl(value: string) {
   const normalized = normalizeHttpBaseUrl(value)
-  dynamicBaseUrl = isLoginOnlyBaseUrl(normalized) ? '' : normalized
+  dynamicBaseUrl = isLoginOnlyBaseUrl(normalized) || !isStoredBaseUrlCompatibleWithEnv(normalized) ? '' : normalized
   try {
     if (dynamicBaseUrl) {
       localStorage.setItem(API_BASE_URL_KEY, dynamicBaseUrl)
@@ -197,14 +228,14 @@ export function syncBaseUrlWithDomainPool(options?: { preferPool?: boolean }): s
  * In Tauri app, call the real URL directly (no CORS restriction).
  */
 export function getBaseUrl(): string {
-  // 对齐老 im：桌面开发态也要避免渲染进程跨域，统一走本地 dev proxy。
+  // 对齐老 im 桌面行为：Tauri 运行时使用真实域名，再由主进程代发；浏览器开发态才走 Vite proxy。
   if (shouldUseViteDevProxy()) return '/api'
   const resolved = syncBaseUrlWithDomainPool()
   return isTauri() ? resolved : '/api'
 }
 
 export function getDomainUrl(): string {
-  // 开发态与 getBaseUrl 保持一致，避免 domain-api 也触发 CORS。
+  // Domain API 同样只在浏览器开发态走相对代理，避免 Tauri 代理收到相对 URL。
   if (shouldUseViteDevProxy()) return '/domain-api'
   if (!isTauri()) return '/domain-api'
   return getDomainPoolFirstNormalDomain() || RAW_DOMAIN_URL
@@ -219,7 +250,7 @@ export function getRawBaseUrl(): string {
 }
 
 export function getOpenChatBaseUrl(): string {
-  // 频道网关在桌面开发态也通过 Vite 代理，避免 localhost 源被网关拦截。
+  // 频道网关在 Tauri 中也走真实域名，浏览器开发态才使用 Vite proxy。
   if (shouldUseViteDevProxy()) return '/open-chat-api'
   return isTauri() ? RAW_OPEN_CHAT_DOMAIN : '/open-chat-api'
 }

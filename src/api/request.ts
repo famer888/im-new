@@ -131,15 +131,9 @@ function normalizeHttpBaseUrl(value: string): string {
   return `${parsed.protocol}//${parsed.host}`
 }
 
-function isDesktopLocalDevOrigin(): boolean {
+function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false
-  const host = String(window.location.hostname || '').toLowerCase()
-  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0'
-}
-
-function isTauriPackagedRuntime(): boolean {
-  if (typeof window === 'undefined') return false
-  return !!(window as any).__TAURI_INTERNALS__ && !isDesktopLocalDevOrigin()
+  return !!(window as any).__TAURI_INTERNALS__
 }
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -357,8 +351,8 @@ type TauriBinaryProxyResponse = {
 }
 
 async function sendProtoHttpRequest(url: string, init: RequestInit): Promise<ProtoHttpResponse> {
-  // 对齐老 im 桌面语义：打包端请求由主进程代发，避免 tauri.localhost 源触发 WebView CORS。
-  if (isTauriPackagedRuntime()) {
+  // 对齐老 im 桌面语义：Tauri 没有 Electron CORS hook，桌面端统一由主进程代发避免 WebView Origin 被拦截。
+  if (isTauriRuntime()) {
     const { invoke } = await import('@tauri-apps/api/core')
     const bodyBytes = toUint8ArrayFromRequestBody(init.body as BodyInit | null | undefined)
     const result = await invoke<TauriBinaryProxyResponse>('proxy_http_binary', {
