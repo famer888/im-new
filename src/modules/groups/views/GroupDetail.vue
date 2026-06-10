@@ -25,6 +25,10 @@ const sendingMessage = ref(false)
 
 const group = computed(() => groupStore.getGroup(props.groupId))
 
+function groupDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
+  console[level](`[GROUP-DIAG] ${message}`, data)
+}
+
 /** 与老项目 im/details/group.vue 一致：store 已按 role 排序，截取前 8 人展示 */
 const previewMembers = computed(() => groupStore.getMembers(props.groupId).slice(0, 8))
 const displayedMemberCount = computed(() => group.value?.memberCount || previewMembers.value.length)
@@ -115,6 +119,7 @@ async function refreshGroupDetail(groupId: string, options: { forceRemote?: bool
   const normalizedId = String(groupId || '').trim()
   if (!normalizedId) return false
   const cacheKey = getGroupDetailCacheKey(String(authStore.uid || ''), normalizedId)
+  const startedAt = Date.now()
 
   if (!options.forceRemote) {
     const cached = getCachedGroupDetail(cacheKey)
@@ -123,18 +128,41 @@ async function refreshGroupDetail(groupId: string, options: { forceRemote?: bool
       if (cached.valid && cached.groupPatch) {
         groupStore.upsertGroup(cached.groupPatch)
       }
+      groupDiag('detail cache hit', {
+        groupId: normalizedId,
+        valid: cached.valid,
+        durationMs: Date.now() - startedAt,
+      })
       return cached.valid
     }
   }
 
   const existingRequest = groupDetailRequestMap.get(cacheKey)
-  if (existingRequest) return existingRequest
+  if (existingRequest) {
+    groupDiag('detail pending reused', {
+      groupId: normalizedId,
+      forceRemote: !!options.forceRemote,
+    })
+    return existingRequest
+  }
 
   const request = (async () => {
     try {
+      groupDiag('detail request start', {
+        groupId: normalizedId,
+        forceRemote: !!options.forceRemote,
+        hasLocalGroup: !!groupStore.getGroup(normalizedId),
+      })
       const detail = await getGroupDetail({ groupId: normalizedId })
       const detailCode = Number((detail as any)?.commonResult?.errCode ?? 200)
       const groupBase = (detail as any)?.group
+      groupDiag('detail response received', {
+        groupId: normalizedId,
+        code: detailCode,
+        hasGroup: !!groupBase,
+        name: groupBase?.name ?? groupBase?.groupName ?? '',
+        durationMs: Date.now() - startedAt,
+      })
       // 详情接口失败或无群对象时，按无效群处理并从列表移除，避免继续进入空群会话。
       if ((detailCode !== 0 && detailCode !== 200) || !groupBase) {
         await handleInvalidGroup(normalizedId)
@@ -144,9 +172,21 @@ async function refreshGroupDetail(groupId: string, options: { forceRemote?: bool
       // 详情接口比本地缓存更新；打开群资料时回填名称和人数，避免缺失时显示数字 ID 或 0 人。
       groupStore.upsertGroup(groupPatch)
       groupDetailCache.set(cacheKey, { valid: true, checkedAt: Date.now(), groupPatch })
+      groupDiag('detail applied', {
+        groupId: normalizedId,
+        name: groupPatch.name || '',
+        memberCount: groupPatch.memberCount,
+        durationMs: Date.now() - startedAt,
+      })
       return true
     } catch (error) {
       console.error('[GroupDetail] refresh group detail failed:', error)
+      groupDiag('detail request failed', {
+        groupId: normalizedId,
+        forceRemote: !!options.forceRemote,
+        durationMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+      }, 'error')
       return false
     }
   })().finally(() => {
@@ -157,20 +197,48 @@ async function refreshGroupDetail(groupId: string, options: { forceRemote?: bool
   return request
 }
 
+function openGroupConversation(groupId: string) {
+  const conv = chatStore.ensureConversation(1, groupId)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setDetailView('chat')
+}
+
 async function startChat() {
   if (sendingMessage.value) return
-  // 点击后保持按钮 loading，避免慢接口期间重复触发群详情校验和会话跳转。
+  const groupId = String(props.groupId || '').trim()
+  if (!groupId) return
+
+  const hasLocalGroup = !!group.value
+  groupDiag('enter click', {
+    groupId,
+    hasLocalGroup,
+  })
+
+  if (hasLocalGroup) {
+    // 对齐老 im：已有本地群资料时先进入聊天；后台校验复用详情页请求/短期缓存，避免线上慢接口被点击再次触发。
+    openGroupConversation(groupId)
+    void refreshGroupDetail(groupId).then((available) => {
+      groupDiag('enter background validation done', {
+        groupId,
+        available,
+      })
+      if (!available) {
+        eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
+      }
+    })
+    return
+  }
+
+  // 没有本地群资料时仍需先校验，防止从异常入口进入一个不存在的空群会话。
   sendingMessage.value = true
   try {
-    const available = await refreshGroupDetail(props.groupId, { forceRemote: true })
+    const available = await refreshGroupDetail(groupId, { forceRemote: true })
     if (!available) {
       eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
       return
     }
-    const conv = chatStore.ensureConversation(1, props.groupId)
-    chatStore.setCurrentConversation(conv.id)
-    uiStore.setSidebarTab('chats')
-    uiStore.setDetailView('chat')
+    openGroupConversation(groupId)
   } finally {
     sendingMessage.value = false
   }

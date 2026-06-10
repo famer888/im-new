@@ -48,6 +48,7 @@ const WS_CONNECT_STATUS_CHECK_COUNT = 20
 const WS_CONNECT_STATUS_CHECK_DELAY_MS = 150
 
 function recordSendDiagnosticTrace(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
+  console[level](`[SEND-DIAG] ${message}`, data || {})
   try {
     const raw = localStorage.getItem('last-send-diagnostic-trace')
     const list = raw ? JSON.parse(raw) : []
@@ -1460,11 +1461,28 @@ export const useMessageStore = defineStore('message', () => {
       ? getMessages(conversationId).find((m) => m.id === clientMsgId || m.customMsgId === clientMsgId)
       : undefined
     const shouldKeepSingleImagePreview = Boolean(existingClientPlaceholder)
+    const optimisticId = clientMsgId || String(Date.now())
+    const sendStartedAt = performance.now()
+    const logSendStep = (
+      message: string,
+      data?: Record<string, unknown>,
+      level: 'info' | 'warn' | 'error' = 'info',
+    ) => {
+      // 对齐老 im“发送诊断”：只记录最近发送链路步骤，供设置里的发送诊断弹窗复制排查。
+      recordSendDiagnosticTrace(message, {
+        uid,
+        conversationId,
+        convType,
+        targetId,
+        msgType,
+        optimisticId,
+        ...data,
+      }, level)
+    }
 
     // 乐观追加：先插一条 status=0（发送中）的本地消息，立即反馈到 UI。
     // 单聊图片在上传前已插入本地占位，这里保留占位，等 send_message 成功后再替换为远端消息，
     // 避免发送中提前下载/解密远端图片并短暂显示“图片加载失败”。
-    const optimisticId = clientMsgId || String(Date.now())
     const optimisticSendTime = Date.now()
     const optimistic: Message = {
       id: optimisticId,
@@ -1489,6 +1507,11 @@ export const useMessageStore = defineStore('message', () => {
       appendMessage(conversationId, optimistic)
       syncConversationSummary(conversationId, optimistic)
     }
+    logSendStep('optimistic message visible', {
+      listSizeAfterAppend: getMessages(conversationId).length,
+      msFromEntry: Math.round(performance.now() - sendStartedAt),
+      reusedClientPlaceholder: shouldKeepSingleImagePreview,
+    })
     if (isSingleVideo) {
       singleVideoLog('optimistic appended', {
         optimisticId,
@@ -1523,23 +1546,6 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
 
-    const sendStartedAt = performance.now()
-    const logSendStep = (
-      message: string,
-      data?: Record<string, unknown>,
-      level: 'info' | 'warn' | 'error' = 'info',
-    ) => {
-      // 对齐老 im“发送诊断”：只记录最近发送链路步骤，供设置里的发送诊断弹窗复制排查。
-      recordSendDiagnosticTrace(message, {
-        uid,
-        conversationId,
-        convType,
-        targetId,
-        msgType,
-        optimisticId,
-        ...data,
-      }, level)
-    }
     logSendStep('sendMessage entry', {
       usesWsSend: messageUsesWsSend(convType, msgType),
       contentLen: String(content || '').length,
@@ -1733,6 +1739,12 @@ export const useMessageStore = defineStore('message', () => {
       }
       appendMessage(conversationId, normalized)
       syncConversationSummary(conversationId, normalized)
+      logSendStep('sendMessage success appended', {
+        totalMs: Math.round(performance.now() - sendStartedAt),
+        normalizedId: normalized.id,
+        normalizedCustomMsgId: normalized.customMsgId,
+        status: normalized.status,
+      })
       if (isSingleVideo) {
         singleVideoLog('normalized appended', {
           optimisticId,
@@ -1782,6 +1794,11 @@ export const useMessageStore = defineStore('message', () => {
           }
           appendMessage(conversationId, normalized)
           syncConversationSummary(conversationId, normalized)
+          logSendStep('sendMessage retry after group key success appended', {
+            totalMs: Math.round(performance.now() - sendStartedAt),
+            normalizedId: normalized.id,
+            status: normalized.status,
+          })
           return normalized
         } catch (retryErr) {
           console.warn('[send] retry after refreshGroupRelKey failed:', retryErr)
@@ -1825,6 +1842,11 @@ export const useMessageStore = defineStore('message', () => {
           }
           appendMessage(conversationId, normalized)
           syncConversationSummary(conversationId, normalized)
+          logSendStep('sendMessage retry after ws success appended', {
+            totalMs: Math.round(performance.now() - sendStartedAt),
+            normalizedId: normalized.id,
+            status: normalized.status,
+          })
           if (isSingleVideo) {
             singleVideoLog('retry send_message result appended', {
               optimisticId,
@@ -1858,6 +1880,10 @@ export const useMessageStore = defineStore('message', () => {
       }
       console.error('[send] send_message failed:', e)
       updateMessageStatus(optimisticId, -1)
+      logSendStep('sendMessage failed final', {
+        totalMs: Math.round(performance.now() - sendStartedAt),
+        error: errText,
+      }, 'error')
       throw e
     }
   }

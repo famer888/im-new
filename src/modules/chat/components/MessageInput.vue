@@ -58,6 +58,10 @@ const showEmoji = ref(false)
 const emojiToggleBtnRef = ref<HTMLElement | null>(null)
 const emojiPickerPopoverRef = ref<HTMLElement | null>(null)
 useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
+
+function sendDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
+  console[level](`[SEND-DIAG][Input] ${message}`, data)
+}
 const showAtList = ref(false)
 const atKeyword = ref('')
 const atListRef = ref<{ handleKeyboard: (key: string) => void } | null>(null)
@@ -1068,10 +1072,19 @@ function handleQrForwardCancel() {
 }
 
 async function handleSend() {
+  const startedAt = performance.now()
   showEmoji.value = false
   content.value = serializeEditorContent()
   const text = normalizeEditorText(content.value).trim()
   if (!text && !hasForwardDraft.value) return
+  sendDiag('handleSend start', {
+    conversationId: convId.value || '',
+    isGroup: isGroup.value,
+    isFileHelper: isFileHelperChat.value,
+    textLen: text.length,
+    hasForwardDraft: hasForwardDraft.value,
+    forwardCount: currentForwardDraftItems.value.length,
+  })
 
   const extra: Record<string, unknown> = {}
   if (uiStore.quoteMessage) {
@@ -1100,6 +1113,11 @@ async function handleSend() {
           return
         }
       } else {
+        sendDiag('emit forward message', {
+          msgType: item.msgType,
+          contentLen: String(item.content || '').length,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        })
         emit('send', item.content, item.msgType, item.extra)
       }
     }
@@ -1113,12 +1131,21 @@ async function handleSend() {
     const textExtra = atPayload.atUids.length > 0
       ? { ...extra, atUids: atPayload.atUids, atUsers: atPayload.atUsers }
       : extra
+    sendDiag('emit text message', {
+      msgType: MessageType.Text,
+      contentLen: atPayload.content.length,
+      atCount: atPayload.atUids.length,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    })
     emit('send', atPayload.content, MessageType.Text, withReadBurnExtra(Object.keys(textExtra).length > 0 ? textExtra : undefined))
   }
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
   if (convId.value) chatStore.setDraft(convId.value, null)
   resetEditorHistory()
+  sendDiag('handleSend done', {
+    elapsedMs: Math.round(performance.now() - startedAt),
+  })
 }
 
 function handleKeydown(e: KeyboardEvent) {

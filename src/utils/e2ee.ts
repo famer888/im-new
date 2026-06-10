@@ -26,6 +26,10 @@ function e2eeDebugLog(...args: unknown[]) {
   void args
 }
 
+function e2eeDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
+  console[level](`[E2EE-DIAG] ${message}`, data)
+}
+
 /** 账号维度持久化到 localStorage 的 key lifecycle 数据。 */
 interface OwnKeyPair {
   /** 32 字节 curve25519 私钥（HEX 大写）。 */
@@ -277,20 +281,48 @@ export function updateFriendKeyCacheFromPush(
  * 复用 pending Promise 以防首次登录时多处并发调用造成重复上报。
  */
 let pendingOwnKey: Promise<OwnKeyPair> | null = null
+let pendingOwnKeyServerCheck: Promise<void> | null = null
+let lastOwnKeyServerCheckAt = 0
+const OWN_KEY_SERVER_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair> {
   if (!isTauri()) {
     throw new Error('ensureOwnKeyPair: Tauri only')
   }
+  const startedAt = Date.now()
+  e2eeDiag('ensure own key start', { uid })
+  const stableLoadStartedAt = Date.now()
   const stableCached = await loadOwnKeyFromStableStore(uid)
+  e2eeDiag('load stable own key done', {
+    uid,
+    hasStableCached: !!stableCached,
+    durationMs: Date.now() - stableLoadStartedAt,
+  })
+  const localLoadStartedAt = Date.now()
   const localCached = loadOwnKey(uid)
+  e2eeDiag('load localStorage own key done', {
+    uid,
+    hasLocalCached: !!localCached,
+    durationMs: Date.now() - localLoadStartedAt,
+  })
   const cached = stableCached || localCached
   if (cached) {
+    e2eeDiag('own key cache hit', {
+      uid,
+      source: stableCached ? 'stable-store' : 'localStorage',
+      keyVersion: cached.keyVersion,
+      elapsedMs: Date.now() - startedAt,
+    })
     upsertFriendPublicKey(uid, uid, 'web', cached.keyVersion, cached.publicKey)
     if (stableCached && !localCached) {
       saveOwnKey(uid, cached)
     } else if (!stableCached && localCached) {
+      const persistStartedAt = Date.now()
       await persistOwnKey(uid, localCached)
+      e2eeDiag('persist local cached own key to stable store done', {
+        uid,
+        durationMs: Date.now() - persistStartedAt,
+      })
     }
     e2eeDebugLog('[e2ee] ensureOwnKeyPair: cache hit', {
       uid,
@@ -298,9 +330,18 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       keyVersion: cached.keyVersion,
     })
 
-    let selfAppKeyPair: any = null
-    try {
+    if (!pendingOwnKeyServerCheck && Date.now() - lastOwnKeyServerCheckAt > OWN_KEY_SERVER_CHECK_INTERVAL_MS) {
+      // 发送热路径不能同步等待 /sys/getKeyPair 自检；本地私钥可用时先放行，服务端版本校验后台节流执行。
+      pendingOwnKeyServerCheck = (async () => {
+        lastOwnKeyServerCheckAt = Date.now()
+        let selfAppKeyPair: any = null
+      const serverCheckStartedAt = Date.now()
+      e2eeDiag('server self key check start', { uid })
       const resp = await getKeyPair({ targetId: Number(uid), flag: 0 })
+      e2eeDiag('server self key check done', {
+        uid,
+        durationMs: Date.now() - serverCheckStartedAt,
+      })
       const web = (resp as any)?.webKeyPair
       selfAppKeyPair = (resp as any)?.appKeyPair
       const serverWebPublicKey = web?.publicKey ? String(web.publicKey).toUpperCase() : ''
@@ -317,11 +358,26 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           cachedPubHead: cached.publicKey.slice(0, 16),
           serverPubHead: serverWebPublicKey.slice(0, 16),
         })
+        const rotateStartedAt = Date.now()
+        e2eeDiag('own key cache mismatch rotate start', {
+          uid,
+          cachedKeyVersion: cached.keyVersion,
+          serverWebKeyVersion,
+        })
         const fresh = await tauriInvoke<{
           privateKeyHex: string
           publicKeyHex: string
         }>('generate_curve25519_keypair')
+        e2eeDiag('generate rotated own key done', {
+          uid,
+          durationMs: Date.now() - rotateStartedAt,
+        })
+        const updateStartedAt = Date.now()
         const upd = await updateKeyPair({ publicKey: fresh.publicKeyHex })
+        e2eeDiag('update rotated own key done', {
+          uid,
+          durationMs: Date.now() - updateStartedAt,
+        })
         const keyVersion = Number((upd as any)?.keyVersion || 0)
         if (!keyVersion) {
           throw new Error('[e2ee] updateKeyPair returned empty keyVersion after cache mismatch')
@@ -333,6 +389,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         }
         await persistOwnKey(uid, kp)
         upsertFriendPublicKey(uid, uid, 'web', kp.keyVersion, kp.publicKey)
+        const injectStartedAt = Date.now()
         await tauriInvoke<void>('set_curve_private_key_hex', {
           privateKeyHex: kp.privateKey,
         })
@@ -343,22 +400,76 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           version: Number(kp.keyVersion || 1),
           source: 'web',
         })
+        e2eeDiag('rotated own key injected and self rel_key derived', {
+          uid,
+          keyVersion: kp.keyVersion,
+          durationMs: Date.now() - injectStartedAt,
+          totalDurationMs: Date.now() - startedAt,
+        })
         e2eeDebugLog('[e2ee] rotated and derived self web rel_key', {
           uid,
           keyVersion: kp.keyVersion,
           pubHead: kp.publicKey.slice(0, 16),
         })
-        return kp
+        return
       }
-    } catch (err) {
-      console.warn('[e2ee] own web key server check failed, using local cache:', err)
+
+        if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
+          upsertFriendPublicKey(uid, uid, 'app', selfAppKeyPair.keyVersion, selfAppKeyPair.publicKey)
+          try {
+            const deriveAppStartedAt = Date.now()
+            await tauriInvoke<string>('derive_friend_rel_key', {
+              friendId: String(uid),
+              publicKeyHex: String(selfAppKeyPair.publicKey),
+              encryptedMsgKeyHex: '',
+              version: Number(selfAppKeyPair.keyVersion || 1),
+              source: 'app',
+            })
+            e2eeDiag('derive self app rel_key done', {
+              uid,
+              durationMs: Date.now() - deriveAppStartedAt,
+            })
+            e2eeDebugLog('[e2ee] derived self app rel_key (cache hit)');
+          } catch (err) {
+            console.error('[e2ee] derive self app rel_key failed (cache hit)', err);
+            e2eeDiag('derive self app rel_key failed', {
+              uid,
+              message: err instanceof Error ? err.message : String(err),
+            }, 'error')
+          }
+        }
+      })()
+        .catch((err) => {
+          console.warn('[e2ee] own web key server check failed, using local cache:', err)
+          e2eeDiag('server self key check failed, using local cache', {
+            uid,
+            elapsedMs: Date.now() - startedAt,
+            message: err instanceof Error ? err.message : String(err),
+          }, 'warn')
+        })
+        .finally(() => {
+          pendingOwnKeyServerCheck = null
+        })
+    } else {
+      e2eeDiag('server self key check skipped on hot path', {
+        uid,
+        hasPendingCheck: !!pendingOwnKeyServerCheck,
+        elapsedSinceLastCheckMs: Date.now() - lastOwnKeyServerCheckAt,
+      })
     }
 
+    const injectStartedAt = Date.now()
+    e2eeDiag('inject cached own private key start', { uid })
     await tauriInvoke<void>('set_curve_private_key_hex', {
       privateKeyHex: cached.privateKey,
     })
+    e2eeDiag('inject cached own private key done', {
+      uid,
+      durationMs: Date.now() - injectStartedAt,
+    })
 
     try {
+      const deriveWebStartedAt = Date.now()
       await tauriInvoke<string>('derive_friend_rel_key', {
         friendId: String(uid),
         publicKeyHex: cached.publicKey,
@@ -366,40 +477,46 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         version: Number(cached.keyVersion || 1),
         source: 'web',
       })
+      e2eeDiag('derive self web rel_key done', {
+        uid,
+        durationMs: Date.now() - deriveWebStartedAt,
+      })
       e2eeDebugLog('[e2ee] derived self web rel_key (cache hit)');
     } catch (err) {
       console.error('[e2ee] derive self web rel_key failed (cache hit)', err);
+      e2eeDiag('derive self web rel_key failed', {
+        uid,
+        message: err instanceof Error ? err.message : String(err),
+      }, 'error')
     }
 
-    if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
-      upsertFriendPublicKey(uid, uid, 'app', selfAppKeyPair.keyVersion, selfAppKeyPair.publicKey)
-      try {
-        await tauriInvoke<string>('derive_friend_rel_key', {
-          friendId: String(uid),
-          publicKeyHex: String(selfAppKeyPair.publicKey),
-          encryptedMsgKeyHex: '',
-          version: Number(selfAppKeyPair.keyVersion || 1),
-          source: 'app',
-        })
-        e2eeDebugLog('[e2ee] derived self app rel_key (cache hit)');
-      } catch (err) {
-        console.error('[e2ee] derive self app rel_key failed (cache hit)', err);
-      }
-    }
-
+    e2eeDiag('ensure own key done from cache', {
+      uid,
+      keyVersion: cached.keyVersion,
+      totalDurationMs: Date.now() - startedAt,
+    })
     return cached
   }
 
-  if (pendingOwnKey) return pendingOwnKey
+  if (pendingOwnKey) {
+    e2eeDiag('ensure own key pending reused', { uid })
+    return pendingOwnKey
+  }
   pendingOwnKey = (async () => {
     e2eeDebugLog('[e2ee] ensureOwnKeyPair: no local cache, fetching from server', { uid })
+    e2eeDiag('no local own key, server bootstrap start', { uid })
     let existing: {
       publicKey?: string
       keyVersion?: number
     } = {}
     let selfAppKeyPair: any = null
     try {
+      const serverFetchStartedAt = Date.now()
       const resp = await getKeyPair({ targetId: Number(uid), flag: 0 })
+      e2eeDiag('bootstrap getKeyPair self done', {
+        uid,
+        durationMs: Date.now() - serverFetchStartedAt,
+      })
       const web = (resp as any)?.webKeyPair
       const app = (resp as any)?.appKeyPair
       selfAppKeyPair = app
@@ -416,20 +533,34 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       }
     } catch (err) {
       console.warn('[e2ee] getKeyPair(self) failed, will generate fresh:', err)
+      e2eeDiag('bootstrap getKeyPair self failed, generate fresh', {
+        uid,
+        message: err instanceof Error ? err.message : String(err),
+      }, 'warn')
     }
 
     // 本地 curve25519 私钥已丢 → 无法复用老 publicKey，只能重签一把。
+    const generateStartedAt = Date.now()
     const fresh = await tauriInvoke<{
       privateKeyHex: string
       publicKeyHex: string
     }>('generate_curve25519_keypair')
+    e2eeDiag('generate fresh own key done', {
+      uid,
+      durationMs: Date.now() - generateStartedAt,
+    })
     e2eeDebugLog('[e2ee] generated new curve25519 keypair', {
       privLen: fresh.privateKeyHex.length,
       pubLen: fresh.publicKeyHex.length,
       pubHead: fresh.publicKeyHex.slice(0, 16),
     })
 
+    const updateStartedAt = Date.now()
     const upd = await updateKeyPair({ publicKey: fresh.publicKeyHex })
+    e2eeDiag('update fresh own key done', {
+      uid,
+      durationMs: Date.now() - updateStartedAt,
+    })
     const keyVersion = Number((upd as any)?.keyVersion || 0)
     const commonResult = (upd as any)?.commonResult
     e2eeDebugLog('[e2ee] updateKeyPair resp:', { keyVersion, commonResult })
@@ -442,14 +573,25 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       publicKey: fresh.publicKeyHex,
       keyVersion,
     }
+    const persistStartedAt = Date.now()
     await persistOwnKey(uid, kp)
+    e2eeDiag('persist fresh own key done', {
+      uid,
+      durationMs: Date.now() - persistStartedAt,
+    })
     upsertFriendPublicKey(uid, uid, 'web', kp.keyVersion, kp.publicKey)
 
+    const injectStartedAt = Date.now()
     await tauriInvoke<void>('set_curve_private_key_hex', {
       privateKeyHex: kp.privateKey,
     })
+    e2eeDiag('inject fresh own private key done', {
+      uid,
+      durationMs: Date.now() - injectStartedAt,
+    })
 
     try {
+      const deriveWebStartedAt = Date.now()
       await tauriInvoke<string>('derive_friend_rel_key', {
         friendId: String(uid),
         publicKeyHex: kp.publicKey,
@@ -457,14 +599,23 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
         version: Number(kp.keyVersion || 1),
         source: 'web',
       })
+      e2eeDiag('derive fresh self web rel_key done', {
+        uid,
+        durationMs: Date.now() - deriveWebStartedAt,
+      })
       e2eeDebugLog('[e2ee] derived self web rel_key');
     } catch (err) {
       console.error('[e2ee] derive self web rel_key failed', err);
+      e2eeDiag('derive fresh self web rel_key failed', {
+        uid,
+        message: err instanceof Error ? err.message : String(err),
+      }, 'error')
     }
 
     if (selfAppKeyPair?.publicKey && selfAppKeyPair?.keyVersion) {
       upsertFriendPublicKey(uid, uid, 'app', selfAppKeyPair.keyVersion, selfAppKeyPair.publicKey)
       try {
+        const deriveAppStartedAt = Date.now()
         await tauriInvoke<string>('derive_friend_rel_key', {
           friendId: String(uid),
           publicKeyHex: String(selfAppKeyPair.publicKey),
@@ -472,9 +623,17 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
           version: Number(selfAppKeyPair.keyVersion || 1),
           source: 'app',
         })
+        e2eeDiag('derive fresh self app rel_key done', {
+          uid,
+          durationMs: Date.now() - deriveAppStartedAt,
+        })
         e2eeDebugLog('[e2ee] derived self app rel_key');
       } catch (err) {
         console.error('[e2ee] derive self app rel_key failed', err);
+        e2eeDiag('derive fresh self app rel_key failed', {
+          uid,
+          message: err instanceof Error ? err.message : String(err),
+        }, 'error')
       }
     }
     e2eeDebugLog('[e2ee] ensureOwnKeyPair DONE', {
@@ -482,6 +641,11 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       keyVersion: kp.keyVersion,
       pubHead: kp.publicKey.slice(0, 16),
       existingOnServer: existing,
+    })
+    e2eeDiag('ensure own key done from fresh key', {
+      uid,
+      keyVersion: kp.keyVersion,
+      totalDurationMs: Date.now() - startedAt,
     })
 
     return kp
@@ -571,24 +735,43 @@ export async function ensureGroupRelKey(
     throw new Error('ensureGroupRelKey: Tauri only')
   }
   const gid = String(groupId)
+  const startedAt = Date.now()
+  e2eeDiag('ensure group rel key start', { uid, groupId: gid })
 
   const cachedHit = await tauriInvoke<boolean>('has_group_rel_key', { groupId: gid })
   if (cachedHit) {
     e2eeDebugLog('[e2ee] ensureGroupRelKey: rust cache hit', { gid })
+    e2eeDiag('ensure group rel key cache hit', {
+      groupId: gid,
+      totalDurationMs: Date.now() - startedAt,
+    })
     return ''
   }
 
   const existing = pendingGroupKeys.get(gid)
-  if (existing) return existing
+  if (existing) {
+    e2eeDiag('ensure group rel key pending reused', { groupId: gid })
+    return existing
+  }
 
   const task = (async () => {
     e2eeDebugLog('[e2ee] ensureGroupRelKey: start', { uid, gid })
+    const ownStartedAt = Date.now()
     await ensureOwnKeyPair(uid)
+    e2eeDiag('ensure group own key ready', {
+      groupId: gid,
+      durationMs: Date.now() - ownStartedAt,
+    })
 
+    const getKeyStartedAt = Date.now()
     const resp = await getKeyPair({
       targetId: Number(gid),
       flag: 1,
       groupKeyVersion: 1,
+    })
+    e2eeDiag('ensure group getKeyPair done', {
+      groupId: gid,
+      durationMs: Date.now() - getKeyStartedAt,
     })
     const gkp = (resp as any)?.groupKeyPair
     e2eeDebugLog('[e2ee] getKeyPair(group) resp:', {
@@ -605,10 +788,16 @@ export async function ensureGroupRelKey(
     }
 
     try {
+      const deriveStartedAt = Date.now()
       const relKey = await tauriInvoke<string>('derive_group_rel_key', {
         groupId: gid,
         publicKeyHex: String(gkp.publicKey),
         encryptedMsgKeyHex: String(gkp.msgKey),
+      })
+      e2eeDiag('ensure group derive rel key done', {
+        groupId: gid,
+        durationMs: Date.now() - deriveStartedAt,
+        totalDurationMs: Date.now() - startedAt,
       })
       e2eeDebugLog('[e2ee] ensureGroupRelKey DONE', {
         gid,
@@ -746,13 +935,24 @@ export async function ensureFriendRelKey(
     throw new Error('ensureFriendRelKey: Tauri only')
   }
   const fid = String(friendId)
+  const startedAt = Date.now()
+  e2eeDiag('ensure friend rel key start', { uid, friendId: fid, forceRefresh })
   e2eeDebugLog('[e2ee] ensureFriendRelKey: start', { uid, fid })
+  const ownStartedAt = Date.now()
   await ensureOwnKeyPair(uid)
+  e2eeDiag('ensure friend own key ready', {
+    friendId: fid,
+    durationMs: Date.now() - ownStartedAt,
+  })
 
   if (!forceRefresh) {
     const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', { friendId: fid })
     if (cacheHit) {
       e2eeDebugLog('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
+      e2eeDiag('ensure friend rel key cache hit', {
+        friendId: fid,
+        totalDurationMs: Date.now() - startedAt,
+      })
       return ''
     }
   }
@@ -767,7 +967,10 @@ export async function ensureFriendRelKey(
   }
 
   const existing = pendingFriendKeys.get(fid)
-  if (existing) return existing
+  if (existing) {
+    e2eeDiag('ensure friend rel key pending reused', { friendId: fid })
+    return existing
+  }
 
   const task = (async () => {
     // 对齐老 im：先用本地缓存中的最新 app/web 公钥；只有缺口时才再调接口补全。
@@ -777,9 +980,14 @@ export async function ensureFriendRelKey(
     let app: any = merged.appKeyPair
     if (!web?.publicKey || !app?.publicKey) {
       try {
+        const requestStartedAt = Date.now()
         const resp = await requestFriendKeyPair(fid, {
           webKeyVersion: -1,
           appKeyVersion: -1,
+        })
+        e2eeDiag('ensure friend request key pair done', {
+          friendId: fid,
+          durationMs: Date.now() - requestStartedAt,
         })
         persistFriendKeyPairs(uid, fid, resp)
         merged = getCachedFriendKeyPairs(uid, fid)
@@ -806,6 +1014,7 @@ export async function ensureFriendRelKey(
     }
     let last = ''
     if (web?.publicKey) {
+      const deriveWebStartedAt = Date.now()
       last = await tauriInvoke<string>('derive_friend_rel_key', {
         friendId: fid,
         publicKeyHex: String(web.publicKey),
@@ -813,9 +1022,14 @@ export async function ensureFriendRelKey(
         version: Number(web.keyVersion || 1),
         source: 'web',
       })
+      e2eeDiag('ensure friend derive web rel key done', {
+        friendId: fid,
+        durationMs: Date.now() - deriveWebStartedAt,
+      })
       e2eeDebugLog('[e2ee] derive_friend_rel_key OK(web)', { fid, len: last.length })
     }
     if (app?.publicKey) {
+      const deriveAppStartedAt = Date.now()
       last = await tauriInvoke<string>('derive_friend_rel_key', {
         friendId: fid,
         publicKeyHex: String(app.publicKey),
@@ -823,17 +1037,27 @@ export async function ensureFriendRelKey(
         version: Number(app.keyVersion || 1),
         source: 'app',
       })
+      e2eeDiag('ensure friend derive app rel key done', {
+        friendId: fid,
+        durationMs: Date.now() - deriveAppStartedAt,
+      })
       e2eeDebugLog('[e2ee] derive_friend_rel_key OK(app)', { fid, len: last.length })
     }
 
     const own = loadOwnKey(uid) || await loadOwnKeyFromStableStore(uid)
     if (own?.publicKey && own?.keyVersion) {
+      const deriveSelfStartedAt = Date.now()
       last = await tauriInvoke<string>('derive_friend_rel_key', {
         friendId: String(uid),
         publicKeyHex: own.publicKey,
         encryptedMsgKeyHex: '',
         version: Number(own.keyVersion || 1),
         source: 'web',
+      })
+      e2eeDiag('ensure friend derive self warmup done', {
+        friendId: fid,
+        durationMs: Date.now() - deriveSelfStartedAt,
+        totalDurationMs: Date.now() - startedAt,
       })
       e2eeDebugLog('[e2ee] derive self web rel_key OK(send warmup)', { uid, len: last.length })
     }

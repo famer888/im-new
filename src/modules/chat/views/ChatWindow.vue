@@ -20,6 +20,7 @@ import {
 } from '@/utils/groupIntroNotice'
 import { isMessageEligibleForUnreadAnchor, isMessageVisibleInTimeline } from '@/utils/chatUnreadVisibility'
 import { isPendingGroupInviteChatMessage } from '@/utils/notificationNavigation'
+import { ensureGroupRelKey } from '@/utils/e2ee'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
@@ -76,6 +77,7 @@ let unlistenTauriDragDrop: (() => void) | null = null
 let closeDropAreaTimer: ReturnType<typeof window.setTimeout> | null = null
 let lastDropHandledAt = 0
 const DROP_DEDUPE_MS = 500
+const groupRelKeyWarmupInFlight = new Set<string>()
 const dropAreaStyle = computed(() => {
   const rect = chatWindowRef.value?.getBoundingClientRect()
   if (!rect) return {}
@@ -282,6 +284,37 @@ function loadGroupMembersIfNeeded(convId: string) {
   }
 }
 
+function prewarmGroupRelKeyIfNeeded(uid: string, groupId: string, source: string) {
+  if (!uid || !groupId || groupId === GROUP_NOTIFICATION_TARGET_ID) return
+  const warmupKey = `${uid}:${groupId}`
+  if (groupRelKeyWarmupInFlight.has(warmupKey)) return
+  groupRelKeyWarmupInFlight.add(warmupKey)
+  const startedAt = performance.now()
+  console.info('[SEND-DIAG][ChatWindow] prewarm group rel key start', { uid, groupId, source })
+  // 群聊首次发送慢主要卡在 relKey 获取；进入会话后后台预热，避免用户点发送时才等待远端 keyPair。
+  void ensureGroupRelKey(uid, groupId)
+    .then(() => {
+      console.info('[SEND-DIAG][ChatWindow] prewarm group rel key done', {
+        uid,
+        groupId,
+        source,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      })
+    })
+    .catch((error) => {
+      console.warn('[SEND-DIAG][ChatWindow] prewarm group rel key failed', {
+        uid,
+        groupId,
+        source,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        message: error instanceof Error ? error.message : String(error),
+      })
+    })
+    .finally(() => {
+      groupRelKeyWarmupInFlight.delete(warmupKey)
+    })
+}
+
 watch(
   friendConversationTargetId,
   (targetId) => {
@@ -309,6 +342,7 @@ watch(
     const myId = newId
     await nextTick()
     captureUnreadSnapshot(myId)
+    prewarmGroupRelKeyIfNeeded(authStore.uid, currentGroupId.value, 'conversation-enter')
     await messageStore.loadMessages(authStore.uid, myId)
     if (conversationId.value !== myId) return
     await resolveVisibleUnreadSnapshot(myId, authStore.uid)
@@ -330,9 +364,33 @@ async function handleLoadMore() {
 
 function handleSend(content: string, msgType: number, extra?: Record<string, unknown>) {
   if (!conversationId.value || !authStore.uid) return
-  messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra).catch((error) => {
-    console.warn('[chat-window] send message failed:', error)
+  const startedAt = performance.now()
+  console.info('[SEND-DIAG][ChatWindow] dispatch sendMessage', {
+    uid: authStore.uid,
+    conversationId: conversationId.value,
+    msgType,
+    contentLen: String(content || '').length,
+    extraKeys: Object.keys(extra ?? {}),
   })
+  messageStore.sendMessage(authStore.uid, conversationId.value, msgType, content, extra)
+    .then((message) => {
+      console.info('[SEND-DIAG][ChatWindow] sendMessage resolved', {
+        conversationId: conversationId.value,
+        msgType,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        messageId: message?.id || '',
+        status: message?.status ?? null,
+      })
+    })
+    .catch((error) => {
+      console.warn('[chat-window] send message failed:', error)
+      console.error('[SEND-DIAG][ChatWindow] sendMessage rejected', {
+        conversationId: conversationId.value,
+        msgType,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        message: error instanceof Error ? error.message : String(error),
+      })
+    })
 }
 
 function hasDraggedFiles(e: DragEvent) {
