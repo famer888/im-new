@@ -5,8 +5,9 @@
  */
 import { aesEncrypt, aesDecrypt } from '@/utils/crypto'
 import { API_CONFIG, getOpenChatBaseUrl } from './config'
-import { getOpenChatSignedApiHeaders } from './request'
+import { getOpenChatSignedApiHeaders, getSessionIdFromStorage } from './request'
 import { getRuntimePlatform } from '@/utils/runtimePlatform'
+import { getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
 import { ungzip } from 'pako'
 
 let cachedPackagedDesktopProxyRuntime: boolean | null = null
@@ -130,6 +131,99 @@ function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
 
 function quoteLargeIntegerIds(json: string): string {
   return json.replace(/"([A-Za-z0-9_]*(?:id|Id|ID)[A-Za-z0-9_]*)"\s*:\s*(-?\d{16,})/g, '"$1":"$2"')
+}
+
+class ChannelHttpError extends Error {
+  status: number
+  url: string
+
+  constructor(status: number, url: string, detail?: string) {
+    super(`HTTP ${status}${detail ? `; ${detail}` : ''}`)
+    this.name = 'ChannelHttpError'
+    this.status = status
+    this.url = url
+  }
+}
+
+function normalizeHttpBaseUrl(value: string): string {
+  try {
+    const parsed = new URL(String(value || '').trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return ''
+  }
+}
+
+function channelDiag(message: string, data?: Record<string, unknown>) {
+  console.warn(`[ChannelAPI] ${message}`, data || {})
+}
+
+function getOpenChatBaseCandidates(): string[] {
+  const candidates = [
+    getOpenChatBaseUrl(),
+    ...getOrderedDomainUrls('openchatChannel'),
+    API_CONFIG.rawOpenChatDomain,
+  ]
+  const seen = new Set<string>()
+  return candidates
+    .map(normalizeHttpBaseUrl)
+    .filter((base) => {
+      if (!base || seen.has(base)) return false
+      seen.add(base)
+      return true
+    })
+}
+
+function shouldRetryOpenChatError(error: unknown): boolean {
+  // HTTP 401/487 以及主进程网络错误都可能是单个 openchatChannel 节点异常，继续尝试候选域名。
+  return error instanceof ChannelHttpError || !(error instanceof Error && error.message.includes('decode failed'))
+}
+
+async function sendChannelRequest<T>(
+  url: string,
+  headers: Record<string, string>,
+  packet: Uint8Array,
+): Promise<T> {
+  if (await isTauriPackagedDesktopProxyRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<{
+      ok: boolean
+      status: number
+      bodyBase64: string
+      error?: string
+    }>('proxy_http_binary', {
+      request: {
+        url,
+        method: 'POST',
+        headers,
+        bodyBase64: encodeBase64(packet),
+      },
+    })
+    if (!result?.ok) {
+      throw new ChannelHttpError(Number(result?.status || 0), url, result?.error || '')
+    }
+    const buf = decodeBase64ToArrayBuffer(result.bodyBase64 || '')
+    if (buf.byteLength === 0) {
+      throw new Error(`channel api response too short: ${buf.byteLength}`)
+    }
+    return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: packet.buffer as ArrayBuffer,
+  })
+  if (!res.ok) {
+    console.error('[ChannelAPI] http error', { status: res.status, url })
+    throw new ChannelHttpError(res.status, url)
+  }
+  const buf = await res.arrayBuffer()
+  if (buf.byteLength === 0) {
+    throw new Error(`channel api response too short: ${buf.byteLength}`)
+  }
+  return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
 }
 
 export interface ChannelListItem {
@@ -303,8 +397,6 @@ export interface SearchAliasContentResp {
 }
 
 async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
-  const base = getOpenChatBaseUrl()
-  const url = `${base}${path}`
   const headers = {
     'Content-Type': 'application/octet-stream',
     Accept: 'application/json',
@@ -313,47 +405,61 @@ async function requestChannelJson<T>(path: string, data: Record<string, unknown>
 
   // 频道接口不是 protobuf，而是“固定头 + AES(JSON)”这一条老协议，不能复用通用 requestProto。
   const packet = encodePacketWithAesJson(data, API_CONFIG.secretKey)
-
-  // 频道别名和频道详情都依赖这条二进制协议；桌面打包端统一交给主进程发送，避免端侧 fetch 差异。
-  if (await isTauriPackagedDesktopProxyRuntime()) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const result = await invoke<{
-      ok: boolean
-      status: number
-      bodyBase64: string
-      error?: string
-    }>('proxy_http_binary', {
-      request: {
-        url,
-        method: 'POST',
-        headers,
-        bodyBase64: encodeBase64(packet),
-      },
-    })
-    if (!result?.ok) {
-      throw new Error(`HTTP ${Number(result?.status || 0)}${result?.error ? `; ${result.error}` : ''}`)
-    }
-    const buf = decodeBase64ToArrayBuffer(result.bodyBase64 || '')
-    if (buf.byteLength === 0) {
-      throw new Error(`channel api response too short: ${buf.byteLength}`)
-    }
-    return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
-  }
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: packet.buffer as ArrayBuffer,
+  const bases = getOpenChatBaseCandidates()
+  let lastError: unknown = null
+  channelDiag('request start', {
+    path,
+    candidateCount: bases.length,
+    firstBase: bases[0] || '',
+    appVer: API_CONFIG.openChatAppVer ?? API_CONFIG.appVer,
+    packageCode: API_CONFIG.openChatPackageCode,
+    hasSessionId: !!getSessionIdFromStorage(),
   })
-  if (!res.ok) {
-    console.error('[ChannelAPI] http error', { status: res.status, url })
-    throw new Error(`HTTP ${res.status}`)
+
+  for (const [index, base] of bases.entries()) {
+    const url = `${base}${path}`
+    const startedAt = Date.now()
+    channelDiag('candidate try', {
+      path,
+      base,
+      index,
+      candidateCount: bases.length,
+    })
+    try {
+      const result = await sendChannelRequest<T>(url, headers, packet)
+      channelDiag('candidate success', {
+        path,
+        base,
+        index,
+        elapsedMs: Date.now() - startedAt,
+      })
+      return result
+    } catch (error) {
+      lastError = error
+      if (normalizeHttpBaseUrl(base)) {
+        void markDomainError('openchatChannel', base)
+      }
+      channelDiag('candidate failed', {
+        path,
+        base,
+        index,
+        elapsedMs: Date.now() - startedAt,
+        status: error instanceof ChannelHttpError ? error.status : 0,
+        message: error instanceof Error ? error.message : String(error),
+        willRetry: shouldRetryOpenChatError(error) && index < bases.length - 1,
+      })
+      if (!shouldRetryOpenChatError(error)) {
+        throw error
+      }
+    }
   }
-  const buf = await res.arrayBuffer()
-  if (buf.byteLength === 0) {
-    throw new Error(`channel api response too short: ${buf.byteLength}`)
-  }
-  return decodePacketWithAesJson(buf, API_CONFIG.secretKey) as T
+
+  channelDiag('request exhausted', {
+    path,
+    candidateCount: bases.length,
+    message: lastError instanceof Error ? lastError.message : String(lastError || ''),
+  })
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || 'channel api request failed'))
 }
 
 export async function getChannelList(data: {

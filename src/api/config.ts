@@ -31,6 +31,19 @@ function getDomainPoolFirstNormalDomain(): string {
   }
 }
 
+function getFirstNormalOpenChatChannelDomain(): string {
+  if (!isTauri()) return ''
+  try {
+    // 打包端优先使用生产快照里的 openchatChannel 池，避免单个频道网关异常时无法切换。
+    const normal = getAllDomains('openchatChannel')
+      .find(item => item.status !== 'error')
+      ?.domain
+    return normalizeHttpBaseUrl(normal || '')
+  } catch {
+    return ''
+  }
+}
+
 const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
 const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
 const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
@@ -252,5 +265,5 @@ export function getRawBaseUrl(): string {
 export function getOpenChatBaseUrl(): string {
   // 频道网关在 Tauri 中也走真实域名，浏览器开发态才使用 Vite proxy。
   if (shouldUseViteDevProxy()) return '/open-chat-api'
-  return isTauri() ? RAW_OPEN_CHAT_DOMAIN : '/open-chat-api'
+  return isTauri() ? (getFirstNormalOpenChatChannelDomain() || RAW_OPEN_CHAT_DOMAIN) : '/open-chat-api'
 }

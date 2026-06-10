@@ -408,19 +408,30 @@ function shouldRepairChannelName(conv: Conversation): boolean {
 
 function repairChannelName(conv: Conversation) {
   if (!shouldRepairChannelName(conv)) return
-  if (repairingChannelNameIds.has(conv.targetId)) return
+  if (repairingChannelNameIds.has(conv.targetId)) {
+    console.warn('[CHANNEL-DIAG] conversation channel name repair skipped: pending', {
+      conversationId: conv.id,
+      channelId: conv.targetId,
+      currentName: getName(conv),
+    })
+    return
+  }
 
   repairingChannelNameIds.add(conv.targetId)
-  groupNoticeDebug('repair channel name: load detail', {
+  const startedAt = Date.now()
+  console.warn('[CHANNEL-DIAG] conversation channel name repair start', {
     conversationId: conv.id,
     channelId: conv.targetId,
     currentName: getName(conv),
   })
   void channelStore.refreshChannelDetail(conv.targetId).finally(() => {
-    groupNoticeDebug('repair channel name: load done', {
+    const channel = channelStore.getChannel(conv.targetId)
+    console.warn('[CHANNEL-DIAG] conversation channel name repair done', {
       conversationId: conv.id,
       channelId: conv.targetId,
       currentName: getName(conv),
+      channelName: channel?.channelName || channel?.name || '',
+      durationMs: Date.now() - startedAt,
     })
     repairingChannelNameIds.delete(conv.targetId)
   })

@@ -239,6 +239,8 @@ export async function getQrCodeUrl(
     respType: proto.QrCodeUrlResp,
     // 与老 im 一致：登录前二维码接口不携带历史 session
     withSessionId: false,
+    // 二维码页自身已经按 login_v2/webBiz 列表逐个切域名；这里关闭底层全量兜底，避免首屏一个请求后台扫完整域名池。
+    disableWebBizFallback: true,
     onResolvedBaseUrl,
   })
 }

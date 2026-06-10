@@ -48,12 +48,11 @@ export const useChannelStore = defineStore('channel', () => {
   let activeUid = ''
   const detailRequestById = new Map<string, Promise<Channel | null>>()
 
-  function channelDebug(message: string, data: Record<string, unknown> = {}) {
-    if (import.meta.env.VITE_CHANNEL_DEBUG !== 'true') return
-    // 频道加载排查日志默认静默，只有显式打开环境开关时才输出。
-    console.debug(`[ChannelStore][debug] ${message}`, {
+  function channelDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
+    console[level](`[CHANNEL-DIAG] ${message}`, {
       activeUid,
       isTauri: isTauri(),
+      channelCount: channels.value.length,
       ...data,
     })
   }
@@ -316,6 +315,8 @@ export const useChannelStore = defineStore('channel', () => {
 
   async function loadChannelsFromConversationCache(uid: string): Promise<Channel[]> {
     if (!isTauri()) return []
+    const startedAt = Date.now()
+    channelDiag('conversation fallback start', { uid })
 
     try {
       // 老 im 会把 MessageChannelList 里的频道也展示出来；这里用本地 channel 会话做同样的兜底。
@@ -340,54 +341,72 @@ export const useChannelStore = defineStore('channel', () => {
           updatedAt: conv.updatedAt,
         }))
       }
-
+      channelDiag('conversation fallback done', {
+        uid,
+        count: fallbackChannels.length,
+        sampleIds: fallbackChannels.slice(0, 5).map((item) => item.id),
+        durationMs: Date.now() - startedAt,
+      })
       return fallbackChannels
     } catch (e) {
       console.error('[ChannelStore] get_conversations fallback failed:', e)
+      channelDiag('conversation fallback failed', {
+        uid,
+        durationMs: Date.now() - startedAt,
+        message: e instanceof Error ? e.message : String(e),
+      }, 'error')
       return []
     }
   }
 
   async function loadChannels(uid: string, options?: { refreshRemote?: boolean }) {
+    const startedAt = Date.now()
     const refreshRemote = options?.refreshRemote ?? true
     if (uid !== activeUid) {
       resetDetailRuntimeState()
     }
     activeUid = uid
     loading.value = true
-    channelDebug('loadChannels start', { uid })
+    channelDiag('loadChannels start', { uid, refreshRemote })
     try {
       let localChannels: Channel[] = []
 
       if (isTauri()) {
+        const localStartedAt = Date.now()
         try {
           const localRows = await tauriInvoke<any[]>('get_channels', { uid })
           localChannels = Array.isArray(localRows)
             // 历史版本可能把异常会话 ID 写进 channels 表，这里只保留合法频道 ID。
             ? filterRemovedChannels(localRows.map((item) => normalizeChannel(item)).filter((item) => isValidChannelId(item.id)), uid)
             : []
-          channelDebug('local get_channels done', {
-            rawCount: Array.isArray(localRows) ? localRows.length : -1,
-            filteredCount: localChannels.length,
-            sampleIds: localChannels.slice(0, 5).map((item) => item.id),
-          })
           if (localChannels.length > 0) {
             channels.value = localChannels
           }
+          channelDiag('local get_channels done', {
+            rawCount: Array.isArray(localRows) ? localRows.length : -1,
+            filteredCount: localChannels.length,
+            placeholderCount: localChannels.filter(isPlaceholderChannel).length,
+            sampleIds: localChannels.slice(0, 5).map((item) => item.id),
+            durationMs: Date.now() - localStartedAt,
+          })
         } catch (e) {
           // 本地缓存读失败时继续走远端，避免频道列表被一次 SQLite 异常直接清空。
           console.error('[ChannelStore] local get_channels failed:', e)
-          channelDebug('local get_channels failed', { error: String(e) })
+          channelDiag('local get_channels failed', {
+            durationMs: Date.now() - localStartedAt,
+            message: e instanceof Error ? e.message : String(e),
+          }, 'error')
         }
       }
 
       const conversationChannels = await loadChannelsFromConversationCache(uid)
-      channelDebug('conversation fallback done', {
-        count: conversationChannels.length,
-        sampleIds: conversationChannels.slice(0, 5).map((item) => item.id),
-      })
       if (conversationChannels.length > 0) {
         channels.value = filterRemovedChannels(mergeChannelsById(conversationChannels, localChannels), uid)
+        channelDiag('applied conversation fallback', {
+          count: channels.value.length,
+          placeholderCount: channels.value.filter(isPlaceholderChannel).length,
+          refreshRemote,
+        })
         if (refreshRemote) {
           await hydratePlaceholderChannels(uid)
         }
@@ -404,11 +423,16 @@ export const useChannelStore = defineStore('channel', () => {
       })
     } catch (e) {
       console.error('[ChannelStore] loadChannels failed:', e)
-      channelDebug('loadChannels failed', { error: String(e) })
+      channelDiag('loadChannels failed', {
+        durationMs: Date.now() - startedAt,
+        message: e instanceof Error ? e.message : String(e),
+      }, 'error')
     } finally {
-      channelDebug('loadChannels final', {
+      channelDiag('loadChannels final', {
         count: channels.value.length,
+        placeholderCount: channels.value.filter(isPlaceholderChannel).length,
         sampleIds: channels.value.slice(0, 5).map((item) => item.id),
+        durationMs: Date.now() - startedAt,
       })
       loading.value = false
     }
@@ -417,16 +441,38 @@ export const useChannelStore = defineStore('channel', () => {
   async function hydratePlaceholderChannels(uid = activeUid) {
     if (!uid) return
     const placeholders = channels.value.filter((item) => isPlaceholderChannel(item))
-    if (placeholders.length === 0) return
+    if (placeholders.length === 0) {
+      channelDiag('hydrate placeholder skipped: none', { uid })
+      return
+    }
 
+    const startedAt = Date.now()
+    channelDiag('hydrate placeholder start', {
+      uid,
+      count: placeholders.length,
+      sampleIds: placeholders.slice(0, 10).map((item) => item.id),
+    })
     for (const item of placeholders) {
       const id = String(item.id || item.channelId || '').trim()
       if (!id || isChannelRemoved(id, uid)) continue
+      const detailStartedAt = Date.now()
       const detail = await refreshChannelDetail(id)
+      channelDiag('hydrate placeholder detail settled', {
+        channelId: id,
+        hasDetail: !!detail,
+        name: detail?.channelName || detail?.name || '',
+        stillPlaceholder: isPlaceholderChannel(detail || item),
+        durationMs: Date.now() - detailStartedAt,
+      })
       if (detail && !isPlaceholderChannel(detail)) {
         await saveChannelsToLocal(uid, channels.value)
       }
     }
+    channelDiag('hydrate placeholder done', {
+      uid,
+      remainingPlaceholderCount: channels.value.filter(isPlaceholderChannel).length,
+      durationMs: Date.now() - startedAt,
+    })
   }
 
   async function loadChannelsViaApi(
@@ -442,18 +488,26 @@ export const useChannelStore = defineStore('channel', () => {
     let hasMore = true
     const seen = new Set<string>()
     let apiSucceeded = false
+    const startedAt = Date.now()
+    channelDiag('API channelList start', {
+      uid,
+      seedConversationCount: seed?.conversationChannels?.length || 0,
+      seedLocalCount: seed?.localChannels?.length || 0,
+    })
 
     while (hasMore) {
+      const pageStartedAt = Date.now()
       try {
         const resp = await getChannelList({ pageNum, pageSize })
         const code = Number(resp?.code ?? 200)
         const list = resp?.data?.rowList || []
-        channelDebug('API channelList page', {
+        channelDiag('API channelList page done', {
           pageNum,
           code,
           msg: resp?.msg || '',
           rawCount: Array.isArray(list) ? list.length : -1,
           total: resp?.data?.total ?? null,
+          durationMs: Date.now() - pageStartedAt,
         })
         if (code !== 200 && code !== 0) {
           if (isAuthSessionExpiredResponse(resp)) {
@@ -478,7 +532,11 @@ export const useChannelStore = defineStore('channel', () => {
         if (isAuthSessionExpiredError(e)) {
           void handleAuthSessionExpired('channel-list-error', (e as Error)?.message || '登录已过期，请重新登录')
         }
-        channelDebug('API channelList failed', { pageNum, error: String(e) })
+        channelDiag('API channelList page failed', {
+          pageNum,
+          durationMs: Date.now() - pageStartedAt,
+          message: e instanceof Error ? e.message : String(e),
+        }, 'error')
         hasMore = false
       }
     }
@@ -498,13 +556,15 @@ export const useChannelStore = defineStore('channel', () => {
         trustedSeedChannels,
         apiChannels,
       ), uid)
-      channelDebug('API channelList result', {
+      channelDiag('API channelList result', {
         collectedCount: allChannels.length,
         apiFilteredCount: apiChannels.length,
         mergedCount: nextChannels.length,
         trustedSeedCount: trustedSeedChannels.length,
         seedConversationCount: seed?.conversationChannels?.length || 0,
         seedLocalCount: seed?.localChannels?.length || 0,
+        placeholderCount: nextChannels.filter(isPlaceholderChannel).length,
+        durationMs: Date.now() - startedAt,
       })
       channels.value = nextChannels
       await hydratePlaceholderChannels(uid)
@@ -522,7 +582,11 @@ export const useChannelStore = defineStore('channel', () => {
       channels.value = mergedChannels
       await hydratePlaceholderChannels(uid)
       await saveChannelsToLocal(uid, mergedChannels)
-      channelDebug('API failed, using merged fallback', { count: mergedChannels.length })
+      channelDiag('API failed, using merged fallback', {
+        count: mergedChannels.length,
+        placeholderCount: mergedChannels.filter(isPlaceholderChannel).length,
+        durationMs: Date.now() - startedAt,
+      })
       return
     }
 
@@ -530,7 +594,11 @@ export const useChannelStore = defineStore('channel', () => {
     const fallbackChannels = seed?.conversationChannels || (await loadChannelsFromConversationCache(uid))
     channels.value = filterRemovedChannels(fallbackChannels, uid)
     await hydratePlaceholderChannels(uid)
-    channelDebug('API empty, using conversation fallback', { count: channels.value.length })
+    channelDiag('API empty, using conversation fallback', {
+      count: channels.value.length,
+      placeholderCount: channels.value.filter(isPlaceholderChannel).length,
+      durationMs: Date.now() - startedAt,
+    })
     console.warn(
       '[ChannelStore] channel api empty, fallback from conversations',
     )
@@ -539,6 +607,7 @@ export const useChannelStore = defineStore('channel', () => {
   async function saveChannelsToLocal(uid: string, list: Channel[]) {
     if (!isTauri()) return
 
+    const startedAt = Date.now()
     try {
       await tauriInvoke('save_channels', {
         uid,
@@ -551,8 +620,20 @@ export const useChannelStore = defineStore('channel', () => {
           updatedAt: item.updatedAt,
         })),
       })
+      channelDiag('save channels local done', {
+        uid,
+        count: list.length,
+        placeholderCount: list.filter(isPlaceholderChannel).length,
+        durationMs: Date.now() - startedAt,
+      })
     } catch (e) {
       console.error('[ChannelStore] save_channels failed:', e)
+      channelDiag('save channels local failed', {
+        uid,
+        count: list.length,
+        durationMs: Date.now() - startedAt,
+        message: e instanceof Error ? e.message : String(e),
+      }, 'error')
     }
   }
 
@@ -615,19 +696,40 @@ export const useChannelStore = defineStore('channel', () => {
   }
 
   async function requestChannelDetail(id: string): Promise<Channel | null> {
+    const startedAt = Date.now()
+    channelDiag('detail request start', {
+      channelId: id,
+      currentName: getChannelDisplayName(getChannel(id)),
+      currentStatus: getChannelDetailStatus(id),
+    })
     const resp = await getChannelDetail({ channelId: id })
     const code = Number(resp?.code ?? 200)
+    channelDiag('detail response received', {
+      channelId: id,
+      code,
+      msg: resp?.msg || '',
+      hasData: !!resp?.data,
+      name: resp?.data?.channelName || (resp?.data as any)?.name || '',
+      durationMs: Date.now() - startedAt,
+    })
     if (code !== 200 && code !== 0) {
       if (isAuthSessionExpiredResponse(resp)) {
         void handleAuthSessionExpired('channel-detail', resp?.msg || '登录已过期，请重新登录')
       }
       throw new Error(resp?.msg || 'channel detail request failed')
     }
-    if (!resp.data) return getChannel(id) || null
+    if (!resp.data) {
+      channelDiag('detail response empty data', { channelId: id })
+      return getChannel(id) || null
+    }
     const detailData = resp.data as any
     const rawMemberType = detailData.memberType ?? detailData.member_type
     const hasMemberType = rawMemberType !== undefined && rawMemberType !== null && rawMemberType !== ''
     if (hasMemberType && Number(rawMemberType) <= 0 && !isPublicChannel(detailData)) {
+      channelDiag('detail says non-member private channel, remove', {
+        channelId: id,
+        rawMemberType,
+      })
       // 对齐旧 im `deleteChat`：频道详情判定为非成员（未加入/已退出/被移出）时，
       // 私密频道仍同步删除会话；公开频道保留会话并在输入区展示“加入频道”。
       await removeChannel(activeUid, id)
@@ -652,6 +754,12 @@ export const useChannelStore = defineStore('channel', () => {
     } else {
       channels.value.unshift(next)
     }
+    channelDiag('detail applied', {
+      channelId: id,
+      name: next.channelName || next.name || '',
+      stillPlaceholder: isPlaceholderChannel(next),
+      durationMs: Date.now() - startedAt,
+    })
     return next
   }
 
@@ -664,27 +772,47 @@ export const useChannelStore = defineStore('channel', () => {
 
     const status = getChannelDetailStatus(id)
     if (!options.force && status === 'ready') {
+      channelDiag('detail ready skip', { channelId: id, status })
       return getChannel(id) || null
     }
 
     const pending = detailRequestById.get(id)
     if (pending) {
       // 复用同一频道的进行中请求，避免短时间重复点击触发并发详情请求。
+      channelDiag('detail pending reused', { channelId: id, status })
       return pending
     }
 
     if (!options.skipLoadingState) {
       setChannelDetailStatus(id, 'loading')
     }
+    channelDiag('detail ensure start', {
+      channelId: id,
+      force: !!options.force,
+      skipLoadingState: !!options.skipLoadingState,
+      previousStatus: status,
+    })
+    const startedAt = Date.now()
     const request = (async () => {
       try {
         const detail = await requestChannelDetail(id)
         // 无论是否仍在频道，详情请求已完成，避免输入区长期停留在 loading 状态。
         setChannelDetailStatus(id, 'ready')
+        channelDiag('detail ensure done', {
+          channelId: id,
+          hasDetail: !!detail,
+          name: detail?.channelName || detail?.name || '',
+          durationMs: Date.now() - startedAt,
+        })
         return detail
       } catch (e) {
         console.error('[ChannelStore] ensureChannelDetailReady failed:', e)
         setChannelDetailStatus(id, 'error')
+        channelDiag('detail ensure failed', {
+          channelId: id,
+          durationMs: Date.now() - startedAt,
+          message: e instanceof Error ? e.message : String(e),
+        }, 'error')
         return getChannel(id) || null
       } finally {
         detailRequestById.delete(id)

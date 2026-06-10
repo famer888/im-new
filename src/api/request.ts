@@ -131,6 +131,15 @@ function normalizeHttpBaseUrl(value: string): string {
   return `${parsed.protocol}//${parsed.host}`
 }
 
+function getUrlPathForLog(value: string): string {
+  try {
+    const parsed = new URL(value, window.location.origin)
+    return parsed.pathname
+  } catch {
+    return ''
+  }
+}
+
 function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false
   return !!(window as any).__TAURI_INTERNALS__
@@ -176,7 +185,7 @@ function toUint8ArrayFromRequestBody(body: BodyInit | null | undefined): Uint8Ar
 }
 
 function shouldFallbackForHttpStatus(status: number): boolean {
-  // 对齐老 im：桌面端业务请求只要不是 200，就允许切下一个 webBiz 域名重试一次。
+  // 对齐老 im：桌面端业务请求只要不是 200，就允许继续切下一个 webBiz 域名重试。
   return status !== 200
 }
 
@@ -221,62 +230,103 @@ async function refreshWebBizDomainPool(): Promise<boolean> {
   }
 }
 
-async function resolveNextWebBizBaseUrl(
-  failedBase: string,
-  options: { isLoginRequest: boolean },
-): Promise<string> {
-  let nextBase = getNextWebBizBaseUrl(failedBase, {
-    includeLoginOnlyDomains: options.isLoginRequest,
-  })
-  if (!nextBase && !options.isLoginRequest) {
-    await refreshWebBizDomainPool()
-    nextBase = getNextWebBizBaseUrl(failedBase, {
-      includeLoginOnlyDomains: false,
-    })
-  }
-  return nextBase
-}
-
-async function retryWithNextWebBizBase(
+async function retryWithWebBizCandidates(
   url: string,
   init: RequestInit,
   options: { failedBase: string; isLoginRequest: boolean; onResolvedBaseUrl?: (baseUrl: string) => void },
   errorForReport: unknown,
   httpStatus = 0,
 ): Promise<ProtoHttpResponse | null> {
-  const nextBase = await resolveNextWebBizBaseUrl(options.failedBase, {
-    isLoginRequest: options.isLoginRequest,
-  })
-  if (!nextBase) return null
+  const failedBases = new Set<string>([normalizeHttpBaseUrl(options.failedBase)].filter(Boolean))
+  let refreshedPool = false
+  let lastResponse: ProtoHttpResponse | null = null
+  let lastError: unknown = null
+  let attempt = 0
+  const requestPath = getUrlPathForLog(url)
 
-  const retryUrl = replaceRequestBaseUrl(url, nextBase)
-  try {
-    const retryResponse = await sendProtoHttpRequest(retryUrl, init)
-    if (shouldFallbackForHttpStatus(retryResponse.status)) {
-      void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
+  for (;;) {
+    const nextBase = getNextWebBizBaseUrl(failedBases, {
+      includeLoginOnlyDomains: options.isLoginRequest,
+    })
+    if (!nextBase) {
+      if (!refreshedPool && !options.isLoginRequest) {
+        refreshedPool = true
+        console.warn('[requestProto] webBiz fallback refresh pool', {
+          failedBase: options.failedBase,
+          requestPath,
+        })
+        await refreshWebBizDomainPool()
+        continue
+      }
+      console.warn('[requestProto] webBiz fallback exhausted', {
+        failedBase: options.failedBase,
+        requestPath,
+        attempt,
+        lastStatus: lastResponse?.status || 0,
+        lastError: lastError instanceof Error ? lastError.message : String(lastError || ''),
+      })
+      if (lastResponse) return lastResponse
+      if (lastError) throw lastError
+      return null
+    }
+
+    attempt += 1
+    failedBases.add(nextBase)
+    const retryUrl = replaceRequestBaseUrl(url, nextBase)
+    const startedAt = Date.now()
+    console.warn('[requestProto] webBiz fallback try', {
+      failedBase: options.failedBase,
+      nextBase,
+      requestPath,
+      attempt,
+    })
+    try {
+      const retryResponse = await sendProtoHttpRequest(retryUrl, init)
+      if (shouldFallbackForHttpStatus(retryResponse.status)) {
+        void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
+        lastResponse = retryResponse
+        console.warn('[requestProto] webBiz fallback status failed', {
+          nextBase,
+          requestPath,
+          attempt,
+          status: retryResponse.status,
+          elapsedMs: Date.now() - startedAt,
+        })
+        continue
+      }
+
+      if (!options.isLoginRequest) {
+        // 只有真正切换成功后，才把当前业务 baseUrl 持久化到新域名。
+        setBaseUrl(nextBase)
+      }
+      options.onResolvedBaseUrl?.(nextBase)
+      void reportWebBizDomainFailure(options.failedBase, url, errorForReport, httpStatus)
+      console.warn('[requestProto] webBiz domain fallback success:', {
+        failedBase: options.failedBase,
+        nextBase,
+        requestPath,
+        attempt,
+        elapsedMs: Date.now() - startedAt,
+      })
       return retryResponse
+    } catch (retryError) {
+      void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
+      lastError = retryError
+      console.warn('[requestProto] webBiz fallback request failed', {
+        nextBase,
+        requestPath,
+        attempt,
+        elapsedMs: Date.now() - startedAt,
+        message: retryError instanceof Error ? retryError.message : String(retryError),
+      })
     }
-
-    if (!options.isLoginRequest) {
-      // 只有真正切换成功后，才把当前业务 baseUrl 持久化到新域名。
-      setBaseUrl(nextBase)
-    }
-    options.onResolvedBaseUrl?.(nextBase)
-    void reportWebBizDomainFailure(options.failedBase, url, errorForReport, httpStatus)
-    console.warn('[requestProto] webBiz domain fallback success:', options.failedBase, '->', nextBase)
-    return retryResponse
-  } catch (retryError) {
-    void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
-    throw retryError
   }
 }
 
 function getNextWebBizBaseUrl(
-  failedBase: string,
+  failedBases: Set<string>,
   options: { includeLoginOnlyDomains?: boolean } = {},
 ): string {
-  const failed = normalizeHttpBaseUrl(failedBase)
-  if (!failed) return ''
   const loginDomains = options.includeLoginOnlyDomains
     ? getOrderedDomainUrls('login_v2')
     : []
@@ -289,7 +339,7 @@ function getNextWebBizBaseUrl(
 
   for (const candidate of ordered) {
     const normalized = normalizeHttpBaseUrl(candidate)
-    if (!normalized || normalized === failed || seen.has(normalized)) continue
+    if (!normalized || failedBases.has(normalized) || seen.has(normalized)) continue
     if (!options.includeLoginOnlyDomains && isLoginOnlyBaseUrl(normalized)) continue
     seen.add(normalized)
     return normalized
@@ -383,10 +433,10 @@ async function sendProtoHttpRequest(url: string, init: RequestInit): Promise<Pro
 async function fetchWithWebBizFallback(
   url: string,
   init: RequestInit,
-  options: { withSessionId: boolean; onResolvedBaseUrl?: (baseUrl: string) => void },
+  options: { withSessionId: boolean; onResolvedBaseUrl?: (baseUrl: string) => void; disableWebBizFallback?: boolean },
 ): Promise<ProtoHttpResponse> {
   // 登录前二维码接口也要切域名；withSessionId 只控制协议 session，不控制域名兜底。
-  const allowFallback = shouldFallbackWebBiz(url)
+  const allowFallback = !options.disableWebBizFallback && shouldFallbackWebBiz(url)
   const failedBase = normalizeHttpBaseUrl(url)
   const isLoginRequest = isLoginApiRequest(url)
 
@@ -396,8 +446,14 @@ async function fetchWithWebBizFallback(
       options.onResolvedBaseUrl?.(failedBase)
     }
     if (!response.ok && allowFallback && shouldFallbackForHttpStatus(response.status) && failedBase) {
+      console.warn('[requestProto] webBiz primary status failed', {
+        failedBase,
+        requestPath: getUrlPathForLog(url),
+        status: response.status,
+        errorText: response.errorText || '',
+      })
       void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
-      const retryResponse = await retryWithNextWebBizBase(url, init, {
+      const retryResponse = await retryWithWebBizCandidates(url, init, {
         failedBase,
         isLoginRequest,
         onResolvedBaseUrl: options.onResolvedBaseUrl,
@@ -408,8 +464,13 @@ async function fetchWithWebBizFallback(
   } catch (error) {
     if (!allowFallback || !failedBase) throw error
 
+    console.warn('[requestProto] webBiz primary request failed', {
+      failedBase,
+      requestPath: getUrlPathForLog(url),
+      message: error instanceof Error ? error.message : String(error),
+    })
     void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
-    const retryResponse = await retryWithNextWebBizBase(url, init, {
+    const retryResponse = await retryWithWebBizCandidates(url, init, {
       failedBase,
       isLoginRequest,
       onResolvedBaseUrl: options.onResolvedBaseUrl,
@@ -597,6 +658,7 @@ export async function requestProto<TReq, TResp>(opts: {
   includeMetaHeaders?: boolean
   clientInfo?: proto.IClientInfo
   onResolvedBaseUrl?: (baseUrl: string) => void
+  disableWebBizFallback?: boolean
 }): Promise<TResp> {
   const { url, reqType, respType, aesKey = API_CONFIG.aesKey, withSessionId = true } = opts
 
@@ -619,6 +681,7 @@ export async function requestProto<TReq, TResp>(opts: {
   }, {
     withSessionId,
     onResolvedBaseUrl: opts.onResolvedBaseUrl,
+    disableWebBizFallback: opts.disableWebBizFallback,
   })
 
   if (!response.ok) {
