@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
@@ -38,11 +38,26 @@ const hasLoadedFirstQr = ref(false)
 const lastLoginInfo = ref<{ id?: string | number; icon?: string; name?: string; sessionId?: string }>({})
 const lastAvatarLoadError = ref(false)
 
-const domainList = ref<string[]>([getBaseUrl()])
+const QR_SUCCESS_BASE_URL_KEY = `qr-success-base-url:${API_CONFIG.env}:${API_CONFIG.brandId}`
+const domainList = ref<string[]>([getStoredQrSuccessBaseUrl() || getBaseUrl()])
 const urlIndex = ref(0)
 const activeQrBaseUrl = ref('')
 let qrRequestSeq = 0
+let qrLoadCycleId = 0
+let qrLoadCycleStartedAt = 0
 const QR_REQUEST_TIMEOUT_MS = 8000
+
+type QrAttemptStat = {
+  baseUrl: string
+  domainIndex: number
+  startedAt: number
+  elapsedMs?: number
+  result?: 'success' | 'server-error' | 'missing-token' | 'timeout' | 'request-error' | 'stale'
+  message?: string
+  errCode?: number
+}
+
+let qrAttemptStats: QrAttemptStat[] = []
 
 let timerOutTimer: ReturnType<typeof setTimeout> | null = null
 let loginPollingTimer: ReturnType<typeof setTimeout> | null = null
@@ -97,8 +112,49 @@ function inferSessionWsUrl(baseUrl: string): string {
   return normalizeWsUrl(base.replace(/webbiz/gi, 'websession'))
 }
 
+function normalizeHttpBaseUrl(input: string): string {
+  try {
+    const parsed = new URL(String(input || '').trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return ''
+  }
+}
+
+function getStoredQrSuccessBaseUrl(): string {
+  try {
+    return normalizeHttpBaseUrl(localStorage.getItem(QR_SUCCESS_BASE_URL_KEY) || '')
+  } catch {
+    return ''
+  }
+}
+
+function persistQrSuccessBaseUrl(baseUrl: string) {
+  const normalized = normalizeHttpBaseUrl(baseUrl)
+  if (!normalized) return
+  try {
+    localStorage.setItem(QR_SUCCESS_BASE_URL_KEY, normalized)
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function clearQrSuccessBaseUrl(baseUrl?: string) {
+  try {
+    const stored = getStoredQrSuccessBaseUrl()
+    const failed = normalizeHttpBaseUrl(baseUrl || '')
+    if (!baseUrl || !failed || stored === failed) {
+      localStorage.removeItem(QR_SUCCESS_BASE_URL_KEY)
+    }
+  } catch {
+    // ignore storage failures
+  }
+}
+
 function buildDomainList(preferredDomains: string[] = []): string[] {
   const preferred = preferredDomains.map(domain => String(domain || '').trim()).filter(Boolean)
+  const lastSuccessBase = getStoredQrSuccessBaseUrl()
   const base = getBaseUrl()
   const loginPoolDomains = getOrderedDomainUrls('login_v2', { includeError: false })
   const normalPoolDomains = getOrderedDomainUrls('webBiz', { includeError: false })
@@ -109,11 +165,12 @@ function buildDomainList(preferredDomains: string[] = []): string[] {
 
   return [...new Set([
     ...preferred,
+    lastSuccessBase,
     ...loginPoolDomains,
     base,
     ...normalPoolDomains,
     ...errorPoolDomains,
-  ])]
+  ])].filter(Boolean)
 }
 
 function refreshDomainList(preferredDomains: string[] = props.extraDomains || []): boolean {
@@ -130,6 +187,13 @@ function refreshDomainList(preferredDomains: string[] = props.extraDomains || []
     urlIndex.value = Math.max(0, domainList.value.length - 1)
   }
 
+  qrDiag('domain list refreshed', {
+    domainCount: domainList.value.length,
+    domainIndex: urlIndex.value,
+    hasNewDomain,
+    lastSuccessBase: getStoredQrSuccessBaseUrl(),
+    currentBaseUrl: currentBaseUrl.value,
+  })
   return hasNewDomain
 }
 
@@ -199,8 +263,30 @@ function retryAfterDomainRefresh() {
 
 function retryNextDomain(): boolean {
   const failedBase = currentBaseUrl.value
+  clearQrSuccessBaseUrl(failedBase)
   void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
-  if (urlIndex.value >= domainList.value.length - 1) return false
+  if (urlIndex.value >= domainList.value.length - 1) {
+    qrDiag('retry domain exhausted', {
+      failedBase,
+      domainIndex: urlIndex.value,
+      domainCount: domainList.value.length,
+    })
+    return false
+  }
+  // 还没有 token 时继续保持加载态，避免域名兜底间隙提前露出空二维码框。
+  isLoading.value = true
+  qrDiag('retry next domain', {
+    failedBase,
+    nextBase: domainList.value[urlIndex.value + 1] || '',
+    nextIndex: urlIndex.value + 1,
+    domainCount: domainList.value.length,
+  })
+  qrDiag('QR retry visual loading shown', {
+    cycleId: qrLoadCycleId,
+    hasLoadedFirstQr: hasLoadedFirstQr.value,
+    hasToken: !!loginToken.value,
+    isLoading: isLoading.value,
+  })
   urlIndex.value++
   qrCodeUrlError.value = false
   isOutTime.value = false
@@ -275,9 +361,76 @@ function qrDiag(message: string, data?: Record<string, unknown>) {
   console.warn(`[AUTH-DIAG][QRCode] ${message}`, data || {})
 }
 
+function startQrLoadCycle(reason: string) {
+  qrLoadCycleId += 1
+  qrLoadCycleStartedAt = Date.now()
+  qrAttemptStats = []
+  qrDiag('QR load cycle start', {
+    cycleId: qrLoadCycleId,
+    reason,
+    currentBaseUrl: currentBaseUrl.value,
+    domainIndex: urlIndex.value,
+    domainCount: domainList.value.length,
+    lastSuccessBase: getStoredQrSuccessBaseUrl(),
+    hasExtraDomains: !!props.extraDomains?.length,
+  })
+}
+
+function ensureQrLoadCycle(reason: string) {
+  if (qrLoadCycleStartedAt > 0) return
+  startQrLoadCycle(reason)
+}
+
+function finishQrAttempt(attempt: QrAttemptStat, result: QrAttemptStat['result'], data: Partial<QrAttemptStat> = {}) {
+  attempt.result = result
+  attempt.elapsedMs = Date.now() - attempt.startedAt
+  Object.assign(attempt, data)
+}
+
+function getQrSlowReason() {
+  const timeoutCount = qrAttemptStats.filter(item => item.result === 'timeout').length
+  const requestErrorCount = qrAttemptStats.filter(item => item.result === 'request-error').length
+  const serverErrorCount = qrAttemptStats.filter(item => item.result === 'server-error').length
+  const missingTokenCount = qrAttemptStats.filter(item => item.result === 'missing-token').length
+  if (timeoutCount > 0) return 'domain timeout'
+  if (requestErrorCount > 0) return 'domain request error'
+  if (serverErrorCount > 0) return 'server error'
+  if (missingTokenCount > 0) return 'missing token response'
+  if (qrAttemptStats.length > 1) return 'domain fallback'
+  return 'single domain latency'
+}
+
+function logQrLoadSummary(result: 'success' | 'failed') {
+  const totalElapsedMs = qrLoadCycleStartedAt ? Date.now() - qrLoadCycleStartedAt : 0
+  const attempts = qrAttemptStats.map((item) => ({
+    baseUrl: item.baseUrl,
+    domainIndex: item.domainIndex,
+    result: item.result || '',
+    elapsedMs: item.elapsedMs ?? Date.now() - item.startedAt,
+    errCode: item.errCode || 0,
+    message: item.message || '',
+  }))
+  qrDiag('QR load summary', {
+    cycleId: qrLoadCycleId,
+    result,
+    totalElapsedMs,
+    attemptCount: qrAttemptStats.length,
+    slowReason: getQrSlowReason(),
+    attempts,
+  })
+}
+
 async function handleGetQrCodeUrl() {
+  ensureQrLoadCycle('handle get QR without explicit cycle')
   const requestSeq = ++qrRequestSeq
   const baseUrl = currentBaseUrl.value
+  const startedAt = Date.now()
+  const attemptStat: QrAttemptStat = {
+    baseUrl,
+    domainIndex: urlIndex.value,
+    startedAt,
+  }
+  qrAttemptStats.push(attemptStat)
   activeQrBaseUrl.value = baseUrl
   clearTimers()
   isLoading.value = true
@@ -286,9 +439,11 @@ async function handleGetQrCodeUrl() {
   qrCodeUrlError.value = false
   isOutTime.value = false
   qrDiag('get QR code start', {
+    cycleId: qrLoadCycleId,
     baseUrl,
     domainIndex: urlIndex.value,
     domainCount: domainList.value.length,
+    attemptCount: qrAttemptStats.length,
   })
 
   try {
@@ -303,36 +458,59 @@ async function handleGetQrCodeUrl() {
         }, QR_REQUEST_TIMEOUT_MS)
       }),
     ])
-    if (requestSeq !== qrRequestSeq) return
+    if (requestSeq !== qrRequestSeq) {
+      finishQrAttempt(attemptStat, 'stale', { message: 'stale request ignored' })
+      return
+    }
     isLoading.value = false
 
     const errCode = Number(res?.commonResult?.errCode || 0)
     if (errCode && errCode !== 200) {
+      finishQrAttempt(attemptStat, 'server-error', {
+        errCode,
+        message: res.commonResult?.errMsg || '',
+      })
       console.error('[QRCode] Server error:', res.commonResult?.errMsg)
       qrDiag('get QR code server error', {
+        cycleId: qrLoadCycleId,
         baseUrl,
         resolvedQrBaseUrl,
         errCode,
         errMsg: res.commonResult?.errMsg || '',
+        elapsedMs: Date.now() - startedAt,
       })
       isLoading.value = false
       // 与老 im 一致：当前域名失败后切到下一个域名重试
       if (retryNextDomain()) return
       qrCodeUrlError.value = true
+      logQrLoadSummary('failed')
       return
     }
 
     if (res?.token) {
+      finishQrAttempt(attemptStat, 'success')
       activateResolvedBaseUrl(resolvedQrBaseUrl)
+      persistQrSuccessBaseUrl(resolvedQrBaseUrl)
       hasLoadedFirstQr.value = true
+      const tokenSetStartedAt = Date.now()
       loginToken.value = res.token
       qrDiag('get QR code done', {
+        cycleId: qrLoadCycleId,
         baseUrl,
         resolvedQrBaseUrl,
         hasToken: true,
         tokenLen: String(res.token).length,
         officialUrl: officialUrl.value,
+        elapsedMs: Date.now() - startedAt,
       })
+      await nextTick()
+      qrDiag('QR token rendered', {
+        cycleId: qrLoadCycleId,
+        renderWaitMs: Date.now() - tokenSetStartedAt,
+        totalElapsedMs: Date.now() - qrLoadCycleStartedAt,
+        attemptCount: qrAttemptStats.length,
+      })
+      logQrLoadSummary('success')
       // 注意：与老 im 一致——*不* 用 res.officialUrl 覆盖当前包的固定官网域名。
       // 二维码必须保持 `{brand}chat.com?token=X&imQrCodeType=2` 格式。
 
@@ -345,32 +523,45 @@ async function handleGetQrCodeUrl() {
       }, 1500)
     } else {
       // 与老 im 一致：token 无效也尝试切换域名
+      finishQrAttempt(attemptStat, 'missing-token')
       qrDiag('get QR code missing token', {
+        cycleId: qrLoadCycleId,
         baseUrl,
         resolvedQrBaseUrl,
+        elapsedMs: Date.now() - startedAt,
       })
       if (retryNextDomain()) return
       hasLoadedFirstQr.value = true
       qrCodeUrlError.value = true
+      logQrLoadSummary('failed')
     }
   } catch (err) {
-    if (requestSeq !== qrRequestSeq) return
+    if (requestSeq !== qrRequestSeq) {
+      finishQrAttempt(attemptStat, 'stale', { message: 'stale request ignored' })
+      return
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    finishQrAttempt(attemptStat, message.includes('timeout') ? 'timeout' : 'request-error', { message })
     console.error('[QRCode] Failed to get QR code URL:', err)
     qrDiag('get QR code failed', {
+      cycleId: qrLoadCycleId,
       baseUrl,
-      message: err instanceof Error ? err.message : String(err),
+      message,
+      elapsedMs: Date.now() - startedAt,
     })
     isLoading.value = false
 
     if (retryNextDomain()) return
     hasLoadedFirstQr.value = true
     qrCodeUrlError.value = true
+    logQrLoadSummary('failed')
   }
 }
 
 function handleReGetQrCodeUrl() {
   if (!qrCodeUrlError.value && !isOutTime.value) return
 
+  const reloadReason = isOutTime.value ? 'manual reload after QR timeout' : 'manual reload after QR error'
   qrCodeUrlError.value = false
   isOutTime.value = false
   isScanned.value = false
@@ -378,6 +569,7 @@ function handleReGetQrCodeUrl() {
   isLoading.value = true
 
   clearTimers()
+  startQrLoadCycle(reloadReason)
   setTimeout(() => {
     handleGetQrCodeUrl()
   }, 1500)
@@ -439,6 +631,7 @@ async function handleIsLoginGet() {
       isScanned.value = false
       isScanCancelled.value = true
       clearTimers()
+      startQrLoadCycle('refresh after scan cancelled')
       cancelRefreshTimer = setTimeout(() => {
         handleGetQrCodeUrl()
       }, 1200)
@@ -478,26 +671,57 @@ function clearTimers() {
 }
 
 onMounted(async () => {
+  const mountedAt = Date.now()
+  qrDiag('mounted', {
+    initialBaseUrl: currentBaseUrl.value,
+    initialDomainCount: domainList.value.length,
+    hasExtraDomains: !!props.extraDomains?.length,
+  })
   getDeviceConfig()
   loadLastLoginInfo()
   refreshLastLoginAvatar()
 
   // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。
   refreshDomainList(props.extraDomains || [])
+  startQrLoadCycle('mounted initial QR')
   handleGetQrCodeUrl()
 
+  const ossStartedAt = Date.now()
   initDomainPoolFromOss()
     .then(() => {
       const hasNewDomain = refreshDomainList(props.extraDomains || [])
+      qrDiag('oss domain init done', {
+        hasNewDomain,
+        domainCount: domainList.value.length,
+        elapsedMs: Date.now() - ossStartedAt,
+        sinceMountedMs: Date.now() - mountedAt,
+      })
       if (hasNewDomain) retryAfterDomainRefresh()
     })
-    .catch(() => {})
+    .catch((error) => {
+      qrDiag('oss domain init failed', {
+        message: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - ossStartedAt,
+      })
+    })
+  const apiStartedAt = Date.now()
   initDomainPoolFromApi()
     .then(() => {
       const hasNewDomain = refreshDomainList(props.extraDomains || [])
+      qrDiag('api domain init done', {
+        hasNewDomain,
+        domainCount: domainList.value.length,
+        elapsedMs: Date.now() - apiStartedAt,
+        sinceMountedMs: Date.now() - mountedAt,
+      })
       if (hasNewDomain) retryAfterDomainRefresh()
     })
-    .catch(() => {})
+    .catch((error) => {
+      qrDiag('api domain init failed', {
+        message: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - apiStartedAt,
+      })
+    })
 })
 
 onBeforeUnmount(() => {

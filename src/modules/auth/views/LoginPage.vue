@@ -26,32 +26,65 @@ const isMac = ref(false)
 const isLoginWindow = ref(!isTauri())
 const extraDomains = ref<string[]>([])
 const qrLoginKey = ref(0)
+const LOGIN_RESTORE_STEP_TIMEOUT_MS = 10000
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
 
+function loginDiag(message: string, data?: Record<string, unknown>) {
+  console.warn(`[AUTH-DIAG][LoginPage] ${message}`, data || {})
+}
+
+async function withRestoreTimeout<T>(label: string, task: Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  const startedAt = Date.now()
+  try {
+    // 登录窗口初始化不能无限等 Tauri invoke，否则会一直停在首屏转圈。
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`${label} timeout after ${LOGIN_RESTORE_STEP_TIMEOUT_MS}ms`))
+        }, LOGIN_RESTORE_STEP_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+    loginDiag(`${label} settled`, { elapsedMs: Date.now() - startedAt })
+  }
+}
+
 onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
+  loginDiag('mounted', {
+    isTauri: isTauri(),
+    route: route.fullPath,
+    autoLogin: route.query.autoLogin,
+  })
   try {
-    await settingStore.loadSettings()
+    await withRestoreTimeout('load settings', settingStore.loadSettings())
     locale.value = settingStore.settings.language
+    loginDiag('settings loaded', { language: settingStore.settings.language })
 
     if (isTauri()) {
       isLoginWindow.value = getCurrentWindow().label === 'login'
+      loginDiag('window label resolved', { isLoginWindow: isLoginWindow.value })
       if (!isLoginWindow.value) {
-        await authStore.initSession()
+        await withRestoreTimeout('init session for main window', authStore.initSession())
         if (authStore.uid) {
+          loginDiag('main window session restored, route home', { uid: authStore.uid })
           await router.replace('/home')
         } else {
-          await invoke('show_login_window')
+          loginDiag('main window has no session, show login window')
+          await withRestoreTimeout('show login window', invoke('show_login_window'))
         }
         return
       }
     }
 
     const autoLoginAllowed = route.query.autoLogin !== '0'
-    await authStore.initSession(
+    await withRestoreTimeout('init login session', authStore.initSession(
       isTauri()
         ? {
             restoreSession: autoLoginAllowed,
@@ -59,10 +92,15 @@ onMounted(async () => {
             fallbackToCachedAccount: false,
           }
         : undefined,
-    )
+    ))
+    loginDiag('login session init done', {
+      hasUid: !!authStore.uid,
+      autoLoginAllowed,
+    })
     if (authStore.uid) {
       if (isTauri()) {
-        await invoke('login', {
+        loginDiag('cached session found, invoke login', { uid: authStore.uid })
+        await withRestoreTimeout('invoke login with cached session', invoke('login', {
           request: {
             uid: authStore.uid,
             nickname: authStore.nickname,
@@ -74,7 +112,7 @@ onMounted(async () => {
             install_code: getOrCreateInstallCode(),
             session_id: authStore.session?.sessionId || '',
           },
-        })
+        }))
         return
       }
       await router.replace('/home')
@@ -82,8 +120,12 @@ onMounted(async () => {
     }
   } catch (error) {
     console.warn('[auth] restore previous session failed:', error)
+    loginDiag('restore failed, show QR login', {
+      message: error instanceof Error ? error.message : String(error),
+    })
   } finally {
     isRestoring.value = false
+    loginDiag('restore finished', { isRestoring: isRestoring.value })
   }
 })
 

@@ -90,6 +90,7 @@ const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const ACTIVE_GROUP_MEMBER_SYNC_INTERVAL_MS = 5000
 const ACTIVE_GROUP_MEMBER_SYNC_MIN_GAP_MS = 2500
 const CHAT_LIST_NAME_READY_TIMEOUT_MS = 1800
+const INIT_OPTIONAL_STEP_TIMEOUT_MS = 8000
 const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
@@ -109,9 +110,163 @@ let activeGroupMemberSyncInFlight = false
 let lastActiveGroupMemberSyncAt = 0
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/
+let initTraceStartedAt = 0
+let initHeartbeatTimer: number | null = null
+let currentInitStep = ''
+let currentInitStepStartedAt = 0
+let currentInitPhase = 'idle'
 
 function setInitText(text: string) {
+  const previousText = initText.value
   initText.value = text
+  initDiag('init text changed', {
+    from: previousText,
+    to: text,
+  })
+}
+
+function initDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
+  const elapsedMs = initTraceStartedAt ? Date.now() - initTraceStartedAt : 0
+  console[level](`[INIT-DIAG] ${message}`, {
+    elapsedMs,
+    uid: authStore.uid || '',
+    initText: initText.value,
+    currentStep: currentInitStep,
+    currentStepElapsedMs: currentInitStepStartedAt ? Date.now() - currentInitStepStartedAt : 0,
+    currentPhase: currentInitPhase,
+    reloadVisible: initReloadVisible.value,
+    initialized: isInitialized.value,
+    firstInit: firstInitProgressVisible.value,
+    friendProgress: initFriendProgress.value,
+    chatProgress: initChatProgress.value,
+    ...data,
+  })
+}
+
+function setCurrentInitStep(label: string, phase: string) {
+  currentInitStep = label
+  currentInitPhase = phase
+  currentInitStepStartedAt = Date.now()
+  if (initReloadVisible.value) {
+    initReloadVisible.value = false
+    initDiag('reload button hidden: bootstrap progressed', {
+      nextStep: label,
+      nextPhase: phase,
+    })
+  }
+}
+
+function clearCurrentInitStep(label: string) {
+  if (currentInitStep !== label) return
+  currentInitPhase = 'idle'
+  currentInitStep = ''
+  currentInitStepStartedAt = 0
+}
+
+function startInitHeartbeat() {
+  stopInitHeartbeat()
+  initHeartbeatTimer = window.setInterval(() => {
+    if (isInitialized.value) return
+    initDiag('heartbeat: init still pending', {
+      contactCount: contactStore.contacts.length,
+      groupCount: groupStore.groups.length,
+      channelCount: channelStore.channels.length,
+      conversationCount: chatStore.conversations.length,
+    }, 'warn')
+  }, 5000)
+}
+
+function stopInitHeartbeat() {
+  if (initHeartbeatTimer === null) return
+  window.clearInterval(initHeartbeatTimer)
+  initHeartbeatTimer = null
+}
+
+async function traceInitStep<T>(label: string, task: () => Promise<T>, options: { rethrow?: boolean } = {}): Promise<T | null> {
+  const startedAt = Date.now()
+  let settled = false
+  setCurrentInitStep(label, 'blocking')
+  const slowTimer = window.setTimeout(() => {
+    if (!settled) {
+      initDiag(`${label} still pending`, {
+        durationMs: Date.now() - startedAt,
+      }, 'warn')
+    }
+  }, 3000)
+  initDiag(`${label} start`)
+  try {
+    const result = await task()
+    settled = true
+    initDiag(`${label} done`, { durationMs: Date.now() - startedAt })
+    return result
+  } catch (error) {
+    settled = true
+    initDiag(`${label} failed`, {
+      durationMs: Date.now() - startedAt,
+      message: error instanceof Error ? error.message : String(error),
+    }, 'error')
+    if (options.rethrow) throw error
+    return null
+  } finally {
+    window.clearTimeout(slowTimer)
+    clearCurrentInitStep(label)
+  }
+}
+
+async function traceOptionalInitStep<T>(label: string, task: () => Promise<T>, timeoutMs = INIT_OPTIONAL_STEP_TIMEOUT_MS): Promise<T | null> {
+  const startedAt = Date.now()
+  let settled = false
+  let timedOut = false
+  setCurrentInitStep(label, 'optional')
+  const slowTimer = window.setTimeout(() => {
+    if (!settled) {
+      initDiag(`${label} still pending`, {
+        optional: true,
+        durationMs: Date.now() - startedAt,
+      }, 'warn')
+    }
+  }, 3000)
+  initDiag(`${label} start`, { optional: true, timeoutMs })
+  const taskPromise = task()
+    .then((result) => {
+      settled = true
+      initDiag(`${label} done`, {
+        optional: true,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+      })
+      return result
+    })
+    .catch((error) => {
+      settled = true
+      initDiag(`${label} failed`, {
+        optional: true,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+      }, 'error')
+      return null
+    })
+
+  const timeoutPromise = new Promise<null>((resolve) => {
+    window.setTimeout(() => {
+      if (!settled) {
+        timedOut = true
+        initDiag(`${label} timeout, continue bootstrap`, {
+          optional: true,
+          durationMs: Date.now() - startedAt,
+          timeoutMs,
+        }, 'warn')
+      }
+      resolve(null)
+    }, timeoutMs)
+  })
+
+  // 加密检测/WS 连接是启动增强任务，线上域名异常时不能无限挡住进入主页。
+  return Promise.race([taskPromise, timeoutPromise]).finally(() => {
+    window.clearTimeout(slowTimer)
+    clearCurrentInitStep(label)
+  })
 }
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
@@ -217,6 +372,9 @@ function startInitReloadTimer() {
   initReloadTimer = window.setTimeout(() => {
     if (!isInitialized.value) {
       initReloadVisible.value = true
+      initDiag('reload button shown: init still pending after 15000ms', {
+        initText: initText.value,
+      }, 'warn')
     }
   }, 15000)
 }
@@ -234,15 +392,19 @@ function reloadInitPage() {
 function setFirstInitProgress(friend: number, chat: number) {
   initFriendProgress.value = Math.min(100, Math.max(0, friend))
   initChatProgress.value = Math.min(100, Math.max(0, chat))
+  initDiag('first init progress changed', {
+    nextFriendProgress: initFriendProgress.value,
+    nextChatProgress: initChatProgress.value,
+  })
 }
 
 function refreshInitializedAccountData(uid: string) {
   if (!uid) return Promise.resolve([])
   return Promise.allSettled([
-    contactStore.loadContacts(uid, { refreshRemote: true }),
-    groupStore.loadGroups(uid, { forceApi: true }),
-    channelStore.loadChannels(uid),
-    settingStore.loadSettings(),
+    traceInitStep('background refresh contacts', () => contactStore.loadContacts(uid, { refreshRemote: true })),
+    traceInitStep('background refresh groups', () => groupStore.loadGroups(uid, { forceApi: true })),
+    traceInitStep('background refresh channels', () => channelStore.loadChannels(uid)),
+    traceInitStep('background refresh settings', () => settingStore.loadSettings()),
   ])
 }
 
@@ -303,19 +465,56 @@ function pruneUnknownConversations() {
   }
 }
 
+function ensureChannelPlaceholdersFromConversations() {
+  const channelConversations = chatStore.conversations
+    .filter((conv) => conv.type === ConversationType.Channel && /^\d+$/.test(String(conv.targetId || '')))
+
+  if (channelConversations.length === 0) return
+
+  let addedCount = 0
+  for (const conv of channelConversations) {
+    if (channelStore.getChannel(conv.targetId)) continue
+    channelStore.patchChannel(conv.targetId, {
+      id: conv.targetId,
+      channelId: conv.targetId,
+      name: conv.targetId,
+      channelName: conv.targetId,
+      updatedAt: conv.updatedAt || conv.lastMsgTime || Date.now(),
+    })
+    addedCount += 1
+  }
+
+  if (addedCount > 0) {
+    initDiag('channel placeholders restored from conversations', {
+      addedCount,
+      channelConversationCount: channelConversations.length,
+      channelCount: channelStore.channels.length,
+      sampleIds: channelConversations.slice(0, 5).map((item) => item.targetId),
+    })
+    void channelStore.hydratePlaceholderChannels(authStore.uid)
+  }
+}
+
 onMounted(async () => {
+  initTraceStartedAt = Date.now()
+  initDiag('bootstrap mounted', {
+    isTauri: !!(window as any).__TAURI_INTERNALS__,
+  })
   startInitReloadTimer()
+  startInitHeartbeat()
   window.addEventListener('focus', handleWindowFocusRefreshGroupMembers)
   document.addEventListener('visibilitychange', handleVisibilityRefreshGroupMembers)
   uiStore.setChatListNamesReady(true)
 
   try {
     setInitText(t('加载中'))
-    await authStore.initSession()
+    await traceInitStep('auth initSession', () => authStore.initSession(), { rethrow: true })
     if (!authStore.uid) {
+      initDiag('no uid after initSession, show login')
       uiStore.setChatListNamesReady(true)
       isInitialized.value = true
       clearInitReloadTimer()
+      stopInitHeartbeat()
       if ((window as any).__TAURI_INTERNALS__) {
         const { invoke } = await import('@tauri-apps/api/core')
         await invoke('show_login_window')
@@ -328,13 +527,13 @@ onMounted(async () => {
     if (authStore.uid) {
       let chatListNameWarmupPromise: Promise<unknown> | null = null
       firstInitProgressVisible.value = !authStore.isAccountInitialized(authStore.uid)
+      initDiag('account init state resolved', {
+        isAccountInitialized: !firstInitProgressVisible.value,
+      })
       setFirstInitProgress(0, 0)
 
-      try {
-        await authStore.refreshProfile()
-      } catch (error) {
-        console.warn('[init] refresh profile failed:', error)
-      }
+      // 头像/昵称刷新只是启动增强信息，线上 /user/userInfo 慢时不能阻塞本地数据加载和进入主页。
+      void traceOptionalInitStep('refresh profile', () => authStore.refreshProfile(), 3000)
 
       const skipBootstrapAfterLogoutClear = Boolean(
         localStorage.getItem(`${LOGOUT_CLEARED_HISTORY_FLAG_PREFIX}${authStore.uid}`),
@@ -342,45 +541,60 @@ onMounted(async () => {
       setInitText(t('数据载入'))
       if (firstInitProgressVisible.value) {
         uiStore.setChatListNamesReady(true)
-        await contactStore.loadContacts(authStore.uid)
+        await traceInitStep('first init contacts', () => contactStore.loadContacts(authStore.uid), { rethrow: true })
         setFirstInitProgress(100, 0)
 
         await Promise.all([
-          groupStore.loadGroups(authStore.uid),
-          channelStore.loadChannels(authStore.uid),
-          settingStore.loadSettings(),
+          traceInitStep('first init groups', () => groupStore.loadGroups(authStore.uid), { rethrow: true }),
+          traceInitStep('first init channels', () => channelStore.loadChannels(authStore.uid), { rethrow: true }),
+          traceInitStep('first init settings', () => settingStore.loadSettings(), { rethrow: true }),
         ])
 
-        await chatStore.loadConversations(authStore.uid)
+        await traceInitStep('first init conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true })
         setFirstInitProgress(100, 100)
+        initDiag('first init progress reached 100, post steps start')
       } else if ((window as any).__TAURI_INTERNALS__) {
         // 所有 Tauri 桌面端（macOS/Windows）统一走这里：
         // 已初始化账号优先读本地；联系人名称对齐旧 im，加载后立即后台强刷远端通讯录。
         uiStore.setChatListNamesReady(false)
         await Promise.all([
-          chatStore.loadConversations(authStore.uid),
-          contactStore.loadContacts(authStore.uid),
-          groupStore.loadGroups(authStore.uid, { fallbackToApi: false }),
-          channelStore.loadChannels(authStore.uid, { refreshRemote: false }),
-          settingStore.loadSettings({ syncRemote: false }),
+          traceInitStep('desktop cache conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true }),
+          traceInitStep('desktop cache contacts', () => contactStore.loadContacts(authStore.uid), { rethrow: true }),
+          traceInitStep('desktop cache groups', () => groupStore.loadGroups(authStore.uid, { fallbackToApi: false }), { rethrow: true }),
+          traceInitStep('desktop cache channels', () => channelStore.loadChannels(authStore.uid, { refreshRemote: false }), { rethrow: true }),
+          traceInitStep('desktop cache settings', () => settingStore.loadSettings({ syncRemote: false }), { rethrow: true }),
         ])
         chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid).finally(() => {
+          initDiag('background refresh final prune start')
           pruneUnknownConversations()
+          initDiag('background refresh final prune done', {
+            conversationCount: chatStore.conversations.length,
+            channelCount: channelStore.channels.length,
+          })
         })
       } else {
         uiStore.setChatListNamesReady(true)
         await Promise.all([
-          chatStore.loadConversations(authStore.uid),
-          contactStore.loadContacts(authStore.uid),
-          groupStore.loadGroups(authStore.uid),
-          channelStore.loadChannels(authStore.uid),
-          settingStore.loadSettings(),
+          traceInitStep('web conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true }),
+          traceInitStep('web contacts', () => contactStore.loadContacts(authStore.uid), { rethrow: true }),
+          traceInitStep('web groups', () => groupStore.loadGroups(authStore.uid), { rethrow: true }),
+          traceInitStep('web channels', () => channelStore.loadChannels(authStore.uid), { rethrow: true }),
+          traceInitStep('web settings', () => settingStore.loadSettings(), { rethrow: true }),
         ])
       }
+      initDiag('primary data load done', {
+        contactCount: contactStore.contacts.length,
+        groupCount: groupStore.groups.length,
+        channelCount: channelStore.channels.length,
+        conversationCount: chatStore.conversations.length,
+      })
       setInitText(t('数据已载入'))
       appLocale.value = settingStore.settings.language
       void preloadConversationSummariesNeedingNames(authStore.uid)
+      initDiag('prune conversations start', { beforeCount: chatStore.conversations.length })
+      ensureChannelPlaceholdersFromConversations()
       pruneUnknownConversations()
+      initDiag('prune conversations done', { afterCount: chatStore.conversations.length })
 
       // Bootstrap: if no real conversations exist, seed from contacts/groups
       // (mirrors old im project's behavior of building the chat list from synced data)
@@ -388,6 +602,11 @@ onMounted(async () => {
         (c) => !isFileHelperTargetId(c.targetId) && isConversationInCurrentRelations(c),
       )
       if (!hasRealConversations && !skipBootstrapAfterLogoutClear) {
+        initDiag('seed conversations from relations start', {
+          contactCount: contactStore.contacts.length,
+          groupCount: groupStore.groups.length,
+          channelCount: channelStore.channels.length,
+        })
         for (const contact of contactStore.contacts) {
           if (contact.id && contact.status > 0) {
             chatStore.ensureConversation(0, contact.id)
@@ -403,6 +622,9 @@ onMounted(async () => {
             chatStore.ensureConversation(2, channel.id)
           }
         }
+        initDiag('seed conversations from relations done', {
+          conversationCount: chatStore.conversations.length,
+        })
       }
       try {
         if ((window as any).__TAURI_INTERNALS__) {
@@ -414,7 +636,7 @@ onMounted(async () => {
 
               // 对齐老 im：启动页只阻塞自身密钥初始化；联系人 relKey 在 WS 连接后由 tauri-events
               // 后台预热，避免联系人多时长时间停留在“加密检测”。
-              await ensureOwnKeyPair(uid)
+              await traceOptionalInitStep('ensure own key pair', () => ensureOwnKeyPair(uid))
             } catch {
               // key prewarm best effort; do not block WS connect forever
             }
@@ -424,7 +646,7 @@ onMounted(async () => {
           const sessionId = String(authStore.session?.sessionId || '').trim()
           const installCode = authStore.wsConnectConfig?.installCode || getOrCreateInstallCode()
           if (wsUrl && aesKey) {
-            await invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid })
+            await traceOptionalInitStep('connect ws', () => invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid }))
           } else if (uid) {
             networkStore.setWsStatus('disconnected')
             console.warn('[AUTH-DIAG][ws] skipped connect: missing ws config', {
@@ -444,15 +666,33 @@ onMounted(async () => {
     }
 
     setInitText(t('完成'))
+    initDiag('before final initialized', {
+      channelCount: channelStore.channels.length,
+      placeholderChannelCount: channelStore.channels.filter((item) => {
+        const name = String(item.channelName || item.name || '').trim()
+        const id = String(item.id || item.channelId || '').trim()
+        return !name || name === id
+      }).length,
+    })
     chatStore.ensureFileHelperConversationInMemory()
     if (authStore.uid && firstInitProgressVisible.value) {
       authStore.markAccountInitialized(authStore.uid)
     }
     isInitialized.value = true
+    initDiag('bootstrap initialized true', {
+      totalDurationMs: Date.now() - initTraceStartedAt,
+      conversationCount: chatStore.conversations.length,
+      channelCount: channelStore.channels.length,
+    })
     clearInitReloadTimer()
+    stopInitHeartbeat()
   } catch (err) {
     uiStore.setChatListNamesReady(true)
     initReloadVisible.value = true
+    initDiag('bootstrap failed, reload button shown', {
+      initText: initText.value,
+      message: err instanceof Error ? err.message : String(err),
+    }, 'error')
     console.warn('[init] bootstrap failed:', err)
   }
 
@@ -464,6 +704,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearInitReloadTimer()
+  stopInitHeartbeat()
   clearActiveGroupMemberSyncTimer()
   window.removeEventListener('focus', handleWindowFocusRefreshGroupMembers)
   document.removeEventListener('visibilitychange', handleVisibilityRefreshGroupMembers)
