@@ -332,7 +332,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
   display: block;
   width: 180px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: normal;
   line-height: 20px;
   color: #000;
   white-space: nowrap;
