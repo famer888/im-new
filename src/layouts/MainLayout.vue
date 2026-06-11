@@ -1114,6 +1114,19 @@ function getGroupReadTotal(data: Record<string, unknown>): number {
 }
 
 function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
+  const readTotal = getGroupReadTotal(data)
+  // 0 个已读是明确空态；只有已读数存在但成员明细缺失时，才显示加载中。
+  if (readTotal <= 0) {
+    return [
+      {
+        key: 'group_read_submenu_empty',
+        label: '暂无已读成员',
+        disabled: true,
+        tone: 'muted',
+      },
+    ]
+  }
+
   const rawUsers = getMessageReadUsers(data)
   if (!rawUsers.length) {
     if (!Boolean(data.isSelf) && Number(data.readStatus || 0) > 0) {
