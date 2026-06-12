@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { MessageType } from '@/types'
 import ImageMessage from './ImageMessage.vue'
@@ -34,6 +34,52 @@ function parseExtraObject(raw: Message['extra']): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function isChannelConversationId(value: unknown): boolean {
+  return String(value || '').startsWith('2_')
+}
+
+function stringifySlotExtra(extra: Record<string, unknown>): string | null {
+  try {
+    return Object.keys(extra).length > 0 ? JSON.stringify(extra) : null
+  } catch {
+    return null
+  }
+}
+
+function buildMediaSlotExtra(index: number): string | null {
+  const parentExtra = parseExtraObject(props.message.extra)
+  const channelId = String(parentExtra.channelId || '').trim()
+  const isChannelMessage = isChannelConversationId(props.message.conversationId) || Boolean(channelId)
+  if (!isChannelMessage) return null
+
+  // 频道多图子格子会复用 Image/Video 组件下载；必须保留父消息的附件 key，避免子格子 extra=null 后无法解密。
+  const slotExtra: Record<string, unknown> = {
+    channelId: channelId || String(props.message.conversationId || '').split('_')[1] || '',
+    mediaSlotIndex: index,
+    parentMsgId: props.message.id || props.message.customMsgId || '',
+  }
+  for (const key of ['version', 'contentMd5', 'readTotal', 'decryptPending', 'cipherHex', 'attachmentKey', 'fileKey']) {
+    if (parentExtra[key] !== undefined && parentExtra[key] !== null && String(parentExtra[key]).length > 0) {
+      slotExtra[key] = parentExtra[key]
+    }
+  }
+  return stringifySlotExtra(slotExtra)
+}
+
+function channelMediasLog(message: string, data: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
+  console[level](`[channel-medias] ${message}`, data)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[channel-medias] ${message}`,
+        data,
+      },
+    }))
+    .catch(() => {})
 }
 
 function buildImageSlotContent(meta: string[], fileKey: string): string {
@@ -104,11 +150,11 @@ function buildCommonItem(index: number): Omit<MediaCaptionItem, 'msgType' | 'con
     ...props.message,
     id: slotId,
     customMsgId: slotId,
-    extra: null,
+    extra: buildMediaSlotExtra(index),
     mediaSlotIndex: index,
   } as MediaCaptionItem
 
-  // 子格子不直接继承整份 extra，避免 attachmentKey/cipherCandidates 污染；共享 fileKey 会按格子写入 content。
+  // 子格子不直接继承整份 extra，避免私聊/群聊 cipherCandidates 污染；频道只保留下载解密需要的父级字段。
   delete (common as Partial<MediaCaptionItem>).content
   const dynamicFields = common as unknown as Record<string, unknown>
   delete dynamicFields.fileKey
@@ -175,6 +221,49 @@ const parsed = computed(() => {
 const mediaItems = computed(() => parsed.value.items)
 const captionText = computed(() => parsed.value.caption)
 const gridColumnCount = computed(() => Math.max(1, Math.min(3, mediaItems.value.length || 1)))
+
+watch(
+  () => [
+    props.message.id,
+    props.message.customMsgId,
+    props.message.conversationId,
+    props.message.content,
+    props.message.extra,
+    mediaItems.value.length,
+  ],
+  () => {
+    const parentExtra = parseExtraObject(props.message.extra)
+    const content = String(props.message.content || '')
+    const channelId = String(parentExtra.channelId || '').trim()
+    if (!isChannelConversationId(props.message.conversationId) && !channelId) return
+
+    // 频道多图单独打点：确认父内容是否已解密、是否拆出了子图、子图是否拿到附件 key。
+    channelMediasLog(mediaItems.value.length > 0 ? 'parsed channel medias' : 'empty channel medias', {
+      id: props.message.id,
+      customMsgId: props.message.customMsgId,
+      conversationId: props.message.conversationId,
+      contentLen: content.length,
+      contentHead: content.slice(0, 220),
+      segmentCount: (content.split('##caption##')[0] || '').split('|||').filter((segment) => segment.trim()).length,
+      itemCount: mediaItems.value.length,
+      captionLen: captionText.value.length,
+      parentFileKeyLen: parentFileKey.value.length,
+      parentAttachmentKeyLen: String(parentExtra.attachmentKey || '').length,
+      decryptPending: Boolean(parentExtra.decryptPending),
+      itemSamples: mediaItems.value.slice(0, 4).map((item) => {
+        const itemExtra = parseExtraObject(item.extra)
+        return {
+          id: item.id,
+          msgType: item.msgType,
+          contentLen: String(item.content || '').length,
+          fileKeyLen: String(itemExtra.fileKey || '').length,
+          attachmentKeyLen: String(itemExtra.attachmentKey || '').length,
+        }
+      }),
+    }, mediaItems.value.length > 0 ? 'info' : 'warn')
+  },
+  { immediate: true },
+)
 </script>
 
 <template>

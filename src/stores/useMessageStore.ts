@@ -277,6 +277,30 @@ function toFiniteNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
+function countByNumber(values: Array<number | string>): Record<string, number> {
+  return values.reduce<Record<string, number>>((acc, value) => {
+    const key = String(value)
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+}
+
+function channelHistoryLog(
+  message: string,
+  data: Record<string, unknown> = {},
+  level: 'info' | 'warn' | 'error' = 'info',
+) {
+  console[level](`[channel-history] ${message}`, data)
+  if (!isTauri()) return
+  void tauriInvoke('image_send_log', {
+    payload: {
+      level,
+      message: `[channel-history] ${message}`,
+      data,
+    },
+  }).catch(() => {})
+}
+
 function buildPrivateCipherCandidates(extra: Record<string, unknown>) {
   const candidates = Array.isArray(extra.cipherCandidates)
     ? extra.cipherCandidates
@@ -1227,6 +1251,116 @@ export const useMessageStore = defineStore('message', () => {
 
     return messages
   }
+
+  async function retryDecryptPendingChannelMessages(uid: string, messages: Message[]) {
+    if (!isTauri() || !uid || messages.length === 0) return messages
+
+    const pendingChannelIds = Array.from(new Set(
+      messages
+        .filter((message) => {
+          if (!getChannelIdFromConversationId(message.conversationId)) return false
+          const extra = parseExtraObject(message.extra)
+          return Boolean(extra?.decryptPending && extra?.cipherHex)
+        })
+        .map((message) => {
+          const extra = parseExtraObject(message.extra)
+          return String(extra?.channelId || getChannelIdFromConversationId(message.conversationId) || '')
+        })
+        .filter((channelId) => !!channelId),
+    ))
+
+    for (const channelId of pendingChannelIds) {
+      try {
+        await ensureChannelRelKey(uid, channelId)
+      } catch (error) {
+        channelHistoryLog('ensure channel rel key on loadMessages retry failed', {
+          uid,
+          channelId,
+          err: String(error),
+        }, 'warn')
+      }
+    }
+
+    const persisted: Message[] = []
+    for (const message of messages) {
+      const conversationId = String(message.conversationId || '')
+      const channelId = getChannelIdFromConversationId(conversationId)
+      if (!channelId) continue
+
+      const extra = parseExtraObject(message.extra) || {}
+      const cipherHex = String(extra.cipherHex || '')
+      if (!extra.decryptPending || !cipherHex) continue
+
+      try {
+        const plain = await tauriInvoke<string>('decrypt_channel_incoming', {
+          channelId: String(extra.channelId || channelId),
+          ciphertextHex: cipherHex,
+          msgType: Number(message.msgType || 0),
+        })
+        const nextExtra = {
+          ...extra,
+          decryptPending: false,
+          cipherHex,
+        } as Record<string, unknown>
+        const attachmentKey = String(nextExtra.attachmentKey || nextExtra.attachment_key || '')
+        const fileKey = await resolveChannelAttachmentFileKey(channelId, attachmentKey)
+        if (fileKey && !normalizeResolvedFileKey(nextExtra.fileKey)) {
+          nextExtra.fileKey = fileKey
+        }
+
+        // 频道本地缓存里的 decryptPending 消息打开会话时重试，避免旧占位一直留在 UI。
+        message.content = plain
+        message.extra = stringifyExtra(nextExtra)
+        persisted.push(message)
+        channelHistoryLog('retry pending channel decrypted', {
+          uid,
+          channelId,
+          messageId: message.id,
+          msgType: message.msgType,
+          contentLen: plain.length,
+          contentHead: plain.slice(0, 180),
+        })
+      } catch (error) {
+        channelHistoryLog('retry pending channel decrypt failed', {
+          uid,
+          channelId,
+          messageId: message.id,
+          msgType: message.msgType,
+          cipherLen: cipherHex.length,
+          err: String(error),
+        }, 'warn')
+      }
+    }
+
+    if (persisted.length > 0) {
+      await tauriInvoke('upsert_incoming_messages', {
+        uid,
+        messages: persisted.map((message) => ({
+          id: message.id,
+          customMsgId: message.customMsgId,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          msgType: message.msgType,
+          content: message.content,
+          sendTime: message.sendTime,
+          status: message.status,
+          readStatus: message.readStatus,
+          version: message.version,
+          isDeleted: message.isDeleted,
+          extra: parseExtraObject(message.extra),
+        })),
+      }).catch((error) => {
+        channelHistoryLog('persist retried channel messages failed', {
+          uid,
+          count: persisted.length,
+          err: String(error),
+        }, 'warn')
+      })
+    }
+
+    // 返回新对象，确保频道 decryptPending 占位被真实内容替换后，消息组件能收到 props 更新。
+    return messages.map((message) => ({ ...message }))
+  }
   async function retryDecryptPendingPrivateConversations(uid: string, conversationIds?: string[]) {
     if (!isTauri() || !uid) return
     const targets = (conversationIds && conversationIds.length > 0
@@ -1279,11 +1413,11 @@ export const useMessageStore = defineStore('message', () => {
       })
       return normalizeResolvedFileKey(resolved)
     } catch (error) {
-      console.warn('[channel-history] resolve attachment fileKey failed', {
+      channelHistoryLog('resolve attachment fileKey failed', {
         channelId,
         attachmentKeyLen: attachmentKey.length,
         err: String(error),
-      })
+      }, 'warn')
       return ''
     }
   }
@@ -1305,14 +1439,14 @@ export const useMessageStore = defineStore('message', () => {
       })
     } catch (error) {
       decryptPending = true
-      console.warn('[channel-history] decrypt content failed', {
+      channelHistoryLog('decrypt content failed', {
         uid,
         channelId,
         msgId: item.msgId,
         msgType: item.msgType,
         cipherLen: item.contentHex.length,
         err: String(error),
-      })
+      }, 'warn')
     }
 
     const fileKey = await resolveChannelAttachmentFileKey(channelId, item.attachmentKey)
@@ -1344,15 +1478,33 @@ export const useMessageStore = defineStore('message', () => {
 
   async function syncChannelRecentHistory(uid: string, conversationId: string, loadedMessages: Message[]) {
     const channelId = getChannelIdFromConversationId(conversationId)
-    if (!isTauri() || !uid || !channelId) return
+    if (!isTauri() || !uid || !channelId) {
+      channelHistoryLog('sync skipped: invalid runtime or params', {
+        isTauri: isTauri(),
+        hasUid: Boolean(uid),
+        uid,
+        conversationId,
+        channelId,
+        loadedCount: loadedMessages.length,
+      }, 'warn')
+      return
+    }
 
     try {
+      channelHistoryLog('sync start', {
+        uid,
+        conversationId,
+        channelId,
+        loadedCount: loadedMessages.length,
+        loadedIds: loadedMessages.slice(-10).map((message) => message.id),
+        loadedTypes: loadedMessages.slice(-10).map((message) => message.msgType),
+      })
       const latestResp = await getChannelLastMsgInfo({
         bizType: 2,
         bizId: channelId,
       })
       const latestMsgId = getLatestChannelMsgId(latestResp)
-      console.info('[channel-history] latest check', {
+      channelHistoryLog('latest check', {
         uid,
         conversationId,
         channelId,
@@ -1362,12 +1514,12 @@ export const useMessageStore = defineStore('message', () => {
         rawRows: (latestResp as any)?.data || [],
       })
       if (!latestMsgId) {
-        console.warn('[channel-history] skip: empty latest msg id', {
+        channelHistoryLog('skip: empty latest msg id', {
           uid,
           conversationId,
           channelId,
           latestResp,
-        })
+        }, 'warn')
         return
       }
 
@@ -1375,23 +1527,24 @@ export const useMessageStore = defineStore('message', () => {
       const hasLastOne = hasVisibleChannelMessageId(recentMessages, latestMsgId)
       const hasLastTwo = latestMsgId <= 1 || hasVisibleChannelMessageId(recentMessages, latestMsgId - 1)
       if (hasLastOne && hasLastTwo) {
-        console.info('[channel-history] skip: local already latest', {
+        channelHistoryLog('skip: local already latest', {
           uid,
           conversationId,
           channelId,
           latestMsgId,
           recentIds: recentMessages.map((message) => message.id),
+          expectedPrevId: latestMsgId - 1,
         })
         return
       }
 
       // 对齐旧 im：本地不是频道最新时只补最近 30 条，避免长时间离线后一次性拉全量历史。
       await ensureChannelRelKey(uid, channelId).catch((error) => {
-        console.warn('[channel-history] ensure channel rel key failed before history decrypt', {
+        channelHistoryLog('ensure channel rel key failed before history decrypt', {
           uid,
           channelId,
           err: String(error),
-        })
+        }, 'warn')
       })
       const historyParams = {
         bizType: 2,
@@ -1401,7 +1554,7 @@ export const useMessageStore = defineStore('message', () => {
         latestSize: latestMsgId > CHANNEL_HISTORY_LATEST_SIZE ? CHANNEL_HISTORY_LATEST_SIZE : latestMsgId,
         latestMsgId: latestMsgId + 1,
       }
-      console.info('[channel-history] request history start', {
+      channelHistoryLog('request history start', {
         uid,
         conversationId,
         channelId,
@@ -1411,11 +1564,12 @@ export const useMessageStore = defineStore('message', () => {
         historyParams,
       })
       const historyItems = await getChannelHistoryMessages(historyParams)
-      console.info('[channel-history] request history done', {
+      channelHistoryLog('request history done', {
         uid,
         conversationId,
         channelId,
         count: historyItems.length,
+        msgTypeCounts: countByNumber(historyItems.map((item) => item.msgType)),
         samples: historyItems.slice(0, 5).map((item) => ({
           msgId: item.msgId,
           msgType: item.msgType,
@@ -1424,19 +1578,37 @@ export const useMessageStore = defineStore('message', () => {
           contentHexLen: item.contentHex.length,
           attachmentKeyLen: item.attachmentKey.length,
         })),
+        mediasCaptionSamples: historyItems
+          .filter((item) => Number(item.msgType) === 17)
+          .slice(0, 5)
+          .map((item) => ({
+            msgId: item.msgId,
+            msgTime: item.msgTime,
+            contentHexLen: item.contentHex.length,
+            attachmentKeyLen: item.attachmentKey.length,
+          })),
       })
-      if (historyItems.length === 0) return
+      if (historyItems.length === 0) {
+        channelHistoryLog('skip: history api returned empty', {
+          uid,
+          conversationId,
+          channelId,
+          historyParams,
+        }, 'warn')
+        return
+      }
 
       const normalized = (await Promise.all(
         historyItems.map((item) => normalizeChannelHistoryMessage(uid, conversationId, channelId, item)),
       ))
         .filter((item): item is Message => !!item)
         .sort((a, b) => a.sendTime - b.sendTime)
-      console.info('[channel-history] normalized messages', {
+      channelHistoryLog('normalized messages', {
         uid,
         conversationId,
         channelId,
         count: normalized.length,
+        msgTypeCounts: countByNumber(normalized.map((message) => message.msgType)),
         samples: normalized.slice(0, 5).map((message) => {
           const extra = parseExtraObject(message.extra)
           return {
@@ -1448,10 +1620,41 @@ export const useMessageStore = defineStore('message', () => {
             decryptPending: Boolean(extra?.decryptPending),
           }
         }),
+        mediasCaptionSamples: normalized
+          .filter((message) => Number(message.msgType) === 17)
+          .slice(0, 5)
+          .map((message) => {
+            const extra = parseExtraObject(message.extra)
+            const content = String(message.content || '')
+            return {
+              id: message.id,
+              contentLen: content.length,
+              contentHead: content.slice(0, 180),
+              fileKeyLen: String(extra?.fileKey || '').length,
+              attachmentKeyLen: String(extra?.attachmentKey || '').length,
+              decryptPending: Boolean(extra?.decryptPending),
+            }
+          }),
       })
-      if (normalized.length === 0) return
+      if (normalized.length === 0) {
+        channelHistoryLog('skip: normalized history empty', {
+          uid,
+          conversationId,
+          channelId,
+          historyCount: historyItems.length,
+        }, 'warn')
+        return
+      }
 
       batchAppendMessages(normalized)
+      channelHistoryLog('append normalized messages', {
+        uid,
+        conversationId,
+        channelId,
+        count: normalized.length,
+        ids: normalized.map((message) => message.id),
+        currentCountAfterAppend: getMessages(conversationId).length,
+      })
       await tauriInvoke('upsert_incoming_messages', {
         uid,
         messages: normalized.map((message) => ({
@@ -1469,26 +1672,58 @@ export const useMessageStore = defineStore('message', () => {
           extra: parseExtraObject(message.extra),
         })),
       }).catch((error) => {
-        console.warn('[channel-history] persist fetched messages failed', {
+        channelHistoryLog('persist fetched messages failed', {
           uid,
           channelId,
           count: normalized.length,
           err: String(error),
-        })
+        }, 'warn')
       })
     } catch (error) {
-      console.warn('[channel-history] sync recent history failed', {
+      channelHistoryLog('sync recent history failed', {
         uid,
         conversationId,
         channelId,
         err: String(error),
-      })
+      }, 'warn')
     }
   }
 
   async function loadMessages(uid: string, conversationId: string, force = false) {
-    if (!isTauri()) return
-    if (isLoading(conversationId) && !force) return
+    const channelIdForHistory = getChannelIdFromConversationId(conversationId)
+    if (channelIdForHistory) {
+      channelHistoryLog('loadMessages enter', {
+        uid,
+        conversationId,
+        channelId: channelIdForHistory,
+        force,
+        isTauri: isTauri(),
+        isLoading: isLoading(conversationId),
+        currentCount: getMessages(conversationId).length,
+        currentTailIds: getMessages(conversationId).slice(-10).map((message) => message.id),
+      })
+    }
+    if (!isTauri()) {
+      if (channelIdForHistory) {
+        channelHistoryLog('loadMessages skipped: not tauri runtime', {
+          uid,
+          conversationId,
+          channelId: channelIdForHistory,
+        }, 'warn')
+      }
+      return
+    }
+    if (isLoading(conversationId) && !force) {
+      if (channelIdForHistory) {
+        channelHistoryLog('loadMessages skipped: already loading', {
+          uid,
+          conversationId,
+          channelId: channelIdForHistory,
+          force,
+        }, 'warn')
+      }
+      return
+    }
 
     const loadStartedAt = Date.now()
     const existingBeforeLoad = getMessages(conversationId)
@@ -1550,6 +1785,15 @@ export const useMessageStore = defineStore('message', () => {
       applyLoadedSnapshot(normalizedBase)
       // 频道会话对齐旧 im：进入聊天窗口后校验服务端最新消息，必要时补最近 30 条离线漏消息。
       if (getChannelIdFromConversationId(conversationId)) {
+        channelHistoryLog('loadMessages local snapshot applied', {
+          uid,
+          conversationId,
+          channelId: channelIdForHistory,
+          rawCount: Array.isArray(result) ? result.length : 0,
+          normalizedCount: normalizedBase.length,
+          currentCount: getMessages(conversationId).length,
+          currentTailIds: getMessages(conversationId).slice(-10).map((message) => message.id),
+        })
         await syncChannelRecentHistory(uid, conversationId, getMessages(conversationId))
       }
       const hasDecryptPending = normalizedBase.some((message) => {
@@ -1557,7 +1801,10 @@ export const useMessageStore = defineStore('message', () => {
         return Boolean(extra?.decryptPending)
       })
       if (hasDecryptPending) {
-        void retryDecryptPendingPrivateMessages(uid, normalizedBase)
+        const retryPendingMessages = getChannelIdFromConversationId(conversationId)
+          ? retryDecryptPendingChannelMessages(uid, normalizedBase)
+          : retryDecryptPendingPrivateMessages(uid, normalizedBase)
+        void retryPendingMessages
           .then((resolved) => {
             applyLoadedSnapshot(resolved)
           })
@@ -1630,7 +1877,10 @@ export const useMessageStore = defineStore('message', () => {
         return Boolean(extra?.decryptPending)
       })
       if (hasDecryptPending) {
-        void retryDecryptPendingPrivateMessages(uid, normalizedBase)
+        const retryPendingMessages = getChannelIdFromConversationId(conversationId)
+          ? retryDecryptPendingChannelMessages(uid, normalizedBase)
+          : retryDecryptPendingPrivateMessages(uid, normalizedBase)
+        void retryPendingMessages
           .then((resolved) => {
             applyOlderSnapshot(resolved)
           })

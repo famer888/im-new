@@ -490,9 +490,13 @@ export interface ChannelHistoryMessage {
   attachmentKey: string
 }
 
-async function requestChannelJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
+async function requestChannelJson<T>(
+  path: string,
+  data: Record<string, unknown>,
+  options?: { contentType?: string },
+): Promise<T> {
   const headers = {
-    'Content-Type': 'application/octet-stream',
+    'Content-Type': options?.contentType || 'application/octet-stream',
     Accept: 'application/json',
     ...getOpenChatSignedApiHeaders(),
   }
@@ -735,7 +739,14 @@ export async function getChannelLastMsgInfo(data: {
   bizType: number
   bizId: number | string
 }): Promise<ChannelLastMsgInfoResp> {
-  return requestChannelJson<ChannelLastMsgInfoResp>('/message/channelMessage/latestId', data)
+  // 对齐旧 im：latestId 的 bizId 传 Number(channelId)，且网关要求 Content-Type=application/json。
+  const bizIdNumber = Number(data.bizId)
+  return requestChannelJson<ChannelLastMsgInfoResp>('/message/channelMessage/latestId', {
+    ...data,
+    bizId: Number.isFinite(bizIdNumber) ? bizIdNumber : data.bizId,
+  }, {
+    contentType: 'application/json',
+  })
 }
 
 export async function getChannelHistoryMessages(data: {
