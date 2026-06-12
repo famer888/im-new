@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
+import { API_CONFIG } from '@/api/config'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
@@ -20,6 +21,7 @@ const showPreview = ref(false)
 const imageElRef = ref<HTMLImageElement | null>(null)
 const naturalImageWidth = ref(0)
 const naturalImageHeight = ref(0)
+const dynamicImageHeadKeyFallbackStarted = ref(false)
 let downloadToken = 0
 let materializeToken = 0
 let stopDownloadEvents: Array<() => void> = []
@@ -95,6 +97,41 @@ function extractImageUrlFromRawContent(raw: string): string {
 
 function isRemoteImageSrc(src: string): boolean {
   return /^https?:\/\//i.test(src)
+}
+
+function shortLogValue(value: unknown, max = 120): string {
+  const text = String(value ?? '')
+  return text.length > max ? `${text.slice(0, max)}...` : text
+}
+
+function isChannelMessage(): boolean {
+  return String(props.message.conversationId || '').startsWith('2_')
+}
+
+function channelImageLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
+  if (!isChannelMessage()) return
+  const payload = {
+    messageId: props.message.id || props.message.customMsgId || '',
+    customMsgId: props.message.customMsgId || '',
+    conversationId: props.message.conversationId || '',
+    msgType: props.message.msgType,
+    status: props.message.status,
+    contentHead: shortLogValue(props.message.content, 160),
+    extraHead: shortLogValue(typeof props.message.extra === 'string' ? props.message.extra : JSON.stringify(props.message.extra || {}), 160),
+    ...data,
+  }
+  console[level](`[channel-image] ${message}`, payload)
+
+  if (!(window as any).__TAURI_INTERNALS__) return
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[channel-image] ${message}`,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
 }
 
 const imageData = computed((): {
@@ -299,8 +336,25 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   loadError.value = false
   activeSrc.value = ''
   localFilePath.value = ''
+  channelImageLog('watch decision start', {
+    hasImageUrl: Boolean(imageData.value.url),
+    imageUrlHead: shortLogValue(imageData.value.url),
+    thumbnailHead: shortLogValue(thumbnailUrl.value),
+    downloadUrlHead: shortLogValue(downloadUrl.value),
+    hasFileKey: Boolean(fileKey.value),
+    fileKeyLen: fileKey.value.length,
+    hasAttachmentKey: Boolean(attachmentKey.value),
+    attachmentKeyLen: attachmentKey.value.length,
+    hasLocalSource: Boolean(localSourcePath.value),
+    shouldUseLocalPreview: shouldUseLocalPreview.value,
+    isOwnPlaceholder: isOwnSingleImageUploadPlaceholder.value,
+  })
   if (shouldUseLocalPreview.value) {
     // 自己刚发送的图片保留本地预览，避免发送成功后重新回到桌面端不可加载的 blob: 源。
+    channelImageLog('use local preview', {
+      localSourceHead: shortLogValue(localSourcePath.value),
+      previewHead: shortLogValue(localPreviewSrc.value),
+    })
     cleanupDownloadEvents()
     localFilePath.value = localSourcePath.value
     activeSrc.value = localPreviewSrc.value
@@ -310,6 +364,10 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   }
   if (isOwnSingleImageUploadPlaceholder.value) {
     // 发送中的本地图片也先渲染缩略图，避免仅显示灰色加载蒙层。
+    channelImageLog('use upload placeholder preview', {
+      localSourceHead: shortLogValue(localSourcePath.value),
+      thumbnailHead: shortLogValue(thumbnailUrl.value),
+    })
     cleanupDownloadEvents()
     if (localSourcePath.value) {
       localFilePath.value = localSourcePath.value
@@ -320,12 +378,17 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
     return
   }
   if (!thumbnailUrl.value && !imageData.value.url && !fileKey.value && !attachmentKey.value) {
+    channelImageLog('load error: missing url and keys', {}, 'warn')
     loadError.value = true
     isLoaded.value = true
     return
   }
   const cached = getCachedImage(imageCacheKey.value)
   if (cached) {
+    channelImageLog('use memory cache', {
+      cachedSrcHead: shortLogValue(cached.src),
+      cachedLocalPathHead: shortLogValue(cached.localFilePath),
+    })
     activeSrc.value = cached.src
     localFilePath.value = cached.localFilePath
     loadError.value = false
@@ -333,6 +396,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
     return
   }
   if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
+    channelImageLog('start download/decrypt path')
     downloadAndDecryptImage()
     return
   }
@@ -340,6 +404,10 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
     localFilePath.value = localSourcePath.value
   }
   activeSrc.value = thumbnailUrl.value
+  channelImageLog('use direct thumbnail path', {
+    activeSrcHead: shortLogValue(activeSrc.value),
+    hasRemoteOriginal: isRemoteImageSrc(imageData.value.url),
+  })
   materializeDataImageForDrag()
   markLoadedIfImageAlreadyComplete()
 }, { immediate: true })
@@ -348,6 +416,12 @@ function handleLoad() {
   naturalImageWidth.value = imageElRef.value?.naturalWidth || 0
   naturalImageHeight.value = imageElRef.value?.naturalHeight || 0
   isLoaded.value = true
+  channelImageLog('img load success', {
+    activeSrcHead: shortLogValue(activeSrc.value),
+    localFilePathHead: shortLogValue(localFilePath.value),
+    naturalWidth: naturalImageWidth.value,
+    naturalHeight: naturalImageHeight.value,
+  })
   setCachedImage(imageCacheKey.value, {
     src: activeSrc.value,
     localFilePath: localFilePath.value,
@@ -392,11 +466,43 @@ function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (fallbackFromLocalPreviewError()) return
   const originalUrl = imageData.value.url
+  if (
+    isChannelMessage()
+    && Number(props.message.msgType) === 9
+    && downloadUrl.value
+    && !fileKey.value
+    && !attachmentKey.value
+    && !dynamicImageHeadKeyFallbackStarted.value
+  ) {
+    dynamicImageHeadKeyFallbackStarted.value = true
+    channelImageLog('img error: retry dynamic image with head aes key', {
+      activeSrcHead: shortLogValue(activeSrc.value),
+      downloadUrlHead: shortLogValue(downloadUrl.value),
+      headKeyLen: API_CONFIG.headAesKey.length,
+    }, 'warn')
+    activeSrc.value = ''
+    loadError.value = false
+    isLoaded.value = false
+    downloadAndDecryptImage()
+    return
+  }
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
+    channelImageLog('img error: fallback to original url', {
+      activeSrcHead: shortLogValue(activeSrc.value),
+      originalUrlHead: shortLogValue(originalUrl),
+    }, 'warn')
     activeSrc.value = originalUrl
     isLoaded.value = false
     return
   }
+  channelImageLog('img error: final load failed', {
+    activeSrcHead: shortLogValue(activeSrc.value),
+    originalUrlHead: shortLogValue(originalUrl),
+    hasFileKey: Boolean(fileKey.value),
+    fileKeyLen: fileKey.value.length,
+    hasAttachmentKey: Boolean(attachmentKey.value),
+    attachmentKeyLen: attachmentKey.value.length,
+  }, 'error')
   loadError.value = true
   isLoaded.value = true
 }
@@ -554,9 +660,20 @@ async function getImageSavePath(join: (...paths: string[]) => Promise<string>, b
 }
 
 async function resolveFileKey(): Promise<string> {
-  if (fileKey.value) return fileKey.value
+  if (fileKey.value) {
+    channelImageLog('resolve key: use message fileKey', {
+      fileKeyLen: fileKey.value.length,
+    })
+    return fileKey.value
+  }
   const plainAttachmentKey = normalizeResolvedFileKey(attachmentKey.value)
-  if (plainAttachmentKey) return plainAttachmentKey
+  if (plainAttachmentKey) {
+    channelImageLog('resolve key: use plain attachmentKey', {
+      fileKeyLen: plainAttachmentKey.length,
+      attachmentKeyLen: attachmentKey.value.length,
+    })
+    return plainAttachmentKey
+  }
 
   const conversationId = String(props.message.conversationId || '')
   if (conversationId.startsWith('0_')) {
@@ -573,7 +690,17 @@ async function resolveFileKey(): Promise<string> {
       if (resolved) return resolved
     }
   }
-
+  if (
+    isChannelMessage()
+    && Number(props.message.msgType) === 9
+    && dynamicImageHeadKeyFallbackStarted.value
+  ) {
+    // 旧 im 对 msgType 9 会在直连失败后尝试默认 HEAD_AES_KEY；只在 img onerror 后启用，避免影响明文 GIF。
+    channelImageLog('resolve key: use dynamic image head aes fallback', {
+      headKeyLen: API_CONFIG.headAesKey.length,
+    }, 'warn')
+    return API_CONFIG.headAesKey
+  }
   if (!attachmentKey.value || !groupId.value) return ''
 
   try {
@@ -596,6 +723,14 @@ async function downloadAndDecryptImage() {
   const url = downloadUrl.value
   const key = await resolveFileKey()
   if (!url || !key) {
+    channelImageLog('download skipped: missing url or key', {
+      hasUrl: Boolean(url),
+      urlHead: shortLogValue(url),
+      hasKey: Boolean(key),
+      keyLen: key.length,
+      hasAttachmentKey: Boolean(attachmentKey.value),
+      attachmentKeyLen: attachmentKey.value.length,
+    }, 'warn')
     loadError.value = true
     isLoaded.value = true
     return
@@ -619,6 +754,10 @@ async function downloadAndDecryptImage() {
     if (token !== downloadToken) return
     if (hasCachedFile && cachedSrc) {
       // 历史图片已经解密落盘时直接复用本地文件，避免切换会话后闪回下载蒙层。
+      channelImageLog('download skipped: cache file exists', {
+        savePathHead: shortLogValue(savePath),
+        cachedSrcHead: shortLogValue(cachedSrc),
+      })
       activeSrc.value = cachedSrc
       loadError.value = false
       isLoaded.value = true
@@ -631,16 +770,33 @@ async function downloadAndDecryptImage() {
     }
     const doneEvent = `file:done:${id}`
     const errorEvent = `file:error:${id}`
+    channelImageLog('download invoke start', {
+      urlHead: shortLogValue(url),
+      savePathHead: shortLogValue(savePath),
+      msgId: id,
+      fileKeyLen: key.length,
+      doneEvent,
+      errorEvent,
+    })
 
     const unlistenDone = await listen<{ dataUrl?: string; data_url?: string }>(doneEvent, (event) => {
       if (token !== downloadToken) return
       cleanupDownloadEvents()
       const src = toDisplayImageSrc(savePath) || event.payload.dataUrl || event.payload.data_url || ''
       if (!src) {
+        channelImageLog('download done but no display src', {
+          savePathHead: shortLogValue(savePath),
+          hasDataUrl: Boolean(event.payload.dataUrl || event.payload.data_url),
+        }, 'error')
         loadError.value = true
         isLoaded.value = true
         return
       }
+      channelImageLog('download done', {
+        savePathHead: shortLogValue(savePath),
+        srcHead: shortLogValue(src),
+        hasDataUrl: Boolean(event.payload.dataUrl || event.payload.data_url),
+      })
       loadError.value = false
       isLoaded.value = false
       activeSrc.value = src
@@ -650,9 +806,15 @@ async function downloadAndDecryptImage() {
         localFilePath: localFilePath.value,
       })
     })
-    const unlistenError = await listen(errorEvent, () => {
+    const unlistenError = await listen(errorEvent, (event) => {
       if (token !== downloadToken) return
       cleanupDownloadEvents()
+      channelImageLog('download error event', {
+        eventPayloadHead: shortLogValue(JSON.stringify(event.payload || {}), 240),
+        urlHead: shortLogValue(url),
+        savePathHead: shortLogValue(savePath),
+        fileKeyLen: key.length,
+      }, 'error')
       loadError.value = true
       isLoaded.value = true
     })
@@ -664,9 +826,14 @@ async function downloadAndDecryptImage() {
       savePath,
       msgId: id,
     })
-  } catch {
+  } catch (error) {
     if (token !== downloadToken) return
     cleanupDownloadEvents()
+    channelImageLog('download invoke threw', {
+      urlHead: shortLogValue(url),
+      fileKeyLen: key.length,
+      err: String(error),
+    }, 'error')
     loadError.value = true
     isLoaded.value = true
   }
