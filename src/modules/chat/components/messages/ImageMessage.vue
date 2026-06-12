@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
+import { ensureChannelRelKey, ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
@@ -102,6 +102,16 @@ function isRemoteImageSrc(src: string): boolean {
 function shortLogValue(value: unknown, max = 120): string {
   const text = String(value ?? '')
   return text.length > max ? `${text.slice(0, max)}...` : text
+}
+
+function imageSrcKind(src: string): string {
+  if (!src) return 'empty'
+  if (/^asset:\/\//i.test(src)) return 'asset'
+  if (/^data:image\//i.test(src)) return 'data-image'
+  if (/^https?:\/\//i.test(src)) return 'remote'
+  if (/^blob:/i.test(src)) return 'blob'
+  if (/^file:/i.test(src)) return 'file'
+  return 'other'
 }
 
 function isChannelMessage(): boolean {
@@ -300,6 +310,12 @@ const groupId = computed(() => {
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
+const channelId = computed(() => {
+  const extraChannelId = String(extraData.value.channelId || '').trim()
+  if (extraChannelId) return extraChannelId
+  const convId = props.message.conversationId || ''
+  return convId.startsWith('2_') ? convId.split('_')[1] || '' : ''
+})
 const privateAttachmentCandidates = computed(() => {
   const extra = extraData.value
   const candidates = Array.isArray(extra.cipherCandidates)
@@ -330,6 +346,34 @@ const imageCacheKey = computed(() => [
   fileKey.value || '',
   attachmentKey.value || '',
 ].join('|'))
+
+watch(loadError, (failed) => {
+  if (!failed) return
+  channelImageLog('visible failure state', {
+    activeSrcHead: shortLogValue(activeSrc.value),
+    activeSrcKind: imageSrcKind(activeSrc.value),
+    imageUrlHead: shortLogValue(imageData.value.url),
+    imageUrlKind: imageSrcKind(imageData.value.url),
+    thumbnailHead: shortLogValue(thumbnailUrl.value),
+    thumbnailKind: imageSrcKind(thumbnailUrl.value),
+    downloadUrlHead: shortLogValue(downloadUrl.value),
+    downloadUrlKind: imageSrcKind(downloadUrl.value),
+    localFilePathHead: shortLogValue(localFilePath.value),
+    hasFileKey: Boolean(fileKey.value),
+    fileKeyLen: fileKey.value.length,
+    hasAttachmentKey: Boolean(attachmentKey.value),
+    attachmentKeyLen: attachmentKey.value.length,
+    showImageLoading: showImageLoading.value,
+    showImageOverlay: showImageOverlay.value,
+    isLoaded: isLoaded.value,
+    imageCacheKeyHead: shortLogValue(imageCacheKey.value, 180),
+    dynamicHeadFallbackStarted: dynamicImageHeadKeyFallbackStarted.value,
+    imgComplete: imageElRef.value?.complete ?? null,
+    imgNaturalWidth: imageElRef.value?.naturalWidth ?? 0,
+    imgNaturalHeight: imageElRef.value?.naturalHeight ?? 0,
+    imgCurrentSrcHead: shortLogValue(imageElRef.value?.currentSrc || ''),
+  }, 'error')
+})
 
 watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
   isLoaded.value = false
@@ -497,7 +541,21 @@ function handleError() {
   }
   channelImageLog('img error: final load failed', {
     activeSrcHead: shortLogValue(activeSrc.value),
+    activeSrcKind: imageSrcKind(activeSrc.value),
     originalUrlHead: shortLogValue(originalUrl),
+    originalUrlKind: imageSrcKind(originalUrl),
+    thumbnailHead: shortLogValue(thumbnailUrl.value),
+    thumbnailKind: imageSrcKind(thumbnailUrl.value),
+    downloadUrlHead: shortLogValue(downloadUrl.value),
+    downloadUrlKind: imageSrcKind(downloadUrl.value),
+    localFilePathHead: shortLogValue(localFilePath.value),
+    imgComplete: imageElRef.value?.complete ?? null,
+    imgNaturalWidth: imageElRef.value?.naturalWidth ?? 0,
+    imgNaturalHeight: imageElRef.value?.naturalHeight ?? 0,
+    imgCurrentSrcHead: shortLogValue(imageElRef.value?.currentSrc || ''),
+    hasLocalSource: Boolean(localSourcePath.value),
+    shouldUseLocalPreview: shouldUseLocalPreview.value,
+    dynamicHeadFallbackStarted: dynamicImageHeadKeyFallbackStarted.value,
     hasFileKey: Boolean(fileKey.value),
     fileKeyLen: fileKey.value.length,
     hasAttachmentKey: Boolean(attachmentKey.value),
@@ -700,6 +758,33 @@ async function resolveFileKey(): Promise<string> {
       headKeyLen: API_CONFIG.headAesKey.length,
     }, 'warn')
     return API_CONFIG.headAesKey
+  }
+  if (isChannelMessage() && attachmentKey.value && channelId.value) {
+    try {
+      if (authStore.uid) {
+        await ensureChannelRelKey(String(authStore.uid), channelId.value)
+      }
+      const { invoke } = await import('@tauri-apps/api/core')
+      // iOS/频道历史图片可能只带频道加密 attachmentKey，需要先解出真实 fileKey 才能下载原图。
+      const resolved = await invoke<string>('decrypt_channel_incoming', {
+        channelId: channelId.value,
+        ciphertextHex: attachmentKey.value,
+        msgType: 0,
+      })
+      const normalized = normalizeResolvedFileKey(resolved)
+      channelImageLog('resolve key: channel attachmentKey decrypted', {
+        channelId: channelId.value,
+        attachmentKeyLen: attachmentKey.value.length,
+        fileKeyLen: normalized.length,
+      })
+      if (normalized) return normalized
+    } catch (error) {
+      channelImageLog('resolve key: channel attachmentKey decrypt failed', {
+        channelId: channelId.value,
+        attachmentKeyLen: attachmentKey.value.length,
+        err: String(error),
+      }, 'warn')
+    }
   }
   if (!attachmentKey.value || !groupId.value) return ''
 

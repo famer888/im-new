@@ -21,6 +21,11 @@ import {
   resolvePrivateAttachmentFileKey,
 } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
+import {
+  getChannelHistoryMessages,
+  getChannelLastMsgInfo,
+  type ChannelHistoryMessage,
+} from '@/api/imChannel'
 import { isHiddenMessageType } from '@/types'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import {
@@ -211,6 +216,7 @@ export interface Message {
 
 const MAX_CACHED_MESSAGES = 500
 const PAGE_SIZE = 80
+const CHANNEL_HISTORY_LATEST_SIZE = 30
 const LOGOUT_CLEARED_HISTORY_FLAG_PREFIX = 'logout-cleared-history:'
 const groupIntroMessageTraceCache = new Set<string>()
 const HIDDEN_GROUP_EVENT_TEXT = '群聊事件'
@@ -258,6 +264,17 @@ function stringifyExtra(rawExtra: unknown): string | null {
     }
   }
   return null
+}
+
+function getChannelIdFromConversationId(conversationId: string): string {
+  return String(conversationId || '').startsWith('2_')
+    ? String(conversationId).split('_')[1] || ''
+    : ''
+}
+
+function toFiniteNumber(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
 }
 
 function buildPrivateCipherCandidates(extra: Record<string, unknown>) {
@@ -1238,6 +1255,237 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  function getLatestChannelMsgId(resp: unknown): number {
+    const rows = (resp as { data?: Array<{ msgType?: number | string; latestMsgId?: number | string }> })?.data
+    if (!Array.isArray(rows)) return 0
+    const item = rows.find((row) => Number(row?.msgType ?? 0) === 0)
+    return toFiniteNumber(item?.latestMsgId)
+  }
+
+  function hasVisibleChannelMessageId(messages: Message[], msgId: number): boolean {
+    if (!msgId) return false
+    return messages.some((message) => toFiniteNumber(message.id) === msgId)
+  }
+
+  async function resolveChannelAttachmentFileKey(channelId: string, attachmentKey: string): Promise<string> {
+    const plain = normalizeResolvedFileKey(attachmentKey)
+    if (plain) return plain
+    if (!attachmentKey || !channelId) return ''
+    try {
+      const resolved = await tauriInvoke<string>('decrypt_channel_incoming', {
+        channelId,
+        ciphertextHex: attachmentKey,
+        msgType: 0,
+      })
+      return normalizeResolvedFileKey(resolved)
+    } catch (error) {
+      console.warn('[channel-history] resolve attachment fileKey failed', {
+        channelId,
+        attachmentKeyLen: attachmentKey.length,
+        err: String(error),
+      })
+      return ''
+    }
+  }
+
+  async function normalizeChannelHistoryMessage(
+    uid: string,
+    conversationId: string,
+    channelId: string,
+    item: ChannelHistoryMessage,
+  ): Promise<Message | null> {
+    if (!item.msgId || !item.channelId || String(item.channelId) !== channelId) return null
+    let content = '[加密消息，等待密钥同步]'
+    let decryptPending = false
+    try {
+      content = await tauriInvoke<string>('decrypt_channel_incoming', {
+        channelId,
+        ciphertextHex: item.contentHex,
+        msgType: item.msgType,
+      })
+    } catch (error) {
+      decryptPending = true
+      console.warn('[channel-history] decrypt content failed', {
+        uid,
+        channelId,
+        msgId: item.msgId,
+        msgType: item.msgType,
+        cipherLen: item.contentHex.length,
+        err: String(error),
+      })
+    }
+
+    const fileKey = await resolveChannelAttachmentFileKey(channelId, item.attachmentKey)
+    const extra = {
+      channelId,
+      version: item.version,
+      contentMd5: item.contentMd5,
+      readTotal: item.readTotal,
+      decryptPending,
+      cipherHex: item.contentHex,
+      attachmentKey: item.attachmentKey,
+      fileKey,
+    }
+    return {
+      id: item.msgId,
+      customMsgId: null,
+      conversationId,
+      senderId: item.sendUid,
+      msgType: item.msgType,
+      content,
+      sendTime: item.msgTime || Date.now(),
+      status: 1,
+      readStatus: 0,
+      version: item.version,
+      isDeleted: false,
+      extra: stringifyExtra(extra),
+    }
+  }
+
+  async function syncChannelRecentHistory(uid: string, conversationId: string, loadedMessages: Message[]) {
+    const channelId = getChannelIdFromConversationId(conversationId)
+    if (!isTauri() || !uid || !channelId) return
+
+    try {
+      const latestResp = await getChannelLastMsgInfo({
+        bizType: 2,
+        bizId: channelId,
+      })
+      const latestMsgId = getLatestChannelMsgId(latestResp)
+      console.info('[channel-history] latest check', {
+        uid,
+        conversationId,
+        channelId,
+        latestMsgId,
+        loadedCount: loadedMessages.length,
+        loadedTailIds: loadedMessages.slice(-5).map((message) => message.id),
+        rawRows: (latestResp as any)?.data || [],
+      })
+      if (!latestMsgId) {
+        console.warn('[channel-history] skip: empty latest msg id', {
+          uid,
+          conversationId,
+          channelId,
+          latestResp,
+        })
+        return
+      }
+
+      const recentMessages = loadedMessages.slice(-10)
+      const hasLastOne = hasVisibleChannelMessageId(recentMessages, latestMsgId)
+      const hasLastTwo = latestMsgId <= 1 || hasVisibleChannelMessageId(recentMessages, latestMsgId - 1)
+      if (hasLastOne && hasLastTwo) {
+        console.info('[channel-history] skip: local already latest', {
+          uid,
+          conversationId,
+          channelId,
+          latestMsgId,
+          recentIds: recentMessages.map((message) => message.id),
+        })
+        return
+      }
+
+      // 对齐旧 im：本地不是频道最新时只补最近 30 条，避免长时间离线后一次性拉全量历史。
+      await ensureChannelRelKey(uid, channelId).catch((error) => {
+        console.warn('[channel-history] ensure channel rel key failed before history decrypt', {
+          uid,
+          channelId,
+          err: String(error),
+        })
+      })
+      const historyParams = {
+        bizType: 2,
+        bizId: channelId,
+        msgType: 0,
+        eventType: 2,
+        latestSize: latestMsgId > CHANNEL_HISTORY_LATEST_SIZE ? CHANNEL_HISTORY_LATEST_SIZE : latestMsgId,
+        latestMsgId: latestMsgId + 1,
+      }
+      console.info('[channel-history] request history start', {
+        uid,
+        conversationId,
+        channelId,
+        latestMsgId,
+        hasLastOne,
+        hasLastTwo,
+        historyParams,
+      })
+      const historyItems = await getChannelHistoryMessages(historyParams)
+      console.info('[channel-history] request history done', {
+        uid,
+        conversationId,
+        channelId,
+        count: historyItems.length,
+        samples: historyItems.slice(0, 5).map((item) => ({
+          msgId: item.msgId,
+          msgType: item.msgType,
+          sendUid: item.sendUid,
+          msgTime: item.msgTime,
+          contentHexLen: item.contentHex.length,
+          attachmentKeyLen: item.attachmentKey.length,
+        })),
+      })
+      if (historyItems.length === 0) return
+
+      const normalized = (await Promise.all(
+        historyItems.map((item) => normalizeChannelHistoryMessage(uid, conversationId, channelId, item)),
+      ))
+        .filter((item): item is Message => !!item)
+        .sort((a, b) => a.sendTime - b.sendTime)
+      console.info('[channel-history] normalized messages', {
+        uid,
+        conversationId,
+        channelId,
+        count: normalized.length,
+        samples: normalized.slice(0, 5).map((message) => {
+          const extra = parseExtraObject(message.extra)
+          return {
+            id: message.id,
+            msgType: message.msgType,
+            contentHead: String(message.content || '').slice(0, 120),
+            fileKeyLen: String(extra?.fileKey || '').length,
+            attachmentKeyLen: String(extra?.attachmentKey || '').length,
+            decryptPending: Boolean(extra?.decryptPending),
+          }
+        }),
+      })
+      if (normalized.length === 0) return
+
+      batchAppendMessages(normalized)
+      await tauriInvoke('upsert_incoming_messages', {
+        uid,
+        messages: normalized.map((message) => ({
+          id: message.id,
+          customMsgId: message.customMsgId,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          msgType: message.msgType,
+          content: message.content,
+          sendTime: message.sendTime,
+          status: message.status,
+          readStatus: message.readStatus,
+          version: message.version,
+          isDeleted: message.isDeleted,
+          extra: parseExtraObject(message.extra),
+        })),
+      }).catch((error) => {
+        console.warn('[channel-history] persist fetched messages failed', {
+          uid,
+          channelId,
+          count: normalized.length,
+          err: String(error),
+        })
+      })
+    } catch (error) {
+      console.warn('[channel-history] sync recent history failed', {
+        uid,
+        conversationId,
+        channelId,
+        err: String(error),
+      })
+    }
+  }
+
   async function loadMessages(uid: string, conversationId: string, force = false) {
     if (!isTauri()) return
     if (isLoading(conversationId) && !force) return
@@ -1300,6 +1548,10 @@ export const useMessageStore = defineStore('message', () => {
 
       // 先渲染首屏，避免被解密耗时阻塞；解密成功后再静默回填真实文案/附件信息。
       applyLoadedSnapshot(normalizedBase)
+      // 频道会话对齐旧 im：进入聊天窗口后校验服务端最新消息，必要时补最近 30 条离线漏消息。
+      if (getChannelIdFromConversationId(conversationId)) {
+        await syncChannelRecentHistory(uid, conversationId, getMessages(conversationId))
+      }
       const hasDecryptPending = normalizedBase.some((message) => {
         const extra = parseExtraObject(message.extra)
         return Boolean(extra?.decryptPending)
