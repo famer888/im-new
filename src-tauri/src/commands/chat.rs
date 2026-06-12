@@ -10,7 +10,7 @@ use tracing::{error, warn};
 use crate::crypto::CryptoEngine;
 use crate::db::{models, queries, DbManager};
 use crate::messaging::pipeline;
-use crate::proto::imweb;
+use crate::proto::{im, imweb};
 use crate::ws::{commands as ws_cmds, WsManager};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -255,6 +255,48 @@ fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
     } else {
         format!("{}*|*|*{}*|*|*{}", obj.nick_name, obj.icon, obj.uid)
     }
+}
+
+fn media_text_list_obj_to_legacy_content(obj: im::MediaTextListObj) -> String {
+    let segments = obj
+        .objs
+        .into_iter()
+        .filter_map(|media| {
+            let media_type = im::CaptionMediaType::try_from(media.r#type).ok()?;
+            match media_type {
+                im::CaptionMediaType::Image => {
+                    let item = imweb::ImageObj::decode(media.content.as_slice()).ok()?;
+                    Some(format!(
+                        "image:{}||{}||{}||{}",
+                        item.url, item.thumb_url, item.file_size, item.size_type
+                    ))
+                }
+                im::CaptionMediaType::Video => {
+                    let item = imweb::VideoObj::decode(media.content.as_slice()).ok()?;
+                    Some(format!(
+                        "video:{}*P{}||{}||{}||{}||{}",
+                        item.url,
+                        item.thumb_url,
+                        item.duration,
+                        item.file_size,
+                        item.width,
+                        item.height
+                    ))
+                }
+                im::CaptionMediaType::DynamicImage => {
+                    let item = imweb::DynamicImageObj::decode(media.content.as_slice()).ok()?;
+                    Some(format!("gif:{}||{}", item.url, item.thumb_url))
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut content = segments.join("|||");
+    if !obj.caption.trim().is_empty() {
+        content.push_str("##caption##");
+        content.push_str(obj.caption.trim());
+    }
+    content
 }
 
 /// 入站消息落库（用于 WS 推送消息的本地历史持久化）。
@@ -2049,6 +2091,12 @@ pub fn decrypt_channel_incoming(
                     if let Ok(obj) = crate::proto::imweb::AnimatedGameObj::decode(plain.as_slice())
                     {
                         return Ok(obj.current_image);
+                    }
+                }
+                17 => {
+                    // 频道历史补拉走这个命令；多图内容需要和 WS 路径一样转成旧 im 的分隔字符串。
+                    if let Ok(obj) = im::MediaTextListObj::decode(plain.as_slice()) {
+                        return Ok(media_text_list_obj_to_legacy_content(obj));
                     }
                 }
                 _ => {}
