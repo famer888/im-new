@@ -110,6 +110,10 @@ const MODULE_CODE_ALIAS_MAP: Record<string, string> = {
   biz: 'webBiz',
   config: 'domain',
   domainConfig: 'domain',
+  // 对齐旧 im：媒体下载只认这四个 OSS 桶；新版接口里的聊天图片桶先归一到旧桶名复用现有下载/上传链路。
+  ossChatPicUrl: 'ossChatUrl',
+  ossChatPicLowRateUrl: 'ossLowRateUrl',
+  ossChatPicEndpoint: 'ossEndpoint',
 }
 
 function isProdEnv(): boolean {
