@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey } from '@/utils/e2ee'
+import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import ComLoading from '@/components/ComLoading.vue'
 
 const props = defineProps<{
@@ -383,6 +384,13 @@ async function downloadAndDecryptAudio() {
       savePath,
       msgId: id,
       logTag: isGroupAudio.value ? 'group-audio' : undefined,
+      // 音频和图片共用旧 im 的 OSS 下载兜底：先准备候选域名，4xx/过期由后端停止重试。
+      urlCandidates: getOssDownloadCandidates({
+        url,
+        channelType: extraData.value.channelType ?? extraData.value.channel_type,
+      }),
+      msgType: props.message.msgType,
+      sendTime: props.message.sendTime,
     })
     audioTerminalLog('download invoke returned', {
       messageId: props.message.id,

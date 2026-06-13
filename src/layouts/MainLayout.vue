@@ -54,6 +54,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
+import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
 import { API_CONFIG } from '@/api/config'
@@ -1454,12 +1455,13 @@ function videoUrlCandidates(url: string, fileName = ''): string[] {
   const [withoutHash, hash = ''] = raw.split('#')
   const [base, query = ''] = withoutHash.split('?')
   const hasVideoExt = /\.(mp4|m4v|mov|webm|ogg|ogv|avi|mkv)$/i.test(base)
-  if (hasVideoExt) return [raw]
+  if (hasVideoExt) return getOssDownloadCandidates({ url: raw })
 
   const suffixFromName = videoExtFromUrl(fileName)
   const suffixes = [suffixFromName, '.mp4', '.mov'].filter((item, index, list) => item && list.indexOf(item) === index)
   const withSuffix = suffixes.map(suffix => `${base}${suffix}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`)
-  return [...new Set([...withSuffix, raw])]
+  // 右键视频菜单保留原有“补后缀”候选，同时按旧 im 展开 OSS 域名兜底。
+  return [...new Set([...withSuffix, raw].flatMap(candidate => getOssDownloadCandidates({ url: candidate })))]
 }
 
 function suggestedVideoSaveName(data: Record<string, unknown>): string {
@@ -1763,11 +1765,16 @@ async function ensureVideoLocalFile(data: Record<string, unknown>): Promise<stri
       return savePath
     } catch (error) {
       lastError = error
+      // 对齐旧 im：4xx 和日期过期说明资源本身不可用，继续换域名也不会成功。
+      const message = (error as Error)?.message || String(error)
       videoMenuLog('candidate download failed', {
         candidateHead: candidate.slice(0, 160),
         savePath,
-        error: (error as Error)?.message || String(error),
+        error: message,
       }, 'warn')
+      if (/HTTP 4\d\d/i.test(message) || /\b4\d\d\b/.test(message) || /url_dated_expired/i.test(message)) {
+        throw error
+      }
     }
   }
 
@@ -1962,6 +1969,7 @@ async function waitForOfficeFileDownload(
   savePath: string,
   msgId: string,
   requestState: ContextMenuDownloadRequestState,
+  downloadOptions: { urlCandidates?: string[]; msgType?: number; sendTime?: number } = {},
 ): Promise<{ filePath: string; isDangerous: boolean }> {
   const [{ invoke }, { listen }] = await Promise.all([
     import('@tauri-apps/api/core'),
@@ -2009,6 +2017,10 @@ async function waitForOfficeFileDownload(
         statusVersion: requestState.statusVersion,
         logTag: 'file',
         emitDataUrl: false,
+        // 文件右键下载也走旧 im 的 OSS 候选域名，避免组件内可用、菜单下载不可用。
+        urlCandidates: downloadOptions.urlCandidates,
+        msgType: downloadOptions.msgType,
+        sendTime: downloadOptions.sendTime,
       })
     } catch (error) {
       if (!settled) {
@@ -2086,7 +2098,14 @@ async function ensureOfficeFileLocalFile(data: Record<string, unknown>): Promise
   const menuChannel = buildContextMenuDownloadChannel(data, 'file')
   const requestState = registerContextMenuDownloadRequest(menuChannel)
   // 文件密钥可能为空（明文文件），此时仍走同一下载链路，避免把“可下载文件”误判成失败。
-  const result = await waitForOfficeFileDownload(url, key, savePath, menuChannel, requestState)
+  const result = await waitForOfficeFileDownload(url, key, savePath, menuChannel, requestState, {
+    urlCandidates: getOssDownloadCandidates({
+      url,
+      channelType: source.extra.channelType ?? source.extra.channel_type,
+    }),
+    msgType: Number(data.msgType || MessageType.File),
+    sendTime: Number(data.sendTime || 0) || undefined,
+  })
   // 对齐旧 im：右键“打开目录/另存为”允许继续使用隔离后的 .dangerous 文件路径，
   // 由用户在系统目录中手动确认来源并重命名后再打开。
   return result.filePath

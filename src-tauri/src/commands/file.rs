@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
+use chrono::{Local, NaiveDate};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -190,6 +191,241 @@ async fn send_download_request(url: &str) -> Result<(reqwest::Response, String),
     // 记录最终 URL，便于观测 302/redirect 后实际落点是否一致。
     let final_url = response.url().to_string();
     Ok((response, final_url))
+}
+
+#[derive(Debug)]
+struct ExpiredDownloadUrl {
+    url: String,
+    date: NaiveDate,
+}
+
+#[derive(Debug)]
+struct DownloadAttemptError {
+    message: String,
+    http_status: Option<u16>,
+    expired: bool,
+    reason: Option<&'static str>,
+}
+
+impl DownloadAttemptError {
+    fn other(message: String) -> Self {
+        Self {
+            message,
+            http_status: None,
+            expired: false,
+            reason: None,
+        }
+    }
+
+    fn http(status: reqwest::StatusCode, body: String) -> Self {
+        Self {
+            message: format!(
+                "Download failed: HTTP {} body_head={}",
+                status.as_u16(),
+                body.chars().take(400).collect::<String>()
+            ),
+            http_status: Some(status.as_u16()),
+            expired: false,
+            reason: None,
+        }
+    }
+
+    fn expired(info: ExpiredDownloadUrl) -> Self {
+        Self {
+            message: format!(
+                "Download failed: url_dated_expired date={} url_head={}",
+                info.date,
+                info.url.chars().take(180).collect::<String>()
+            ),
+            http_status: None,
+            expired: true,
+            reason: Some("url_dated_expired"),
+        }
+    }
+
+    fn should_retry_with_backup_domain(&self) -> bool {
+        // 对齐旧 im：过期 URL 和 4xx 都代表“换域名也没用”，直接失败，避免无意义轮询域名池。
+        if self.expired || self.reason == Some("url_dated_expired") {
+            return false;
+        }
+        if let Some(status) = self.http_status {
+            if (400..500).contains(&status) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn build_download_url_candidates(url: &str, url_candidates: Option<Vec<String>>) -> Vec<String> {
+    let mut candidates = vec![url.trim().to_string()];
+    if let Some(extra) = url_candidates {
+        candidates.extend(extra.into_iter().map(|item| item.trim().to_string()));
+    }
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|item| !item.is_empty() && seen.insert(item.clone()))
+        .collect()
+}
+
+fn should_apply_url_date_expire_guard(msg_type: Option<i32>, send_time: Option<i64>) -> bool {
+    if msg_type == Some(9) {
+        return false;
+    }
+    let send_time = send_time.unwrap_or(0);
+    if send_time > 0 {
+        let age_ms = Local::now().timestamp_millis().saturating_sub(send_time);
+        if age_ms >= 0 && age_ms < 3 * 24 * 60 * 60 * 1000 {
+            return false;
+        }
+    }
+    true
+}
+
+fn should_skip_url_date_expire_guard(url: &str) -> bool {
+    let raw = url.to_ascii_lowercase();
+    raw.contains("/chat/emoticon/") || raw.contains("zhenyoumei.top")
+}
+
+fn dated_chat_url_date(url: &str) -> Option<NaiveDate> {
+    let path = url::Url::parse(url).ok()?.path().to_string();
+    let segments: Vec<&str> = path.split('/').filter(|item| !item.is_empty()).collect();
+    let chat_index = segments
+        .iter()
+        .position(|item| item.eq_ignore_ascii_case("chat"))?;
+    let year_month = segments.get(chat_index + 2)?;
+    let day = segments.get(chat_index + 3)?;
+    if year_month.len() != 6 || day.len() != 2 {
+        return None;
+    }
+    let year = year_month.get(0..4)?.parse::<i32>().ok()?;
+    let month = year_month.get(4..6)?.parse::<u32>().ok()?;
+    let day = day.parse::<u32>().ok()?;
+    NaiveDate::from_ymd_opt(year, month, day)
+}
+
+fn find_expired_dated_download_url(urls: &[String]) -> Option<ExpiredDownloadUrl> {
+    let today = Local::now().date_naive();
+    for url in urls {
+        if should_skip_url_date_expire_guard(url) {
+            continue;
+        }
+        let Some(date) = dated_chat_url_date(url) else {
+            continue;
+        };
+        if today.signed_duration_since(date).num_days() >= 3 {
+            return Some(ExpiredDownloadUrl {
+                url: url.clone(),
+                date,
+            });
+        }
+    }
+    None
+}
+
+async fn send_download_request_with_candidates(
+    urls: &[String],
+    msg_id: &str,
+    should_log_audio: bool,
+    should_log_file_open: bool,
+    should_log_video_menu: bool,
+) -> Result<(reqwest::Response, String), DownloadAttemptError> {
+    let mut last_error = DownloadAttemptError::other("Download failed: empty url".to_string());
+    for (index, candidate_url) in urls.iter().enumerate() {
+        if should_log_audio {
+            tracing::info!(
+                target: "group-audio",
+                "download_file http start msg_id={} candidate={} url_head={}",
+                msg_id,
+                index,
+                candidate_url.chars().take(120).collect::<String>(),
+            );
+        }
+        if should_log_file_open {
+            tracing::warn!(
+                target: "file-open",
+                msg_id = %msg_id,
+                candidate = index,
+                url_head = %candidate_url.chars().take(160).collect::<String>(),
+                "download_file http start"
+            );
+        }
+        if should_log_video_menu {
+            eprintln!(
+                "[video-menu] download_file http start msg_id={} candidate={} url_head={}",
+                msg_id,
+                index,
+                candidate_url.chars().take(180).collect::<String>(),
+            );
+        }
+
+        let (response, final_url) = match send_download_request(candidate_url).await {
+            Ok(result) => result,
+            Err(error) => {
+                last_error = DownloadAttemptError::other(error);
+                if !last_error.should_retry_with_backup_domain() {
+                    return Err(last_error);
+                }
+                continue;
+            }
+        };
+        let status = response.status();
+        if should_log_audio {
+            tracing::info!(
+                target: "group-audio",
+                "download_file http response msg_id={} candidate={} status={} ok={} final_url_head={}",
+                msg_id,
+                index,
+                status.as_u16(),
+                status.is_success(),
+                final_url.chars().take(120).collect::<String>(),
+            );
+        }
+        if should_log_file_open {
+            tracing::warn!(
+                target: "file-open",
+                msg_id = %msg_id,
+                candidate = index,
+                status = status.as_u16(),
+                ok = status.is_success(),
+                final_url_head = %final_url.chars().take(160).collect::<String>(),
+                "download_file http response"
+            );
+        }
+        if should_log_video_menu {
+            eprintln!(
+                "[video-menu] download_file http response msg_id={} candidate={} status={} ok={} final_url_head={}",
+                msg_id,
+                index,
+                status.as_u16(),
+                status.is_success(),
+                final_url.chars().take(180).collect::<String>(),
+            );
+        }
+        if status.is_success() {
+            return Ok((response, final_url));
+        }
+
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("read error body failed: {}", e));
+        if should_log_video_menu {
+            eprintln!(
+                "[video-menu] download_file http error msg_id={} candidate={} status={} body_head={}",
+                msg_id,
+                index,
+                status.as_u16(),
+                body.chars().take(400).collect::<String>(),
+            );
+        }
+        last_error = DownloadAttemptError::http(status, body);
+        if !last_error.should_retry_with_backup_domain() {
+            return Err(last_error);
+        }
+    }
+    Err(last_error)
 }
 
 fn video_streams() -> &'static Mutex<HashMap<String, VideoStreamSource>> {
@@ -1897,6 +2133,9 @@ pub async fn download_file(
     status_version: Option<u64>,
     log_tag: Option<String>,
     emit_data_url: Option<bool>,
+    url_candidates: Option<Vec<String>>,
+    msg_type: Option<i32>,
+    send_time: Option<i64>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&save_path);
     // 图片/视频组件会因重渲染、缩略图失败重试、重复点击同时请求同一文件；
@@ -1948,8 +2187,10 @@ pub async fn download_file(
     let should_log_audio_clone = should_log_audio;
     let should_log_file_open_clone = should_log_file_open;
     let should_log_video_menu_clone = should_log_video_menu;
+    let candidate_urls = build_download_url_candidates(&url, url_candidates);
 
     tokio::spawn(async move {
+        let mut error_meta: Option<(Option<u16>, bool, Option<&'static str>)> = None;
         let download_result = async {
             if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                 let (final_path, is_dangerous) = quarantine_dangerous_file(&path).await?;
@@ -2008,79 +2249,26 @@ pub async fn download_file(
                 ));
             }
 
-            if should_log_audio_clone {
-                tracing::info!(
-                    target: "group-audio",
-                    "download_file http start msg_id={} url_head={}",
-                    msg_id_clone,
-                    url.chars().take(120).collect::<String>(),
-                );
-            }
-            if should_log_file_open_clone {
-                tracing::warn!(
-                    target: "file-open",
-                    msg_id = %msg_id_clone,
-                    url_head = %url.chars().take(160).collect::<String>(),
-                    "download_file http start"
-                );
-            }
-            if should_log_video_menu_clone {
-                eprintln!(
-                    "[video-menu] download_file http start msg_id={} url_head={}",
-                    msg_id_clone,
-                    url.chars().take(180).collect::<String>(),
-                );
-            }
-            let (response, final_url) = send_download_request(&url).await?;
-            let status = response.status();
-            if should_log_audio_clone {
-                tracing::info!(
-                    target: "group-audio",
-                    "download_file http response msg_id={} status={} ok={} final_url_head={}",
-                    msg_id_clone,
-                    status.as_u16(),
-                    status.is_success(),
-                    final_url.chars().take(120).collect::<String>(),
-                );
-            }
-            if should_log_file_open_clone {
-                tracing::warn!(
-                    target: "file-open",
-                    msg_id = %msg_id_clone,
-                    status = status.as_u16(),
-                    ok = status.is_success(),
-                    final_url_head = %final_url.chars().take(160).collect::<String>(),
-                    "download_file http response"
-                );
-            }
-            if should_log_video_menu_clone {
-                eprintln!(
-                    "[video-menu] download_file http response msg_id={} status={} ok={} final_url_head={}",
-                    msg_id_clone,
-                    status.as_u16(),
-                    status.is_success(),
-                    final_url.chars().take(180).collect::<String>(),
-                );
-            }
-            if !status.is_success() {
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|e| format!("read error body failed: {}", e));
-                if should_log_video_menu_clone {
-                    eprintln!(
-                        "[video-menu] download_file http error msg_id={} status={} body_head={}",
-                        msg_id_clone,
-                        status.as_u16(),
-                        body.chars().take(400).collect::<String>(),
-                    );
+            if should_apply_url_date_expire_guard(msg_type, send_time) {
+                if let Some(expired) = find_expired_dated_download_url(&candidate_urls) {
+                    // 对齐旧 im：带日期目录的聊天资源超过 3 天直接判过期，不再尝试备用域名。
+                    let error = DownloadAttemptError::expired(expired);
+                    error_meta = Some((error.http_status, error.expired, error.reason));
+                    return Err(error.message);
                 }
-                return Err(format!(
-                    "Download failed: HTTP {} body_head={}",
-                    status.as_u16(),
-                    body.chars().take(400).collect::<String>()
-                ));
             }
+            let (response, _final_url) = send_download_request_with_candidates(
+                &candidate_urls,
+                &msg_id_clone,
+                should_log_audio_clone,
+                should_log_file_open_clone,
+                should_log_video_menu_clone,
+            )
+            .await
+            .map_err(|error| {
+                error_meta = Some((error.http_status, error.expired, error.reason));
+                error.message
+            })?;
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
@@ -2306,6 +2494,7 @@ pub async fn download_file(
             }
             Err(e) => {
                 let _ = tokio::fs::remove_file(path.with_extension("enc")).await;
+                let (http_status, expired, reason) = error_meta.unwrap_or((None, false, None));
                 if should_log_audio_clone {
                     tracing::error!(
                         target: "group-audio",
@@ -2326,6 +2515,10 @@ pub async fn download_file(
                     &format!("file:error:{}", msg_id_clone),
                     serde_json::json!({
                         "error": e,
+                        "httpStatusCode": http_status,
+                        "http_status_code": http_status,
+                        "expired": expired,
+                        "reason": reason,
                         "requestId": request_id_clone.clone(),
                         "request_id": request_id_clone,
                         "statusVersion": status_version_clone,
@@ -2933,6 +3126,50 @@ mod tests {
         assert!(try_register_active_download(&key).expect("register first key"));
         assert!(!try_register_active_download(&same_key).expect("register duplicated key"));
         unregister_active_download(&key);
+    }
+
+    #[test]
+    fn dated_chat_url_expires_after_three_days() {
+        let urls = vec!["https://oss.example.com/chat/media/202001/01/a.png".to_string()];
+        let expired = find_expired_dated_download_url(&urls).expect("old dated url expires");
+        assert_eq!(
+            expired.date,
+            NaiveDate::from_ymd_opt(2020, 1, 1).expect("valid date")
+        );
+    }
+
+    #[test]
+    fn gif_message_skips_dated_url_expire_guard() {
+        assert!(!should_apply_url_date_expire_guard(Some(9), None));
+    }
+
+    #[test]
+    fn client_error_does_not_retry_backup_domain() {
+        let error = DownloadAttemptError {
+            message: "Download failed: HTTP 404".to_string(),
+            http_status: Some(404),
+            expired: false,
+            reason: None,
+        };
+        assert!(!error.should_retry_with_backup_domain());
+    }
+
+    #[test]
+    fn download_candidates_are_deduped_with_primary_first() {
+        let urls = build_download_url_candidates(
+            "https://a.example.com/file.png",
+            Some(vec![
+                "https://a.example.com/file.png".to_string(),
+                "https://b.example.com/file.png".to_string(),
+            ]),
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "https://a.example.com/file.png".to_string(),
+                "https://b.example.com/file.png".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]

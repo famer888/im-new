@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureChannelRelKey, ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { mediaViewerState } from '@/utils/mediaViewerState'
+import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
@@ -916,6 +917,13 @@ async function downloadAndDecryptImage() {
       fileKey: key,
       savePath,
       msgId: id,
+      // 桌面端下载对齐旧 im：按 OSS 通道准备候选域名，真正是否重试交给 Rust 侧判断。
+      urlCandidates: getOssDownloadCandidates({
+        url,
+        channelType: extraData.value.channelType ?? extraData.value.channel_type,
+      }),
+      msgType: props.message.msgType,
+      sendTime: props.message.sendTime,
     })
   } catch (error) {
     if (token !== downloadToken) return

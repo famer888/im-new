@@ -7,6 +7,7 @@ import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFi
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { eventBus } from '@/utils/eventBus'
+import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
 const props = defineProps<{
@@ -506,6 +507,13 @@ async function downloadAndDecryptThumb() {
       fileKey: key,
       savePath,
       msgId: id,
+      // 视频封面仍走图片下载链路，按旧 im 的 OSS 域名规则提供备用地址。
+      urlCandidates: getOssDownloadCandidates({
+        url,
+        channelType: extraData.value.channelType ?? extraData.value.channel_type,
+      }),
+      msgType: props.message.msgType,
+      sendTime: props.message.sendTime,
     })
   } catch {
     if (token !== downloadToken) return
@@ -767,6 +775,10 @@ function downloadVideoToLocal(url: string, key: string): Promise<string> {
         msgId: id,
         logTag: 'video',
         emitDataUrl: false,
+        // 视频原文件下载与流式播放使用同一批候选，避免“可播放但默认打开失败”。
+        urlCandidates: getVideoUrlCandidates(url, videoData.value.name),
+        msgType: props.message.msgType,
+        sendTime: props.message.sendTime,
       })
     } catch (error) {
       if (token !== videoOpenToken) return
@@ -1002,7 +1014,11 @@ function getVideoUrlCandidates(url: string, name = ''): string[] {
       candidates.push(`${base}${suffix}${query ? `?${query}` : ''}${hash ? `#${hash}` : ''}`)
     }
   }
-  return [...new Set(candidates)]
+  // 旧 im 会在媒体下载失败时换 OSS 域名；这里先为每个视频后缀候选展开域名候选。
+  return [...new Set(candidates.flatMap(candidate => getOssDownloadCandidates({
+    url: candidate,
+    channelType: extraData.value.channelType ?? extraData.value.channel_type,
+  })))]
 }
 
 async function probeEncryptedVideoStreamUrl(streamUrl: string) {

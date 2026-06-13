@@ -8,6 +8,7 @@ import { ensureGroupRelKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
+import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { normalizeOpenTarget } from '@/utils/resourcePath'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import fileDocIcon from '@/assets/images/message/file-doc.png'
@@ -397,6 +398,13 @@ function waitForDownloadFile(url: string, key: string, savePath: string, msgId: 
         msgId,
         logTag: 'file-open',
         emitDataUrl: false,
+        // 文件打开走桌面下载命令，候选域名按旧 im 文件资源通道准备。
+        urlCandidates: getOssDownloadCandidates({
+          url,
+          channelType: extraData.value.channelType ?? extraData.value.channel_type,
+        }),
+        msgType: props.message.msgType,
+        sendTime: props.message.sendTime,
       })
     } catch (error) {
       if (!settled) {

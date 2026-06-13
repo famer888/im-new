@@ -12,6 +12,7 @@ import Toast from '@/components/Toast.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
 import { getFileExtension, resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
 import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerState'
+import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import { getRuntimePlatform, type RuntimePlatform } from '@/utils/runtimePlatform'
 import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
@@ -1267,6 +1268,9 @@ async function downloadImageForDefaultApp(options: { silent?: boolean } = {}): P
         msgId: stableId,
         logTag: 'image-default-open',
         emitDataUrl: false,
+        // 媒体预览窗口没有完整消息上下文，仍按旧 im 默认聊天 OSS 通道准备兜底域名。
+        urlCandidates: getOssDownloadCandidates({ url }),
+        msgType: 1,
       })
     } catch (error) {
       if (settled) return
@@ -1349,6 +1353,9 @@ async function downloadVideoForDefaultApp(options: { silent?: boolean } = {}): P
         msgId: id,
         logTag: 'video-default-open',
         emitDataUrl: false,
+        // 默认播放器打开走同一个桌面下载命令，补齐 OSS 域名重试能力。
+        urlCandidates: getOssDownloadCandidates({ url }),
+        msgType: 3,
       })
     } catch (error) {
       if (settled) return
