@@ -197,6 +197,7 @@ pub fn run() {
             commands::media::media_window_close,
             commands::media::media_window_is_maximized,
             commands::media::media_window_is_fullscreen,
+            commands::native_image::resolve_native_image,
             commands::window::open_chat_window,
             commands::window::close_chat_window,
             commands::window::show_notification_window,

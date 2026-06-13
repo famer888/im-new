@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import groupIcon from '@/assets/images/logo/default_group_icon.png'
 import friendIcon from '@/assets/images/logo/logo-58.png'
 import channelIcon from '@/assets/images/logo/channel-notice.webp'
+import { canUseNativeImageAvatar, resolveNativeAvatarSrc } from '@/utils/nativeImage'
 
 const props = withDefaults(defineProps<{
   id?: string | number | null
@@ -21,6 +22,7 @@ const props = withDefaults(defineProps<{
 const initial = computed(() => (props.name || '?')[0].toUpperCase())
 const imageLoadError = ref(false)
 const resolvedImageSrc = ref<string | null>(null)
+const nativeImageLoading = ref(false)
 // src 频繁切换时用 token 丢弃过期异步结果，避免旧请求回写新头像。
 let resolveTaskToken = 0
 
@@ -30,6 +32,13 @@ const AVATAR_FAIL_RETRY_MS = 60_000
 const avatarPreloadPromises = new Map<string, Promise<boolean>>()
 // 记录最近一次加载结果：成功直接复用，失败短时间内不重复探测。
 const avatarLoadStates = new Map<string, { loaded: boolean; updatedAt: number }>()
+
+const SKELETON_SVG =
+  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' preserveAspectRatio='xMidYMid slice'>" +
+  "<rect width='40' height='40' fill='#e0e0e0'>" +
+  "<animate attributeName='fill' values='#e0e0e0;#f0f0f0;#e0e0e0' dur='1.2s' repeatCount='indefinite'/>" +
+  '</rect></svg>'
+const SKELETON_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent(SKELETON_SVG)}`
 
 const legacyChannelGradientColors = [
   ['#ff516a', '#ff885e'],
@@ -53,8 +62,11 @@ const defaultSrc = computed(() => {
   return friendIcon
 })
 
-const showImage = computed(() => props.avatarType !== 'text' && (props.avatarType !== 'channel' || !!resolvedImageSrc.value))
-const imageSrc = computed<string>(() => resolvedImageSrc.value || defaultSrc.value)
+const showImage = computed(() => props.avatarType !== 'text' && (nativeImageLoading.value || props.avatarType !== 'channel' || !!resolvedImageSrc.value))
+const imageSrc = computed<string>(() => {
+  if (nativeImageLoading.value) return SKELETON_DATA_URL
+  return resolvedImageSrc.value || defaultSrc.value
+})
 const useCircle = computed(() => props.rounded || props.avatarType === 'group' || props.avatarType === 'channel' || props.avatarType === 'text')
 
 function legacyGradientById(id: string | number | null | undefined): string | null {
@@ -149,9 +161,34 @@ function preloadAvatar(src: string): Promise<boolean> {
 async function refreshResolvedImageSrc() {
   const token = ++resolveTaskToken
   const src = normalizeAvatarSrc(props.src)
+  nativeImageLoading.value = false
   if (!src || imageLoadError.value || props.avatarType === 'text') {
     if (token !== resolveTaskToken) return
     resolvedImageSrc.value = null
+    return
+  }
+
+  if (canUseNativeImageAvatar(src)) {
+    // 桌面端远程头像走 NativeImage：本地缓存 + 候选域名 + 明文/加密识别，避免 WebView 反复直连头像源。
+    nativeImageLoading.value = true
+    try {
+      const nativeSrc = await resolveNativeAvatarSrc({
+        id: props.id,
+        type: props.avatarType,
+        src,
+      })
+      if (token !== resolveTaskToken) return
+      resolvedImageSrc.value = nativeSrc
+      imageLoadError.value = !nativeSrc
+    } catch (error) {
+      if (token !== resolveTaskToken) return
+      // NativeImage 解析失败只影响当前头像，回退到原有默认图/文字头像，不阻断页面渲染。
+      console.warn('[TextAvatar] native image resolve failed', error)
+      resolvedImageSrc.value = null
+      imageLoadError.value = true
+    } finally {
+      if (token === resolveTaskToken) nativeImageLoading.value = false
+    }
     return
   }
 
