@@ -510,26 +510,7 @@ function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (fallbackFromLocalPreviewError()) return
   const originalUrl = imageData.value.url
-  if (
-    isChannelMessage()
-    && Number(props.message.msgType) === 9
-    && downloadUrl.value
-    && !fileKey.value
-    && !attachmentKey.value
-    && !dynamicImageHeadKeyFallbackStarted.value
-  ) {
-    dynamicImageHeadKeyFallbackStarted.value = true
-    channelImageLog('img error: retry dynamic image with head aes key', {
-      activeSrcHead: shortLogValue(activeSrc.value),
-      downloadUrlHead: shortLogValue(downloadUrl.value),
-      headKeyLen: API_CONFIG.headAesKey.length,
-    }, 'warn')
-    activeSrc.value = ''
-    loadError.value = false
-    isLoaded.value = false
-    downloadAndDecryptImage()
-    return
-  }
+  if (!fileKey.value && !attachmentKey.value && retryDynamicImageWithHeadKey('img-error')) return
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
     channelImageLog('img error: fallback to original url', {
       activeSrcHead: shortLogValue(activeSrc.value),
@@ -617,6 +598,33 @@ async function openWithDefaultApp() {
 function cleanupDownloadEvents() {
   stopDownloadEvents.forEach(stop => stop())
   stopDownloadEvents = []
+}
+
+function retryDynamicImageWithHeadKey(reason: string): boolean {
+  if (
+    !(window as any).__TAURI_INTERNALS__
+    || Number(props.message.msgType) !== 9
+    || !downloadUrl.value
+    || dynamicImageHeadKeyFallbackStarted.value
+  ) {
+    return false
+  }
+
+  // 旧 im 对 msgType 9 GIF 会在直连/fileKey 解密失败后再试默认 HEAD_AES_KEY；这里只在桌面下载链路失败后兜底一次。
+  dynamicImageHeadKeyFallbackStarted.value = true
+  channelImageLog('retry dynamic image with head aes key', {
+    reason,
+    activeSrcHead: shortLogValue(activeSrc.value),
+    downloadUrlHead: shortLogValue(downloadUrl.value),
+    headKeyLen: API_CONFIG.headAesKey.length,
+    hasFileKey: Boolean(fileKey.value),
+    hasAttachmentKey: Boolean(attachmentKey.value),
+  }, 'warn')
+  activeSrc.value = ''
+  loadError.value = false
+  isLoaded.value = false
+  downloadAndDecryptImage()
+  return true
 }
 
 function getFileSuffix(chatType: number, fileUrl: string): string {
@@ -718,6 +726,13 @@ async function getImageSavePath(join: (...paths: string[]) => Promise<string>, b
 }
 
 async function resolveFileKey(): Promise<string> {
+  if (Number(props.message.msgType) === 9 && dynamicImageHeadKeyFallbackStarted.value) {
+    // 旧 im 的 GIF 下载按候选 key 重试：E2EE fileKey 失败后再试默认 HEAD_AES_KEY。
+    channelImageLog('resolve key: use dynamic image head aes fallback', {
+      headKeyLen: API_CONFIG.headAesKey.length,
+    }, 'warn')
+    return API_CONFIG.headAesKey
+  }
   if (fileKey.value) {
     channelImageLog('resolve key: use message fileKey', {
       fileKeyLen: fileKey.value.length,
@@ -747,17 +762,6 @@ async function resolveFileKey(): Promise<string> {
       })
       if (resolved) return resolved
     }
-  }
-  if (
-    isChannelMessage()
-    && Number(props.message.msgType) === 9
-    && dynamicImageHeadKeyFallbackStarted.value
-  ) {
-    // 旧 im 对 msgType 9 会在直连失败后尝试默认 HEAD_AES_KEY；只在 img onerror 后启用，避免影响明文 GIF。
-    channelImageLog('resolve key: use dynamic image head aes fallback', {
-      headKeyLen: API_CONFIG.headAesKey.length,
-    }, 'warn')
-    return API_CONFIG.headAesKey
   }
   if (isChannelMessage() && attachmentKey.value && channelId.value) {
     try {
@@ -816,6 +820,7 @@ async function downloadAndDecryptImage() {
       hasAttachmentKey: Boolean(attachmentKey.value),
       attachmentKeyLen: attachmentKey.value.length,
     }, 'warn')
+    if (url && retryDynamicImageWithHeadKey('missing-key')) return
     loadError.value = true
     isLoaded.value = true
     return
@@ -900,6 +905,7 @@ async function downloadAndDecryptImage() {
         savePathHead: shortLogValue(savePath),
         fileKeyLen: key.length,
       }, 'error')
+      if (retryDynamicImageWithHeadKey('download-error')) return
       loadError.value = true
       isLoaded.value = true
     })
@@ -919,6 +925,7 @@ async function downloadAndDecryptImage() {
       fileKeyLen: key.length,
       err: String(error),
     }, 'error')
+    if (retryDynamicImageWithHeadKey('download-throw')) return
     loadError.value = true
     isLoaded.value = true
   }
