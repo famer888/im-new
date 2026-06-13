@@ -11,6 +11,7 @@ import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { eventBus } from '@/utils/eventBus'
+import { writeClipboardText } from '@/utils/clipboard'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
 import { DEFAULT_READ_BURN_SECONDS, getReadBurnTimeText } from '@/utils/readBurn'
 import { emojiObj } from '@/utils/emoji'
@@ -1685,7 +1686,7 @@ async function handleEditorMenuSelect(key: string) {
   if (key === 'copy') {
     const text = window.getSelection()?.toString() || ''
     if (text) {
-      try { await navigator.clipboard.writeText(text) } catch { /* clipboard may be unavailable */ }
+      try { await writeClipboardText(text) } catch { /* clipboard may be unavailable */ }
     }
     return
   }

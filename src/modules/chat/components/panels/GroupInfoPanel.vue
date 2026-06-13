@@ -17,6 +17,7 @@ import GroupNoticeDialog from './GroupNoticeDialog.vue'
 import GroupNoticeContent from './GroupNoticeContent.vue'
 import InviteFriendDialog from '@/modules/groups/components/InviteFriendDialog.vue'
 import RemoveMemberDialog from '@/modules/groups/components/RemoveMemberDialog.vue'
+import { writeClipboardText } from '@/utils/clipboard'
 import { eventBus } from '@/utils/eventBus'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import searchCloseIcon from '@/assets/images/headNav/search-close-icon.png'
@@ -372,7 +373,7 @@ watch(
 )
 
 function copyText(text: string) {
-  navigator.clipboard.writeText(text.endsWith(' ') ? text : `${text} `).then(() => {
+  writeClipboardText(text.endsWith(' ') ? text : `${text} `).then(() => {
     showToast(t('复制成功'))
   }).catch(() => {})
 }

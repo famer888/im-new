@@ -78,6 +78,7 @@ import { groupQrCode } from '@/api/imBase'
 import Toast from '@/components/Toast.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
+import { writeClipboardText } from '@/utils/clipboard'
 import { useUIStore } from '@/stores/useUIStore'
 
 const { t: $t, locale } = useI18n()
@@ -239,7 +240,7 @@ async function handleGroupQrCodeGet() {
 
 function handleCopy() {
   if (!qrUrl.value) return
-  navigator.clipboard.writeText(qrUrl.value).then(() => {
+  writeClipboardText(qrUrl.value).then(() => {
     showToast($t('复制成功'))
   }).catch(() => {
     showToast($t('复制失败'), 'error')

@@ -8,6 +8,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import { updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
+import { writeClipboardText } from '@/utils/clipboard'
 import editIcon from '@/assets/images/message/edit-icon.png'
 
 const props = defineProps<{ contactId: string }>()
@@ -56,7 +57,7 @@ async function handleCopyId() {
   const id = displayId.value
   if (!id) return
   try {
-    await navigator.clipboard.writeText(`@${id} `)
+    await writeClipboardText(`@${id} `)
     if (copyToastTimer) {
       clearTimeout(copyToastTimer)
     }

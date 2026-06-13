@@ -52,10 +52,11 @@ import type { MenuItem } from '@/components/ContextMenu.vue'
 import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
+import { writeClipboardText } from '@/utils/clipboard'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
-import { toDisplaySrc, toFsPath } from '@/utils/resourcePath'
+import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
 import { API_CONFIG } from '@/api/config'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
@@ -1065,41 +1066,8 @@ function normalizeCopyTextContent(rawContent: unknown, extraData: Record<string,
 }
 
 async function writeTextClipboard(text: string) {
-  const normalized = String(text ?? '')
-  const blob = new Blob([normalized], { type: 'text/plain' })
-  const ClipboardItemCtor = window.ClipboardItem
-  if (ClipboardItemCtor && navigator.clipboard?.write) {
-    try {
-      await withClipboardTimeout(
-        navigator.clipboard.write([new ClipboardItemCtor({ 'text/plain': blob })]),
-        'web clipboard text write',
-      )
-      return
-    } catch (error) {
-      console.warn('[clipboard] web text write failed:', error)
-    }
-  }
-  if (navigator.clipboard?.writeText) {
-    try {
-      await withClipboardTimeout(
-        navigator.clipboard.writeText(normalized),
-        'web clipboard text write',
-      )
-      return
-    } catch (error) {
-      console.warn('[clipboard] web text writeText failed:', error)
-    }
-  }
-  if ((window as any).__TAURI_INTERNALS__) {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await withClipboardTimeout(
-      invoke('write_clipboard_text', { text: normalized }),
-      'native clipboard text write',
-      5000,
-    )
-    return
-  }
-  throw new Error('clipboard text write unsupported')
+  // 文本复制统一走兼容工具：桌面原生优先，Web Clipboard 失败后回落到旧 im 的 execCommand。
+  await writeClipboardText(text)
 }
 
 function getGroupReadTotal(data: Record<string, unknown>): number {
@@ -2342,6 +2310,11 @@ async function copyMessageImage(data: Record<string, unknown>) {
   }
   if (!imageSrc) {
     throw new Error('image source unavailable')
+  }
+  if ((window as any).__TAURI_INTERNALS__ && isLocalLikePath(imageSrc)) {
+    // 右键数据偶发只有本地展示 URL、没有 data-local-path；仍按旧 im 走原生剪贴板，避免 fetch 本地协议失败。
+    await writeLocalImageWithNativeClipboard(imageSrc)
+    return
   }
   await copyImageToClipboard(imageSrc)
 }

@@ -13,6 +13,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from 'vue-i18n'
 import { proto } from '@/api/request'
+import { writeClipboardText } from '@/utils/clipboard'
 import { DEFAULT_READ_BURN_SECONDS, READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
 import choiceIcon from '@/assets/images/setting/choice-icon.png'
 
@@ -112,7 +113,7 @@ watch(
 async function copyId() {
   if (!displayId.value) return
   try {
-    await navigator.clipboard.writeText(`@${displayId.value} `)
+    await writeClipboardText(`@${displayId.value} `)
     showToast(t('复制成功'))
   } catch {
     // ignore clipboard failure

@@ -17,6 +17,7 @@ import Toast from '@/components/Toast.vue'
 import ImageOverwriteDialog from '@/components/ImageOverwriteDialog.vue'
 import GroupNoticeContent from './GroupNoticeContent.vue'
 import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/utils/fileTools'
+import { writeClipboardText } from '@/utils/clipboard'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { shouldShowChannelShareInfo } from './channelShareVisibility'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
@@ -734,7 +735,7 @@ function handleCopyQrLink() {
     showQrToast(t('复制失败'), 'error')
     return
   }
-  navigator.clipboard.writeText(qrLink).then(() => {
+  writeClipboardText(qrLink).then(() => {
     showQrToast(t('复制成功'))
   }).catch(() => {
     showQrToast(t('复制失败'), 'error')
@@ -844,7 +845,7 @@ async function handleExportChannelQr(qrCodeBase64: string) {
 function copyAlias() {
   if (!alias.value) return
   const textToCopy = `@${alias.value}`
-  navigator.clipboard.writeText(textToCopy).then(() => {
+  writeClipboardText(textToCopy).then(() => {
     toastMessage.value = t('复制成功')
     if (toastTimer.value) clearTimeout(toastTimer.value)
     toastTimer.value = window.setTimeout(() => {
