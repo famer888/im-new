@@ -449,6 +449,37 @@ mod private_decode_tests {
         assert_eq!(channel_removed_reason(1, None, Some(5)), None);
         assert_eq!(channel_removed_reason(1, None, Some(6)), None);
     }
+
+    #[test]
+    fn group_live_send_gift_payload_decodes_to_frontend_event() {
+        let payload = imweb::PushGroupLiveSendGiftMsg {
+            group_id: 123,
+            live_room_id: 456,
+            gift_id: 0,
+            gift_type: 3,
+            animation_url: "https://example.com/a.svga".to_string(),
+            sound_url: "https://example.com/a.mp3".to_string(),
+            gift_name: "金币".to_string(),
+            quantity: 1,
+            icon_url: "https://example.com/icon.png".to_string(),
+            from_uid: 789,
+            anchor_uid: 987,
+            coin_name: "OCS".to_string(),
+            amount: "88".to_string(),
+            room_sum_amount: "188".to_string(),
+        }
+        .encode_to_vec();
+
+        let evt = decode_group_live_send_gift_event(&payload).unwrap();
+
+        assert_eq!(evt.group_id, 123);
+        assert_eq!(evt.live_room_id, 456);
+        assert_eq!(evt.gift_id, 0);
+        assert_eq!(evt.gift_type, 3);
+        assert_eq!(evt.from_uid, 789);
+        assert_eq!(evt.amount, "88");
+        assert_eq!(evt.room_sum_amount, "188");
+    }
 }
 
 fn decrypt_group_attachment_key(
@@ -607,6 +638,26 @@ pub struct ChannelReadReceiptPushEvent {
     pub read_channel_messages: Vec<ChannelReadReceiptEvent>,
 }
 
+#[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupLiveSendGiftEvent {
+    /// 2217 原始协议字段透传给前端，前端只负责按当前会话判断是否展示临时气泡。
+    pub group_id: i64,
+    pub live_room_id: i64,
+    pub gift_id: i64,
+    pub gift_type: i32,
+    pub animation_url: String,
+    pub sound_url: String,
+    pub gift_name: String,
+    pub quantity: i32,
+    pub icon_url: String,
+    pub from_uid: i64,
+    pub anchor_uid: i64,
+    pub coin_name: String,
+    pub amount: String,
+    pub room_sum_amount: String,
+}
+
 pub struct MessageBatcher {
     buffer: Vec<DecodedMessage>,
     last_flush: Instant,
@@ -733,6 +784,13 @@ impl MessageBatcher {
             cmds::CHANNEL_READ_PUSH => {
                 if let Err(e) = self.emit_channel_read_push(&decoded_payload) {
                     error!("[channel] 4206 decode/emit failed: {}", e);
+                }
+                return;
+            }
+            cmds::GROUP_LIVE_SEND_GIFT_PUSH => {
+                // 2217 是群直播打赏提示，对齐旧 im：只通知前端展示临时气泡，不入库也不更新会话列表。
+                if let Err(e) = self.emit_group_live_send_gift(&decoded_payload) {
+                    warn!("2217 decode/emit group live gift failed: {}", e);
                 }
                 return;
             }
@@ -2557,6 +2615,38 @@ impl MessageBatcher {
         }
         Ok(())
     }
+
+    fn emit_group_live_send_gift(&self, payload: &[u8]) -> Result<(), String> {
+        let evt = decode_group_live_send_gift_event(payload)?;
+        // 对齐旧 im 的事件模型：2217 是 UI 即时提示，不进入消息批处理和本地数据库。
+        self.app_handle
+            .emit("group-live:send-gift", &evt)
+            .map_err(|e| format!("emit group-live:send-gift: {}", e))?;
+        Ok(())
+    }
+}
+
+fn decode_group_live_send_gift_event(payload: &[u8]) -> Result<GroupLiveSendGiftEvent, String> {
+    let resp = imweb::PushGroupLiveSendGiftMsg::decode(payload)
+        .map_err(|e| format!("decode PushGroupLiveSendGiftMsg: {}", e))?;
+
+    // Rust 字段保持 proto 语义，serde 统一输出 camelCase，避免前端再做蛇形字段兼容。
+    Ok(GroupLiveSendGiftEvent {
+        group_id: resp.group_id,
+        live_room_id: resp.live_room_id,
+        gift_id: resp.gift_id,
+        gift_type: resp.gift_type,
+        animation_url: resp.animation_url,
+        sound_url: resp.sound_url,
+        gift_name: resp.gift_name,
+        quantity: resp.quantity,
+        icon_url: resp.icon_url,
+        from_uid: resp.from_uid,
+        anchor_uid: resp.anchor_uid,
+        coin_name: resp.coin_name,
+        amount: resp.amount,
+        room_sum_amount: resp.room_sum_amount,
+    })
 }
 
 fn normalize_timestamp(ts: i64) -> i64 {

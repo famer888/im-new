@@ -12,6 +12,8 @@ type Events = {
   'chat:switch': string
   'group-invitation:update': void
   'channel-notice:update': void
+  /** 群直播打赏提示：Web 兜底和本地模拟共用，桌面端实际来源是 Tauri 事件。 */
+  'group-live:send-gift': Record<string, unknown>
   'notification:click': { conversationId: string }
   'show-toast': { message: string; type?: 'success' | 'error' }
 }

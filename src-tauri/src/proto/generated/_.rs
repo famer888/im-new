@@ -3071,6 +3071,52 @@ pub struct PushGroupEventMessage {
     #[prost(message, repeated, tag = "2")]
     pub group_update_event_msg_dto: ::prost::alloc::vec::Vec<GroupUpdateEventMsgDto>,
 }
+/// 推送群直播礼物消息 2217
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PushGroupLiveSendGiftMsg {
+    /// 群id
+    #[prost(int64, tag = "1")]
+    pub group_id: i64,
+    /// 直播间id
+    #[prost(int64, tag = "2")]
+    pub live_room_id: i64,
+    /// 礼物id，null或0时为直接送币
+    #[prost(int64, tag = "3")]
+    pub gift_id: i64,
+    /// 礼物类型：1-静态图 2-动图 3-动图+声音
+    #[prost(int32, tag = "4")]
+    pub gift_type: i32,
+    /// 动效 URL
+    #[prost(string, tag = "5")]
+    pub animation_url: ::prost::alloc::string::String,
+    /// 声音 URL
+    #[prost(string, tag = "6")]
+    pub sound_url: ::prost::alloc::string::String,
+    /// 礼物名称
+    #[prost(string, tag = "7")]
+    pub gift_name: ::prost::alloc::string::String,
+    /// 数量
+    #[prost(int32, tag = "8")]
+    pub quantity: i32,
+    /// 图标 URL
+    #[prost(string, tag = "9")]
+    pub icon_url: ::prost::alloc::string::String,
+    /// 送礼用户UID
+    #[prost(int64, tag = "10")]
+    pub from_uid: i64,
+    /// 主播UID
+    #[prost(int64, tag = "11")]
+    pub anchor_uid: i64,
+    /// 币种
+    #[prost(string, tag = "12")]
+    pub coin_name: ::prost::alloc::string::String,
+    /// 金额
+    #[prost(string, tag = "13")]
+    pub amount: ::prost::alloc::string::String,
+    /// 当场直播总金额
+    #[prost(string, tag = "14")]
+    pub room_sum_amount: ::prost::alloc::string::String,
+}
 /// 推送发送频道消息成功消息 4201
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct PushSendChannelMessageSuccessMessage {

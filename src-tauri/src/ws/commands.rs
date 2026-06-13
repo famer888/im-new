@@ -35,6 +35,8 @@ pub const GROUP_READ_RECEIPT_PUSH: u16 = 20403;
 pub const KEY_PAIR_CHANGE_PUSH: u16 = 20501;
 pub const USER_ONLINE_STATUS_PUSH: u16 = 20601;
 pub const GROUP_EVENT_PUSH: u16 = 20701;
+// 群直播打赏/礼物推送，旧 im 只展示临时气泡，不作为聊天消息落库。
+pub const GROUP_LIVE_SEND_GIFT_PUSH: u16 = 2217;
 pub const HEARTBEAT_RESP: u16 = 29901;
 pub const ERROR_RESP: u16 = 29999;
 pub const SENSITIVE_WORDS_PUSH: u16 = 30001;
@@ -79,6 +81,7 @@ pub fn cmd_name(cmd: u16) -> &'static str {
         KEY_PAIR_CHANGE_PUSH => "KEY_PAIR_CHANGE_PUSH",
         USER_ONLINE_STATUS_PUSH => "USER_ONLINE_STATUS_PUSH",
         GROUP_EVENT_PUSH => "GROUP_EVENT_PUSH",
+        GROUP_LIVE_SEND_GIFT_PUSH => "GROUP_LIVE_SEND_GIFT_PUSH",
         HEARTBEAT_RESP => "HEARTBEAT_RESP",
         ERROR_RESP => "ERROR_RESP",
         SENSITIVE_WORDS_PUSH => "SENSITIVE_WORDS_PUSH",

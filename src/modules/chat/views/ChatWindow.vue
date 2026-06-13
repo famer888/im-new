@@ -24,6 +24,7 @@ import { ensureGroupRelKey } from '@/utils/e2ee'
 import ChatHeader from '../components/ChatHeader.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
+import GiftTipBubble, { type GiftTipItem } from '../components/GiftTipBubble.vue'
 import GroupNoticeDialog from '../components/panels/GroupNoticeDialog.vue'
 import GroupNoticeContent from '../components/panels/GroupNoticeContent.vue'
 import lockIcon from '@/assets/images/message/lock.png'
@@ -74,10 +75,13 @@ const unreadSnapshotLocked = ref(false)
 const dropAreaVisible = ref(false)
 const chatWindowRef = ref<HTMLElement | null>(null)
 let unlistenTauriDragDrop: (() => void) | null = null
+let unlistenGroupLiveGift: (() => void) | null = null
+let groupLiveGiftListenerDisposed = false
 let closeDropAreaTimer: ReturnType<typeof window.setTimeout> | null = null
 let lastDropHandledAt = 0
 const DROP_DEDUPE_MS = 500
 const groupRelKeyWarmupInFlight = new Set<string>()
+const giftTips = ref<GiftTipItem[]>([])
 const dropAreaStyle = computed(() => {
   const rect = chatWindowRef.value?.getBoundingClientRect()
   if (!rect) return {}
@@ -393,6 +397,78 @@ function handleSend(content: string, msgType: number, extra?: Record<string, unk
     })
 }
 
+interface GroupLiveSendGiftPayload {
+  /** 这些字段直接来自 2217 PushGroupLiveSendGiftMsg，保持协议含义，UI 只做展示转换。 */
+  groupId?: string | number
+  liveRoomId?: string | number
+  giftId?: string | number
+  giftType?: string | number
+  animationUrl?: string
+  soundUrl?: string
+  giftName?: string
+  quantity?: string | number
+  iconUrl?: string
+  fromUid?: string | number
+  anchorUid?: string | number
+  coinName?: string
+  amount?: string
+  roomSumAmount?: string
+}
+
+type TauriEvent<T> = { payload: T }
+
+function normalizePositiveQuantity(value: unknown): number {
+  const quantity = Number(value || 1)
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : 1
+}
+
+function playGroupLiveGiftSound(payload: GroupLiveSendGiftPayload) {
+  // 旧 im 只有动图/动图+声音礼物才尝试播放音效，直接送币只展示气泡。
+  const soundUrl = String(payload.soundUrl || '')
+  const giftType = Number(payload.giftType || 0)
+  if (!soundUrl || ![2, 3].includes(giftType)) return
+
+  try {
+    const audio = new Audio(soundUrl)
+    audio.volume = 0.6
+    void audio.play().catch(() => {})
+  } catch {
+    // 浏览器或桌面 WebView 可能因播放策略拒绝声音，气泡展示不应被阻断。
+  }
+}
+
+function resolveGroupGiftUserName(groupId: string, fromUid: string): string {
+  if (!fromUid) return ''
+  // 群成员列表可能还在加载中；找不到昵称时回退 UID，保证 2217 提示不丢失。
+  const member = groupStore.getMembers(groupId).find((item) => String(item.userId) === fromUid)
+  return member?.nickname || fromUid
+}
+
+function handleGroupLiveSendGift(payload: GroupLiveSendGiftPayload | Record<string, unknown>) {
+  if (!isGroupConversation.value) return
+
+  // 2217 是全局窗口事件，只能在当前打开的同一个群里展示，避免串到其它会话。
+  const groupId = String(payload.groupId || '')
+  if (!groupId || groupId !== currentGroupId.value) return
+
+  const fromUid = String(payload.fromUid || '')
+  const quantity = normalizePositiveQuantity(payload.quantity)
+  const giftId = Number(payload.giftId || 0)
+  const giftName = String(payload.giftName || t('礼物'))
+  const isDirectCoin = !giftId
+
+  // 对齐旧 im：2217 只追加一条临时提示，不落入消息列表或会话未读。
+  const tip: GiftTipItem = {
+    fromUid,
+    userName: resolveGroupGiftUserName(groupId, fromUid),
+    actionText: isDirectCoin ? t('打赏') : quantity > 1 ? `${giftName} x${quantity}` : giftName,
+    displayAmount: isDirectCoin ? String(payload.amount || '') : String(quantity),
+  }
+  // 父级仅保留一小段输入历史，真正的最多 3 条展示和自动移除交给气泡组件处理。
+  giftTips.value = [...giftTips.value, tip].slice(-50)
+  playGroupLiveGiftSound(payload)
+}
+
 function hasDraggedFiles(e: DragEvent) {
   return Array.from(e.dataTransfer?.types ?? []).includes('Files')
 }
@@ -557,13 +633,46 @@ async function setupTauriDragDrop() {
   }
 }
 
+async function setupGroupLiveGiftListener() {
+  // eventBus 供 Web 兜底/本地模拟复用；Tauri listen 负责接收 Rust WebSocket 解码后的桌面事件。
+  eventBus.on('group-live:send-gift', handleGroupLiveSendGift)
+  if (!(window as any).__TAURI_INTERNALS__) return
+
+  try {
+    const { listen } = await import('@tauri-apps/api/event') as {
+      listen: <T>(eventName: string, handler: (event: TauriEvent<T>) => void) => Promise<() => void>
+    }
+    const unlisten = await listen<GroupLiveSendGiftPayload>('group-live:send-gift', (event) => {
+      handleGroupLiveSendGift(event.payload)
+    })
+    if (groupLiveGiftListenerDisposed) {
+      unlisten()
+      return
+    }
+    unlistenGroupLiveGift = unlisten
+  } catch (error) {
+    console.warn('[chat-window] group live gift listen failed:', error)
+  }
+}
+
+function cleanupGroupLiveGiftListener() {
+  // 组件卸载后仍可能有异步 listen 返回，标记后立即释放，避免重复绑定或泄漏。
+  groupLiveGiftListenerDisposed = true
+  eventBus.off('group-live:send-gift', handleGroupLiveSendGift)
+  unlistenGroupLiveGift?.()
+  unlistenGroupLiveGift = null
+}
+
 onMounted(() => {
+  groupLiveGiftListenerDisposed = false
   setupDomDragDrop()
   void setupTauriDragDrop()
+  void setupGroupLiveGiftListener()
 })
 
 onBeforeUnmount(() => {
   cleanupDomDragDrop()
+  cleanupGroupLiveGiftListener()
   unlistenTauriDragDrop?.()
   unlistenTauriDragDrop = null
 })
@@ -610,6 +719,7 @@ onBeforeUnmount(() => {
       @load-more="handleLoadMore"
       @open-group-notice="handleOpenGroupNoticeFromMessage"
     />
+    <GiftTipBubble v-if="isGroupConversation" :tips="giftTips" />
     <MessageInput v-if="!hideMessageInput" @send="handleSend" />
     <div
       v-if="dropAreaVisible"
