@@ -386,6 +386,24 @@ message PushGroupEventMessage {
     repeated     GroupUpdateEventMsgDto        groupUpdateEventMsgDto  = 2; // 群更新事件消息集合
 }
 
+// 推送群直播礼物消息 2217
+message PushGroupLiveSendGiftMsg {
+    int64       groupId         = 1;  // 群id
+    int64       liveRoomId      = 2;  // 直播间id
+    int64       giftId          = 3;  // 礼物id，null或0时为直接送币
+    int32       giftType        = 4;  // 礼物类型：1-静态图 2-动图 3-动图+声音
+    string      animationUrl    = 5;  // 动效 URL
+    string      soundUrl        = 6;  // 声音 URL
+    string      giftName        = 7;  // 礼物名称
+    int32       quantity        = 8;  // 数量
+    string      iconUrl         = 9;  // 图标 URL
+    int64       fromUid         = 10; // 送礼用户UID
+    int64       anchorUid       = 11; // 主播UID
+    string      coinName        = 12; // 币种
+    string      amount          = 13; // 金额
+    string      roomSumAmount   = 14; // 当场直播总金额
+}
+
 
 // 推送发送频道消息成功消息 4201
 message PushSendChannelMessageSuccessMessage {

@@ -1006,6 +1006,13 @@ async function fetchImageAsPngDataUrl(): Promise<string> {
 }
 
 async function copyImageToClipboard() {
+  const localPath = isFile.value ? localFilePath.value : localImagePath.value
+  if ((window as any).__TAURI_INTERNALS__ && localPath) {
+    // 对齐旧 im：预览窗口复制本地图片时直接读磁盘写剪贴板，避免 fetch 本地展示 URL 触发 CORS/协议限制。
+    await invoke('write_clipboard_image_from_path', { path: toFsPath(localPath) })
+    return
+  }
+
   const dataUrl = await fetchImageAsPngDataUrl()
   const dataBase64 = dataUrl.split(',', 2)[1] || ''
   if (!dataBase64) {

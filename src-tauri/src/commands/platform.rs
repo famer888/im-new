@@ -310,6 +310,33 @@ pub fn write_clipboard_image(data_base64: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+pub fn write_clipboard_image_from_path(path: String) -> Result<(), String> {
+    let file_path = std::path::PathBuf::from(path.trim());
+    if !file_path.is_file() {
+        return Err(format!(
+            "clipboard image file not found: {}",
+            file_path.to_string_lossy()
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return write_clipboard_image_from_path_macos(&file_path);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return write_clipboard_image_from_path_windows(&file_path);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = file_path;
+        Err("clipboard image path write is not supported on this platform".to_string())
+    }
+}
+
 fn run_command_output(program: &str, args: &[&str]) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     let mut command = hidden_windows_command(program);
@@ -1078,6 +1105,50 @@ fn write_clipboard_image_macos(bytes: &[u8]) -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn is_png_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+}
+
+#[cfg(target_os = "macos")]
+fn write_clipboard_image_from_path_macos(path: &std::path::Path) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    if is_png_bytes(&bytes) {
+        return write_clipboard_image_macos(&bytes);
+    }
+
+    let png_path =
+        std::env::temp_dir().join(format!("ocs_clipboard_path_{}.png", uuid::Uuid::new_v4()));
+    // 对齐旧 im：本地图片复制不走 local-resource/asset fetch，先由系统工具转 PNG，再写入系统剪贴板。
+    let status = std::process::Command::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("png")
+        .arg(path)
+        .arg("--out")
+        .arg(&png_path)
+        .status()
+        .map_err(|e| e.to_string());
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = std::fs::remove_file(&png_path);
+            return Err(error);
+        }
+    };
+    if !status.success() {
+        let _ = std::fs::remove_file(&png_path);
+        return Err(format!(
+            "sips image conversion failed with status: {}",
+            status
+        ));
+    }
+
+    let png_bytes = std::fs::read(&png_path).map_err(|e| e.to_string());
+    let _ = std::fs::remove_file(&png_path);
+    write_clipboard_image_macos(&png_bytes?)
+}
+
 #[cfg(target_os = "windows")]
 fn write_clipboard_image_windows(bytes: &[u8]) -> Result<(), String> {
     let path =
@@ -1114,6 +1185,41 @@ try {{
         Ok(())
     } else {
         Err(format!("SetImage failed with status: {}", status))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn write_clipboard_image_from_path_windows(path: &std::path::Path) -> Result<(), String> {
+    let path_text = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let script = format!(
+        r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$path = "{}"
+$image = [System.Drawing.Image]::FromFile($path)
+try {{
+  [System.Windows.Forms.Clipboard]::SetImage($image)
+}} finally {{
+  $image.Dispose()
+}}
+"#,
+        path_text
+    );
+
+    let mut command = hidden_windows_command("powershell.exe");
+    command.args(["-NoProfile", "-Sta", "-Command", &script]);
+    // Windows 直接让 System.Drawing 从磁盘读图，避免 WebView fetch 本地资源时受 CORS/协议限制。
+    let status = command_status_with_timeout(&mut command, Duration::from_secs(6))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "SetImage clipboard from path failed with status: {}",
+            status
+        ))
     }
 }
 

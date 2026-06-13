@@ -198,11 +198,12 @@ fn json_bool(value: &serde_json::Value, keys: &[&str]) -> Option<bool> {
     keys.iter().find_map(|key| {
         value.get(*key).and_then(|v| {
             v.as_bool().or_else(|| {
-                v.as_str().and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
-                    "true" | "1" => Some(true),
-                    "false" | "0" => Some(false),
-                    _ => None,
-                })
+                v.as_str()
+                    .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                        "true" | "1" => Some(true),
+                        "false" | "0" => Some(false),
+                        _ => None,
+                    })
             })
         })
     })
@@ -567,7 +568,9 @@ fn normalize_external_timestamp(ts: i64, fallback: i64) -> i64 {
 fn should_count_as_unread(msg: &models::Message, uid: &str) -> bool {
     // 对齐旧 im：阅后即焚配置变更等通知消息是 chatType=51，不进入
     // “未读正文”计数；新项目用 msgType=6/8 承载这类系统提示。
-    msg.sender_id != uid && !matches!(msg.msg_type, 6 | 8) && !queries::is_hidden_message_type(msg.msg_type)
+    msg.sender_id != uid
+        && !matches!(msg.msg_type, 6 | 8)
+        && !queries::is_hidden_message_type(msg.msg_type)
 }
 
 fn dedupe_incoming_group_notification_rows(rows: Vec<models::Message>) -> Vec<models::Message> {
@@ -1659,7 +1662,8 @@ pub fn decrypt_private_incoming(
         }
     }
     if plain.is_none() && is_file_helper_peer {
-        if let Some((latest_ver, _)) = crypto.get_latest_friend_key_with_version(&sender_id, "app") {
+        if let Some((latest_ver, _)) = crypto.get_latest_friend_key_with_version(&sender_id, "app")
+        {
             if latest_ver != ver {
                 tracing::info!(
                     target: "e2ee",
@@ -1670,7 +1674,13 @@ pub fn decrypt_private_incoming(
                     latest_ver,
                 );
                 match crypto.decrypt_friend_message(&sender_id, latest_ver, "app", &data) {
-                    Ok(bytes) if validate_plain_content(msg_type.unwrap_or(0), &bytes, content_md5.as_deref()) => {
+                    Ok(bytes)
+                        if validate_plain_content(
+                            msg_type.unwrap_or(0),
+                            &bytes,
+                            content_md5.as_deref(),
+                        ) =>
+                    {
                         tracing::info!(
                             target: "e2ee",
                             "decrypt_private_incoming fallback latest-app OK sender_id={} peer_id={} version={} plain_len={}",
@@ -1933,8 +1943,7 @@ pub fn decrypt_group_incoming(
                     }
                 }
                 8 => {
-                    if let Ok(obj) = crate::proto::imweb::GroupNoticeObj::decode(plain.as_slice())
-                    {
+                    if let Ok(obj) = crate::proto::imweb::GroupNoticeObj::decode(plain.as_slice()) {
                         return Ok(obj.content);
                     }
                 }
@@ -2873,7 +2882,6 @@ pub async fn apply_friend_read_receipts(
             }
 
             if let Some((conversation_id, boundary_send_time)) = sync_conversation {
-
                 let mut stmt = conn
                     .prepare_cached(
                         "SELECT id

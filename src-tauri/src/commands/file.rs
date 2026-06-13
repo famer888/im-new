@@ -2941,7 +2941,9 @@ mod tests {
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("skip redirect test: local tcp bind is not permitted in current environment");
+                eprintln!(
+                    "skip redirect test: local tcp bind is not permitted in current environment"
+                );
                 return;
             }
             Err(err) => panic!("bind local server failed: {err}"),
@@ -2975,10 +2977,7 @@ mod tests {
                         .write_all(response.as_bytes())
                         .await
                         .expect("write final headers");
-                    socket
-                        .write_all(body)
-                        .await
-                        .expect("write final body");
+                    socket.write_all(body).await.expect("write final body");
                 }
             }
             (served_redirect, served_final)

@@ -236,6 +236,7 @@ pub fn run() {
             commands::platform::read_clipboard_text,
             commands::platform::write_clipboard_text,
             commands::platform::write_clipboard_image,
+            commands::platform::write_clipboard_image_from_path,
             commands::platform::write_clipboard_file,
             commands::platform::start_native_file_drag,
             commands::platform::start_screenshot,

@@ -401,12 +401,22 @@ mod private_decode_tests {
 
     #[test]
     fn subscriber_remove_without_notice_should_not_emit_fallback_message() {
-        assert!(!should_emit_subscriber_remove_fallback(2, Some(2), 1001, false));
+        assert!(!should_emit_subscriber_remove_fallback(
+            2,
+            Some(2),
+            1001,
+            false
+        ));
     }
 
     #[test]
     fn subscriber_remove_with_notice_should_not_emit_fallback_message() {
-        assert!(!should_emit_subscriber_remove_fallback(2, Some(2), 1001, true));
+        assert!(!should_emit_subscriber_remove_fallback(
+            2,
+            Some(2),
+            1001,
+            true
+        ));
     }
 
     #[test]
@@ -1310,7 +1320,10 @@ impl MessageBatcher {
             if let Some((notice_id, show_notify)) = group_notice_meta {
                 if let Some(map) = extra.as_object_mut() {
                     map.insert("noticeId".to_string(), serde_json::Value::from(notice_id));
-                    map.insert("showNotify".to_string(), serde_json::Value::from(show_notify));
+                    map.insert(
+                        "showNotify".to_string(),
+                        serde_json::Value::from(show_notify),
+                    );
                     map.insert("bfAll".to_string(), serde_json::Value::from(show_notify));
                     map.insert("isHide".to_string(), serde_json::Value::from(!show_notify));
                 }
@@ -1569,11 +1582,12 @@ impl MessageBatcher {
                 } else {
                     content.attachment_key.as_str()
                 };
-                if !ciphertexts_to_try.iter().any(
-                    |(v, s, cipher, _): &(i64, &str, &[u8], &str)| {
+                if !ciphertexts_to_try
+                    .iter()
+                    .any(|(v, s, cipher, _): &(i64, &str, &[u8], &str)| {
                         *v == version && *s == source && *cipher == content.content.as_slice()
-                    },
-                ) {
+                    })
+                {
                     ciphertexts_to_try.push((
                         version,
                         source,

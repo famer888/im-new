@@ -295,7 +295,10 @@ fn media_caption_payload(segment: &str) -> Option<(im::CaptionMediaType, String)
             return Some((media_type, payload.trim().to_string()));
         }
         if let Some(index) = segment.find(&format!("||{}", marker)) {
-            return Some((media_type, segment[index + marker.len() + 2..].trim().to_string()));
+            return Some((
+                media_type,
+                segment[index + marker.len() + 2..].trim().to_string(),
+            ));
         }
     }
     None
@@ -312,7 +315,10 @@ pub fn encode_media_text_list_obj(content: &str) -> Vec<u8> {
             strip_medias_caption_ref_suffix(&raw[index + CAPTION_SEPARATOR.len()..]).to_string(),
         )
     } else {
-        (strip_medias_caption_ref_suffix(raw).to_string(), String::new())
+        (
+            strip_medias_caption_ref_suffix(raw).to_string(),
+            String::new(),
+        )
     };
 
     let objs = body

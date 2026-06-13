@@ -2236,6 +2236,23 @@ async function writeImageBlobWithNativeClipboard(blob: Blob) {
   )
 }
 
+async function writeLocalImageWithNativeClipboard(path: string) {
+  if (!(window as any).__TAURI_INTERNALS__) {
+    throw new Error('native clipboard image path write unsupported')
+  }
+  const filePath = toFsPath(path)
+  if (!filePath) {
+    throw new Error('image local path unavailable')
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  // 对齐旧 im：本地图片复制直接让原生层读磁盘写剪贴板，避免 fetch(asset/local-resource) 被 CORS 拦截。
+  await withClipboardTimeout(
+    invoke('write_clipboard_image_from_path', { path: filePath }),
+    'native clipboard image path write',
+    8000,
+  )
+}
+
 async function copyImageToClipboard(src: string) {
   const response = await fetch(src)
   if (!response.ok) {
@@ -2301,11 +2318,8 @@ async function copyMessageImage(data: Record<string, unknown>) {
   let imageSrc = String(data.imageSrc || '').trim()
   const imagePath = String(data.imagePath || '').trim()
   if ((window as any).__TAURI_INTERNALS__ && imagePath) {
-    try {
-      imageSrc = toDisplaySrc(imagePath)
-    } catch (error) {
-      console.warn('[clipboard] image local path conversion failed:', error)
-    }
+    await writeLocalImageWithNativeClipboard(imagePath)
+    return
   }
   if (!imageSrc) {
     throw new Error('image source unavailable')
