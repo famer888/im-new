@@ -88,6 +88,9 @@ const LINK_SAFE_END_CHAR = `[^${LINK_FORBIDDEN_CHARS}\\.,;:?!()\\[\\]{}]`
 const LINK_AT_START_REGEX = new RegExp(
   `^((?:(?:https?|rtmps?)://|www\\.)[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR})`,
 )
+const BARE_DOMAIN_LINK_AT_START_REGEX = new RegExp(
+  `^(([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,6}(\\/[^${LINK_FORBIDDEN_CHARS}]*${LINK_SAFE_END_CHAR}|/)?)`,
+)
 const aliasTargetCache = new Map<string, Promise<AliasTarget>>()
 const openingMentionKeys = new Set<string>()
 const openingLinkKeys = new Set<string>()
@@ -293,14 +296,20 @@ function detectExtraLinkAt(content: string, start: number, ranges: ExtraLinkRang
 function detectLinkAtStart(content: string, start: number): { text: string; href: string } | null {
   const rest = content.slice(start)
   const match = rest.match(LINK_AT_START_REGEX)
-  if (!match) return null
+  if (match) {
+    const url = match[1]
+    if (url.startsWith('http') && url.length <= 7) return null // At least "http://" + one char
+    if (url.startsWith('rtmp://') && url.length <= 8) return null
+    if (url.startsWith('rtmps://') && url.length <= 9) return null
+    if (url.startsWith('www.') && url.length <= 5) return null
+    return { text: url, href: url }
+  }
 
-  const url = match[1]
-  if (url.startsWith('http') && url.length <= 7) return null // At least "http://" + one char
-  if (url.startsWith('rtmp://') && url.length <= 8) return null
-  if (url.startsWith('rtmps://') && url.length <= 9) return null
-  if (url.startsWith('www.') && url.length <= 5) return null
-  return { text: url, href: url }
+  const bareDomainMatch = rest.match(BARE_DOMAIN_LINK_AT_START_REGEX)
+  if (!bareDomainMatch) return null
+  const url = bareDomainMatch[1]
+  // 对齐旧 im：没有协议的普通域名也展示为链接，点击时补 https://。
+  return { text: url, href: `https://${url}` }
 }
 
 function resolveEmojiSrc(name: string): string {
@@ -825,8 +834,8 @@ const contentSegments = computed<ContentSegment[]>(() => {
     .replace(/[ \t\u00a0]*[\r\n]+[ \t\u00a0]*$/g, '')
   const content = displayContent
   const extraLinkRanges = getExtraLinkRanges(content, props.message.extra)
-  // 常规纯文本消息不进入逐字符解析，减少首屏大量文本消息的渲染开销。
-  if (content && !extraLinkRanges.length && !/[@\[]|https?:\/\/|rtmps?:\/\/|www\./i.test(content)) {
+  // 常规纯文本消息不进入逐字符解析，减少首屏大量文本消息的渲染开销；裸域名需进入解析以对齐旧 im 链接样式。
+  if (content && !extraLinkRanges.length && !/[@\[]|https?:\/\/|rtmps?:\/\/|www\.|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}/i.test(content)) {
     return [{ type: 'text', text: content }]
   }
   const segments: ContentSegment[] = []
@@ -1155,7 +1164,7 @@ async function handleLinkClick(event: MouseEvent, segment: LinkLikeSegment) {
 
 <style lang="scss" scoped>
 .text-message.com-msg-text {
-  max-width: 650px;
+  max-width: 450px;
   min-width: 130px;
   border-radius: 10px;
   border-top-left-radius: 0;
@@ -1229,10 +1238,10 @@ async function handleLinkClick(event: MouseEvent, segment: LinkLikeSegment) {
 
     .text-link {
       display: inline;
-      text-decoration: none;
+      text-decoration: underline;
 
       &:hover {
-        text-decoration: underline;
+        opacity: 0.8;
       }
 
       &.stream-link {
