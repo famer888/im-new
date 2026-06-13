@@ -1060,7 +1060,7 @@ export const useMessageStore = defineStore('message', () => {
       lastMsgDigest: digest || null,
       // 进入会话加载历史消息只修正预览，不改变左侧列表位置，避免点击后列表突然重排。
       updatedAt: options?.preserveListOrder ? existing.updatedAt : latest?.sendTime || 0,
-    })
+    }, { preserveListOrder: options?.preserveListOrder === true })
   }
 
   function normalizeMessage(raw: any): Message {

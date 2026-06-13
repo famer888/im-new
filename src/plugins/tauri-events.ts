@@ -435,6 +435,31 @@ function getMessageIdentity(message: any): { conversationId: string; id: string;
   }
 }
 
+function numericPayloadField(value: unknown): number {
+  const n = Number(value ?? 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+function stringPayloadField(value: unknown): string {
+  return String(value ?? '')
+}
+
+function shouldPreserveConversationOrderForUpdate(existing: Conversation | undefined, payload: any): boolean {
+  if (!existing) return false
+
+  const nextPinned = Boolean(payload?.isPinned ?? payload?.is_pinned ?? existing.isPinned)
+  if (nextPinned !== existing.isPinned) return false
+
+  const nextLastMsgTime = numericPayloadField(payload?.lastMsgTime ?? payload?.last_msg_time ?? existing.lastMsgTime)
+  if (nextLastMsgTime !== numericPayloadField(existing.lastMsgTime)) return false
+
+  const nextLastMsgId = stringPayloadField(payload?.lastMsgId ?? payload?.last_msg_id ?? existing.lastMsgId)
+  if (nextLastMsgId !== stringPayloadField(existing.lastMsgId)) return false
+
+  // 对齐旧 im：资料、未读、已读回执、摘要修正不改变 sendTime，所以只替换当前项，不触发左侧列表重排。
+  return true
+}
+
 function getBatchMessageKey(message: any): string {
   const { conversationId, id, customMsgId } = getMessageIdentity(message)
   const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {}
@@ -1872,7 +1897,10 @@ export async function setupTauriListeners() {
         lastMsgDigest: String(payload?.lastMsgDigest ?? payload?.last_msg_digest ?? ''),
       })
     }
-    chatStore.addOrUpdateConversation(event.payload)
+    const existingConversation = chatStore.conversations.find((conv) => conv.id === conversationId)
+    chatStore.addOrUpdateConversation(event.payload, {
+      preserveListOrder: shouldPreserveConversationOrderForUpdate(existingConversation, payload),
+    })
   })
 
   listen<{ messageId: string; conversationId?: string; clear?: number | string | boolean }>('msg:recall', (event) => {

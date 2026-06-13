@@ -355,15 +355,20 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  function addOrUpdateConversation(conv: Conversation) {
+  function addOrUpdateConversation(conv: Conversation, options?: { preserveListOrder?: boolean }) {
     const normalized = normalizeConversation(conv as any)
     if (normalized.type === 1 && isPendingGroupInviteConversation(normalized.targetId)) return
     const index = conversations.value.findIndex((c) => c.id === normalized.id)
     if (index >= 0) {
-      conversations.value[index] = normalized
+      const previous = conversations.value[index]
+      conversations.value[index] = options?.preserveListOrder
+        ? { ...normalized, updatedAt: previous.updatedAt }
+        : normalized
     } else {
       conversations.value.unshift(normalized)
     }
+    // 对齐旧 im：只有新消息/置顶等会影响排序的更新才重排；局部状态更新保留当前列表位置。
+    if (options?.preserveListOrder && index >= 0) return
     sortConversations()
   }
 
