@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<{
   hasMore: boolean
   unreadCount?: number
   unreadMessageIds?: string[]
+  atMentionMessageIds?: string[]
   /** 对齐旧 im：少量消息从顶部开始排列，不做吸底留白 */
   alignTop?: boolean
   /** 仅在好友开启阅后即焚时显示中间背景图 */
@@ -67,12 +68,14 @@ const entriesWithDate = computed(() =>
 const unreadBannerDismissed = ref(false)
 /** 每次进入会话只自动定位一次未读分隔条，避免后续图片高度变化反复抢滚动位置。 */
 const initialUnreadAutoScrollDone = ref(false)
+const dismissedAtMentionIdSet = ref(new Set<string>())
 
 watch(
   () => props.conversationId,
   () => {
     unreadBannerDismissed.value = false
     initialUnreadAutoScrollDone.value = false
+    dismissedAtMentionIdSet.value = new Set()
   },
 )
 
@@ -85,6 +88,11 @@ const effectiveUnreadCount = computed(() => {
 const unreadMessageIdSet = computed(() => new Set(
   (props.unreadMessageIds ?? []).map((id) => String(id || '')).filter(Boolean),
 ))
+const visibleAtMentionIds = computed(() =>
+  (props.atMentionMessageIds ?? [])
+    .map((id) => String(id || '').trim())
+    .filter((id, index, list) => id && list.indexOf(id) === index && !dismissedAtMentionIdSet.value.has(id)),
+)
 
 function isMessageEligibleForUnreadSnapshotAnchor(message: Message): boolean {
   const uid = String(authStore.uid || '')
@@ -557,6 +565,39 @@ function onClickScrollToLatest() {
   void pinToLatest(true)
 }
 
+async function onClickAtMention() {
+  const targetId = visibleAtMentionIds.value[0]
+  const convId = props.conversationId || ''
+  if (!targetId || !convId) return
+
+  // 对齐旧 im：@ 按钮按队列逐条跳转，点击后消费第一条，避免反复跳同一条消息。
+  const nextDismissed = new Set(dismissedAtMentionIdSet.value)
+  nextDismissed.add(targetId)
+  dismissedAtMentionIdSet.value = nextDismissed
+  stickToBottom.value = false
+
+  let found = sortedMessages.value.find((message) =>
+    String(message.id || '') === targetId || String(message.customMsgId || '') === targetId,
+  )
+  let guard = 0
+  while (!found && messageStore.hasMore(convId) && authStore.uid && guard < 20) {
+    guard += 1
+    await messageStore.loadOlderMessages(authStore.uid, convId, { silent: true })
+    found = sortedMessages.value.find((message) =>
+      String(message.id || '') === targetId || String(message.customMsgId || '') === targetId,
+    )
+  }
+
+  await nextTick()
+  for (let i = 0; i < 4; i++) {
+    if (scrollToRow(targetId)) break
+    await nextTick()
+    await new Promise<void>((r) => requestAnimationFrame(() => r()))
+  }
+  const highlightId = found?.id || targetId
+  searchStore.setSearchMessageHighlight(highlightId)
+}
+
 onUnmounted(() => {
   if (floatHideTimer) clearTimeout(floatHideTimer)
   if (throttleTimer) clearTimeout(throttleTimer)
@@ -737,6 +778,18 @@ function onUnreadBannerClick() {
       </span>
       <img src="@/assets/images/message/arrow-down.png" alt="" />
     </button>
+    <button
+      v-if="visibleAtMentionIds.length > 0"
+      class="at-mention-btn"
+      type="button"
+      @mousedown.stop.prevent
+      @click.stop="onClickAtMention"
+    >
+      <span class="at-mention-count">
+        {{ visibleAtMentionIds.length > 99 ? '99+' : visibleAtMentionIds.length }}
+      </span>
+      <span class="at-mention-symbol">@</span>
+    </button>
   </div>
 </template>
 
@@ -892,5 +945,50 @@ function onUnreadBannerClick() {
   line-height: 20px;
   white-space: nowrap;
   z-index: 1;
+}
+
+.at-mention-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 72px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  z-index: 11;
+  color: #999;
+
+  &:hover {
+    color: #666;
+    background: #fff;
+  }
+}
+
+.at-mention-count {
+  position: absolute;
+  left: 50%;
+  top: -10px;
+  transform: translateX(-50%);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 7px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: #178aff;
+  color: #fff;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.at-mention-symbol {
+  display: block;
+  font-size: 18px;
+  line-height: 38px;
+  font-weight: 500;
 }
 </style>

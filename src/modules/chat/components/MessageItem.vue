@@ -51,9 +51,15 @@ const isSelected = computed(() => uiStore.selectedMessageIds.has(props.message.i
 const renderMsgType = computed(() => Number(props.message.msgType || 0))
 const shouldRenderMessage = computed(() => !isHiddenMessageType(renderMsgType.value))
 /** 与 im `getCurrentMsgClass` 里 `active`（搜索定位高亮）一致 */
-const isSearchHighlighted = computed(
-  () => searchStore.highlightSearchMessageId === props.message.id,
-)
+const isSearchHighlighted = computed(() => {
+  const highlightId = String(searchStore.highlightSearchMessageId || '').trim()
+  if (!highlightId) return false
+  // 只允许非空 id 命中，避免 highlight 清空后和空 customMsgId 匹配，导致多条消息同时变色。
+  return [props.message.id, props.message.customMsgId]
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .includes(highlightId)
+})
 const isGroupIntroNotice = computed(() => isGroupIntroNoticeMessage(props.message))
 
 const senderName = computed(() => {
@@ -391,20 +397,27 @@ onUnmounted(() => {
     padding-top: 40px;
   }
 
-  /* 搜索定位：整行淡淡底色铺满聊天区宽度（抵消自身左右 padding，避免只高亮中间一截） */
+  /* 搜索/@ 定位：对齐旧 im active 行，用浅蓝底色铺满目标消息行。 */
   &.search-hit-active {
-    margin-left: -16px;
-    margin-right: -16px;
-    padding-left: 32px;
-    padding-right: 32px;
-    padding-bottom: 6px;
-    padding-top: 6px;
-    background: rgba(241, 245, 247);
-    border-radius: 0;
+    background: #e9f3f9;
+    border-radius: 5px;
+    animation: message-highlight 2s infinite;
+    transition: background-color 2s ease;
+  }
+}
 
-    &.showTime {
-      padding-top: 40px;
-    }
+@keyframes message-highlight {
+  0% {
+    background-color: #f6f6f6;
+  }
+
+  30%,
+  70% {
+    background-color: #e9f3f9;
+  }
+
+  100% {
+    background-color: #f6f6f6;
   }
 }
 
@@ -462,9 +475,24 @@ onUnmounted(() => {
     flex-direction: row-reverse;
     margin-left: auto;
   }
+
+  // 对齐旧 im 的头像/昵称横向预留；旧版昵称是绝对定位，新项目昵称是文档流，不能再重复套旧版 22px 顶部预留。
+  .message-item:not(.is-self) & {
+    position: relative;
+    padding: 0 0 0 45px;
+    gap: 0;
+  }
 }
 
-.msg-avatar { flex-shrink: 0; }
+.msg-avatar {
+  flex-shrink: 0;
+
+  .message-item:not(.is-self) & {
+    position: absolute;
+    left: 0;
+    top: 5px;
+  }
+}
 
 .bubble-area {
   display: flex;
@@ -515,9 +543,11 @@ onUnmounted(() => {
 }
 
 .sender-name {
+  // 旧 im 头像名称行高为 22px；这里用行高控制气泡起点，避免额外 margin 把消息间距撑大。
   font-size: 12px;
+  line-height: 22px;
   color: #999;
-  margin-bottom: 2px;
+  margin-bottom: 0;
 }
 
 .non-text-bubble-host {

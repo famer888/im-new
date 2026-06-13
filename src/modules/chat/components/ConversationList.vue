@@ -1138,6 +1138,72 @@ function shouldShowUnreadBadge(conv: Conversation): boolean {
   return conv.id !== chatStore.currentConversationId && hasDisplayUnread(conv)
 }
 
+function hasUidInAtList(rawList: unknown, uid: string): boolean {
+  if (!Array.isArray(rawList)) return false
+  return rawList.some((item) => {
+    if (item && typeof item === 'object') {
+      const raw = item as Record<string, unknown>
+      const id = String(raw.uid ?? raw.userId ?? raw.user_id ?? raw.id ?? '').trim()
+      return id === uid || id === '-1'
+    }
+    const id = String(item ?? '').trim()
+    return id === uid || id === '-1'
+  })
+}
+
+function normalizeAtName(value: unknown): string {
+  return String(value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function getSelfMentionNames(conv: Conversation): string[] {
+  const uid = String(authStore.uid || '').trim()
+  const names = [
+    authStore.nickname,
+    uid,
+    groupStore.getMembers(conv.targetId).find((member) => member.userId === uid)?.nickname,
+  ]
+  return Array.from(new Set(names.map(normalizeAtName).filter(Boolean)))
+}
+
+function digestMentionsCurrentUser(conv: Conversation, digest: string): boolean {
+  const text = normalizeAtName(digest)
+  if (!text) return false
+  if (text.includes('@全体成员') || text.includes('@所有人')) return true
+  return getSelfMentionNames(conv).some((name) => text.includes(`@${name}`))
+}
+
+function messageMentionsCurrentUser(message: Message): boolean {
+  const uid = String(authStore.uid || '').trim()
+  if (!uid) return false
+  const extra = parseMessageExtra(message.extra)
+  const content = String(message.content || '')
+  return content.includes('@全体成员')
+    || content.includes('@所有人')
+    || hasUidInAtList(extra?.atUids ?? extra?.at_uids, uid)
+    || hasUidInAtList(extra?.atUsers ?? extra?.at_users, uid)
+}
+
+function shouldShowAtMe(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  if (conv.id === chatStore.currentConversationId) return false
+  if (shouldShowDraft(conv) || !hasDisplayUnread(conv)) return false
+  if (conv.atMe) return true
+
+  const latest = getLoadedLatestVisibleMessage(conv)
+  if (
+    latest
+    && Number(latest.readStatus || 0) === 0
+    && isLatestLoadedMessageForConversation(conv, latest)
+    && messageMentionsCurrentUser(latest)
+  ) {
+    return true
+  }
+
+  // 兼容旧数据/缓存恢复：会话 atMe 未落下来时，列表摘要里已出现 @ 我的昵称，也要补出旧 im 的红色提醒。
+  return digestMentionsCurrentUser(conv, String(conv.lastMsgDigest || '') || getDigest(conv))
+    || digestMentionsCurrentUser(conv, getDigest(conv))
+}
+
 watch(
   () => [
     String(authStore.uid || ''),
@@ -1357,7 +1423,7 @@ onBeforeUnmount(() => {
             <span class="conv-time">{{ formatTime(getDisplayTime(conv)) }}</span>
           </div>
           <div class="conv-row-bottom">
-            <span v-if="!shouldShowDraft(conv) && conv.atMe" class="at-me">[{{ t('有人@我') }}]</span>
+            <span v-if="shouldShowAtMe(conv)" class="at-me">[{{ t('有人@我') }}]</span>
             <span v-if="shouldShowDraft(conv)" class="draft-tag">[{{ t('草稿') }}]</span>
             <span class="conv-digest">
               <template v-for="(segment, index) in getDigestSegments(conv)" :key="`${conv.id}-digest-${index}`">
