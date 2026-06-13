@@ -253,6 +253,29 @@ function parseExtraObject(rawExtra: unknown): Record<string, unknown> | null {
   return typeof rawExtra === 'object' ? rawExtra as Record<string, unknown> : null
 }
 
+function hasUidInAtList(rawList: unknown, uid: string): boolean {
+  if (!Array.isArray(rawList)) return false
+  return rawList.some((item) => {
+    if (item && typeof item === 'object') {
+      const raw = item as Record<string, unknown>
+      return String(raw.uid ?? raw.userId ?? raw.id ?? '').trim() === uid
+    }
+    const value = String(item ?? '').trim()
+    return value === uid || value === '-1'
+  })
+}
+
+function isMessageAtCurrentUser(conversationId: string, msg: Message, uid: string): boolean {
+  if (!uid || !conversationId.startsWith('1_')) return false
+  const extra = parseExtraObject(msg.extra)
+  const content = String(msg.content || '')
+  // 对齐旧 im：会话列表 @ 提醒按协议 atUids/atUsers 判断；@全体成员也要提醒当前用户。
+  return content.includes('@全体成员')
+    || content.includes('@所有人')
+    || hasUidInAtList(extra?.atUids ?? extra?.at_uids, uid)
+    || hasUidInAtList(extra?.atUsers ?? extra?.at_users, uid)
+}
+
 function stringifyExtra(rawExtra: unknown): string | null {
   if (!rawExtra) return null
   if (typeof rawExtra === 'string') return rawExtra
@@ -987,11 +1010,13 @@ export const useMessageStore = defineStore('message', () => {
       const nextUnreadCount = isIncomingUnread
         ? Math.max(0, Number(existing.unreadCount || 0)) + 1
         : existing.unreadCount
+      const nextAtMe = existing.atMe || (isIncomingUnread && isMessageAtCurrentUser(conversationId, msg, currentUid))
       groupIntroMessageTrace('syncConversationSummary', conversationId, msg, {
         digest,
         currentUid,
         currentConversationId,
         isIncomingUnread,
+        nextAtMe,
         nextUnreadCount,
         existingUnreadCount: existing.unreadCount ?? null,
         existingLastMsgDigest: existing.lastMsgDigest || '',
@@ -1003,6 +1028,7 @@ export const useMessageStore = defineStore('message', () => {
         lastMsgTime: msg.sendTime || Date.now(),
         lastMsgDigest: digest || existing.lastMsgDigest,
         unreadCount: nextUnreadCount,
+        atMe: nextAtMe,
         updatedAt: msg.sendTime || Date.now(),
       })
       return
@@ -1019,11 +1045,13 @@ export const useMessageStore = defineStore('message', () => {
       && Number(msg.readStatus || 0) === 0
     )
     const nextUnreadCount = isIncomingUnread ? Math.max(1, Number(conv.unreadCount || 0) + 1) : conv.unreadCount
+    const nextAtMe = conv.atMe || (isIncomingUnread && isMessageAtCurrentUser(conversationId, msg, currentUid))
     groupIntroMessageTrace('syncConversationSummary:newConversation', conversationId, msg, {
       digest,
       currentUid,
       currentConversationId,
       isIncomingUnread,
+      nextAtMe,
       nextUnreadCount,
       existingUnreadCount: conv.unreadCount ?? null,
       existingLastMsgDigest: conv.lastMsgDigest || '',
@@ -1035,6 +1063,7 @@ export const useMessageStore = defineStore('message', () => {
       lastMsgTime: msg.sendTime || Date.now(),
       lastMsgDigest: digest || conv.lastMsgDigest,
       unreadCount: nextUnreadCount,
+      atMe: nextAtMe,
       updatedAt: msg.sendTime || Date.now(),
     })
   }

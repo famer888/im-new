@@ -70,6 +70,8 @@ const dismissedGroupNoticeKey = ref('')
 const sessionInitialUnread = ref(0)
 /** 进入会话时实际已加载到的未读消息 ID；用于把分隔条锚到真实消息，避免只凭未读数误显示 */
 const sessionUnreadMessageIds = ref<string[]>([])
+/** 对齐旧 im 的 atMeIds：进入会话时先保存未读区里 @ 我的消息，markAsRead 后仍可显示右侧 @ 跳转按钮。 */
+const sessionAtMentionMessageIds = ref<string[]>([])
 /** 已为当前会话执行过 markAsRead 后，不再用 store 覆盖快照，避免把已算好的 N 冲掉 */
 const unreadSnapshotLocked = ref(false)
 const dropAreaVisible = ref(false)
@@ -202,6 +204,56 @@ function collectEligibleUnreadMessageIds(convId: string, uid: string, limit = 0)
   return [...ids]
 }
 
+function parseMessageExtra(raw: unknown): Record<string, any> {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw as Record<string, any>
+  try {
+    const parsed = JSON.parse(String(raw))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function hasUidInList(rawList: unknown, uid: string): boolean {
+  if (!Array.isArray(rawList)) return false
+  return rawList.some((item) => {
+    if (item && typeof item === 'object') {
+      const raw = item as Record<string, unknown>
+      return String(raw.uid ?? raw.userId ?? raw.id ?? '').trim() === uid
+    }
+    return String(item ?? '').trim() === uid
+  })
+}
+
+function getMessageJumpIds(message: Message): string[] {
+  return [message.id, message.customMsgId].map((id) => String(id || '')).filter(Boolean)
+}
+
+function isMessageAtMe(message: Message, uid: string): boolean {
+  if (!uid || !isGroupConversation.value) return false
+  const extra = parseMessageExtra(message.extra)
+  const content = String(message.content || '')
+  // 旧 im 会把 @全体成员也作为“有人@我”提示；普通 @ 优先看协议里的 atUids/atUsers。
+  return content.includes('@全体成员')
+    || content.includes('@所有人')
+    || hasUidInList(extra.atUids ?? extra.at_uids, uid)
+    || hasUidInList(extra.atUsers ?? extra.at_users, uid)
+}
+
+function collectAtMentionMessageIds(messagesForCheck: Message[], uid: string): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const message of messagesForCheck) {
+    if (!isMessageAtMe(message, uid)) continue
+    const jumpId = getMessageJumpIds(message)[0]
+    if (!jumpId || seen.has(jumpId)) continue
+    seen.add(jumpId)
+    ids.push(jumpId)
+  }
+  return ids
+}
+
 function isMessageEligibleForUnreadCountFallback(convId: string, message: Message, uid: string): boolean {
   if (!isMessageVisibleInTimeline(convId, message, uid)) return false
   if (String(message.senderId || '') === uid) return false
@@ -220,6 +272,7 @@ async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
   const targetUnreadCount = Math.max(0, Number(sessionInitialUnread.value || 0))
   if (targetUnreadCount <= 0) {
     sessionUnreadMessageIds.value = []
+    sessionAtMentionMessageIds.value = []
     sessionInitialUnread.value = 0
     return
   }
@@ -229,9 +282,16 @@ async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
     const unreadCandidates = collectUnreadCandidates(convId, uid)
     const eligibleIds = collectEligibleUnreadMessageIds(convId, uid, targetUnreadCount)
     const fallbackCandidates = collectUnreadCountFallbackCandidates(convId, uid)
+    const scopedUnreadCandidates = targetUnreadCount > 0 && unreadCandidates.length > targetUnreadCount
+      ? unreadCandidates.slice(unreadCandidates.length - targetUnreadCount)
+      : unreadCandidates
+    const scopedFallbackCandidates = targetUnreadCount > 0 && fallbackCandidates.length > targetUnreadCount
+      ? fallbackCandidates.slice(fallbackCandidates.length - targetUnreadCount)
+      : fallbackCandidates
     if (eligibleIds.length > 0) {
       // 群聊可能残留更早的 readStatus=0；只保留本次未读数范围内的最后 N 条，避免锚点跳到过早历史。
       sessionUnreadMessageIds.value = eligibleIds
+      sessionAtMentionMessageIds.value = collectAtMentionMessageIds(scopedUnreadCandidates, uid)
       return
     }
 
@@ -240,6 +300,7 @@ async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
     if (fallbackCandidateCount >= targetUnreadCount) {
       // 群聊历史消息不一定保留 readStatus=0；保留未读数，让 MessageList 按最后 N 条可见对方消息兜底定位。
       sessionUnreadMessageIds.value = []
+      sessionAtMentionMessageIds.value = collectAtMentionMessageIds(scopedFallbackCandidates, uid)
       return
     }
 
@@ -248,6 +309,10 @@ async function resolveVisibleUnreadSnapshot(convId: string, uid: string) {
     if (exhaustedHistory || inspectedUnreadCount >= targetUnreadCount || pageLoads >= 6) {
       sessionUnreadMessageIds.value = []
       sessionInitialUnread.value = Math.min(targetUnreadCount, fallbackCandidateCount)
+      sessionAtMentionMessageIds.value = collectAtMentionMessageIds(
+        scopedUnreadCandidates.length ? scopedUnreadCandidates : scopedFallbackCandidates,
+        uid,
+      )
       return
     }
 
@@ -334,11 +399,13 @@ watch(
     if (oldId !== undefined && newId !== oldId) {
       sessionInitialUnread.value = 0
       sessionUnreadMessageIds.value = []
+      sessionAtMentionMessageIds.value = []
       unreadSnapshotLocked.value = false
     }
     if (!newId) {
       sessionInitialUnread.value = 0
       sessionUnreadMessageIds.value = []
+      sessionAtMentionMessageIds.value = []
       unreadSnapshotLocked.value = false
       return
     }
@@ -714,6 +781,7 @@ onBeforeUnmount(() => {
       :has-more="messageStore.hasMore(conversationId)"
       :unread-count="sessionInitialUnread"
       :unread-message-ids="sessionUnreadMessageIds"
+      :at-mention-message-ids="sessionAtMentionMessageIds"
       :show-read-burn-background="showReadBurnBackground"
       align-top
       @load-more="handleLoadMore"
