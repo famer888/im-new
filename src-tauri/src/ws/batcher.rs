@@ -1317,6 +1317,40 @@ impl MessageBatcher {
                 "attachmentKey": gm.attachment_key,
                 "fileKey": file_key,
             });
+            if let Some(map) = extra.as_object_mut() {
+                // 对齐旧 im：@ 点击优先依赖服务端协议里的 atUids/atUsers，而不是只按显示名猜成员。
+                if !gm.at_uids.is_empty() {
+                    map.insert(
+                        "atUids".to_string(),
+                        serde_json::Value::Array(
+                            gm.at_uids
+                                .iter()
+                                .map(|uid| serde_json::Value::from(*uid))
+                                .collect(),
+                        ),
+                    );
+                }
+                if !gm.at_users.is_empty() {
+                    map.insert(
+                        "atUsers".to_string(),
+                        serde_json::Value::Array(
+                            gm.at_users
+                                .iter()
+                                .map(|user| {
+                                    serde_json::json!({
+                                        "uid": user.uid.to_string(),
+                                        "id": user.uid.to_string(),
+                                        "userId": user.uid.to_string(),
+                                        "nickName": user.nick_name,
+                                        "nickname": user.nick_name,
+                                        "name": user.friend_relation.as_ref().map(|relation| relation.remark_name.clone()).unwrap_or_default(),
+                                    })
+                                })
+                                .collect(),
+                        ),
+                    );
+                }
+            }
             if let Some((notice_id, show_notify)) = group_notice_meta {
                 if let Some(map) = extra.as_object_mut() {
                     map.insert("noticeId".to_string(), serde_json::Value::from(notice_id));

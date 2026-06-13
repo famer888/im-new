@@ -50,7 +50,7 @@ const displayAsSelf = computed(() => (isSelf.value || isFileHelperChat.value) &&
 type ContentSegment =
   | { type: 'text'; text: string }
   | { type: 'emoji'; name: string; src: string }
-  | { type: 'at'; text: string; memberId?: string }
+  | { type: 'at'; text: string; memberId?: string; possibleUid?: string }
   | { type: 'link'; text: string; href: string; showConfirm?: boolean }
   | { type: 'stream-link'; prefix: string; text: string; href: string; showConfirm?: boolean }
 
@@ -142,6 +142,18 @@ function readMessageAtUsers(rawExtra: unknown): MessageAtUser[] {
       }
     })
     .filter((item) => item.uid && (item.nickName || item.name))
+}
+
+function readMessageAtUids(rawExtra: unknown): string[] {
+  const extra = parseMessageExtraObject(rawExtra)
+  const rawAtUids = Array.isArray(extra?.atUids)
+    ? extra.atUids
+    : Array.isArray(extra?.at_uids)
+      ? extra.at_uids
+      : []
+  return rawAtUids
+    .map((uid) => String(uid ?? '').trim())
+    .filter(Boolean)
 }
 
 const mentionCandidates = computed<MentionCandidate[]>(() => {
@@ -872,8 +884,38 @@ const contentSegments = computed<ContentSegment[]>(() => {
     index += 1
   }
 
-  return segments
+  return assignMentionUidByOrder(segments)
 })
+
+function assignMentionUidByOrder(segments: ContentSegment[]): ContentSegment[] {
+  const atUids = readMessageAtUids(props.message.extra)
+  if (!atUids.length) return segments
+
+  const atSegments = segments.filter((segment): segment is Extract<ContentSegment, { type: 'at' }> =>
+    segment.type === 'at'
+      && segment.text !== '@'
+      && segment.text !== '@所有人'
+      && segment.text !== '@全体成员',
+  )
+  if (!atSegments.length || atSegments.length !== atUids.length) return segments
+
+  const usedUids = new Set(
+    atSegments
+      .map((segment) => segment.memberId)
+      .filter((uid): uid is string => Boolean(uid))
+      .map(String),
+  )
+  const remainingUids = atUids.filter((uid) => !usedUids.has(String(uid)))
+  const unmatched = atSegments.filter((segment) => !segment.memberId)
+  if (!unmatched.length || unmatched.length !== remainingUids.length) return segments
+
+  // 对齐旧 im：成员改名导致 @ 文本按名字匹配失败时，才按 @ 出现顺序和 atUids 做低可信兜底。
+  unmatched.forEach((segment, index) => {
+    const uid = remainingUids[index]
+    if (uid && uid !== '-1') segment.possibleUid = uid
+  })
+  return segments
+}
 
 function findMentionMember(label: string, members: GroupMember[]): GroupMember | undefined {
   const cleanLabel = label.replace(/^@+/, '').trim()
@@ -920,8 +962,24 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
     const member = segment.memberId
       ? members.find((item) => item.userId === segment.memberId)
       : findMentionMember(segment.text, members)
+    const possibleUid = String(segment.possibleUid || '').trim()
+
+    if (segment.memberId) {
+      // atUsers/群成员名匹配到的 uid 是高可信来源；即使成员列表未加载，也先按 uid 打开资料卡。
+      uiStore.openMemberInfo(segment.memberId, groupId, [cleanLabel])
+      return
+    }
 
     if (!member) {
+      const possibleMember = possibleUid
+        ? members.find((item) => item.userId === possibleUid)
+        : undefined
+      if (possibleMember) {
+        // atUids 顺序兜底命中本地群成员时，直接按 uid 打开，避免成员改名后点击 @ 失效。
+        uiStore.openMemberInfo(possibleMember.userId, groupId, [cleanLabel])
+        return
+      }
+
       const slowTimer = window.setTimeout(() => {
         setMentionResolving(openingKey, true)
       }, 350)
@@ -938,6 +996,11 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
       if (localFriend) {
         // 群聊里的 @ 文本可能是备注/昵称，先映射到好友 uid 再打开，确保展示“发送消息”入口。
         uiStore.openMemberInfo(localFriend.userId, groupId, [cleanLabel], localFriend)
+        return
+      }
+      if (possibleUid) {
+        // 低可信 possibleUid 只在名字/别名都未命中后兜底使用，降低多个 @ 错位时打开错人的风险。
+        uiStore.openMemberInfo(possibleUid, groupId, [cleanLabel])
         return
       }
       if (groupId) {
