@@ -330,6 +330,7 @@ async fn send_download_request_with_candidates(
     should_log_audio: bool,
     should_log_file_open: bool,
     should_log_video_menu: bool,
+    should_log_image_render: bool,
 ) -> Result<(reqwest::Response, String), DownloadAttemptError> {
     let mut last_error = DownloadAttemptError::other("Download failed: empty url".to_string());
     for (index, candidate_url) in urls.iter().enumerate() {
@@ -354,6 +355,15 @@ async fn send_download_request_with_candidates(
         if should_log_video_menu {
             eprintln!(
                 "[video-menu] download_file http start msg_id={} candidate={} url_head={}",
+                msg_id,
+                index,
+                candidate_url.chars().take(180).collect::<String>(),
+            );
+        }
+        if should_log_image_render {
+            tracing::info!(
+                target: "image-send",
+                "[DEBUG-img-send] image-render download_file http start msg_id={} candidate={} url_head={}",
                 msg_id,
                 index,
                 candidate_url.chars().take(180).collect::<String>(),
@@ -403,6 +413,17 @@ async fn send_download_request_with_candidates(
                 final_url.chars().take(180).collect::<String>(),
             );
         }
+        if should_log_image_render {
+            tracing::info!(
+                target: "image-send",
+                "[DEBUG-img-send] image-render download_file http response msg_id={} candidate={} status={} ok={} final_url_head={}",
+                msg_id,
+                index,
+                status.as_u16(),
+                status.is_success(),
+                final_url.chars().take(180).collect::<String>(),
+            );
+        }
         if status.is_success() {
             return Ok((response, final_url));
         }
@@ -414,6 +435,16 @@ async fn send_download_request_with_candidates(
         if should_log_video_menu {
             eprintln!(
                 "[video-menu] download_file http error msg_id={} candidate={} status={} body_head={}",
+                msg_id,
+                index,
+                status.as_u16(),
+                body.chars().take(400).collect::<String>(),
+            );
+        }
+        if should_log_image_render {
+            tracing::warn!(
+                target: "image-send",
+                "[DEBUG-img-send] image-render download_file http error msg_id={} candidate={} status={} body_head={}",
                 msg_id,
                 index,
                 status.as_u16(),
@@ -2148,9 +2179,22 @@ pub async fn download_file(
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
     let should_log_file_open = log_tag.as_deref() == Some("file-open");
     let should_log_video_menu = log_tag.as_deref() == Some("video-menu");
+    // 图片渲染失败需要看到 HTTP/解密边界，但日志只记录 URL 头部和 key 长度。
+    let should_log_image_render = log_tag.as_deref() == Some("image-render");
     if should_log_video_menu {
         eprintln!(
             "[video-menu] download_file request msg_id={} url_head={} save_path={} file_key_len={} emit_data_url={}",
+            msg_id,
+            url.chars().take(180).collect::<String>(),
+            save_path,
+            file_key.len(),
+            should_emit_data_url,
+        );
+    }
+    if should_log_image_render {
+        tracing::info!(
+            target: "image-send",
+            "[DEBUG-img-send] image-render download_file request msg_id={} url_head={} save_path={} file_key_len={} emit_data_url={}",
             msg_id,
             url.chars().take(180).collect::<String>(),
             save_path,
@@ -2187,6 +2231,7 @@ pub async fn download_file(
     let should_log_audio_clone = should_log_audio;
     let should_log_file_open_clone = should_log_file_open;
     let should_log_video_menu_clone = should_log_video_menu;
+    let should_log_image_render_clone = should_log_image_render;
     let candidate_urls = build_download_url_candidates(&url, url_candidates);
 
     tokio::spawn(async move {
@@ -2201,6 +2246,15 @@ pub async fn download_file(
                     if should_log_video_menu_clone {
                         eprintln!(
                             "[video-menu] download_file cache hit msg_id={} path={} bytes={}",
+                            msg_id_clone,
+                            final_path.to_string_lossy(),
+                            meta.len(),
+                        );
+                    }
+                    if should_log_image_render_clone {
+                        tracing::info!(
+                            target: "image-send",
+                            "[DEBUG-img-send] image-render download_file cache hit msg_id={} path={} bytes={} emit_data_url=false",
                             msg_id_clone,
                             final_path.to_string_lossy(),
                             meta.len(),
@@ -2235,6 +2289,16 @@ pub async fn download_file(
                         "download_file cache hit"
                     );
                 }
+                if should_log_image_render_clone {
+                    tracing::info!(
+                        target: "image-send",
+                        "[DEBUG-img-send] image-render download_file cache hit msg_id={} path={} bytes={} head_hex={}",
+                        msg_id_clone,
+                        final_path.to_string_lossy(),
+                        decoded.len(),
+                        bytes_head_hex(&decoded, 16),
+                    );
+                }
                 let mime = sniff_image_mime(&decoded);
                 let data_url = format!(
                     "data:{};base64,{}",
@@ -2263,6 +2327,7 @@ pub async fn download_file(
                 should_log_audio_clone,
                 should_log_file_open_clone,
                 should_log_video_menu_clone,
+                should_log_image_render_clone,
             )
             .await
             .map_err(|error| {
@@ -2342,6 +2407,15 @@ pub async fn download_file(
                     bytes_head_hex(&first_chunk_head, 16),
                 );
             }
+            if should_log_image_render_clone {
+                tracing::info!(
+                    target: "image-send",
+                    "[DEBUG-img-send] image-render download_file http body msg_id={} encrypted_bytes={} encrypted_head_hex={}",
+                    msg_id_clone,
+                    downloaded_bytes,
+                    bytes_head_hex(&first_chunk_head, 16),
+                );
+            }
             if file_key.trim().is_empty() {
                 tokio::fs::rename(&enc_path, &path)
                     .await
@@ -2357,6 +2431,15 @@ pub async fn download_file(
                         path = %final_path.to_string_lossy(),
                         bytes = meta.len(),
                         "download_file saved without decrypt"
+                    );
+                }
+                if should_log_image_render_clone {
+                    tracing::info!(
+                        target: "image-send",
+                        "[DEBUG-img-send] image-render download_file saved without decrypt msg_id={} path={} bytes={}",
+                        msg_id_clone,
+                        final_path.to_string_lossy(),
+                        meta.len(),
                     );
                 }
                 return Ok::<(u64, Option<String>, PathBuf, bool), String>((
@@ -2375,6 +2458,16 @@ pub async fn download_file(
                     enc_path.to_string_lossy(),
                     path.to_string_lossy(),
                     file_key.chars().take(10).collect::<String>(),
+                    file_key.len(),
+                );
+            }
+            if should_log_image_render_clone {
+                tracing::info!(
+                    target: "image-send",
+                    "[DEBUG-img-send] image-render download_file decrypt start msg_id={} enc_path={} out_path={} file_key_len={}",
+                    msg_id_clone,
+                    enc_path.to_string_lossy(),
+                    path.to_string_lossy(),
                     file_key.len(),
                 );
             }
@@ -2437,6 +2530,16 @@ pub async fn download_file(
                         "download_file decrypt done"
                     );
                 }
+                if should_log_image_render_clone {
+                    tracing::info!(
+                        target: "image-send",
+                        "[DEBUG-img-send] image-render download_file decrypt done msg_id={} path={} decoded_bytes={} decoded_head_hex={}",
+                        msg_id_clone,
+                        final_path.to_string_lossy(),
+                        decoded.len(),
+                        bytes_head_hex(&decoded, 16),
+                    );
+                }
                 let mime = sniff_image_mime(&decoded);
                 Some(format!(
                     "data:{};base64,{}",
@@ -2476,6 +2579,17 @@ pub async fn download_file(
                         "download_file emit done"
                     );
                 }
+                if should_log_image_render_clone {
+                    tracing::info!(
+                        target: "image-send",
+                        "[DEBUG-img-send] image-render download_file emit done msg_id={} size={} has_data_url={} file_path={} is_dangerous={}",
+                        msg_id_clone,
+                        size,
+                        data_url.is_some(),
+                        final_path.to_string_lossy(),
+                        is_dangerous,
+                    );
+                }
                 let _ = app_clone.emit(
                     &format!("file:done:{}", msg_id_clone),
                     DownloadProgress {
@@ -2509,6 +2623,17 @@ pub async fn download_file(
                         msg_id = %msg_id_clone,
                         error = %e,
                         "download_file emit error"
+                    );
+                }
+                if should_log_image_render_clone {
+                    tracing::error!(
+                        target: "image-send",
+                        "[DEBUG-img-send] image-render download_file emit error msg_id={} error={} http_status={:?} expired={} reason={:?}",
+                        msg_id_clone,
+                        e,
+                        http_status,
+                        expired,
+                        reason,
                     );
                 }
                 let _ = app_clone.emit(
@@ -2598,6 +2723,19 @@ pub async fn copy_file_overwrite(source_path: String, target_path: String) -> Re
 #[tauri::command]
 pub async fn file_exists(path: String) -> Result<bool, String> {
     Ok(tokio::fs::metadata(PathBuf::from(path)).await.is_ok())
+}
+
+#[tauri::command]
+pub async fn remove_file_if_exists(path: String) -> Result<(), String> {
+    let file_path = PathBuf::from(path);
+    match tokio::fs::metadata(&file_path).await {
+        Ok(meta) if meta.is_file() => tokio::fs::remove_file(&file_path)
+            .await
+            .map_err(|e| format!("remove file failed: {}", e)),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("stat file failed: {}", e)),
+    }
 }
 
 fn app_data_ffmpeg_path(app: &AppHandle) -> Option<PathBuf> {

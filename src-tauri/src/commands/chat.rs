@@ -1570,7 +1570,13 @@ pub fn decrypt_private_incoming(
         .map(str::trim)
         .filter(|s| *s == "web" || *s == "app");
     let source_orders: Vec<Vec<&str>> = if let Some(src) = preferred_source {
-        vec![vec![src]]
+        // 手机与 PC 私聊历史包里可能出现顶层 source 与实际 webContent 加密端不一致；
+        // 先尊重调用方 source，再补另一端，最终用 protobuf/contentMd5 校验避免错 key 误通过。
+        if src == "app" {
+            vec![vec!["app"], vec!["web"]]
+        } else {
+            vec![vec!["web"], vec!["app"]]
+        }
     } else {
         vec![vec!["web", "app"]]
     };

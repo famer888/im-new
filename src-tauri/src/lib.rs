@@ -187,6 +187,7 @@ pub fn run() {
             commands::file::save_base64_image,
             commands::file::copy_file_overwrite,
             commands::file::file_exists,
+            commands::file::remove_file_if_exists,
             commands::file::reveal_file_in_directory,
             commands::file::open_file,
             commands::file::open_in_browser,

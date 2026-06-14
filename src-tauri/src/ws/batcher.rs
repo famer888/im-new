@@ -1653,6 +1653,13 @@ impl MessageBatcher {
         } else {
             if let Some(web) = &om.web_content {
                 push_content_with!(web, ver, sender_source);
+                // 手机与 PC 私聊图片存在顶层 source 与 webContent 实际加密端不一致的历史包；
+                // 先保留服务端 source，再补同版本另一端候选，后续 protobuf/contentMd5 校验会过滤错 key。
+                if sender_source == "app" {
+                    push_content_with!(web, ver, "web");
+                } else {
+                    push_content_with!(web, ver, "app");
+                }
                 if web.version > 0 {
                     push_content_with!(web, i64::from(web.version), "web");
                 }

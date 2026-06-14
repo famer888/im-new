@@ -61,31 +61,61 @@ pub fn encrypt_file(input_path: &str, output_path: &str, key: &str) -> Result<()
 /// Stream-decrypt a file: reads `DECRYPT_CHUNK_SIZE` bytes at a time,
 /// decrypts each chunk with AES-128-ECB, and writes plaintext sequentially.
 pub fn decrypt_file(input_path: &str, output_path: &str, key: &str) -> Result<(), CryptoError> {
-    let input =
-        File::open(input_path).map_err(|e| CryptoError::IoError(format!("open input: {}", e)))?;
-    let output = File::create(output_path)
-        .map_err(|e| CryptoError::IoError(format!("create output: {}", e)))?;
+    let cipher = std::fs::read(input_path)
+        .map_err(|e| CryptoError::IoError(format!("read input: {}", e)))?;
+    let plain = decrypt_file_bytes(&cipher, key)?;
+    std::fs::write(output_path, plain)
+        .map_err(|e| CryptoError::IoError(format!("write output: {}", e)))?;
+    Ok(())
+}
 
-    let mut reader = BufReader::new(input);
-    let mut writer = BufWriter::new(output);
-    let mut buf = vec![0u8; DECRYPT_CHUNK_SIZE];
+/// Decrypt downloaded media bytes.
+///
+/// Old `im/public/worker.js` supports two historical formats:
+/// - PC uploads: each 102400-byte plaintext chunk is independently PKCS7 encrypted
+///   into a 102416-byte ciphertext chunk.
+/// - Android/mobile uploads: the whole file is encrypted once with AES-ECB/PKCS7.
+/// We must mirror that probe here; otherwise mobile images are split at 102416 and
+/// fail with `Invalid PKCS7 padding`.
+pub fn decrypt_file_bytes(cipher: &[u8], key: &str) -> Result<Vec<u8>, CryptoError> {
+    if cipher.is_empty() {
+        return Ok(Vec::new());
+    }
+    if is_pc_chunked_scheme(cipher, key) {
+        return decrypt_pc_chunked_bytes(cipher, key);
+    }
+    aes::decrypt_message(cipher, key)
+}
 
-    loop {
-        let n = read_fill(&mut reader, &mut buf)
-            .map_err(|e| CryptoError::IoError(format!("read: {}", e)))?;
-        if n == 0 {
+fn decrypt_pc_chunked_bytes(cipher: &[u8], key: &str) -> Result<Vec<u8>, CryptoError> {
+    let mut out = Vec::with_capacity(cipher.len());
+
+    for chunk in cipher.chunks(DECRYPT_CHUNK_SIZE) {
+        if chunk.is_empty() {
             break;
         }
-        let decrypted = aes::decrypt_message(&buf[..n], key)?;
-        writer
-            .write_all(&decrypted)
-            .map_err(|e| CryptoError::IoError(format!("write: {}", e)))?;
+        let decrypted = aes::decrypt_message(chunk, key)?;
+        out.extend_from_slice(&decrypted);
     }
 
-    writer
-        .flush()
-        .map_err(|e| CryptoError::IoError(format!("flush: {}", e)))?;
-    Ok(())
+    Ok(out)
+}
+
+fn is_pc_chunked_scheme(cipher: &[u8], key: &str) -> bool {
+    if cipher.len() <= DECRYPT_CHUNK_SIZE {
+        return false;
+    }
+    if cipher.len() < DECRYPT_CHUNK_SIZE || cipher.len() % 16 != 0 {
+        return false;
+    }
+    let pad_cipher = &cipher[ENCRYPT_CHUNK_SIZE..DECRYPT_CHUNK_SIZE];
+    match aes::decrypt_ecb_128_no_padding(
+        pad_cipher,
+        key.chars().take(16).collect::<String>().as_bytes(),
+    ) {
+        Ok(pad_plain) => pad_plain.len() >= 16 && pad_plain[..16].iter().all(|byte| *byte == 0x10),
+        Err(_) => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +212,15 @@ mod tests {
         let _ = std::fs::remove_file(&input_path);
         let _ = std::fs::remove_file(&enc_path);
         let _ = std::fs::remove_file(&dec_path);
+    }
+
+    #[test]
+    fn whole_file_mobile_encrypt_decrypt_roundtrip() {
+        let key = "0123456789abcdef";
+        let original = vec![0x7Au8; 250_000]; // mobile uploads may encrypt the whole file once
+        let encrypted = aes::encrypt_message(&original, key).unwrap();
+        let decrypted = decrypt_file_bytes(&encrypted, key).unwrap();
+        assert_eq!(decrypted, original);
     }
 
     #[test]

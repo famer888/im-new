@@ -78,6 +78,25 @@ pub fn decrypt_ecb_128(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoE
     pkcs7_unpad(&buf)
 }
 
+/// AES-128-ECB decrypt without PKCS7 unpadding.
+/// Used only for file-format probing where the padding block itself must be inspected.
+pub fn decrypt_ecb_128_no_padding(ciphertext: &[u8], key: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if ciphertext.is_empty() || ciphertext.len() % BLOCK_SIZE != 0 {
+        return Err(CryptoError::AesError("Invalid ciphertext length".into()));
+    }
+
+    let key = normalize_key_128(key);
+    let dec =
+        Aes128EcbDec::new_from_slice(&key).map_err(|e| CryptoError::AesError(e.to_string()))?;
+
+    let mut buf = ciphertext.to_vec();
+    for chunk in buf.chunks_mut(BLOCK_SIZE) {
+        let block = aes::Block::from_mut_slice(chunk);
+        dec.clone().decrypt_block_mut(block);
+    }
+    Ok(buf)
+}
+
 /// AES-128-ECB encrypt returning a hex-encoded string.
 pub fn encrypt_ecb_128_hex(plaintext: &str, key: &[u8]) -> Result<String, CryptoError> {
     let encrypted = encrypt_ecb_128(plaintext.as_bytes(), key)?;

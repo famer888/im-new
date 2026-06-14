@@ -30,6 +30,20 @@ function e2eeDiag(message: string, data: Record<string, unknown> = {}, level: 'i
   console[level](`[E2EE-DIAG] ${message}`, data)
 }
 
+function imageKeyDebugLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
+  const line = typeof data.debugLine === 'string' ? ` ${data.debugLine}` : ''
+  const prefixedMessage = `[DEBUG-img-send] ${message}${line}`
+  console[level](prefixedMessage, data)
+  if (!isTauri()) return
+  void tauriInvoke('image_send_log', {
+    payload: {
+      level,
+      message: prefixedMessage,
+      data,
+    },
+  }).catch(() => {})
+}
+
 /** 账号维度持久化到 localStorage 的 key lifecycle 数据。 */
 interface OwnKeyPair {
   /** 32 字节 curve25519 私钥（HEX 大写）。 */
@@ -1090,6 +1104,13 @@ export async function ensureFriendRelKeyForVersion(
   const ver = Number(version || 0)
   const src = String(source || '').toLowerCase()
   if (!fid || !ver) return ''
+  imageKeyDebugLog('friend-key version ensure start', {
+    debugLine: `fid=${fid} version=${ver} source=${src || 'empty'} forceRefresh=${String(forceRefresh)}`,
+    fid,
+    version: ver,
+    source: src,
+    forceRefresh,
+  })
   if (fid === String(uid) && src === 'web') {
     const own = loadOwnKey(uid)
     if (!own || Number(own.keyVersion || 0) !== ver) {
@@ -1127,6 +1148,13 @@ export async function ensureFriendRelKeyForVersion(
       version: ver,
       source: src,
     })
+    imageKeyDebugLog('friend-key version cache check', {
+      debugLine: `fid=${fid} version=${ver} source=${src} cacheHit=${String(cacheHit)}`,
+      fid,
+      version: ver,
+      source: src,
+      cacheHit,
+    })
     if (cacheHit) return ''
   }
 
@@ -1163,6 +1191,32 @@ export async function ensureFriendRelKeyForVersion(
       }
       req.appKeyVersion = ver
     }
+    imageKeyDebugLog('friend-key version request', {
+      debugLine: [
+        `fid=${fid}`,
+        `version=${ver}`,
+        `source=${src || 'empty'}`,
+        `forceRefresh=${String(forceRefresh)}`,
+        `reqWebVersion=${String(req.webKeyVersion ?? '') || 'empty'}`,
+        `reqAppVersion=${String(req.appKeyVersion ?? '') || 'empty'}`,
+        `flag=${String(req.flag ?? '') || 'empty'}`,
+        `cachedWebVersion=${Number(web?.keyVersion || 0)}`,
+        `cachedWebPubLen=${String(web?.publicKey || '').length}`,
+        `cachedAppVersion=${Number(app?.keyVersion || 0)}`,
+        `cachedAppPubLen=${String(app?.publicKey || '').length}`,
+      ].join(' '),
+      fid,
+      version: ver,
+      source: src,
+      forceRefresh,
+      reqWebVersion: req.webKeyVersion,
+      reqAppVersion: req.appKeyVersion,
+      flag: req.flag,
+      cachedWebVersion: Number(web?.keyVersion || 0),
+      cachedWebPubLen: String(web?.publicKey || '').length,
+      cachedAppVersion: Number(app?.keyVersion || 0),
+      cachedAppPubLen: String(app?.publicKey || '').length,
+    })
     if (
       forceRefresh
       || ((src === 'web' || !src) && !web?.publicKey)
@@ -1196,6 +1250,36 @@ export async function ensureFriendRelKeyForVersion(
         cached = getCachedFriendKeyPairForVersion(uid, fid, ver, src || undefined)
         web = cached.webKeyPair
         app = cached.appKeyPair
+        imageKeyDebugLog('friend-key version getKeyPair resp', {
+          debugLine: [
+            `fid=${fid}`,
+            `version=${ver}`,
+            `source=${src || 'empty'}`,
+            `respHasWeb=${String(!!resp?.webKeyPair?.publicKey)}`,
+            `respWebVersion=${Number(resp?.webKeyPair?.keyVersion || 0)}`,
+            `respWebPubLen=${String(resp?.webKeyPair?.publicKey || '').length}`,
+            `respHasApp=${String(!!resp?.appKeyPair?.publicKey)}`,
+            `respAppVersion=${Number(resp?.appKeyPair?.keyVersion || 0)}`,
+            `respAppPubLen=${String(resp?.appKeyPair?.publicKey || '').length}`,
+            `cachedWebVersion=${Number(web?.keyVersion || 0)}`,
+            `cachedWebPubLen=${String(web?.publicKey || '').length}`,
+            `cachedAppVersion=${Number(app?.keyVersion || 0)}`,
+            `cachedAppPubLen=${String(app?.publicKey || '').length}`,
+          ].join(' '),
+          fid,
+          version: ver,
+          source: src,
+          respHasWeb: !!resp?.webKeyPair?.publicKey,
+          respWebVersion: Number(resp?.webKeyPair?.keyVersion || 0),
+          respWebPubLen: String(resp?.webKeyPair?.publicKey || '').length,
+          respHasApp: !!resp?.appKeyPair?.publicKey,
+          respAppVersion: Number(resp?.appKeyPair?.keyVersion || 0),
+          respAppPubLen: String(resp?.appKeyPair?.publicKey || '').length,
+          cachedWebVersion: Number(web?.keyVersion || 0),
+          cachedWebPubLen: String(web?.publicKey || '').length,
+          cachedAppVersion: Number(app?.keyVersion || 0),
+          cachedAppPubLen: String(app?.publicKey || '').length,
+        })
       } catch (error) {
         console.warn('[e2ee] getKeyPair(friend/version) failed, keep cached keys', {
           fid,
@@ -1205,6 +1289,26 @@ export async function ensureFriendRelKeyForVersion(
           hasCachedWeb: !!web?.publicKey,
           hasCachedApp: !!app?.publicKey,
         })
+        imageKeyDebugLog('friend-key version getKeyPair failed', {
+          debugLine: [
+            `fid=${fid}`,
+            `version=${ver}`,
+            `source=${src || 'empty'}`,
+            `err=${String(error)}`,
+            `hasCachedWeb=${String(!!web?.publicKey)}`,
+            `cachedWebVersion=${Number(web?.keyVersion || 0)}`,
+            `hasCachedApp=${String(!!app?.publicKey)}`,
+            `cachedAppVersion=${Number(app?.keyVersion || 0)}`,
+          ].join(' '),
+          fid,
+          version: ver,
+          source: src,
+          err: String(error),
+          hasCachedWeb: !!web?.publicKey,
+          cachedWebVersion: Number(web?.keyVersion || 0),
+          hasCachedApp: !!app?.publicKey,
+          cachedAppVersion: Number(app?.keyVersion || 0),
+        }, 'warn')
       }
     }
     let last = ''
@@ -1217,6 +1321,13 @@ export async function ensureFriendRelKeyForVersion(
         source: 'web',
       })
       e2eeDebugLog('[e2ee] derive_friend_rel_key OK(web/version)', { fid, ver, len: last.length })
+      imageKeyDebugLog('friend-key version derive ok', {
+        debugLine: `fid=${fid} version=${ver} source=web relKeyLen=${last.length}`,
+        fid,
+        version: ver,
+        source: 'web',
+        relKeyLen: last.length,
+      })
     }
     if (app?.publicKey && Number(app.keyVersion || 0) === ver) {
       last = await tauriInvoke<string>('derive_friend_rel_key', {
@@ -1227,7 +1338,34 @@ export async function ensureFriendRelKeyForVersion(
         source: 'app',
       })
       e2eeDebugLog('[e2ee] derive_friend_rel_key OK(app/version)', { fid, ver, len: last.length })
+      imageKeyDebugLog('friend-key version derive ok', {
+        debugLine: `fid=${fid} version=${ver} source=app relKeyLen=${last.length}`,
+        fid,
+        version: ver,
+        source: 'app',
+        relKeyLen: last.length,
+      })
     }
+    imageKeyDebugLog('friend-key version ensure done', {
+      debugLine: [
+        `fid=${fid}`,
+        `version=${ver}`,
+        `source=${src || 'empty'}`,
+        `derivedLen=${last.length}`,
+        `finalWebVersion=${Number(web?.keyVersion || 0)}`,
+        `finalWebPubLen=${String(web?.publicKey || '').length}`,
+        `finalAppVersion=${Number(app?.keyVersion || 0)}`,
+        `finalAppPubLen=${String(app?.publicKey || '').length}`,
+      ].join(' '),
+      fid,
+      version: ver,
+      source: src,
+      derivedLen: last.length,
+      finalWebVersion: Number(web?.keyVersion || 0),
+      finalWebPubLen: String(web?.publicKey || '').length,
+      finalAppVersion: Number(app?.keyVersion || 0),
+      finalAppPubLen: String(app?.publicKey || '').length,
+    }, last ? 'info' : 'warn')
     return last
   })().finally(() => {
     pendingFriendVersionKeys.delete(pendingKey)
@@ -1248,6 +1386,13 @@ export function normalizeResolvedFileKey(value: unknown): string {
   return fallbackPlainFileKey(String(value || ''))
 }
 
+function friendDecryptSources(source: unknown): string[] {
+  const normalized = String(source || '').toLowerCase()
+  if (normalized === 'app') return ['app', 'web']
+  if (normalized === 'web') return ['web', 'app']
+  return ['web', 'app']
+}
+
 export async function resolvePrivateAttachmentFileKey(params: {
   uid: string | number
   senderId: string | number
@@ -1261,17 +1406,21 @@ export async function resolvePrivateAttachmentFileKey(params: {
   if (!isTauri() || !attachmentKey || !params.senderId || !params.version) return ''
 
   const decrypt = async (forceRefresh: boolean) => {
-    await ensureFriendRelKeyForVersion(
-      params.uid,
-      params.senderId,
-      Number(params.version || 0),
-      String(params.source || ''),
-      forceRefresh,
-    )
+    const sources = friendDecryptSources(params.source)
+    // Rust 解附件 key 会按 app/web 兜底；前端也先把两端 relKey 补入缓存，避免兜底时 KeyNotFound。
+    for (const source of sources) {
+      await ensureFriendRelKeyForVersion(
+        params.uid,
+        params.senderId,
+        Number(params.version || 0),
+        source,
+        forceRefresh,
+      ).catch(() => '')
+    }
     return tauriInvoke<string>('decrypt_private_attachment_key', {
       senderId: String(params.senderId),
       version: Number(params.version || 1),
-      source: String(params.source || ''),
+      source: sources[0] || '',
       ciphertextHex: attachmentKey,
     })
   }
