@@ -349,6 +349,14 @@ function buildPrivateCipherCandidates(extra: Record<string, unknown>) {
   return candidates
 }
 
+function privateDecryptSources(source: unknown): string[] {
+  const normalized = String(source || '').toLowerCase()
+  if (normalized === 'app') return ['app', 'web']
+  if (normalized === 'web') return ['web', 'app']
+  // 历史消息可能没保存 source；按两端都补 key，再由 protobuf/contentMd5 校验筛掉错 key。
+  return ['web', 'app']
+}
+
 const DICE_REPLAY_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 let diceReplayLogStarted = false
 
@@ -361,7 +369,8 @@ const GROUP_IMAGE_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toS
 const SINGLE_VIDEO_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
 function isGroupImageMessage(conversationId: string, msgType: number): boolean {
-  return String(conversationId || '').startsWith('1_') && Number(msgType) === 1
+  const type = Number(msgType)
+  return /^(0|1|2)_/.test(String(conversationId || '')) && (type === 1 || type === 9 || type === 17)
 }
 
 function isSingleImageMessage(conversationId: string, msgType: number): boolean {
@@ -389,9 +398,10 @@ function imageContentSummary(content: string | null | undefined) {
   }
   const url = String(parsed?.url ?? parsed?.text ?? (raw.startsWith('data:image/') || raw.startsWith('http') ? raw : ''))
   const thumbnailUrl = String(parsed?.thumbnailUrl ?? parsed?.thumbUrl ?? '')
+  const hasLocalPath = Boolean(parsed?.localPath || parsed?.local_path || parsed?.filePath || parsed?.file_path || parsed?.local)
+  const hasFileKey = Boolean(parsed?.fileKey || parsed?.file_key)
   return {
     contentLen: raw.length,
-    contentHead: shortLogText(raw),
     isJson: Boolean(parsed),
     isDataUrl: raw.includes('data:image/') || url.startsWith('data:image/'),
     urlLen: url.length,
@@ -402,6 +412,63 @@ function imageContentSummary(content: string | null | undefined) {
     height: parsed?.height ?? null,
     size: parsed?.size ?? null,
     name: parsed?.name ?? null,
+    // 图片消息可能把 fileKey 放在 content JSON 里，日志只保留摘要和长度。
+    contentHead: parsed
+      ? shortLogText(JSON.stringify({
+          urlHead: shortLogText(url),
+          thumbnailHead: shortLogText(thumbnailUrl),
+          hasLocalPath,
+          hasFileKey,
+          fileKeyLen: String(parsed.fileKey ?? parsed.file_key ?? '').length,
+        }))
+      : shortLogText(raw),
+    hasLocalPath,
+    hasFileKey,
+    fileKeyLen: String(parsed?.fileKey ?? parsed?.file_key ?? '').length,
+  }
+}
+
+function extraSummary(extra: unknown) {
+  const raw = typeof extra === 'string' ? extra : (extra ? JSON.stringify(extra) : '')
+  let parsed: Record<string, unknown> | null = null
+  try {
+    const value = JSON.parse(raw)
+    parsed = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  } catch {
+    parsed = null
+  }
+  return {
+    extraLen: raw.length,
+    extraHead: parsed
+      ? shortLogText(JSON.stringify({
+          keys: Object.keys(parsed).slice(0, 24),
+          hasFileKey: Boolean(parsed.fileKey || parsed.file_key),
+          fileKeyLen: String(parsed.fileKey ?? parsed.file_key ?? '').length,
+          hasAttachmentKey: Boolean(parsed.attachmentKey || parsed.attachment_key),
+          attachmentKeyLen: String(parsed.attachmentKey ?? parsed.attachment_key ?? '').length,
+          hasClientMsgId: Boolean(parsed.__clientMsgId),
+          hasLocalPath: Boolean(parsed.localPath || parsed.local_path || parsed.local),
+        }))
+      : shortLogText(raw),
+    extraKeys: parsed ? Object.keys(parsed).slice(0, 24) : [],
+    extraHasFileKey: Boolean(parsed?.fileKey || parsed?.file_key),
+    extraFileKeyLen: String(parsed?.fileKey ?? parsed?.file_key ?? '').length,
+    hasAttachmentKey: Boolean(parsed?.attachmentKey || parsed?.attachment_key),
+    attachmentKeyLen: String(parsed?.attachmentKey ?? parsed?.attachment_key ?? '').length,
+    hasClientMsgId: Boolean(parsed?.__clientMsgId),
+    hasLocalPath: Boolean(parsed?.localPath || parsed?.local_path || parsed?.local),
+    decryptPending: Boolean(parsed?.decryptPending),
+    version: parsed?.version ?? null,
+    source: parsed?.source ?? null,
+    contentMd5Len: String(parsed?.contentMd5 ?? parsed?.content_md5 ?? '').length,
+    cipherCandidates: Array.isArray(parsed?.cipherCandidates)
+      ? parsed.cipherCandidates.slice(0, 6).map((candidate: any) => ({
+          version: Number(candidate?.version || parsed?.version || 0),
+          source: String(candidate?.source || parsed?.source || ''),
+          cipherHexLen: String(candidate?.cipherHex || candidate?.cipher_hex || '').length,
+          attachmentKeyLen: String(candidate?.attachmentKey || candidate?.attachment_key || '').length,
+        }))
+      : [],
   }
 }
 
@@ -585,6 +652,7 @@ function messageLogSummary(message: Message | null | undefined) {
     readStatus: message.readStatus,
     sendTime: message.sendTime,
     ...imageContentSummary(message.content),
+    ...extraSummary(message.extra),
   }
 }
 
@@ -593,9 +661,34 @@ function groupImageLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  void message
-  void data
-  void level
+  // 发送和回执合并链路统一写入桌面日志，便于和图片渲染下载日志按前缀串联。
+  const payload = {
+    runId: GROUP_IMAGE_DEBUG_RUN_ID,
+    ...(data || {}),
+  }
+  const debugLine = typeof data?.debugLine === 'string' ? ` ${data.debugLine}` : ''
+  const prefixedMessage = `[DEBUG-img-send] ${message}${debugLine}`
+  console[level](prefixedMessage, payload)
+  if (!isTauri()) return
+  void tauriInvoke('image_send_log', {
+    payload: {
+      level,
+      message: prefixedMessage,
+      data: payload,
+    },
+  }).catch(() => {})
+}
+
+function privateCipherCandidateLine(
+  candidates: Array<{ version?: number; source?: string; cipherHex?: string; attachmentKey?: string }>,
+): string {
+  return candidates.slice(0, 8).map((candidate, index) => [
+    `#${index}`,
+    `version=${Number(candidate.version || 0)}`,
+    `source=${String(candidate.source || '') || 'empty'}`,
+    `cipherHexLen=${String(candidate.cipherHex || '').length}`,
+    `attachmentKeyLen=${String(candidate.attachmentKey || '').length}`,
+  ].join(':')).join(',')
 }
 
 function singleVideoLog(
@@ -1134,6 +1227,29 @@ export const useMessageStore = defineStore('message', () => {
   async function retryDecryptPendingPrivateMessages(uid: string, messages: Message[]) {
     if (!isTauri() || !uid || messages.length === 0) return messages
 
+    const privateImageMessages = messages.filter((message) => {
+      const conversationId = String(message.conversationId || '')
+      return conversationId.startsWith('0_') && isGroupImageMessage(conversationId, message.msgType)
+    })
+    const pendingPrivateImages = privateImageMessages.filter((message) => {
+      const extra = parseExtraObject(message.extra)
+      return Boolean(extra?.decryptPending)
+    })
+    groupImageLog('retry private image scan summary', {
+      debugLine: [
+        `uid=${uid}`,
+        `totalMessages=${messages.length}`,
+        `privateImageCount=${privateImageMessages.length}`,
+        `pendingPrivateImageCount=${pendingPrivateImages.length}`,
+        `pendingIds=${pendingPrivateImages.slice(0, 12).map(message => message.id).join(',') || 'empty'}`,
+      ].join(' '),
+      uid,
+      totalMessages: messages.length,
+      privateImageCount: privateImageMessages.length,
+      pendingPrivateImageCount: pendingPrivateImages.length,
+      pendingIds: pendingPrivateImages.slice(0, 12).map(message => message.id),
+    })
+
     const pendingPeerIds = Array.from(new Set(
       messages
         .filter((message) => {
@@ -1170,6 +1286,30 @@ export const useMessageStore = defineStore('message', () => {
       const peerId = String(conversationId.split('_')[1] || '')
       const senderId = String(message.senderId || '')
       if (!senderId) continue
+      if (isGroupImageMessage(conversationId, message.msgType)) {
+        groupImageLog('retry private image decrypt pending start', {
+          debugLine: [
+            `messageId=${message.id}`,
+            `conversationId=${conversationId}`,
+            `senderId=${senderId}`,
+            `peerId=${peerId}`,
+            `msgType=${Number(message.msgType || 0)}`,
+            `candidateCount=${cipherCandidates.length}`,
+            `candidates=${privateCipherCandidateLine(cipherCandidates)}`,
+          ].join(' '),
+          conversationId,
+          message: messageLogSummary(message),
+          peerId,
+          senderId,
+          candidateCount: cipherCandidates.length,
+          candidates: cipherCandidates.slice(0, 6).map(candidate => ({
+            version: candidate.version,
+            source: candidate.source,
+            cipherHexLen: String(candidate.cipherHex || '').length,
+            attachmentKeyLen: String(candidate.attachmentKey || '').length,
+          })),
+        })
+      }
 
       const applyDecryptedPlain = async (
         plain: string,
@@ -1186,6 +1326,9 @@ export const useMessageStore = defineStore('message', () => {
           ...extra,
           decryptPending: false,
           cipherHex: candidate.cipherHex,
+          // 记录实际解密成功的 key 版本/source，避免下次启动继续按失败 source 进入待解密。
+          version: Number(candidate.version || extra.version || 0) || extra.version,
+          source: String(candidate.source || extra.source || ''),
         } as Record<string, unknown>
         if (resolvedFileKey && !normalizeResolvedFileKey(nextExtra.fileKey)) {
           nextExtra.fileKey = resolvedFileKey
@@ -1193,6 +1336,25 @@ export const useMessageStore = defineStore('message', () => {
 
         message.content = plain
         message.extra = stringifyExtra(nextExtra)
+        if (isGroupImageMessage(conversationId, message.msgType)) {
+          groupImageLog('retry private image decrypt applied', {
+            debugLine: [
+              `messageId=${message.id}`,
+              `conversationId=${conversationId}`,
+              `senderId=${senderId}`,
+              `peerId=${peerId}`,
+              `version=${Number(candidate.version || 0)}`,
+              `source=${String(candidate.source || '') || 'empty'}`,
+              `resolvedFileKeyLen=${String(resolvedFileKey || '').length}`,
+            ].join(' '),
+            conversationId,
+            message: messageLogSummary(message),
+            candidateVersion: candidate.version,
+            candidateSource: candidate.source,
+            plain: imageContentSummary(plain),
+            resolvedFileKeyLen: String(resolvedFileKey || '').length,
+          })
+        }
         await tauriInvoke('mark_private_message_decrypted', {
           uid,
           request: {
@@ -1210,69 +1372,181 @@ export const useMessageStore = defineStore('message', () => {
         })
       }
 
+      candidateLoop:
       for (const candidate of cipherCandidates) {
-        try {
-          try {
-            await ensureFriendRelKeyForVersion(
-              uid,
-              senderId,
-              Number(candidate.version || 0),
-              String(candidate.source || ''),
-            )
-          } catch (keyError) {
-            console.warn('[e2ee] ensureFriendRelKeyForVersion on loadMessages failed', {
+        for (const candidateSource of privateDecryptSources(candidate.source)) {
+          const attemptCandidate = {
+            ...candidate,
+            source: candidateSource,
+          }
+          if (isGroupImageMessage(conversationId, message.msgType)) {
+            groupImageLog('retry private image decrypt attempt', {
+              debugLine: [
+                `messageId=${message.id}`,
+                `conversationId=${conversationId}`,
+                `senderId=${senderId}`,
+                `peerId=${peerId}`,
+                `version=${Number(candidate.version || 0)}`,
+                `source=${candidateSource}`,
+                `originalSource=${String(candidate.source || '') || 'empty'}`,
+                `cipherHexLen=${String(candidate.cipherHex || '').length}`,
+                `attachmentKeyLen=${String(candidate.attachmentKey || '').length}`,
+              ].join(' '),
+              conversationId,
               messageId: message.id,
               senderId,
               peerId,
               version: candidate.version,
-              source: candidate.source,
-              err: String(keyError),
+              source: candidateSource,
+              originalSource: candidate.source,
+              cipherHexLen: String(candidate.cipherHex || '').length,
+              attachmentKeyLen: String(candidate.attachmentKey || '').length,
             })
           }
-
-          const plain = await tauriInvoke<string>('decrypt_private_incoming', {
-            senderId,
-            peerId,
-            version: Number(candidate.version || 1),
-            source: String(candidate.source || ''),
-            ciphertextHex: String(candidate.cipherHex || ''),
-            msgType: Number(message.msgType || 0),
-            contentMd5: String(extra.contentMd5 || extra.content_md5 || ''),
-          })
-
-          await applyDecryptedPlain(plain, candidate)
-          break
-        } catch (error) {
           try {
-            await ensureFriendRelKeyForVersion(
-              uid,
-              senderId,
-              Number(candidate.version || 0),
-              String(candidate.source || ''),
-              true,
-            )
+            try {
+              await ensureFriendRelKeyForVersion(
+                uid,
+                senderId,
+                Number(candidate.version || 0),
+                candidateSource,
+              )
+            } catch (keyError) {
+              console.warn('[e2ee] ensureFriendRelKeyForVersion on loadMessages failed', {
+                messageId: message.id,
+                senderId,
+                peerId,
+                version: candidate.version,
+                source: candidateSource,
+                originalSource: candidate.source,
+                err: String(keyError),
+              })
+              if (isGroupImageMessage(conversationId, message.msgType)) {
+                groupImageLog('retry private image key ensure failed', {
+                  debugLine: [
+                    `messageId=${message.id}`,
+                    `conversationId=${conversationId}`,
+                    `senderId=${senderId}`,
+                    `peerId=${peerId}`,
+                    `version=${Number(candidate.version || 0)}`,
+                    `source=${candidateSource}`,
+                    `originalSource=${String(candidate.source || '') || 'empty'}`,
+                    `err=${String(keyError)}`,
+                  ].join(' '),
+                  conversationId,
+                  messageId: message.id,
+                  senderId,
+                  peerId,
+                  version: candidate.version,
+                  source: candidateSource,
+                  originalSource: candidate.source,
+                  err: String(keyError),
+                }, 'warn')
+              }
+            }
+
+            let hasKeyAfterEnsure = false
+            try {
+              hasKeyAfterEnsure = await tauriInvoke<boolean>('has_friend_rel_key', {
+                friendId: senderId,
+                version: Number(candidate.version || 0),
+                source: candidateSource,
+              })
+            } catch {
+              hasKeyAfterEnsure = false
+            }
+            if (isGroupImageMessage(conversationId, message.msgType)) {
+              groupImageLog('retry private image key ready', {
+                debugLine: [
+                  `messageId=${message.id}`,
+                  `conversationId=${conversationId}`,
+                  `senderId=${senderId}`,
+                  `peerId=${peerId}`,
+                  `version=${Number(candidate.version || 0)}`,
+                  `source=${candidateSource}`,
+                  `originalSource=${String(candidate.source || '') || 'empty'}`,
+                  `hasKey=${String(hasKeyAfterEnsure)}`,
+                ].join(' '),
+                conversationId,
+                messageId: message.id,
+                senderId,
+                peerId,
+                version: candidate.version,
+                source: candidateSource,
+                originalSource: candidate.source,
+                hasKey: hasKeyAfterEnsure,
+              })
+            }
+
             const plain = await tauriInvoke<string>('decrypt_private_incoming', {
               senderId,
               peerId,
               version: Number(candidate.version || 1),
-              source: String(candidate.source || ''),
+              source: candidateSource,
               ciphertextHex: String(candidate.cipherHex || ''),
               msgType: Number(message.msgType || 0),
               contentMd5: String(extra.contentMd5 || extra.content_md5 || ''),
             })
-            await applyDecryptedPlain(plain, candidate)
-            break
-          } catch (refreshError) {
-            console.warn('[e2ee] retry decrypt_private on loadMessages failed', {
-              messageId: message.id,
-              conversationId,
-              senderId,
-              peerId,
-              version: candidate.version,
-              source: candidate.source,
-              err: String(refreshError),
-              firstErr: String(error),
-            })
+
+            await applyDecryptedPlain(plain, attemptCandidate)
+            break candidateLoop
+          } catch (error) {
+            try {
+              await ensureFriendRelKeyForVersion(
+                uid,
+                senderId,
+                Number(candidate.version || 0),
+                candidateSource,
+                true,
+              )
+              const plain = await tauriInvoke<string>('decrypt_private_incoming', {
+                senderId,
+                peerId,
+                version: Number(candidate.version || 1),
+                source: candidateSource,
+                ciphertextHex: String(candidate.cipherHex || ''),
+                msgType: Number(message.msgType || 0),
+                contentMd5: String(extra.contentMd5 || extra.content_md5 || ''),
+              })
+              await applyDecryptedPlain(plain, attemptCandidate)
+              break candidateLoop
+            } catch (refreshError) {
+              console.warn('[e2ee] retry decrypt_private on loadMessages failed', {
+                messageId: message.id,
+                conversationId,
+                senderId,
+                peerId,
+                version: candidate.version,
+                source: candidateSource,
+                originalSource: candidate.source,
+                err: String(refreshError),
+                firstErr: String(error),
+              })
+              if (isGroupImageMessage(conversationId, message.msgType)) {
+                groupImageLog('retry private image decrypt failed', {
+                  debugLine: [
+                    `messageId=${message.id}`,
+                    `conversationId=${conversationId}`,
+                    `senderId=${senderId}`,
+                    `peerId=${peerId}`,
+                    `version=${Number(candidate.version || 0)}`,
+                    `source=${candidateSource}`,
+                    `originalSource=${String(candidate.source || '') || 'empty'}`,
+                    `err=${String(refreshError)}`,
+                    `firstErr=${String(error)}`,
+                  ].join(' '),
+                  conversationId,
+                  messageId: message.id,
+                  senderId,
+                  peerId,
+                  version: candidate.version,
+                  source: candidateSource,
+                  originalSource: candidate.source,
+                  err: String(refreshError),
+                  firstErr: String(error),
+                }, 'warn')
+              }
+            }
           }
         }
       }
@@ -2080,7 +2354,9 @@ export const useMessageStore = defineStore('message', () => {
     logSendStep('sendMessage entry', {
       usesWsSend: messageUsesWsSend(convType, msgType),
       contentLen: String(content || '').length,
-      contentHead: shortLogText(content, 160),
+      contentHead: isGroupImageMessage(conversationId, msgType)
+        ? imageContentSummary(content).contentHead
+        : shortLogText(content, 160),
       extraKeys: Object.keys(sendExtra ?? {}),
       hasClientMsgId: Boolean(clientMsgId),
       isFileHelperSend,
@@ -2572,6 +2848,7 @@ export const useMessageStore = defineStore('message', () => {
           rawCustomMsgId: String((raw as any)?.customMsgId ?? (raw as any)?.custom_msg_id ?? ''),
           normalized: messageLogSummary(msg),
           rawContent: imageContentSummary(String((raw as any)?.content ?? '')),
+          rawExtra: extraSummary((raw as any)?.extra),
         })
       }
       if (msg.msgType === 12) {

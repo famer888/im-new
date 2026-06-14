@@ -522,9 +522,57 @@ function terminalLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  void message
-  void data
-  void level
+  // 图片发送诊断需要落到桌面端日志；这里统一脱敏，避免完整 key/token 进入日志文件。
+  const payload = sanitizeDebugPayload(data || {}) as Record<string, unknown>
+  const prefixedMessage = `[DEBUG-img-send] ${message}`
+  console[level](prefixedMessage, payload)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: prefixedMessage,
+        data: payload,
+      },
+    }))
+    .catch(() => {})
+}
+
+function sanitizeDebugPayload(value: unknown, key = ''): unknown {
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string') {
+    const text = value
+    const lowerKey = key.toLowerCase()
+    const sensitive = /(key|token|secret|authorization|cipher)/i.test(key)
+    if ((lowerKey.includes('content') || lowerKey.includes('extra')) && text.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>
+        return sanitizeDebugPayload(parsed, key)
+      } catch {
+        // Keep the raw fallback below for non-JSON content strings.
+      }
+    }
+    if (sensitive) {
+      return {
+        present: text.length > 0,
+        len: text.length,
+        head: text.slice(0, lowerKey.includes('secret') || lowerKey.includes('token') ? 4 : 8),
+      }
+    }
+    if (/^data:image\//i.test(text)) {
+      return `${text.slice(0, 48)}...(len=${text.length})`
+    }
+    return text.length > 240 ? `${text.slice(0, 240)}...(len=${text.length})` : text
+  }
+  if (typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item, index) => sanitizeDebugPayload(item, `${key}[${index}]`))
+  }
+  const result: Record<string, unknown> = {}
+  for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+    result[childKey] = sanitizeDebugPayload(childValue, childKey)
+  }
+  return result
 }
 
 function safeHead(value: string, length = 8): string {
@@ -2647,7 +2695,8 @@ async function putObjectToOss(options: {
     log('oss put response', {
       ok: result.ok,
       status: result.status,
-      body: result.body,
+      bodyHead: String(result.body || '').slice(0, 240),
+      bodyLen: String(result.body || '').length,
     }, result.ok ? 'info' : 'error')
     // 桌面端与浏览器分支统一：非 2xx 必须抛错，交给上层域名轮换重试，避免把失败上传误判为成功。
     if (!result.ok || result.status < 200 || result.status >= 300) {

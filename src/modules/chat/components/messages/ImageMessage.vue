@@ -23,6 +23,7 @@ const imageElRef = ref<HTMLImageElement | null>(null)
 const naturalImageWidth = ref(0)
 const naturalImageHeight = ref(0)
 const dynamicImageHeadKeyFallbackStarted = ref(false)
+const invalidLocalCacheRedownloadStarted = ref(false)
 let downloadToken = 0
 let materializeToken = 0
 let stopDownloadEvents: Array<() => void> = []
@@ -67,6 +68,11 @@ function setCachedImage(key: string, entry: Omit<ImageDisplayCacheEntry, 'cached
     if (!oldestKey) break
     imageDisplayCache.delete(oldestKey)
   }
+}
+
+function deleteCachedImage(key: string) {
+  if (!key) return
+  imageDisplayCache.delete(key)
 }
 
 function isLikelyBase64ImagePayload(value: string): boolean {
@@ -115,30 +121,64 @@ function imageSrcKind(src: string): string {
   return 'other'
 }
 
+function summarizeImageJsonForLog(raw: unknown): string {
+  // 渲染诊断只需要字段形态；完整 fileKey/attachmentKey 不写入日志。
+  const text = String(raw ?? '').trim()
+  if (!text) return ''
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return shortLogValue(text, 160)
+    const url = String(parsed.url || parsed.fileUrl || parsed.path || parsed.dataUrl || parsed.data_url || '')
+    const thumb = String(parsed.thumbnailUrl || parsed.thumbUrl || parsed.thumbnail || '')
+    return shortLogValue(JSON.stringify({
+      keys: Object.keys(parsed).slice(0, 24),
+      urlHead: shortLogValue(url),
+      thumbHead: shortLogValue(thumb),
+      hasLocalPath: Boolean(parsed.localPath || parsed.local_path || parsed.filePath || parsed.file_path || parsed.local),
+      hasFileKey: Boolean(parsed.fileKey || parsed.file_key),
+      fileKeyLen: String(parsed.fileKey ?? parsed.file_key ?? '').length,
+      hasAttachmentKey: Boolean(parsed.attachmentKey || parsed.attachment_key),
+      attachmentKeyLen: String(parsed.attachmentKey ?? parsed.attachment_key ?? '').length,
+    }), 160)
+  } catch {
+    return shortLogValue(text, 160)
+  }
+}
+
 function isChannelMessage(): boolean {
   return String(props.message.conversationId || '').startsWith('2_')
 }
 
 function channelImageLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
-  if (!isChannelMessage()) return
+  const baseLine = [
+    `messageId=${props.message.id || props.message.customMsgId || ''}`,
+    `customMsgId=${props.message.customMsgId || ''}`,
+    `conversationId=${props.message.conversationId || ''}`,
+    `conversationKind=${String(props.message.conversationId || '').split('_')[0] || ''}`,
+    `msgType=${props.message.msgType}`,
+    `status=${props.message.status}`,
+  ].join(' ')
+  const dataLine = typeof data.debugLine === 'string' ? ` ${data.debugLine}` : ''
   const payload = {
     messageId: props.message.id || props.message.customMsgId || '',
     customMsgId: props.message.customMsgId || '',
     conversationId: props.message.conversationId || '',
+    conversationKind: String(props.message.conversationId || '').split('_')[0] || '',
     msgType: props.message.msgType,
     status: props.message.status,
-    contentHead: shortLogValue(props.message.content, 160),
-    extraHead: shortLogValue(typeof props.message.extra === 'string' ? props.message.extra : JSON.stringify(props.message.extra || {}), 160),
+    contentHead: summarizeImageJsonForLog(props.message.content),
+    extraHead: summarizeImageJsonForLog(typeof props.message.extra === 'string' ? props.message.extra : JSON.stringify(props.message.extra || {})),
     ...data,
   }
-  console[level](`[channel-image] ${message}`, payload)
+  const prefixedMessage = `[DEBUG-img-send] image-render ${message} ${baseLine}${dataLine}`
+  console[level](prefixedMessage, payload)
 
   if (!(window as any).__TAURI_INTERNALS__) return
   import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('image_send_log', {
       payload: {
         level,
-        message: `[channel-image] ${message}`,
+        message: prefixedMessage,
         data: payload,
       },
     }))
@@ -381,6 +421,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   loadError.value = false
   activeSrc.value = ''
   localFilePath.value = ''
+  invalidLocalCacheRedownloadStarted.value = false
   channelImageLog('watch decision start', {
     hasImageUrl: Boolean(imageData.value.url),
     imageUrlHead: shortLogValue(imageData.value.url),
@@ -507,9 +548,60 @@ function fallbackFromLocalPreviewError(): boolean {
   return false
 }
 
-function handleError() {
+function isUsingLocalCacheFile(): boolean {
+  return Boolean(localFilePath.value && activeSrc.value && imageSrcKind(activeSrc.value) === 'asset')
+}
+
+async function retryAfterInvalidLocalCache(): Promise<boolean> {
+  if (
+    invalidLocalCacheRedownloadStarted.value
+    || !(window as any).__TAURI_INTERNALS__
+    || !isUsingLocalCacheFile()
+    || !downloadUrl.value
+    || (!fileKey.value && !attachmentKey.value)
+  ) {
+    return false
+  }
+
+  invalidLocalCacheRedownloadStarted.value = true
+  const stalePath = localFilePath.value
+  channelImageLog('invalid local cache redownload', {
+    debugLine: [
+      `stalePathHead=${shortLogValue(stalePath)}`,
+      `downloadUrlKind=${imageSrcKind(downloadUrl.value)}`,
+      `hasFileKey=${String(Boolean(fileKey.value))}`,
+      `hasAttachmentKey=${String(Boolean(attachmentKey.value))}`,
+    ].join(' '),
+    stalePathHead: shortLogValue(stalePath),
+    activeSrcHead: shortLogValue(activeSrc.value),
+    downloadUrlHead: shortLogValue(downloadUrl.value),
+    hasFileKey: Boolean(fileKey.value),
+    hasAttachmentKey: Boolean(attachmentKey.value),
+  }, 'warn')
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('remove_file_if_exists', { path: stalePath })
+  } catch (error) {
+    channelImageLog('invalid local cache remove failed', {
+      stalePathHead: shortLogValue(stalePath),
+      err: String(error),
+    }, 'warn')
+  }
+
+  deleteCachedImage(imageCacheKey.value)
+  localFilePath.value = ''
+  activeSrc.value = ''
+  loadError.value = false
+  isLoaded.value = false
+  await downloadAndDecryptImage({ ignoreCache: true })
+  return true
+}
+
+async function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (fallbackFromLocalPreviewError()) return
+  if (await retryAfterInvalidLocalCache()) return
   const originalUrl = imageData.value.url
   if (!fileKey.value && !attachmentKey.value && retryDynamicImageWithHeadKey('img-error')) return
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
@@ -734,9 +826,47 @@ async function resolveFileKey(): Promise<string> {
     }, 'warn')
     return API_CONFIG.headAesKey
   }
+  const conversationId = String(props.message.conversationId || '')
+  if (conversationId.startsWith('0_') && attachmentKey.value) {
+    const senderId = String(props.message.senderId || '').trim()
+    for (const candidate of privateAttachmentCandidates.value) {
+      // 手机/PC 私聊图片里 extra.fileKey 可能是旧值；优先从 attachmentKey 解真实文件 key。
+      const resolved = await resolvePrivateAttachmentFileKey({
+        uid: authStore.uid,
+        senderId,
+        version: candidate.version,
+        source: candidate.source,
+        attachmentKey: candidate.attachmentKey,
+      })
+      if (resolved) {
+        channelImageLog('resolve key: private attachmentKey decrypted', {
+          debugLine: [
+            `version=${Number(candidate.version || 0)}`,
+            `source=${String(candidate.source || '') || 'empty'}`,
+            `attachmentKeyLen=${String(candidate.attachmentKey || '').length}`,
+            `fileKeyLen=${resolved.length}`,
+            `messageFileKeyLen=${fileKey.value.length}`,
+          ].join(' '),
+          version: candidate.version,
+          source: candidate.source,
+          attachmentKeyLen: String(candidate.attachmentKey || '').length,
+          fileKeyLen: resolved.length,
+          messageFileKeyLen: fileKey.value.length,
+        })
+        return resolved
+      }
+    }
+    channelImageLog('resolve key: private attachmentKey decrypt unavailable', {
+      attachmentKeyLen: attachmentKey.value.length,
+      candidateCount: privateAttachmentCandidates.value.length,
+      messageFileKeyLen: fileKey.value.length,
+    }, 'warn')
+  }
   if (fileKey.value) {
-    channelImageLog('resolve key: use message fileKey', {
+    channelImageLog(conversationId.startsWith('0_') ? 'resolve key: fallback message fileKey' : 'resolve key: use message fileKey', {
       fileKeyLen: fileKey.value.length,
+      hasAttachmentKey: Boolean(attachmentKey.value),
+      attachmentKeyLen: attachmentKey.value.length,
     })
     return fileKey.value
   }
@@ -749,21 +879,6 @@ async function resolveFileKey(): Promise<string> {
     return plainAttachmentKey
   }
 
-  const conversationId = String(props.message.conversationId || '')
-  if (conversationId.startsWith('0_')) {
-    const senderId = String(props.message.senderId || '').trim()
-    for (const candidate of privateAttachmentCandidates.value) {
-      // 单聊附件可能只带 attachmentKey，需要先解出真实 fileKey 才能下载/默认应用打开。
-      const resolved = await resolvePrivateAttachmentFileKey({
-        uid: authStore.uid,
-        senderId,
-        version: candidate.version,
-        source: candidate.source,
-        attachmentKey: candidate.attachmentKey,
-      })
-      if (resolved) return resolved
-    }
-  }
   if (isChannelMessage() && attachmentKey.value && channelId.value) {
     try {
       if (authStore.uid) {
@@ -808,7 +923,7 @@ async function resolveFileKey(): Promise<string> {
   }
 }
 
-async function downloadAndDecryptImage() {
+async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) {
   if (isOwnSingleImageUploadPlaceholder.value) return
   const url = downloadUrl.value
   const key = await resolveFileKey()
@@ -843,7 +958,7 @@ async function downloadAndDecryptImage() {
     const cachedSrc = toDisplayImageSrc(savePath)
     const hasCachedFile = await invoke<boolean>('file_exists', { path: savePath }).catch(() => false)
     if (token !== downloadToken) return
-    if (hasCachedFile && cachedSrc) {
+    if (!options.ignoreCache && hasCachedFile && cachedSrc) {
       // 历史图片已经解密落盘时直接复用本地文件，避免切换会话后闪回下载蒙层。
       channelImageLog('download skipped: cache file exists', {
         savePathHead: shortLogValue(savePath),
@@ -866,6 +981,7 @@ async function downloadAndDecryptImage() {
       savePathHead: shortLogValue(savePath),
       msgId: id,
       fileKeyLen: key.length,
+      ignoreCache: Boolean(options.ignoreCache),
       doneEvent,
       errorEvent,
     })
@@ -900,8 +1016,12 @@ async function downloadAndDecryptImage() {
     const unlistenError = await listen(errorEvent, (event) => {
       if (token !== downloadToken) return
       cleanupDownloadEvents()
+      const payload = (event.payload || {}) as Record<string, unknown>
       channelImageLog('download error event', {
-        eventPayloadHead: shortLogValue(JSON.stringify(event.payload || {}), 240),
+        eventPayloadHead: shortLogValue(JSON.stringify(payload), 240),
+        httpStatusCode: payload.httpStatusCode ?? payload.http_status_code ?? null,
+        expired: payload.expired ?? null,
+        reason: payload.reason ?? '',
         urlHead: shortLogValue(url),
         savePathHead: shortLogValue(savePath),
         fileKeyLen: key.length,
@@ -924,6 +1044,7 @@ async function downloadAndDecryptImage() {
       }),
       msgType: props.message.msgType,
       sendTime: props.message.sendTime,
+      logTag: 'image-render',
     })
   } catch (error) {
     if (token !== downloadToken) return
