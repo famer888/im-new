@@ -321,7 +321,7 @@ onUnmounted(() => {
       dateBannerText,
       isSearchHighlighted,
     ]"
-    :class="['message-item', { 'is-self': displayAsSelf, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
+    :class="['message-item', { 'is-self': displayAsSelf, 'has-avatar': showAvatar, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
   >
     <span v-if="dateBannerText" class="showtimeDay">{{ dateBannerText }}</span>
     <!-- Full-area selection overlay (matches im select-item.vue) -->
@@ -470,14 +470,15 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   max-width: 70%;
+  width: fit-content;
 
   .is-self & {
     flex-direction: row-reverse;
     margin-left: auto;
   }
 
-  // 对齐旧 im 的头像/昵称横向预留；旧版昵称是绝对定位，新项目昵称是文档流，不能再重复套旧版 22px 顶部预留。
-  .message-item:not(.is-self) & {
+  // 单聊接收方不显示头像，只有真正有头像的群消息才需要预留左侧头像位。
+  .message-item.has-avatar:not(.is-self) & {
     position: relative;
     padding: 0 0 0 45px;
     gap: 0;
@@ -487,7 +488,7 @@ onUnmounted(() => {
 .msg-avatar {
   flex-shrink: 0;
 
-  .message-item:not(.is-self) & {
+  .message-item.has-avatar:not(.is-self) & {
     position: absolute;
     left: 0;
     top: 5px;

@@ -271,14 +271,6 @@ const downloadUrl = computed(() => {
   return ''
 })
 const isVideo = computed(() => props.message.msgType === 3)
-const isChannelSingleImageMessage = computed(() => {
-  const type = Number(props.message.msgType)
-  const isMediaGridSlot = (props.message as unknown as Record<string, unknown>).mediaSlotIndex !== undefined
-  // 频道单图按图片实际宽度收口，避免窄图内容落在 120px 透明区内时看不到外层圆角。
-  return (type === 1 || type === 9)
-    && String(props.message.conversationId || '').startsWith('2_')
-    && !isMediaGridSlot
-})
 const previewSrc = computed(() => activeSrc.value || imageData.value.url)
 const dragFileName = computed(() =>
   pathFileName(localFilePath.value) || getImageFileName(downloadUrl.value || imageData.value.url, imageData.value.name),
@@ -320,17 +312,16 @@ const imageBoxStyle = computed(() => {
   const sourceWidth = imageData.value.width || naturalImageWidth.value
   const sourceHeight = imageData.value.height || naturalImageHeight.value
   const height = 150
-  const minWidth = isChannelSingleImageMessage.value ? 1 : 120
   const maxWidth = 400
   const ratio = sourceWidth > 0 && sourceHeight > 0
     ? sourceWidth / sourceHeight
     : 1
-  const width = Math.min(maxWidth, Math.max(minWidth, Math.round(height * ratio)))
+  // 对齐旧 im：图片有可显示源后会取消 120px 最小宽度，按图片比例自然收缩，避免窄图两侧露出白底。
+  const width = Math.min(maxWidth, Math.max(1, Math.round(height * ratio)))
 
   return {
     width: `${width}px`,
     height: `${height}px`,
-    minWidth: `${width}px`,
   }
 })
 const fileKey = computed(() =>
@@ -1456,10 +1447,9 @@ onBeforeUnmount(() => {
 .image-message {
   .image-wrapper {
     position: relative;
-    border-radius: 10px;
+    border-radius: 5px;
     overflow: hidden;
     cursor: default;
-    min-width: 120px;
     min-height: 150px;
     background: transparent;
 
@@ -1472,7 +1462,7 @@ onBeforeUnmount(() => {
       height: 100%;
       display: block;
       object-fit: contain;
-      border-radius: 10px;
+      border-radius: 5px;
       opacity: 0;
       user-select: none;
       -webkit-user-drag: element;
@@ -1487,7 +1477,7 @@ onBeforeUnmount(() => {
     position: absolute;
     inset: 0;
     z-index: 2;
-    border-radius: 10px;
+    border-radius: 5px;
     overflow: hidden;
     pointer-events: none;
   }
@@ -1566,7 +1556,7 @@ onBeforeUnmount(() => {
     width: 100%;
     height: 100%;
     background: #b8babf;
-    border-radius: 10px;
+    border-radius: 5px;
     color: #999;
     font-size: 13px;
     display: flex;
