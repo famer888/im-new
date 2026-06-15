@@ -131,12 +131,14 @@ defineExpose({ focus })
   display: flex;
   align-items: center;
   flex: 1;
+  min-width: 0;
   width: 100%;
   height: 26px;
   line-height: 26px;
   background-color: rgb(243, 243, 243);
   border-radius: 4px;
   padding: 0 8px;
+  box-sizing: border-box;
   position: relative;
   font-size: 12px;
 
@@ -148,6 +150,7 @@ defineExpose({ focus })
 
   input {
     flex: 1;
+    min-width: 0;
     padding: 0 5px;
     height: 26px;
     line-height: 26px;

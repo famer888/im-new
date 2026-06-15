@@ -956,6 +956,15 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 10px 10px 10px 16px;
   gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
+
+  // 搜索框占剩余宽度，右侧加号/取消按钮保持固定宽度，避免窄侧栏时越界。
+  :deep(.search-input) {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
 
   &.archive-chats-mode {
     flex-direction: column;
@@ -978,6 +987,7 @@ onBeforeUnmount(() => {
     align-items: center;
     width: 100%;
     gap: 0;
+    min-width: 0;
   }
 
   .archive-back {
