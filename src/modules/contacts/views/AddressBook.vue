@@ -200,6 +200,19 @@ const visibleRows = computed(() => {
   return positionedRows.value.filter((row) => row.top + row.height >= start && row.top <= end)
 })
 
+// 计算当前滚动位置对应的分组标题，供虚拟列表顶部吸顶使用。
+const stickyTitleRow = computed(() => {
+  let current: PositionedBookRow | null = null
+  for (const row of positionedRows.value) {
+    if (row.top > scrollTop.value) break
+    // 虚拟列表会卸载滚出视口的标题行，所以不能直接依赖原行做 CSS sticky。
+    if (row.type === 'section' || row.type === 'friend-title') {
+      current = row
+    }
+  }
+  return current
+})
+
 function openFriendExamine() {
   contactStore.setNewFriendReqTotal(0, String(authStore.uid || ''))
   uiStore.setDetailView('friend-examine')
@@ -348,6 +361,28 @@ onBeforeUnmount(() => {
     </div>
 
     <div ref="contentRef" class="book-content" @scroll="handleScroll">
+      <!-- 单独渲染当前分组标题，保证群组/频道/联系人滚动时始终吸顶显示。 -->
+      <h2
+        v-if="stickyTitleRow?.type === 'section'"
+        class="section-title sticky-section-title"
+        @click="toggleSection(stickyTitleRow.section)"
+      >
+        {{ stickyTitleRow.title }}
+        <img
+          class="arrow"
+          :class="{ collapsed: !stickyTitleRow.expanded }"
+          :src="jtIcon"
+          alt="toggle"
+        />
+      </h2>
+
+      <h2
+        v-else-if="stickyTitleRow?.type === 'friend-title'"
+        class="section-title sticky-section-title"
+      >
+        {{ stickyTitleRow.title }}
+      </h2>
+
       <div class="virtual-spacer" :style="{ height: `${virtualTotalHeight}px` }">
         <div
           v-for="row in visibleRows"
@@ -529,6 +564,7 @@ onBeforeUnmount(() => {
 .book-content {
   flex: 1;
   overflow-y: auto;
+  position: relative;
 }
 
 .virtual-spacer {
@@ -554,6 +590,15 @@ onBeforeUnmount(() => {
   color: #333;
   font-weight: normal;
   cursor: pointer;
+}
+
+.sticky-section-title {
+  /* 覆盖在虚拟列表顶部，不参与列表高度计算，避免整体内容下移。 */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin-bottom: -26px;
+  background: #fcfcfc;
 }
 
 .arrow {
