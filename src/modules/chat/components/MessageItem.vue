@@ -4,6 +4,7 @@ import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
+import { useGroupStore } from '@/stores/useGroupStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { ConversationType, MessageType, isHiddenMessageType } from '@/types'
@@ -42,6 +43,7 @@ const emit = defineEmits<{
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const contactStore = useContactStore()
+const groupStore = useGroupStore()
 const uiStore = useUIStore()
 const searchStore = useSearchStore()
 const itemRef = ref<HTMLElement | null>(null)
@@ -62,10 +64,42 @@ const isSearchHighlighted = computed(() => {
 })
 const isGroupIntroNotice = computed(() => isGroupIntroNoticeMessage(props.message))
 
+const currentGroupMember = computed(() => {
+  if (!isGroupChat.value || displayAsSelf.value) return null
+  return groupStore.getMembers(currentGroupId.value)
+    .find((member) => member.userId === props.message.senderId) ?? null
+})
+
 const senderName = computed(() => {
   if (isSelf.value) return '我'
-  return contactStore.getDisplayName(props.message.senderId)
+  const contactName = contactStore.getDisplayName(props.message.senderId)
+  if (contactName && contactName !== props.message.senderId) return contactName
+  // 群聊非好友不会在好友表里；按旧 im 逻辑回退到群成员昵称，避免直接显示 uid。
+  return currentGroupMember.value?.nickname || contactName || props.message.senderId
 })
+
+const senderAvatar = computed(() => {
+  if (isSelf.value) return authStore.avatar || null
+  const contactAvatar = contactStore.getContact(props.message.senderId)?.avatar || null
+  // 群聊非好友头像来自群成员列表；好友头像仍优先用通讯录，保持备注/头像覆盖行为。
+  return contactAvatar || currentGroupMember.value?.avatar || null
+})
+
+function openSenderMemberInfo() {
+  const contact = contactStore.getContact(props.message.senderId)
+  uiStore.openMemberInfo(
+    props.message.senderId,
+    currentGroupId.value,
+    [senderName.value, currentGroupMember.value?.nickname || ''].filter(Boolean),
+    {
+      userId: props.message.senderId,
+      nickname: senderName.value,
+      avatar: senderAvatar.value || '',
+      remark: contact?.remark || null,
+      isFriend: Boolean(contact),
+    },
+  )
+}
 
 const messageComponent = computed(() => {
   switch (renderMsgType.value) {
@@ -180,6 +214,7 @@ const isChannelChat = computed(
 const isGroupChat = computed(
   () => chatStore.currentConversation?.type === 1,
 )
+const currentGroupId = computed(() => (isGroupChat.value ? chatStore.currentConversation?.targetId ?? '' : ''))
 /** 旧 im 频道消息统一按左侧白色气泡展示，即使是自己发送的消息也不右对齐。 */
 const displayAsSelf = computed(() => (isSelf.value || isFileHelperChat.value) && !isChannelChat.value)
 const showAvatar = computed(
@@ -320,6 +355,8 @@ onUnmounted(() => {
       isSelected,
       dateBannerText,
       isSearchHighlighted,
+      senderName,
+      senderAvatar,
     ]"
     :class="['message-item', { 'is-self': displayAsSelf, 'has-avatar': showAvatar, showTime: !!dateBannerText, 'search-hit-active': isSearchHighlighted }]"
   >
@@ -337,14 +374,16 @@ onUnmounted(() => {
       <TextAvatar
         v-if="showAvatar"
         :name="senderName"
+        :src="senderAvatar"
+        :id="message.senderId"
         :size="36"
         class="msg-avatar"
         style="cursor: pointer;"
-        @click="uiStore.openMemberInfo(message.senderId)"
+        @click="openSenderMemberInfo"
         @contextmenu.prevent.stop="handleContextMenu($event, { isAvatar: true })"
       />
       <div class="bubble-area" @contextmenu.stop="handleContextMenu">
-        <span v-if="showAvatar" class="sender-name" style="cursor: pointer;" @click="uiStore.openMemberInfo(message.senderId)">{{ senderName }}</span>
+        <span v-if="showAvatar" class="sender-name" style="cursor: pointer;" @click="openSenderMemberInfo">{{ senderName }}</span>
         <div class="message-content-host">
           <!-- In-bubble quote block (matches im's msg/quote.vue) -->
           <div
