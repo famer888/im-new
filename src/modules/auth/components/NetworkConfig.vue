@@ -256,7 +256,10 @@ onBeforeUnmount(() => {
             <span class="status-text">{{ getQrStatusText(item.qrStatus) }}</span>
           </span>
         </div>
-        <div v-if="!domainList.length" class="empty-tip">
+        <div v-if="isChecking && !domainList.length" class="preload-tip">
+          <span class="loading-icon" />
+        </div>
+        <div v-if="isCompleted && !isChecking && !domainList.length" class="empty-tip">
           <span class="empty-text">{{ t('暂无域名') }}</span>
         </div>
       </div>
@@ -380,6 +383,12 @@ onBeforeUnmount(() => {
   padding: 24px 20px;
 
   .empty-text { font-size: 13px; color: #888888; }
+}
+
+.preload-tip {
+  display: flex;
+  justify-content: center;
+  padding: 32px 20px;
 }
 
 .action-btn {
