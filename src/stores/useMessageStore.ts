@@ -53,17 +53,9 @@ const WS_CONNECT_STATUS_CHECK_COUNT = 20
 const WS_CONNECT_STATUS_CHECK_DELAY_MS = 150
 
 function recordSendDiagnosticTrace(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
-  console[level](`[SEND-DIAG] ${message}`, data || {})
-  try {
-    const raw = localStorage.getItem('last-send-diagnostic-trace')
-    const list = raw ? JSON.parse(raw) : []
-    const next = Array.isArray(list) ? list.slice(-39) : []
-    const dataText = data ? ` ${JSON.stringify(data)}` : ''
-    next.push(`${new Date().toISOString()} [${level}] ${message}${dataText}`)
-    localStorage.setItem('last-send-diagnostic-trace', JSON.stringify(next))
-  } catch {
-    // ignore diagnostic storage errors
-  }
+  void message
+  void data
+  void level
 }
 
 function messageUsesWsSend(convType: number, msgType: number): boolean {
@@ -365,7 +357,6 @@ function diceLog(message: string, data?: Record<string, unknown>) {
   void data
 }
 
-const GROUP_IMAGE_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 const SINGLE_VIDEO_DEBUG_RUN_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
 function isGroupImageMessage(conversationId: string, msgType: number): boolean {
@@ -661,22 +652,9 @@ function groupImageLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  // 发送和回执合并链路统一写入桌面日志，便于和图片渲染下载日志按前缀串联。
-  const payload = {
-    runId: GROUP_IMAGE_DEBUG_RUN_ID,
-    ...(data || {}),
-  }
-  const debugLine = typeof data?.debugLine === 'string' ? ` ${data.debugLine}` : ''
-  const prefixedMessage = `[DEBUG-img-send] ${message}${debugLine}`
-  console[level](prefixedMessage, payload)
-  if (!isTauri()) return
-  void tauriInvoke('image_send_log', {
-    payload: {
-      level,
-      message: prefixedMessage,
-      data: payload,
-    },
-  }).catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function privateCipherCandidateLine(

@@ -121,68 +121,14 @@ function imageSrcKind(src: string): string {
   return 'other'
 }
 
-function summarizeImageJsonForLog(raw: unknown): string {
-  // 渲染诊断只需要字段形态；完整 fileKey/attachmentKey 不写入日志。
-  const text = String(raw ?? '').trim()
-  if (!text) return ''
-  try {
-    const parsed = JSON.parse(text) as Record<string, unknown>
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return shortLogValue(text, 160)
-    const url = String(parsed.url || parsed.fileUrl || parsed.path || parsed.dataUrl || parsed.data_url || '')
-    const thumb = String(parsed.thumbnailUrl || parsed.thumbUrl || parsed.thumbnail || '')
-    return shortLogValue(JSON.stringify({
-      keys: Object.keys(parsed).slice(0, 24),
-      urlHead: shortLogValue(url),
-      thumbHead: shortLogValue(thumb),
-      hasLocalPath: Boolean(parsed.localPath || parsed.local_path || parsed.filePath || parsed.file_path || parsed.local),
-      hasFileKey: Boolean(parsed.fileKey || parsed.file_key),
-      fileKeyLen: String(parsed.fileKey ?? parsed.file_key ?? '').length,
-      hasAttachmentKey: Boolean(parsed.attachmentKey || parsed.attachment_key),
-      attachmentKeyLen: String(parsed.attachmentKey ?? parsed.attachment_key ?? '').length,
-    }), 160)
-  } catch {
-    return shortLogValue(text, 160)
-  }
-}
-
 function isChannelMessage(): boolean {
   return String(props.message.conversationId || '').startsWith('2_')
 }
 
 function channelImageLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
-  const baseLine = [
-    `messageId=${props.message.id || props.message.customMsgId || ''}`,
-    `customMsgId=${props.message.customMsgId || ''}`,
-    `conversationId=${props.message.conversationId || ''}`,
-    `conversationKind=${String(props.message.conversationId || '').split('_')[0] || ''}`,
-    `msgType=${props.message.msgType}`,
-    `status=${props.message.status}`,
-  ].join(' ')
-  const dataLine = typeof data.debugLine === 'string' ? ` ${data.debugLine}` : ''
-  const payload = {
-    messageId: props.message.id || props.message.customMsgId || '',
-    customMsgId: props.message.customMsgId || '',
-    conversationId: props.message.conversationId || '',
-    conversationKind: String(props.message.conversationId || '').split('_')[0] || '',
-    msgType: props.message.msgType,
-    status: props.message.status,
-    contentHead: summarizeImageJsonForLog(props.message.content),
-    extraHead: summarizeImageJsonForLog(typeof props.message.extra === 'string' ? props.message.extra : JSON.stringify(props.message.extra || {})),
-    ...data,
-  }
-  const prefixedMessage = `[DEBUG-img-send] image-render ${message} ${baseLine}${dataLine}`
-  console[level](prefixedMessage, payload)
-
-  if (!(window as any).__TAURI_INTERNALS__) return
-  import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: prefixedMessage,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 const imageData = computed((): {

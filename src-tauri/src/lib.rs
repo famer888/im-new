@@ -175,6 +175,7 @@ pub fn run() {
             commands::channels::delete_channel,
             commands::file::upload_file,
             commands::file::upload_oss_object,
+            commands::file::upload_oss_local_file,
             commands::file::image_send_log,
             commands::file::download_file,
             commands::file::create_video_stream_url,

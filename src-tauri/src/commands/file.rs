@@ -6,7 +6,7 @@ use sha1::{Digest, Sha1};
 #[cfg(target_os = "windows")]
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
-use std::io::SeekFrom;
+use std::io::{Read, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -121,6 +121,20 @@ pub struct OssPutObjectRequest {
     pub security_token: String,
     pub content_type: String,
     pub body_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OssPutLocalFileRequest {
+    pub url: String,
+    pub bucket: String,
+    pub object_key: String,
+    pub access_key_id: String,
+    pub access_key_secret: String,
+    pub security_token: String,
+    pub content_type: String,
+    pub file_path: String,
+    pub file_key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2068,44 +2082,123 @@ pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObj
     let body = general_purpose::STANDARD
         .decode(request.body_base64.trim())
         .map_err(|e| format!("decode upload body failed: {}", e))?;
+    put_oss_bytes(
+        request.url,
+        request.bucket,
+        request.object_key,
+        request.access_key_id,
+        request.access_key_secret,
+        request.security_token,
+        request.content_type,
+        body,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn upload_oss_local_file(
+    request: OssPutLocalFileRequest,
+) -> Result<OssPutObjectResult, String> {
+    let path = PathBuf::from(&request.file_path);
+    if !path.is_file() {
+        return Err(format!("upload file not found: {}", request.file_path));
+    }
+    if request.file_key.trim().is_empty() {
+        return Err("upload file key is empty".to_string());
+    }
+
+    // 桌面端直接从本地路径分块加密，避免大媒体先转成 base64 再跨 IPC 传给 Rust。
+    let body = encrypt_local_file_to_bytes(&path, &request.file_key)?;
+    put_oss_bytes(
+        request.url,
+        request.bucket,
+        request.object_key,
+        request.access_key_id,
+        request.access_key_secret,
+        request.security_token,
+        request.content_type,
+        body,
+    )
+    .await
+}
+
+fn encrypt_local_file_to_bytes(path: &Path, file_key: &str) -> Result<Vec<u8>, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("open upload file failed: {}", e))?;
+    let mut output = Vec::new();
+    let mut buffer = vec![0u8; crypto::file_crypto::ENCRYPT_CHUNK_SIZE];
+
+    loop {
+        let mut filled = 0usize;
+        while filled < buffer.len() {
+            let read = file
+                .read(&mut buffer[filled..])
+                .map_err(|e| format!("read upload file failed: {}", e))?;
+            if read == 0 {
+                break;
+            }
+            filled += read;
+        }
+        if filled == 0 {
+            break;
+        }
+        output.extend_from_slice(&crypto::file_crypto::encrypt_file_chunk(
+            &buffer[..filled],
+            file_key,
+        ));
+    }
+
+    Ok(output)
+}
+
+async fn put_oss_bytes(
+    request_url: String,
+    bucket: String,
+    object_key: String,
+    access_key_id: String,
+    access_key_secret: String,
+    security_token: String,
+    content_type: String,
+    body: Vec<u8>,
+) -> Result<OssPutObjectResult, String> {
     let oss_date = oss_rfc1123_date();
-    let content_type = if request.content_type.trim().is_empty() {
+    let content_type = if content_type.trim().is_empty() {
         "application/octet-stream".to_string()
     } else {
-        request.content_type.trim().to_string()
+        content_type.trim().to_string()
     };
     let url =
-        url::Url::parse(&request.url).map_err(|e| format!("invalid oss upload url: {}", e))?;
+        url::Url::parse(&request_url).map_err(|e| format!("invalid oss upload url: {}", e))?;
     let object_path = url.path().trim_start_matches('/');
     let object_key = if object_path.is_empty() {
-        request.object_key.trim_start_matches('/')
+        object_key.trim_start_matches('/')
     } else {
         object_path
     };
-    let canonical_resource = format!("/{}/{}", request.bucket.trim(), object_key);
+    let canonical_resource = format!("/{}/{}", bucket.trim(), object_key);
     let canonical_headers = format!(
         "x-oss-date:{}\nx-oss-security-token:{}\n",
-        oss_date, request.security_token
+        oss_date, security_token
     );
     let string_to_sign = format!(
         "PUT\n\n{}\n{}\n{}{}",
         content_type, oss_date, canonical_headers, canonical_resource
     );
-    let signature = hmac_sha1_base64(&request.access_key_secret, &string_to_sign);
-    let authorization = format!("OSS {}:{}", &request.access_key_id, signature);
+    let signature = hmac_sha1_base64(&access_key_secret, &string_to_sign);
+    let authorization = format!("OSS {}:{}", &access_key_id, signature);
 
     tracing::info!(
         target: "image-send",
         "rust oss put start url_host={} body_bytes={} bucket={} object_key_head={} object_key_len={} content_type={} has_access_key={} has_secret={} has_token={} canonical_resource_head={} sign_len={}",
         url.host_str().unwrap_or_default(),
         body.len(),
-        request.bucket,
+        bucket,
         object_key.chars().take(24).collect::<String>(),
         object_key.len(),
         content_type,
-        !request.access_key_id.is_empty(),
-        !request.access_key_secret.is_empty(),
-        !request.security_token.is_empty(),
+        !access_key_id.is_empty(),
+        !access_key_secret.is_empty(),
+        !security_token.is_empty(),
         canonical_resource,
         string_to_sign.len(),
     );
@@ -2115,7 +2208,7 @@ pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObj
         .header("Authorization", authorization)
         .header("x-oss-date", oss_date)
         .header("Content-Type", content_type)
-        .header("x-oss-security-token", request.security_token)
+        .header("x-oss-security-token", security_token)
         .body(body)
         .send()
         .await
@@ -2179,8 +2272,8 @@ pub async fn download_file(
     let should_log_audio = log_tag.as_deref() == Some("group-audio");
     let should_log_file_open = log_tag.as_deref() == Some("file-open");
     let should_log_video_menu = log_tag.as_deref() == Some("video-menu");
-    // 图片渲染失败需要看到 HTTP/解密边界，但日志只记录 URL 头部和 key 长度。
-    let should_log_image_render = log_tag.as_deref() == Some("image-render");
+    // 保留前端 log_tag 参数兼容旧调用，但关闭图片渲染诊断，避免控制台刷屏。
+    let should_log_image_render = false;
     if should_log_video_menu {
         eprintln!(
             "[video-menu] download_file request msg_id={} url_head={} save_path={} file_key_len={} emit_data_url={}",

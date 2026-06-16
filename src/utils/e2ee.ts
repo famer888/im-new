@@ -33,17 +33,9 @@ function e2eeDiag(message: string, data: Record<string, unknown> = {}, level: 'i
 }
 
 function imageKeyDebugLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
-  const line = typeof data.debugLine === 'string' ? ` ${data.debugLine}` : ''
-  const prefixedMessage = `[DEBUG-img-send] ${message}${line}`
-  console[level](prefixedMessage, data)
-  if (!isTauri()) return
-  void tauriInvoke('image_send_log', {
-    payload: {
-      level,
-      message: prefixedMessage,
-      data,
-    },
-  }).catch(() => {})
+  void message
+  void data
+  void level
 }
 
 /** 账号维度持久化到 localStorage 的 key lifecycle 数据。 */

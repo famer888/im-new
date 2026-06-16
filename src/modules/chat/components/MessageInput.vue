@@ -61,7 +61,9 @@ const emojiPickerPopoverRef = ref<HTMLElement | null>(null)
 useEmojiPanelDismiss(showEmoji, emojiToggleBtnRef, emojiPickerPopoverRef)
 
 function sendDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
-  console[level](`[SEND-DIAG][Input] ${message}`, data)
+  void message
+  void data
+  void level
 }
 const showAtList = ref(false)
 const atKeyword = ref('')
@@ -522,57 +524,9 @@ function terminalLog(
   data?: Record<string, unknown>,
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  // 图片发送诊断需要落到桌面端日志；这里统一脱敏，避免完整 key/token 进入日志文件。
-  const payload = sanitizeDebugPayload(data || {}) as Record<string, unknown>
-  const prefixedMessage = `[DEBUG-img-send] ${message}`
-  console[level](prefixedMessage, payload)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  void import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: prefixedMessage,
-        data: payload,
-      },
-    }))
-    .catch(() => {})
-}
-
-function sanitizeDebugPayload(value: unknown, key = ''): unknown {
-  if (value === null || value === undefined) return value
-  if (typeof value === 'string') {
-    const text = value
-    const lowerKey = key.toLowerCase()
-    const sensitive = /(key|token|secret|authorization|cipher)/i.test(key)
-    if ((lowerKey.includes('content') || lowerKey.includes('extra')) && text.trim().startsWith('{')) {
-      try {
-        const parsed = JSON.parse(text) as Record<string, unknown>
-        return sanitizeDebugPayload(parsed, key)
-      } catch {
-        // Keep the raw fallback below for non-JSON content strings.
-      }
-    }
-    if (sensitive) {
-      return {
-        present: text.length > 0,
-        len: text.length,
-        head: text.slice(0, lowerKey.includes('secret') || lowerKey.includes('token') ? 4 : 8),
-      }
-    }
-    if (/^data:image\//i.test(text)) {
-      return `${text.slice(0, 48)}...(len=${text.length})`
-    }
-    return text.length > 240 ? `${text.slice(0, 240)}...(len=${text.length})` : text
-  }
-  if (typeof value !== 'object') return value
-  if (Array.isArray(value)) {
-    return value.slice(0, 20).map((item, index) => sanitizeDebugPayload(item, `${key}[${index}]`))
-  }
-  const result: Record<string, unknown> = {}
-  for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
-    result[childKey] = sanitizeDebugPayload(childValue, childKey)
-  }
-  return result
+  void message
+  void data
+  void level
 }
 
 function safeHead(value: string, length = 8): string {
@@ -2528,6 +2482,17 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+function getEncryptedUploadSize(plainSize: number): number {
+  if (!Number.isFinite(plainSize) || plainSize <= 0) return 0
+  let encryptedSize = 0
+  for (let offset = 0; offset < plainSize; offset += FILE_ENCRYPT_CHUNK_SIZE) {
+    const chunkSize = Math.min(FILE_ENCRYPT_CHUNK_SIZE, plainSize - offset)
+    const remainder = chunkSize % 16
+    encryptedSize += chunkSize + (remainder === 0 ? 16 : 16 - remainder)
+  }
+  return encryptedSize
+}
+
 function resolveOssUploadUrl(responseUrl: string, bucket: string, endpoint: string, objectKey: string): string {
   const key = objectKey.replace(/^\/+/, '')
   // 对齐老 im：上传 endpoint / 服务端回传上传 URL 一律走 HTTPS，避免 HTTP 下被 CORS 预检或代理链路拦截。
@@ -2549,7 +2514,10 @@ async function putObjectWithOssCandidates(options: {
   accessKeyId: string
   accessKeySecret: string
   securityToken: string
-  body: Uint8Array
+  body?: Uint8Array
+  localPath?: string
+  fileKey?: string
+  plainSize?: number
   contentType: string
   trace?: ImageSendTrace
   logPrefix?: string
@@ -2579,6 +2547,9 @@ async function putObjectWithOssCandidates(options: {
         accessKeySecret: options.accessKeySecret,
         securityToken: options.securityToken,
         body: options.body,
+        localPath: options.localPath,
+        fileKey: options.fileKey,
+        plainSize: options.plainSize,
         contentType: options.contentType,
         trace: options.trace,
         logPrefix: options.logPrefix,
@@ -2607,6 +2578,9 @@ async function putObjectWithOssCandidates(options: {
         accessKeySecret: options.accessKeySecret,
         securityToken: options.securityToken,
         body: options.body,
+        localPath: options.localPath,
+        fileKey: options.fileKey,
+        plainSize: options.plainSize,
         contentType: options.contentType,
         trace: options.trace,
         logPrefix: options.logPrefix,
@@ -2647,7 +2621,10 @@ async function putObjectToOss(options: {
   accessKeyId: string
   accessKeySecret: string
   securityToken: string
-  body: Uint8Array
+  body?: Uint8Array
+  localPath?: string
+  fileKey?: string
+  plainSize?: number
   contentType: string
   trace?: ImageSendTrace
   logPrefix?: string
@@ -2664,7 +2641,9 @@ async function putObjectToOss(options: {
     bucket: options.bucket,
     objectKeyHead: safeHead(options.objectKey, 24),
     objectKeyLen: options.objectKey.length,
-    bodyBytes: options.body.byteLength,
+    bodyBytes: options.body?.byteLength ?? 0,
+    hasLocalPath: Boolean(options.localPath),
+    plainSize: options.plainSize ?? 0,
     contentType,
     hasAccessKeyId: Boolean(options.accessKeyId),
     hasAccessKeySecret: Boolean(options.accessKeySecret),
@@ -2673,6 +2652,36 @@ async function putObjectToOss(options: {
 
   if ((window as any).__TAURI_INTERNALS__) {
     const { invoke } = await import('@tauri-apps/api/core')
+    if (options.localPath && options.fileKey) {
+      // 桌面端有本地路径时交给 Rust 读盘加密上传，避免大视频/动图经 IPC 传 base64 卡住。
+      const result = await invoke<{ ok: boolean; status: number; body: string }>('upload_oss_local_file', {
+        request: {
+          url: options.url,
+          bucket: options.bucket,
+          objectKey: options.objectKey,
+          accessKeyId: options.accessKeyId,
+          accessKeySecret: options.accessKeySecret,
+          securityToken: options.securityToken,
+          contentType,
+          filePath: options.localPath,
+          fileKey: options.fileKey,
+        },
+      })
+      log('oss local file put response', {
+        ok: result.ok,
+        status: result.status,
+        bodyHead: String(result.body || '').slice(0, 240),
+        bodyLen: String(result.body || '').length,
+      }, result.ok ? 'info' : 'error')
+      if (!result.ok || result.status < 200 || result.status >= 300) {
+        const error = new Error(`上传文件失败：HTTP ${result.status}`)
+        ;(error as any).status = result.status
+        ;(error as any).responseBody = result.body
+        throw error
+      }
+      return
+    }
+    if (!options.body) throw new Error('上传文件失败：上传内容为空')
     const encodeStartedAt = performance.now()
     const bodyBase64 = bytesToBase64(options.body)
     log('oss body base64 done', {
@@ -2708,6 +2717,7 @@ async function putObjectToOss(options: {
     return
   }
 
+  if (!options.body) throw new Error('上传文件失败：上传内容为空')
   const ossDate = new Date().toUTCString()
   const canonicalResource = `/${options.bucket}/${options.objectKey.replace(/^\/+/, '')}`
   const canonicalHeaders = [
@@ -2757,14 +2767,18 @@ async function uploadImageLikeIm(
     type: file.type,
   })
   const fileKey = options?.fileKey || createFileKey()
-  const encrypted = await encryptFileForUpload(file, fileKey)
+  const localUploadPath = (window as any).__TAURI_INTERNALS__ ? getLocalFilePath(file) : ''
+  // 桌面端本地文件用路径上传，避免大媒体重复读入 JS 并转 base64；无路径文件仍走原来的内存上传。
+  const encrypted = localUploadPath ? null : await encryptFileForUpload(file, fileKey)
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
+  const encryptedBytes = encrypted?.byteLength ?? getEncryptedUploadSize(file.size)
   traceLog(trace, 'encrypt done', {
     originalBytes: file.size,
-    encryptedBytes: encrypted.byteLength,
+    encryptedBytes,
     suffix,
     contentType,
+    usedLocalPathUpload: Boolean(localUploadPath),
     fileKeyHead: safeHead(fileKey),
     fileKeyLen: fileKey.length,
   })
@@ -2772,7 +2786,7 @@ async function uploadImageLikeIm(
     getUploadUrl({
       attachType: getUploadAttachType(options?.msgType ?? MessageType.Image),
       attachWorkspaceType: 1,
-      fileSize: encrypted.byteLength,
+      fileSize: encryptedBytes,
       suffix,
     }),
     getUploadToken(),
@@ -2810,7 +2824,10 @@ async function uploadImageLikeIm(
     accessKeyId,
     accessKeySecret,
     securityToken,
-    body: encrypted,
+    body: encrypted ?? undefined,
+    localPath: localUploadPath || undefined,
+    fileKey,
+    plainSize: file.size,
     contentType,
     trace,
   })
@@ -2853,28 +2870,32 @@ async function uploadFileLikeIm(
     type: file.type,
   })
   const fileKey = options?.fileKey || createFileKey()
-  const encrypted = await encryptFileForUpload(file, fileKey)
+  const localUploadPath = (window as any).__TAURI_INTERNALS__ ? getLocalFilePath(file) : ''
+  // 桌面端本地文件用路径上传，避免大媒体重复读入 JS 并转 base64；无路径文件仍走原来的内存上传。
+  const encrypted = localUploadPath ? null : await encryptFileForUpload(file, fileKey)
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
+  const encryptedBytes = encrypted?.byteLength ?? getEncryptedUploadSize(file.size)
   fileTraceLog(trace, 'encrypt done', {
     originalBytes: file.size,
-    encryptedBytes: encrypted.byteLength,
+    encryptedBytes,
     suffix,
     contentType,
+    usedLocalPathUpload: Boolean(localUploadPath),
     fileKeyHead: safeHead(fileKey),
     fileKeyLen: fileKey.length,
   })
   fileTraceLog(trace, 'upload api start', {
     attachType: getUploadAttachType(MessageType.File),
     attachWorkspaceType: 1,
-    fileSize: encrypted.byteLength,
+    fileSize: encryptedBytes,
     suffix,
   })
   const [uploadUrlInfo, token] = await Promise.all([
     getUploadUrl({
       attachType: getUploadAttachType(MessageType.File),
       attachWorkspaceType: 1,
-      fileSize: encrypted.byteLength,
+      fileSize: encryptedBytes,
       suffix,
     }),
     getUploadToken(),
@@ -2912,7 +2933,10 @@ async function uploadFileLikeIm(
     accessKeyId,
     accessKeySecret,
     securityToken,
-    body: encrypted,
+    body: encrypted ?? undefined,
+    localPath: localUploadPath || undefined,
+    fileKey,
+    plainSize: file.size,
     contentType,
     trace,
     logPrefix: '[file-send] ',
@@ -2923,7 +2947,7 @@ async function uploadFileLikeIm(
   fileTraceLog(trace, 'upload done', {
     name: file.name,
     originalBytes: file.size,
-    encryptedBytes: encrypted.byteLength,
+    encryptedBytes,
     finalUrlHost: (() => {
       try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
     })(),
@@ -3208,14 +3232,18 @@ async function uploadVideoLikeIm(
     height: metadata.height,
     duration: metadata.duration,
   })
-  const encrypted = await encryptFileForUpload(file, fileKey)
+  const localUploadPath = (window as any).__TAURI_INTERNALS__ ? getLocalFilePath(file) : ''
+  // 桌面端本地视频用路径上传，避免上传本体再次读入 JS 并转 base64。
+  const encrypted = localUploadPath ? null : await encryptFileForUpload(file, fileKey)
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
+  const encryptedBytes = encrypted?.byteLength ?? getEncryptedUploadSize(file.size)
   fileTraceLog(trace, 'video encrypt done', {
     originalBytes: file.size,
-    encryptedBytes: encrypted.byteLength,
+    encryptedBytes,
     suffix,
     contentType,
+    usedLocalPathUpload: Boolean(localUploadPath),
     fileKeyHead: safeHead(fileKey),
     fileKeyLen: fileKey.length,
   })
@@ -3223,7 +3251,7 @@ async function uploadVideoLikeIm(
     getUploadUrl({
       attachType: getUploadAttachType(MessageType.Video),
       attachWorkspaceType: 1,
-      fileSize: encrypted.byteLength,
+      fileSize: encryptedBytes,
       suffix,
     }),
     getUploadToken(),
@@ -3248,7 +3276,10 @@ async function uploadVideoLikeIm(
     accessKeyId,
     accessKeySecret,
     securityToken,
-    body: encrypted,
+    body: encrypted ?? undefined,
+    localPath: localUploadPath || undefined,
+    fileKey,
+    plainSize: file.size,
     contentType,
     trace,
     logPrefix: '[video-send] ',
@@ -3257,7 +3288,7 @@ async function uploadVideoLikeIm(
   const finalUrl = toHttpsUrl(stripQuery(uploadUrl || responseUrl))
   fileTraceLog(trace, 'video upload done', {
     originalBytes: file.size,
-    encryptedBytes: encrypted.byteLength,
+    encryptedBytes,
     finalUrlHost: (() => {
       try { return new URL(finalUrl).host } catch { return finalUrl.slice(0, 60) }
     })(),
