@@ -165,6 +165,26 @@ function saveFriendKeyCache(loginUid: string | number, cache: FriendKeyCache) {
   }
 }
 
+export function clearE2eeKeyCaches(loginUid: string | number) {
+  const uid = String(loginUid || '').trim()
+  if (!uid) return
+
+  // 对齐老 im 的“消息解密失败 → 修复”：只清空会话密钥缓存，
+  // 不主动遍历会话拉钥匙，避免无公钥会话把内部错误弹给用户。
+  friendKeyCacheByLogin.delete(uid)
+  pendingGroupKeys.clear()
+  pendingChannelKeys.clear()
+  pendingFriendKeys.clear()
+  pendingFriendVersionKeys.clear()
+  try {
+    localStorage.removeItem(friendKeyStorageKey(uid))
+    localStorage.removeItem(`${uid}-group-key-objs`)
+    localStorage.removeItem(`${uid}-channel-key-objs`)
+  } catch (err) {
+    console.warn('[e2ee] clear key cache storage failed:', err)
+  }
+}
+
 function friendCacheKey(source: 'app' | 'web', version: number): string {
   return `${source === 'app' ? 'app' : 'pc'}-${version}`
 }
