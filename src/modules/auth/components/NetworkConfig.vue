@@ -238,6 +238,9 @@ onBeforeUnmount(() => {
 <template>
   <div class="network-overlay">
     <div class="network-panel">
+      <div class="panel-header">
+        <span class="header-text">Network benchmark</span>
+      </div>
       <div class="domain-list">
         <div
           v-for="(item, index) in domainList"
@@ -289,6 +292,17 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #3a3a3a;
+  text-align: center;
+
+  .header-text {
+    font-size: 15px;
+    color: #ffffff;
+  }
 }
 
 .domain-list {
