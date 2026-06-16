@@ -33,7 +33,8 @@ function isTauri(): boolean {
 }
 
 function loginDiag(message: string, data?: Record<string, unknown>) {
-  console.warn(`[AUTH-DIAG][LoginPage] ${message}`, data || {})
+  void message
+  void data
 }
 
 async function withRestoreTimeout<T>(label: string, task: Promise<T>): Promise<T> {

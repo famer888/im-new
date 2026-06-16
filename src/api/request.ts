@@ -222,8 +222,7 @@ async function refreshWebBizDomainPool(): Promise<boolean> {
     await initDomainPoolFromApi()
     syncBaseUrlWithDomainPool({ preferPool: true })
     return true
-  } catch (error) {
-    console.warn('[requestProto] refresh webBiz domain pool failed:', error)
+  } catch {
     return false
   } finally {
     refreshingWebBizDomainPool = false
@@ -242,7 +241,6 @@ async function retryWithWebBizCandidates(
   let lastResponse: ProtoHttpResponse | null = null
   let lastError: unknown = null
   let attempt = 0
-  const requestPath = getUrlPathForLog(url)
 
   for (;;) {
     const nextBase = getNextWebBizBaseUrl(failedBases, {
@@ -251,20 +249,9 @@ async function retryWithWebBizCandidates(
     if (!nextBase) {
       if (!refreshedPool && !options.isLoginRequest) {
         refreshedPool = true
-        console.warn('[requestProto] webBiz fallback refresh pool', {
-          failedBase: options.failedBase,
-          requestPath,
-        })
         await refreshWebBizDomainPool()
         continue
       }
-      console.warn('[requestProto] webBiz fallback exhausted', {
-        failedBase: options.failedBase,
-        requestPath,
-        attempt,
-        lastStatus: lastResponse?.status || 0,
-        lastError: lastError instanceof Error ? lastError.message : String(lastError || ''),
-      })
       if (lastResponse) return lastResponse
       if (lastError) throw lastError
       return null
@@ -273,25 +260,11 @@ async function retryWithWebBizCandidates(
     attempt += 1
     failedBases.add(nextBase)
     const retryUrl = replaceRequestBaseUrl(url, nextBase)
-    const startedAt = Date.now()
-    console.warn('[requestProto] webBiz fallback try', {
-      failedBase: options.failedBase,
-      nextBase,
-      requestPath,
-      attempt,
-    })
     try {
       const retryResponse = await sendProtoHttpRequest(retryUrl, init)
       if (shouldFallbackForHttpStatus(retryResponse.status)) {
         void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
         lastResponse = retryResponse
-        console.warn('[requestProto] webBiz fallback status failed', {
-          nextBase,
-          requestPath,
-          attempt,
-          status: retryResponse.status,
-          elapsedMs: Date.now() - startedAt,
-        })
         continue
       }
 
@@ -301,24 +274,10 @@ async function retryWithWebBizCandidates(
       }
       options.onResolvedBaseUrl?.(nextBase)
       void reportWebBizDomainFailure(options.failedBase, url, errorForReport, httpStatus)
-      console.warn('[requestProto] webBiz domain fallback success:', {
-        failedBase: options.failedBase,
-        nextBase,
-        requestPath,
-        attempt,
-        elapsedMs: Date.now() - startedAt,
-      })
       return retryResponse
     } catch (retryError) {
       void markDomainError(isLoginOnlyBaseUrl(nextBase) ? 'login_v2' : 'webBiz', nextBase)
       lastError = retryError
-      console.warn('[requestProto] webBiz fallback request failed', {
-        nextBase,
-        requestPath,
-        attempt,
-        elapsedMs: Date.now() - startedAt,
-        message: retryError instanceof Error ? retryError.message : String(retryError),
-      })
     }
   }
 }
@@ -379,8 +338,8 @@ async function reportWebBizDomainFailure(
       httpStatus,
       moduleCode: failedModuleCode,
     })
-  } catch (reportError) {
-    console.warn('[requestProto] report webBiz domain failure failed:', reportError)
+  } catch {
+    // 域名上报失败不能影响当前请求兜底结果。
   } finally {
     reportingWebBizDomainFailure = false
   }
@@ -446,12 +405,6 @@ async function fetchWithWebBizFallback(
       options.onResolvedBaseUrl?.(failedBase)
     }
     if (!response.ok && allowFallback && shouldFallbackForHttpStatus(response.status) && failedBase) {
-      console.warn('[requestProto] webBiz primary status failed', {
-        failedBase,
-        requestPath: getUrlPathForLog(url),
-        status: response.status,
-        errorText: response.errorText || '',
-      })
       void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
       const retryResponse = await retryWithWebBizCandidates(url, init, {
         failedBase,
@@ -464,11 +417,6 @@ async function fetchWithWebBizFallback(
   } catch (error) {
     if (!allowFallback || !failedBase) throw error
 
-    console.warn('[requestProto] webBiz primary request failed', {
-      failedBase,
-      requestPath: getUrlPathForLog(url),
-      message: error instanceof Error ? error.message : String(error),
-    })
     void markDomainError(isLoginOnlyBaseUrl(failedBase) ? 'login_v2' : 'webBiz', failedBase)
     const retryResponse = await retryWithWebBizCandidates(url, init, {
       failedBase,

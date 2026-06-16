@@ -358,7 +358,8 @@ function handleLastAvatarError() {
 }
 
 function qrDiag(message: string, data?: Record<string, unknown>) {
-  console.warn(`[AUTH-DIAG][QRCode] ${message}`, data || {})
+  void message
+  void data
 }
 
 function startQrLoadCycle(reason: string) {

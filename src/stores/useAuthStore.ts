@@ -99,7 +99,8 @@ function isWsConnectConfigCompatibleWithEnv(wsUrl: string): boolean {
 }
 
 function authDiag(message: string, data?: Record<string, unknown>) {
-  console.warn(`[AUTH-DIAG][authStore] ${message}`, data || {})
+  void message
+  void data
 }
 
 function safeUrlHost(value: string): string {

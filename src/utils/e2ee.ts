@@ -27,7 +27,9 @@ function e2eeDebugLog(...args: unknown[]) {
 }
 
 function e2eeDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
-  console[level](`[E2EE-DIAG] ${message}`, data)
+  void message
+  void data
+  void level
 }
 
 function imageKeyDebugLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {

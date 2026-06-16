@@ -117,8 +117,8 @@ function decodePacketWithAesJson(buffer: ArrayBuffer, aesKey: string): any {
   if (raw[1] === 0xC0) {
     try {
       encrypted = ungzip(encrypted)
-    } catch (err) {
-      console.warn('[ChannelAPI] gzip decode failed, fallback to raw payload:', err)
+    } catch {
+      // gzip 失败时沿用旧 im 兼容策略，继续用原始 payload 解密。
     }
   }
 
@@ -147,8 +147,8 @@ function decodePacketWithAesBytes(buffer: ArrayBuffer, aesKey: string): Uint8Arr
   if (raw[1] === 0xC0) {
     try {
       encrypted = ungzip(encrypted)
-    } catch (err) {
-      console.warn('[ChannelAPI] protobuf gzip decode failed, fallback to raw payload:', err)
+    } catch {
+      // gzip 失败时沿用旧 im 兼容策略，继续用原始 payload 解密。
     }
   }
 
@@ -182,7 +182,8 @@ function normalizeHttpBaseUrl(value: string): string {
 }
 
 function channelDiag(message: string, data?: Record<string, unknown>) {
-  console.warn(`[ChannelAPI] ${message}`, data || {})
+  void message
+  void data
 }
 
 function getOpenChatBaseCandidates(): string[] {
@@ -242,7 +243,6 @@ async function sendChannelRequest<T>(
     body: packet.buffer as ArrayBuffer,
   })
   if (!res.ok) {
-    console.error('[ChannelAPI] http error', { status: res.status, url })
     throw new ChannelHttpError(res.status, url)
   }
   const buf = await res.arrayBuffer()
@@ -288,7 +288,6 @@ async function sendChannelRawRequest(
     body: packet.buffer as ArrayBuffer,
   })
   if (!res.ok) {
-    console.error('[ChannelAPI] protobuf http error', { status: res.status, url })
     throw new ChannelHttpError(res.status, url)
   }
   const buf = await res.arrayBuffer()

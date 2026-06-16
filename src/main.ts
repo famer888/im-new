@@ -23,7 +23,8 @@ const BOOT_STEP_TIMEOUT_MS = 8000
 installTauriElectronBridge()
 
 function bootDiag(message: string, data?: Record<string, unknown>) {
-  console.warn(`[BOOT] ${message}`, data || {})
+  void message
+  void data
 }
 
 async function withBootTimeout<T>(label: string, task: Promise<T>): Promise<T> {

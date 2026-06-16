@@ -128,21 +128,9 @@ function setInitText(text: string) {
 }
 
 function initDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
-  const elapsedMs = initTraceStartedAt ? Date.now() - initTraceStartedAt : 0
-  console[level](`[INIT-DIAG] ${message}`, {
-    elapsedMs,
-    uid: authStore.uid || '',
-    initText: initText.value,
-    currentStep: currentInitStep,
-    currentStepElapsedMs: currentInitStepStartedAt ? Date.now() - currentInitStepStartedAt : 0,
-    currentPhase: currentInitPhase,
-    reloadVisible: initReloadVisible.value,
-    initialized: isInitialized.value,
-    firstInit: firstInitProgressVisible.value,
-    friendProgress: initFriendProgress.value,
-    chatProgress: initChatProgress.value,
-    ...data,
-  })
+  void message
+  void data
+  void level
 }
 
 function setCurrentInitStep(label: string, phase: string) {
@@ -434,7 +422,7 @@ async function releaseChatListNameGate(refreshPromise: Promise<unknown> | null) 
       window.clearTimeout(timeoutId)
     }
     if (timedOut) {
-      console.warn('[init] chat list name warmup timed out, fallback to current local names')
+      // 名称预热超时只影响展示兜底，不再写控制台诊断日志。
     }
     uiStore.setChatListNamesReady(true)
   }

@@ -49,12 +49,9 @@ export const useChannelStore = defineStore('channel', () => {
   const detailRequestById = new Map<string, Promise<Channel | null>>()
 
   function channelDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
-    console[level](`[CHANNEL-DIAG] ${message}`, {
-      activeUid,
-      isTauri: isTauri(),
-      channelCount: channels.value.length,
-      ...data,
-    })
+    void message
+    void data
+    void level
   }
 
   function removedChannelKey(uid: string): string {
