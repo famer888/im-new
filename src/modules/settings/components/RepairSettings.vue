@@ -170,7 +170,8 @@ async function confirmResetCache() {
   if (resettingCache.value) return
   resetConfirmVisible.value = false
   resettingCache.value = true
-  const uid = authStore.uid
+  const uid = String(authStore.uid || '').trim()
+  const remainingAccounts = authStore.accounts.filter((item) => item.id !== uid)
 
   if (isTauri() && uid) {
     try {
@@ -188,10 +189,15 @@ async function confirmResetCache() {
   try {
     localStorage.clear()
   } catch { /* ignore */ }
+  // 对齐老 im：重置缓存后从登录账号列表移除当前账号，再重启到登录态。
+  if (remainingAccounts.length > 0) {
+    localStorage.setItem('login-account-list', JSON.stringify(remainingAccounts))
+  }
 
   chatStore.conversations = []
   chatStore.currentConversationId = null
   messageStore.clearAllMessageCaches()
+  authStore.accounts = remainingAccounts
   await authStore.logout()
 
   if (!isTauri()) {
