@@ -328,6 +328,7 @@ async function getClientTokenData(): Promise<ClientTokenData> {
 export interface DomainDto {
   domainUrl: string
   moduleCode: string
+  originalModuleCode?: string
   priority?: number
 }
 
@@ -426,11 +427,15 @@ export async function getDynamicDomainSnapshot(moduleCode = ''): Promise<DomainD
 
     return [...new Set(
       (res?.domainDtoList || [])
-        .map(item => ({
-          ...item,
-          moduleCode: normalizeDomainModuleCode(item.moduleCode),
-          domainUrl: String(item.domainUrl || '').trim(),
-        }))
+        .map((item) => {
+          const originalModuleCode = String(item.moduleCode || '').trim()
+          return {
+            ...item,
+            moduleCode: normalizeDomainModuleCode(originalModuleCode),
+            originalModuleCode,
+            domainUrl: String(item.domainUrl || '').trim(),
+          }
+        })
         .filter(item => item.domainUrl)
         .sort((a, b) => (a.priority ?? Infinity) - (b.priority ?? Infinity))
         .map(item => JSON.stringify(item)),
@@ -448,6 +453,19 @@ export async function getDynamicDomainList(moduleCode = 'webBiz'): Promise<strin
     ...new Set(
       domainDtoList
         .filter(item => !normalizedModuleCode || item.moduleCode === normalizedModuleCode)
+        .map(item => item.domainUrl),
+    ),
+  ]
+}
+
+export async function getDynamicDomainListByOriginalModule(moduleCode = 'webBiz'): Promise<string[]> {
+  const rawModuleCode = String(moduleCode || '').trim()
+  const domainDtoList = await getDynamicDomainSnapshot(rawModuleCode)
+  return [
+    ...new Set(
+      domainDtoList
+        // 网络检测对齐老 im：接口结果只接受原始 moduleCode=webBiz，不吃 biz 的兼容归一化。
+        .filter(item => item.originalModuleCode === rawModuleCode)
         .map(item => item.domainUrl),
     ),
   ]

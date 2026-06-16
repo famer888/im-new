@@ -15,6 +15,7 @@ pub struct DomainItem {
     pub domain: String,
     pub status: String,
     pub module_code: String,
+    pub original_module_code: Option<String>,
     pub source: Option<String>,
     pub priority: Option<u32>,
     pub last_check: Option<u64>,

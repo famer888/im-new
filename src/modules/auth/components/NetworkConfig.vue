@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getRawBaseUrl } from '@/api/config'
-import { getAllDomains } from '@/utils/domainPool'
-import { collectAllDomainUrls } from '@/api/imDomain'
+import { getDomainsByOriginalModuleCode } from '@/utils/domainPool'
+import { getDynamicDomainListByOriginalModule } from '@/api/imDomain'
 
 interface DomainCheckItem {
   url: string
@@ -94,7 +94,15 @@ async function checkQrCode(url: string): Promise<200 | 0> {
 
 /** 只获取本地动态域名池（不含 baseBuildUrl 兜底，与老 im getTrendsDomainPool 一致） */
 function getLocalPoolDomains(): string[] {
-  return getAllDomains('webBiz').map(d => d.domain)
+  // 对齐老 im：网络检测只展示后台原始 moduleCode=webBiz 的域名，不吃 biz/friend/group/login 兼容归一化。
+  return getDomainsByOriginalModuleCode('webBiz').map(d => d.domain)
+}
+
+async function getStrictWebBizDomains(): Promise<string[]> {
+  const apiDomains = await getDynamicDomainListByOriginalModule('webBiz')
+  if (apiDomains.length) return apiDomains
+  // 旧版本可能已经把归一化后的域名写入本地池；只有远程严格列表不可用时才退回本地池。
+  return getLocalPoolDomains()
 }
 
 async function checkDomainsFromIndex(startIndex: number) {
@@ -127,7 +135,7 @@ async function checkDomainsFromIndex(startIndex: number) {
  */
 async function fetchAndUpdateDomainPool() {
   try {
-    const apiDomains = await collectAllDomainUrls('webBiz')
+    const apiDomains = await getDynamicDomainListByOriginalModule('webBiz')
     const newUrls = apiDomains.filter(url => !checkedUrls.value.includes(url))
 
     if (newUrls.length) {
@@ -150,12 +158,12 @@ async function fetchAndUpdateDomainPool() {
  * 3. 最后才加 baseBuildUrl 作为兜底
  */
 async function loadAndCheckDomains() {
-  let poolDomains = getLocalPoolDomains()
+  let poolDomains = await getStrictWebBizDomains()
 
   if (!poolDomains.length && retryCount.value < 2 && !cancelled.value) {
     retryCount.value++
     await fetchAndUpdateDomainPool()
-    poolDomains = getLocalPoolDomains()
+    poolDomains = await getStrictWebBizDomains()
   }
 
   const domainUrls = [...poolDomains]

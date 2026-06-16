@@ -5,6 +5,7 @@ export interface DomainItem {
   domain: string
   status: 'normal' | 'error'
   moduleCode: string
+  originalModuleCode?: string
   source?: DomainSource
   priority?: number
   lastCheck?: number
@@ -15,6 +16,7 @@ type DomainSource = 'dynamic' | 'prepared' | 'oss'
 interface DynamicDomainDto {
   domainUrl: string
   moduleCode: string
+  originalModuleCode?: string
   priority?: number
 }
 
@@ -201,10 +203,12 @@ function isLoginOnlyDomain(domain: string): boolean {
 function normalizeItem(item: DomainItem): DomainItem | null {
   const moduleCode = normalizeModuleCode(item.moduleCode)
   const domain = String(item.domain || '').trim()
+  const originalModuleCode = String(item.originalModuleCode || '').trim()
   if (!moduleCode || !domain || !shouldAcceptDomainForEnv(domain)) return null
   return {
     domain,
     moduleCode,
+    originalModuleCode,
     status: item.status === 'error' ? 'error' : 'normal',
     source: normalizeDomainSource(item.source, moduleCode, domain),
     priority: Number.isFinite(Number(item.priority)) ? Number(item.priority) : undefined,
@@ -238,6 +242,8 @@ function upsertDomainItems(items: DomainItem[]): boolean {
         ...previous,
         // 探测失败后的 error 状态要保留到人工/重启恢复，避免后台补池把失败域名马上洗回 normal。
         status: previous.status === 'error' ? 'error' : item.status,
+        // 网络检测需要按后台原始模块名过滤；已有缓存缺失时用新快照/API 数据补齐。
+        originalModuleCode: item.originalModuleCode || previous.originalModuleCode,
         source: itemHasHigherPrioritySource ? item.source : previous.source,
         priority: nextPriority,
         lastCheck: Math.max(Number(previous.lastCheck || 0), Number(item.lastCheck || 0) || Date.now()),
@@ -248,6 +254,7 @@ function upsertDomainItems(items: DomainItem[]): boolean {
         || nextItem.priority !== previous.priority
         || nextItem.lastCheck !== previous.lastCheck
         || nextItem.moduleCode !== previous.moduleCode
+        || nextItem.originalModuleCode !== previous.originalModuleCode
       ) {
         existingMap.set(item.domain, nextItem)
         changed = true
@@ -270,6 +277,7 @@ function mergeDomains(moduleCode: string, urls: string[], source: DomainSource):
       domain,
       status: 'normal',
       moduleCode: normalizedModuleCode,
+      originalModuleCode: moduleCode,
       source,
       priority: index,
       lastCheck: Date.now(),
@@ -284,6 +292,7 @@ function serializeDomainCache(): DomainItem[] {
       domain: item.domain,
       status: item.status,
       moduleCode: normalizeModuleCode(item.moduleCode),
+      originalModuleCode: item.originalModuleCode,
       source: item.source,
       priority: item.priority,
       lastCheck: Number(item.lastCheck || 0) || Date.now(),
@@ -373,6 +382,7 @@ function applyPreloadedDomainSnapshot() {
     items.push({
       domain,
       moduleCode,
+      originalModuleCode: rawModuleCode,
       status: 'normal',
       source: 'prepared',
       priority,
@@ -383,6 +393,7 @@ function applyPreloadedDomainSnapshot() {
       items.push({
         domain,
         moduleCode: 'login_v2',
+        originalModuleCode: rawModuleCode,
         status: 'normal',
         source: 'prepared',
         priority,
@@ -565,6 +576,7 @@ export async function initDomainPoolFromApi(): Promise<void> {
           domain,
           status: 'normal',
           moduleCode,
+          originalModuleCode: entry.originalModuleCode || entry.moduleCode,
           source: 'dynamic',
           priority: Number.isFinite(Number(entry.priority)) ? Number(entry.priority) : index,
           lastCheck: now,
@@ -637,6 +649,15 @@ export function stopPolling() {
 
 export function getAllDomains(moduleCode: string): DomainItem[] {
   return [...(domainCache.get(normalizeModuleCode(moduleCode)) || [])]
+}
+
+export function getDomainsByOriginalModuleCode(moduleCode: string): DomainItem[] {
+  const rawModuleCode = String(moduleCode || '').trim()
+  if (!rawModuleCode) return []
+  // 对齐老 im 的网络检测：只看后台原始 moduleCode，避免 biz/friend/group/login 被归一化后混入 webBiz。
+  return Array.from(domainCache.values())
+    .flat()
+    .filter(item => item.originalModuleCode === rawModuleCode)
 }
 
 export function getOrderedDomainUrls(
