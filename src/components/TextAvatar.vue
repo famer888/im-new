@@ -27,6 +27,7 @@ const nativeImageLoading = ref(false)
 let resolveTaskToken = 0
 
 const AVATAR_PRELOAD_TIMEOUT_MS = 1200
+const AVATAR_NATIVE_SKELETON_TIMEOUT_MS = 1400
 const AVATAR_FAIL_RETRY_MS = 15_000
 const AVATAR_RETRY_MS = 3_000
 // 同一地址复用同一预加载任务，避免列表里重复头像并发请求。
@@ -34,6 +35,7 @@ const avatarPreloadPromises = new Map<string, Promise<boolean>>()
 // 记录最近一次加载结果：成功直接复用，失败短时间内不重复探测。
 const avatarLoadStates = new Map<string, { loaded: boolean; updatedAt: number }>()
 let retryTimer: number | null = null
+let nativeLoadingTimer: number | null = null
 
 const SKELETON_SVG =
   "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' preserveAspectRatio='xMidYMid slice'>" +
@@ -61,6 +63,7 @@ watch([() => props.src, () => props.avatarType], () => {
 
 onBeforeUnmount(() => {
   clearAvatarRetry()
+  clearNativeLoadingTimer()
 })
 
 const defaultSrc = computed(() => {
@@ -119,6 +122,25 @@ function clearAvatarRetry() {
   if (retryTimer === null || typeof window === 'undefined') return
   window.clearTimeout(retryTimer)
   retryTimer = null
+}
+
+// 清理 NativeImage 骨架超时计时器，避免组件卸载或 src 切换后旧计时器回写状态。
+function clearNativeLoadingTimer() {
+  if (nativeLoadingTimer === null || typeof window === 'undefined') return
+  window.clearTimeout(nativeLoadingTimer)
+  nativeLoadingTimer = null
+}
+
+// 开启桌面端头像加载态；超时后先展示兜底头像，后台解析完成再替换为真图。
+function startNativeImageLoading(token: number) {
+  nativeImageLoading.value = true
+  clearNativeLoadingTimer()
+  if (typeof window === 'undefined') return
+  // NativeImage 可能因线上 OSS 签名/候选域名慢而等待较久；骨架超时后先显示兜底，后台完成再换真图。
+  nativeLoadingTimer = window.setTimeout(() => {
+    nativeLoadingTimer = null
+    if (token === resolveTaskToken) nativeImageLoading.value = false
+  }, AVATAR_NATIVE_SKELETON_TIMEOUT_MS)
 }
 
 function scheduleAvatarRetry(src: string) {
@@ -188,6 +210,7 @@ function preloadAvatar(src: string): Promise<boolean> {
 async function refreshResolvedImageSrc(forceRetry = false) {
   const token = ++resolveTaskToken
   const src = normalizeAvatarSrc(props.src)
+  clearNativeLoadingTimer()
   nativeImageLoading.value = false
   if (!src || (!forceRetry && imageLoadError.value) || props.avatarType === 'text') {
     if (token !== resolveTaskToken) return
@@ -197,7 +220,7 @@ async function refreshResolvedImageSrc(forceRetry = false) {
 
   if (canUseNativeImageAvatar(src)) {
     // 桌面端远程头像走 NativeImage：本地缓存 + 候选域名 + 明文/加密识别，避免 WebView 反复直连头像源。
-    nativeImageLoading.value = true
+    startNativeImageLoading(token)
     try {
       const nativeSrc = await resolveNativeAvatarSrc({
         id: props.id,
@@ -216,7 +239,10 @@ async function refreshResolvedImageSrc(forceRetry = false) {
       imageLoadError.value = true
       scheduleAvatarRetry(src)
     } finally {
-      if (token === resolveTaskToken) nativeImageLoading.value = false
+      if (token === resolveTaskToken) {
+        clearNativeLoadingTimer()
+        nativeImageLoading.value = false
+      }
     }
     return
   }

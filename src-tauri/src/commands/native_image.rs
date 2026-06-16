@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tracing::{info, warn};
 
 use crate::crypto;
@@ -91,6 +91,13 @@ type InflightMap = HashMap<String, Arc<AsyncMutex<()>>>;
 
 // 进程内并发合并表：同一头像同时出现在会话列表/头部/成员列表时，只允许一个下载任务落盘。
 static INFLIGHT_NATIVE_IMAGES: OnceLock<Mutex<InflightMap>> = OnceLock::new();
+static NATIVE_IMAGE_DOWNLOAD_LIMIT: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+// 返回头像下载并发限制器，统一控制列表/成员面板同时触发的远程头像请求数量。
+fn download_limit() -> &'static Arc<Semaphore> {
+    // 对齐旧 NativeImage 头像并发上限，避免线上 mac 包一次性拉几十个头像把网络队列拖慢。
+    NATIVE_IMAGE_DOWNLOAD_LIMIT.get_or_init(|| Arc::new(Semaphore::new(8)))
+}
 
 fn inflight_map() -> &'static Mutex<InflightMap> {
     INFLIGHT_NATIVE_IMAGES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -145,7 +152,13 @@ fn meta_path(cache_dir: &Path) -> PathBuf {
 }
 
 fn source_url_hash(req: &ResolveNativeImageRequest) -> String {
-    sha1_hex(req.url.trim())
+    // OSS 签名 query 会轮换；只用去 query 后的地址做指纹，保证同一头像能命中本地缓存。
+    sha1_hex(strip_url_query(req.url.trim()))
+}
+
+// 去掉 URL query，只保留稳定路径用于头像缓存指纹。
+fn strip_url_query(url: &str) -> &str {
+    url.split_once('?').map(|(path, _)| path).unwrap_or(url)
 }
 
 fn response_from_meta(
@@ -322,6 +335,19 @@ async fn run_native_image_pipeline(
 ) -> Result<ResolveNativeImageResponse, PipelineError> {
     let cache_dir = cache_dir_for(cache_root, req);
     // NativeImage 的第一目标是减少重复远程加载；缓存可用时直接返回本地路径。
+    if let Some(cached) = response_from_meta(&cache_dir, req) {
+        return Ok(cached);
+    }
+
+    let _permit = download_limit()
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| {
+            PipelineError::download(ERROR_NETWORK, format!("download limiter closed: {}", e))
+        })?;
+
+    // 排队等待期间可能已有同 key 请求写好缓存，真正下载前再查一次，减少重复网络请求。
     if let Some(cached) = response_from_meta(&cache_dir, req) {
         return Ok(cached);
     }
@@ -522,10 +548,11 @@ mod tests {
     }
 
     #[test]
-    fn cache_hash_ignores_source_query_when_resource_key_is_stable() {
+    fn cache_identity_ignores_source_query_when_resource_key_is_stable() {
         let req_a = request_for("https://example.test/a.png?x=1".to_string(), "stable-key");
         let req_b = request_for("https://example.test/a.png?x=2".to_string(), "stable-key");
         assert_eq!(cache_hash(&req_a), cache_hash(&req_b));
+        assert_eq!(source_url_hash(&req_a), source_url_hash(&req_b));
     }
 
     #[tokio::test]
@@ -547,11 +574,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_resource_key_refreshes_when_source_url_changes() {
+    async fn same_resource_key_reuses_cache_when_only_source_query_changes() {
         let url_a = serve_once(200, PNG_BYTES.to_vec()).await;
-        let mut png_b = PNG_BYTES.to_vec();
-        png_b.extend_from_slice(b"v2");
-        let url_b = serve_once(200, png_b).await;
         let root = test_cache_root("source-url-refresh");
         let client = reqwest::Client::new();
 
@@ -566,12 +590,12 @@ mod tests {
 
         let second = resolve_native_image_in_dir(
             root.clone(),
-            request_for(format!("{}?v=2", url_b), "same-avatar-key"),
+            request_for(format!("{}?v=2", url_a), "same-avatar-key"),
             client,
         )
         .await;
         assert_eq!(second.state, STATE_READY);
-        assert!(!second.from_cache);
+        assert!(second.from_cache);
         let _ = std::fs::remove_dir_all(root);
     }
 

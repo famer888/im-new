@@ -377,6 +377,7 @@ onUnmounted(() => {
         :src="senderAvatar"
         :id="message.senderId"
         :size="36"
+        rounded
         class="msg-avatar"
         style="cursor: pointer;"
         @click="openSenderMemberInfo"
