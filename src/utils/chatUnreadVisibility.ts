@@ -15,6 +15,32 @@ function normalizeText(value: unknown): string {
   return String(value ?? '').trim()
 }
 
+function getNoticeUserId(raw: unknown): string {
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+  if (!record) return ''
+  const nestedUser = record.user && typeof record.user === 'object'
+    ? record.user as Record<string, unknown>
+    : null
+  const nestedUserInfo = record.userInfo && typeof record.userInfo === 'object'
+    ? record.userInfo as Record<string, unknown>
+    : null
+
+  return [
+    record.userId,
+    record.user_id,
+    record.uid,
+    record.id,
+    nestedUser?.userId,
+    nestedUser?.user_id,
+    nestedUser?.uid,
+    nestedUser?.id,
+    nestedUserInfo?.userId,
+    nestedUserInfo?.user_id,
+    nestedUserInfo?.uid,
+    nestedUserInfo?.id,
+  ].map(normalizeText).find(Boolean) || ''
+}
+
 function isGroupConversation(conversationId: string | undefined): boolean {
   return Boolean(conversationId?.startsWith('1_'))
 }
@@ -76,14 +102,13 @@ export function isSelfLeaveGroupSystemMessage(
   const uid = normalizeText(currentUid)
   if (!uid) return false
 
-  const receiveUid = normalizeText(extra.receiveUid)
-  if (receiveUid && receiveUid === uid) return true
-
+  // 群主收到成员退群通知时 receiveUid 也会是群主；只看真正退群的成员，避免误隐藏群主视角的退群提示。
   const members = Array.isArray(extra.members) ? extra.members : []
-  return members.some((member) => {
-    if (!member || typeof member !== 'object') return false
-    return normalizeText((member as Record<string, unknown>).userId) === uid
-  })
+  const affectedMemberId = members.map(getNoticeUserId).find(Boolean)
+    || getNoticeUserId(extra.targetUser)
+    || normalizeText(extra.fromUid ?? extra.sendUid)
+
+  return Boolean(affectedMemberId && affectedMemberId === uid)
 }
 
 export function isMessageVisibleInTimeline(

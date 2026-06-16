@@ -30,6 +30,7 @@ import {
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
+import { isSelfLeaveGroupSystemMessage } from '@/utils/chatUnreadVisibility'
 import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
@@ -776,28 +777,6 @@ function getMessageDigest(message: Message): string {
   return raw ? formatDigestText(raw) : ''
 }
 
-function isSelfLeaveGroupSystemMessage(conversationId: string, message: Message): boolean {
-  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
-  if (message.msgType !== 8) return false
-
-  const extra = parseGroupNoticeExtraObject(message.extra)
-  if (!extra) return false
-  if (String(extra.source ?? '') !== 'group-event') return false
-  if (Number(extra.groupReqType ?? 0) !== 7) return false
-
-  const currentUid = String(authStore.uid || '')
-  if (!currentUid) return false
-
-  const receiveUid = String(extra.receiveUid ?? '')
-  if (receiveUid && receiveUid === currentUid) return true
-
-  const members = Array.isArray(extra.members) ? extra.members : []
-  return members.some((member) => {
-    if (!member || typeof member !== 'object') return false
-    return String((member as Record<string, unknown>).userId ?? '') === currentUid
-  })
-}
-
 function isRejectedGroupInviteNoticeInGroupChat(conversationId: string, message: Message): boolean {
   if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return false
   if (message.msgType !== 8) return false
@@ -915,7 +894,7 @@ function getLoadedLatestVisibleMessage(conv: Conversation): Message | null {
       && String(message.content || '').trim() === HIDDEN_GROUP_NOTICE_TEXT
       && String(parseGroupNoticeExtraObject(message.extra)?.source || '') === 'group-event'
     )
-    && !isSelfLeaveGroupSystemMessage(conv.id, message)
+    && !isSelfLeaveGroupSystemMessage(conv.id, message, authStore.uid)
     && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
   )) ?? null
 }
