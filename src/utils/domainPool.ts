@@ -1,4 +1,5 @@
 import { requestViaTauriOrFetch } from '@/utils/tauriHttp'
+import { isProdSafeDomain } from '@/utils/domainSafety'
 import preloadedDomainSnapshot from '../../scripts/domains.json'
 
 export interface DomainItem {
@@ -145,9 +146,7 @@ function getDomainHost(domain: string): string {
 }
 
 function isDomainCompatibleWithProd(domain: string): boolean {
-  const host = getDomainHost(domain)
-  if (!host) return false
-  return !/(^|[.-])(test|stage|dev|uat|sit)[.-]/i.test(host)
+  return isProdSafeDomain(domain)
 }
 
 function uniqDomains(urls: string[]): string[] {

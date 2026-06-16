@@ -1,4 +1,5 @@
 import { getAllDomains, getFirstNormalDomain } from '@/utils/domainPool'
+import { isProdSafeDomain } from '@/utils/domainSafety'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -138,9 +139,11 @@ function normalizeHttpBaseUrl(value: string): string {
 
 function isStoredBaseUrlCompatibleWithEnv(value: string): boolean {
   try {
-    const host = new URL(String(value || '').trim()).host.toLowerCase()
+    const raw = String(value || '').trim()
+    const host = new URL(raw).host.toLowerCase()
     if (ENV_NAME === 'prod' || ENV_NAME === 'production') {
-      return !/(^|[.-])(test|stage|dev|uat|sit)[.-]/i.test(host)
+      // 生产包要同时清掉测试域名和明显异常的缓存 host，避免历史脏缓存把业务请求导到坏线路。
+      return isProdSafeDomain(raw)
     }
     return true
   } catch {

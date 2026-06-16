@@ -218,6 +218,13 @@ async function refreshResolvedImageSrc(forceRetry = false) {
     return
   }
 
+  const cachedState = getCachedAvatarLoadState(src)
+  if (!forceRetry && cachedState === false) {
+    if (token !== resolveTaskToken) return
+    resolvedImageSrc.value = null
+    return
+  }
+
   if (canUseNativeImageAvatar(src)) {
     // 桌面端远程头像走 NativeImage：本地缓存 + 候选域名 + 明文/加密识别，避免 WebView 反复直连头像源。
     startNativeImageLoading(token)
@@ -230,14 +237,18 @@ async function refreshResolvedImageSrc(forceRetry = false) {
       if (token !== resolveTaskToken) return
       resolvedImageSrc.value = nativeSrc
       imageLoadError.value = !nativeSrc
-      if (!nativeSrc) scheduleAvatarRetry(src)
+      if (!nativeSrc) {
+        // NativeImage 已经尝试原地址和备用 OSS 域名；失败后先锁定兜底态，避免会话列表每 3 秒闪回加载态。
+        avatarLoadStates.set(src, { loaded: false, updatedAt: Date.now() })
+      }
     } catch (error) {
       if (token !== resolveTaskToken) return
       // NativeImage 解析失败只影响当前头像，回退到原有默认图/文字头像，不阻断页面渲染。
       console.warn('[TextAvatar] native image resolve failed', error)
       resolvedImageSrc.value = null
       imageLoadError.value = true
-      scheduleAvatarRetry(src)
+      // 失败原因通常是 URL 过期、下载失败或解密失败；短间隔重试会导致头像位反复重新加载。
+      avatarLoadStates.set(src, { loaded: false, updatedAt: Date.now() })
     } finally {
       if (token === resolveTaskToken) {
         clearNativeLoadingTimer()
@@ -247,7 +258,6 @@ async function refreshResolvedImageSrc(forceRetry = false) {
     return
   }
 
-  const cachedState = getCachedAvatarLoadState(src)
   if (cachedState === true) {
     if (token !== resolveTaskToken) return
     resolvedImageSrc.value = src

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { getGroupContactList, getGroupMemberList, getGroupMemberListV2, groupMemberOnLineStatusList } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
+import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const MEMBER_PREVIEW_COUNT = 8
@@ -36,6 +37,13 @@ function groupMemberRefreshDebug(message: string, data?: Record<string, unknown>
 function isCommonResultOk(resp: any): boolean {
   const code = Number(resp?.commonResult?.errCode ?? 200)
   return code === 0 || code === 200
+}
+
+function normalizeGroupAvatar(value: unknown): string | null {
+  const avatar = typeof value === 'string' ? value.trim() : ''
+  if (!avatar) return null
+  // 服务端偶发回传远程 default_group_icon；这里直接清空让前端走本地默认群头像，避免生产包反复打旧域名。
+  return isRemoteDefaultGroupIcon(avatar) ? null : avatar
 }
 
 export interface Group {
@@ -112,7 +120,7 @@ export const useGroupStore = defineStore('group', () => {
       id: String(item.id ?? item.groupId ?? item.group_id ?? ''),
       // 兼容旧 im 与不同接口返回：有些群资料用 groupName/groupAvatar，不兼容会退回显示数字 ID。
       name: item.name ?? item.groupName ?? item.group_name ?? null,
-      avatar: item.avatar ?? item.pic ?? item.groupAvatar ?? item.group_avatar ?? null,
+      avatar: normalizeGroupAvatar(item.avatar ?? item.pic ?? item.groupAvatar ?? item.group_avatar ?? null),
       ownerId: item.ownerId ?? item.owner_id ?? (item.hostId ? String(item.hostId) : null) ?? null,
       memberCount: Number(item.memberCount ?? item.member_count ?? 0),
       notice: item.notice ?? null,
