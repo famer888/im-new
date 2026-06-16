@@ -1374,6 +1374,8 @@ onBeforeUnmount(() => {
           pinned: conv.isPinned && !conv.isArchived,
           'friend-online': showFriendOnlineDot(conv),
           'has-unread': shouldShowUnreadBadge(conv),
+          'muted-conversation': isConversationMuted(conv),
+          'wide-unread': getDisplayUnreadCount(conv) > 99,
         }]"
         @click="handleSelect(conv)"
         @contextmenu="handleContextMenu($event, conv)"
@@ -1422,18 +1424,23 @@ onBeforeUnmount(() => {
                 <span v-else class="digest-text">{{ segment.text }}</span>
               </template>
             </span>
-            <span v-if="isConversationMuted(conv)" class="muted-icon">
+            <span v-if="isConversationMuted(conv) && !shouldShowUnreadBadge(conv)" class="muted-icon">
               <img :src="mdrIcon" alt="" />
             </span>
           </div>
         </div>
 
-        <span v-if="shouldShowUnreadBadge(conv) && !isConversationMuted(conv)" class="badge">
-          {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
-        </span>
-        <span v-else-if="shouldShowUnreadBadge(conv) && isConversationMuted(conv)" class="badge muted-badge">
-          {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
-        </span>
+        <div
+          v-if="shouldShowUnreadBadge(conv)"
+          :class="['unread-meta', { 'muted-unread-meta': isConversationMuted(conv) }]"
+        >
+          <span v-if="isConversationMuted(conv)" class="muted-icon muted-icon--unread">
+            <img :src="mdrIcon" alt="" />
+          </span>
+          <span :class="['badge', { 'muted-badge': isConversationMuted(conv) }]">
+            {{ getDisplayUnreadCount(conv) > 99 ? '99+' : getDisplayUnreadCount(conv) }}
+          </span>
+        </div>
 
         <div class="conv-divider" />
       </div>
@@ -1570,11 +1577,19 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
-.badge {
+.unread-meta {
   position: absolute;
   right: 12px;
   bottom: 11px;
   z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  height: 18px;
+}
+
+.badge {
   min-width: 18px;
   height: 18px;
   padding: 0 6px;
@@ -1588,6 +1603,11 @@ onBeforeUnmount(() => {
   justify-content: center;
   line-height: 18px;
   white-space: nowrap;
+}
+
+.conv-item.wide-unread .badge {
+  min-width: 34px;
+  padding: 0 7px;
 }
 
 .muted-badge {
@@ -1675,7 +1695,22 @@ onBeforeUnmount(() => {
 }
 
 .conv-item.has-unread .conv-row-bottom {
-  padding-right: 30px;
+  padding-right: 38px;
+  box-sizing: border-box;
+}
+
+.conv-item.muted-conversation .conv-row-bottom {
+  padding-right: 16px;
+  box-sizing: border-box;
+}
+
+.conv-item.muted-conversation.has-unread .conv-row-bottom {
+  padding-right: 48px;
+  box-sizing: border-box;
+}
+
+.conv-item.muted-conversation.has-unread.wide-unread .conv-row-bottom {
+  padding-right: 64px;
   box-sizing: border-box;
 }
 
@@ -1746,6 +1781,13 @@ onBeforeUnmount(() => {
     width: 12px;
     height: 12px;
   }
+}
+
+.muted-icon--unread {
+  position: static;
+  right: auto;
+  bottom: auto;
+  flex-shrink: 0;
 }
 
 .conv-divider {
