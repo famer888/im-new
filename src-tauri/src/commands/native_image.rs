@@ -43,7 +43,7 @@ pub struct ResolveNativeImageResponse {
     pub error_code: Option<String>,
 }
 
-// 缓存元数据只记录命中所需的稳定信息；真实源 URL 的签名 query 会轮换，命中判断以 resourceKey 为准。
+// 缓存元数据记录资源 key 和源 URL 指纹；头像地址参数变化时要重新拉取，避免群头像更新后继续命中旧文件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeImageMeta {
@@ -125,7 +125,7 @@ fn sha1_hex(input: &str) -> String {
 }
 
 fn cache_hash(req: &ResolveNativeImageRequest) -> String {
-    // cache key 只取 scope + resourceKey；前端已去掉 OSS 签名 query，避免签名轮换造成重复缓存。
+    // cache key 只取 scope + resourceKey，让同一头像覆盖同一路径；URL 指纹变化由 meta 决定是否重拉。
     sha1_hex(&format!(
         "{}|{}|{}",
         req.scope_kind.trim(),
@@ -156,6 +156,10 @@ fn response_from_meta(
     let text = std::fs::read_to_string(meta_path(cache_dir)).ok()?;
     let meta: NativeImageMeta = serde_json::from_str(&text).ok()?;
     if meta.resource_key != req.resource_key {
+        return None;
+    }
+    // resourceKey 仍保持稳定目录；但完整 URL 变化通常代表头像版本/签名变化，需要重新下载覆盖旧缓存。
+    if meta.source_url_hash != source_url_hash(req) {
         return None;
     }
     let path = cache_dir.join(meta.local_file);
@@ -539,6 +543,35 @@ mod tests {
         let second = resolve_native_image_in_dir(root.clone(), req, client).await;
         assert_eq!(second.state, STATE_READY);
         assert!(second.from_cache);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn same_resource_key_refreshes_when_source_url_changes() {
+        let url_a = serve_once(200, PNG_BYTES.to_vec()).await;
+        let mut png_b = PNG_BYTES.to_vec();
+        png_b.extend_from_slice(b"v2");
+        let url_b = serve_once(200, png_b).await;
+        let root = test_cache_root("source-url-refresh");
+        let client = reqwest::Client::new();
+
+        let first = resolve_native_image_in_dir(
+            root.clone(),
+            request_for(format!("{}?v=1", url_a), "same-avatar-key"),
+            client.clone(),
+        )
+        .await;
+        assert_eq!(first.state, STATE_READY);
+        assert!(!first.from_cache);
+
+        let second = resolve_native_image_in_dir(
+            root.clone(),
+            request_for(format!("{}?v=2", url_b), "same-avatar-key"),
+            client,
+        )
+        .await;
+        assert_eq!(second.state, STATE_READY);
+        assert!(!second.from_cache);
         let _ = std::fs::remove_dir_all(root);
     }
 

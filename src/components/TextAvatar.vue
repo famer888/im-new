@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import groupIcon from '@/assets/images/logo/default_group_icon.png'
 import friendIcon from '@/assets/images/logo/logo-58.png'
 import channelIcon from '@/assets/images/logo/channel-notice.webp'
@@ -27,11 +27,13 @@ const nativeImageLoading = ref(false)
 let resolveTaskToken = 0
 
 const AVATAR_PRELOAD_TIMEOUT_MS = 1200
-const AVATAR_FAIL_RETRY_MS = 60_000
+const AVATAR_FAIL_RETRY_MS = 15_000
+const AVATAR_RETRY_MS = 3_000
 // 同一地址复用同一预加载任务，避免列表里重复头像并发请求。
 const avatarPreloadPromises = new Map<string, Promise<boolean>>()
 // 记录最近一次加载结果：成功直接复用，失败短时间内不重复探测。
 const avatarLoadStates = new Map<string, { loaded: boolean; updatedAt: number }>()
+let retryTimer: number | null = null
 
 const SKELETON_SVG =
   "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' preserveAspectRatio='xMidYMid slice'>" +
@@ -52,9 +54,14 @@ const legacyChannelGradientColors = [
 
 // 头像默认图先渲染，真实图走去重预热；这样在弱网/偶发慢站点下不会出现整列头像空白。
 watch([() => props.src, () => props.avatarType], () => {
+  clearAvatarRetry()
   imageLoadError.value = false
   void refreshResolvedImageSrc()
 }, { immediate: true })
+
+onBeforeUnmount(() => {
+  clearAvatarRetry()
+})
 
 const defaultSrc = computed(() => {
   if (props.avatarType === 'group') return groupIcon
@@ -102,9 +109,29 @@ function handleImageError() {
       loaded: false,
       updatedAt: Date.now(),
     })
+    scheduleAvatarRetry(src)
   }
   resolvedImageSrc.value = null
   imageLoadError.value = true
+}
+
+function clearAvatarRetry() {
+  if (retryTimer === null || typeof window === 'undefined') return
+  window.clearTimeout(retryTimer)
+  retryTimer = null
+}
+
+function scheduleAvatarRetry(src: string) {
+  if (typeof window === 'undefined') return
+  clearAvatarRetry()
+  // 头像加载失败多是临时网络/缓存文件未就绪，短延迟重试一次，避免一直停留在默认头像。
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null
+    if (normalizeAvatarSrc(props.src) !== src) return
+    imageLoadError.value = false
+    avatarLoadStates.delete(src)
+    void refreshResolvedImageSrc(true)
+  }, AVATAR_RETRY_MS)
 }
 
 function normalizeAvatarSrc(value: unknown): string {
@@ -158,11 +185,11 @@ function preloadAvatar(src: string): Promise<boolean> {
   return task
 }
 
-async function refreshResolvedImageSrc() {
+async function refreshResolvedImageSrc(forceRetry = false) {
   const token = ++resolveTaskToken
   const src = normalizeAvatarSrc(props.src)
   nativeImageLoading.value = false
-  if (!src || imageLoadError.value || props.avatarType === 'text') {
+  if (!src || (!forceRetry && imageLoadError.value) || props.avatarType === 'text') {
     if (token !== resolveTaskToken) return
     resolvedImageSrc.value = null
     return
@@ -180,12 +207,14 @@ async function refreshResolvedImageSrc() {
       if (token !== resolveTaskToken) return
       resolvedImageSrc.value = nativeSrc
       imageLoadError.value = !nativeSrc
+      if (!nativeSrc) scheduleAvatarRetry(src)
     } catch (error) {
       if (token !== resolveTaskToken) return
       // NativeImage 解析失败只影响当前头像，回退到原有默认图/文字头像，不阻断页面渲染。
       console.warn('[TextAvatar] native image resolve failed', error)
       resolvedImageSrc.value = null
       imageLoadError.value = true
+      scheduleAvatarRetry(src)
     } finally {
       if (token === resolveTaskToken) nativeImageLoading.value = false
     }
@@ -216,6 +245,7 @@ async function refreshResolvedImageSrc() {
     return
   }
   resolvedImageSrc.value = null
+  if (!loaded && normalizeAvatarSrc(props.src) === src) scheduleAvatarRetry(src)
 }
 </script>
 
