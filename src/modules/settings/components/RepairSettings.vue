@@ -4,12 +4,10 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
-import { useContactStore } from '@/stores/useContactStore'
-import { useGroupStore } from '@/stores/useGroupStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
-import { ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { clearE2eeKeyCaches, ensureOwnKeyPair } from '@/utils/e2ee'
 import {
   formatDiagnosticsPlainText,
   runNetworkDiagnostics,
@@ -22,8 +20,6 @@ const { t: $t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
-const contactStore = useContactStore()
-const groupStore = useGroupStore()
 const messageStore = useMessageStore()
 let lastNetworkRecoveryResult: NetworkRecoveryResult | null = null
 const toastVisible = ref(false)
@@ -138,59 +134,6 @@ function formatErrorMessage(error: unknown): string {
   return text && text !== '[object Object]' ? text : $t('操作失败')
 }
 
-function collectFriendIds(uid: string): string[] {
-  const ids = new Set<string>()
-
-  for (const contact of contactStore.contacts) {
-    const id = String(contact.id || '')
-    if (!id || id === uid || contact.status <= 0) continue
-    ids.add(id)
-  }
-
-  for (const conv of chatStore.conversations) {
-    if (conv.type !== 0) continue
-    const id = String(conv.targetId || '')
-    if (!id || id === uid) continue
-    ids.add(id)
-  }
-
-  return Array.from(ids)
-}
-
-function collectGroupIds(): string[] {
-  const ids = new Set<string>()
-
-  for (const group of groupStore.groups) {
-    const id = String(group.id || '')
-    if (!id) continue
-    ids.add(id)
-  }
-
-  for (const conv of chatStore.conversations) {
-    if (conv.type !== 1) continue
-    const id = String(conv.targetId || '')
-    if (!id) continue
-    ids.add(id)
-  }
-
-  return Array.from(ids)
-}
-
-async function warmupInBatches(
-  ids: string[],
-  worker: (id: string) => Promise<unknown>,
-  batchSize = 8,
-) {
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const batch = ids.slice(i, i + batchSize)
-    const results = await Promise.allSettled(batch.map((id) => worker(id)))
-    const failed = results.find((result) => result.status === 'rejected')
-    if (failed?.status === 'rejected') {
-      throw failed.reason
-    }
-  }
-}
-
 async function handleDecryptRepair() {
   if (repairingDecrypt.value) return
   if (!isTauri()) {
@@ -206,16 +149,10 @@ async function handleDecryptRepair() {
 
   repairingDecrypt.value = true
   try {
+    clearE2eeKeyCaches(uid)
     await tauriInvoke('repair_clear_crypto_keys')
+    // Rust 修复命令会清掉内存私钥；这里只恢复当前账号私钥，不预热好友/群密钥。
     await ensureOwnKeyPair(uid)
-
-    const [friendIds, groupIds] = [
-      collectFriendIds(uid),
-      collectGroupIds(),
-    ]
-
-    await warmupInBatches(friendIds, (friendId) => ensureFriendRelKey(uid, friendId))
-    await warmupInBatches(groupIds, (groupId) => ensureGroupRelKey(uid, groupId))
 
     showToast($t('秘钥重置成功'))
   } catch (e) {
