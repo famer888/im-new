@@ -407,7 +407,7 @@ async function confirmRestartApp() {
     <dl>
       <dt>{{ $t('消息解密失败') }}</dt>
       <dd>
-        <button type="button" :disabled="repairingDecrypt || resettingCache" @click="handleDecryptRepair">
+        <button type="button" :disabled="repairingDecrypt" @click="handleDecryptRepair">
           {{ $t('修复') }}
         </button>
       </dd>
@@ -415,7 +415,7 @@ async function confirmRestartApp() {
     <dl>
       <dt>{{ $t('重置缓存数据') }}</dt>
       <dd>
-        <button type="button" :disabled="repairingDecrypt || resettingCache" @click="openResetConfirm">
+        <button type="button" :disabled="resettingCache" @click="openResetConfirm">
           {{ $t('重置') }}
         </button>
       </dd>
