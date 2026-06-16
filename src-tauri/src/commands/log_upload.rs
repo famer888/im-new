@@ -8,7 +8,7 @@ use std::process::Command;
 use tauri::Manager;
 
 const SCAN_LOG_DIR: &str = "logs";
-const SCAN_KEY_DIR: &str = "Code Cache";
+const SCAN_KEY_DIRS: [&str; 2] = ["storage", "Code Cache"];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,7 +32,6 @@ pub struct PrepareLogUploadResult {
 struct ZipEntry {
     name: String,
     data: Vec<u8>,
-    crc32: u32,
 }
 
 fn is_data_instance_name(name: &str) -> bool {
@@ -61,6 +60,40 @@ fn is_group_key_name(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with("-group-key-objs.json")
 }
 
+fn normalize_key_filename(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    if lower.starts_with("ocs-storage-") {
+        name["ocs-storage-".len()..].to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn strip_suffix_case_insensitive<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
+    if name.to_ascii_lowercase().ends_with(suffix) {
+        Some(&name[..name.len().saturating_sub(suffix.len())])
+    } else {
+        None
+    }
+}
+
+fn key_upload_entry_name(instance: &str, normalized_name: &str) -> Option<String> {
+    let suffixes = [
+        ("-account-config.json", "dc"),
+        ("-friend-keys-objs.json", "fnk"),
+        ("-friend-key-objs.json", "fnk"),
+        ("-channel-key-objs.json", "cnk"),
+        ("-group-key-objs.json", "gnk"),
+    ];
+
+    for (suffix, short_tag) in suffixes {
+        if let Some(uid) = strip_suffix_case_insensitive(normalized_name, suffix) {
+            return Some(format!("{}-{}-{}", instance, uid, short_tag));
+        }
+    }
+    None
+}
+
 fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -78,24 +111,43 @@ fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn collect_instance_files(instance_dir: &Path) -> Vec<PathBuf> {
+fn collect_instance_files(instance_dir: &Path, instance: &str) -> Vec<(String, PathBuf)> {
     let mut files = Vec::new();
-    walk_files(&instance_dir.join(SCAN_LOG_DIR), &mut files);
+    let mut log_paths = Vec::new();
+    walk_files(&instance_dir.join(SCAN_LOG_DIR), &mut log_paths);
+    for path in log_paths {
+        let Some(filename) = path.file_name().and_then(|v| v.to_str()) else {
+            continue;
+        };
+        files.push((format!("{}-{}", instance, filename), path));
+    }
 
-    let cache_root = instance_dir.join(SCAN_KEY_DIR);
-    if let Ok(entries) = fs::read_dir(cache_root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if is_account_config_name(&name)
-                || is_friend_key_name(&name)
-                || is_channel_key_name(&name)
-                || is_group_key_name(&name)
-            {
-                files.push(path);
+    let mut seen_normalized_names = HashSet::new();
+    for key_dir in SCAN_KEY_DIRS {
+        let cache_root = instance_dir.join(key_dir);
+        if let Ok(entries) = fs::read_dir(cache_root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let raw_name = entry.file_name().to_string_lossy().to_string();
+                let normalized_name = normalize_key_filename(&raw_name);
+                let normalized_key = normalized_name.to_ascii_lowercase();
+                if seen_normalized_names.contains(&normalized_key) {
+                    continue;
+                }
+                if !(is_account_config_name(&normalized_name)
+                    || is_friend_key_name(&normalized_name)
+                    || is_channel_key_name(&normalized_name)
+                    || is_group_key_name(&normalized_name))
+                {
+                    continue;
+                }
+                if let Some(entry_name) = key_upload_entry_name(instance, &normalized_name) {
+                    files.push((entry_name, path));
+                    seen_normalized_names.insert(normalized_key);
+                }
             }
         }
     }
@@ -106,9 +158,7 @@ fn collect_instance_files(instance_dir: &Path) -> Vec<PathBuf> {
 fn collect_log_upload_files(app_data_dir: &Path) -> Vec<(String, PathBuf)> {
     let mut result = Vec::new();
 
-    for path in collect_instance_files(app_data_dir) {
-        result.push(("DATA_0".to_string(), path));
-    }
+    result.extend(collect_instance_files(app_data_dir, "DATA_0"));
 
     if let Ok(entries) = fs::read_dir(app_data_dir) {
         for entry in entries.flatten() {
@@ -122,9 +172,7 @@ fn collect_log_upload_files(app_data_dir: &Path) -> Vec<(String, PathBuf)> {
             if !is_data_instance_name(&name) {
                 continue;
             }
-            for path in collect_instance_files(&entry.path()) {
-                result.push((name.clone(), path));
-            }
+            result.extend(collect_instance_files(&entry.path(), &name));
         }
     }
 
@@ -171,109 +219,6 @@ fn date_md5_password(date_key: &str) -> String {
     hasher.update(input.as_bytes());
     let hex = format!("{:x}", hasher.finalize());
     hex.chars().take(10).collect()
-}
-
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffff_u32;
-    for byte in bytes {
-        crc ^= *byte as u32;
-        for _ in 0..8 {
-            let mask = if crc & 1 == 1 { 0xedb8_8320 } else { 0 };
-            crc = (crc >> 1) ^ mask;
-        }
-    }
-    !crc
-}
-
-fn dos_datetime_now() -> (u16, u16) {
-    use chrono::{Datelike, Timelike};
-    let now = chrono::Local::now();
-    let year = now.year().clamp(1980, 2107) as u16;
-    let date = ((year - 1980) << 9) | ((now.month() as u16) << 5) | now.day() as u16;
-    let time =
-        ((now.hour() as u16) << 11) | ((now.minute() as u16) << 5) | ((now.second() as u16) / 2);
-    (time, date)
-}
-
-fn push_u16(out: &mut Vec<u8>, value: u16) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn create_stored_zip(entries: &[ZipEntry]) -> Result<Vec<u8>, String> {
-    let (dos_time, dos_date) = dos_datetime_now();
-    let mut out = Vec::new();
-    let mut central = Vec::new();
-
-    for entry in entries {
-        let name = entry.name.as_bytes();
-        if name.len() > u16::MAX as usize {
-            return Err(format!("zip entry name too long: {}", entry.name));
-        }
-        if entry.data.len() > u32::MAX as usize || out.len() > u32::MAX as usize {
-            return Err("log package is too large".to_string());
-        }
-
-        let offset = out.len() as u32;
-        let size = entry.data.len() as u32;
-
-        push_u32(&mut out, 0x0403_4b50);
-        push_u16(&mut out, 20);
-        push_u16(&mut out, 0);
-        push_u16(&mut out, 0);
-        push_u16(&mut out, dos_time);
-        push_u16(&mut out, dos_date);
-        push_u32(&mut out, entry.crc32);
-        push_u32(&mut out, size);
-        push_u32(&mut out, size);
-        push_u16(&mut out, name.len() as u16);
-        push_u16(&mut out, 0);
-        out.extend_from_slice(name);
-        out.extend_from_slice(&entry.data);
-
-        push_u32(&mut central, 0x0201_4b50);
-        push_u16(&mut central, 20);
-        push_u16(&mut central, 20);
-        push_u16(&mut central, 0);
-        push_u16(&mut central, 0);
-        push_u16(&mut central, dos_time);
-        push_u16(&mut central, dos_date);
-        push_u32(&mut central, entry.crc32);
-        push_u32(&mut central, size);
-        push_u32(&mut central, size);
-        push_u16(&mut central, name.len() as u16);
-        push_u16(&mut central, 0);
-        push_u16(&mut central, 0);
-        push_u16(&mut central, 0);
-        push_u16(&mut central, 0);
-        push_u32(&mut central, 0);
-        push_u32(&mut central, offset);
-        central.extend_from_slice(name);
-    }
-
-    if entries.len() > u16::MAX as usize
-        || central.len() > u32::MAX as usize
-        || out.len() > u32::MAX as usize
-    {
-        return Err("log package is too large".to_string());
-    }
-
-    let central_offset = out.len() as u32;
-    let central_size = central.len() as u32;
-    out.extend_from_slice(&central);
-    push_u32(&mut out, 0x0605_4b50);
-    push_u16(&mut out, 0);
-    push_u16(&mut out, 0);
-    push_u16(&mut out, entries.len() as u16);
-    push_u16(&mut out, entries.len() as u16);
-    push_u32(&mut out, central_size);
-    push_u32(&mut out, central_offset);
-    push_u16(&mut out, 0);
-
-    Ok(out)
 }
 
 fn create_password_zip_with_system(
@@ -328,15 +273,11 @@ fn create_password_zip_with_system(
 fn build_zip_entries(app_data_dir: &Path) -> Result<Vec<ZipEntry>, String> {
     let mut used = HashSet::new();
     let mut entries = Vec::new();
-    for (instance, source_path) in collect_log_upload_files(app_data_dir) {
-        let Some(filename) = source_path.file_name().and_then(|v| v.to_str()) else {
-            continue;
-        };
+    for (entry_name, source_path) in collect_log_upload_files(app_data_dir) {
         let data = fs::read(&source_path)
             .map_err(|e| format!("read log file failed {}: {}", source_path.display(), e))?;
-        let name = unique_zip_name(&mut used, format!("{}-{}", instance, filename));
-        let crc32 = crc32(&data);
-        entries.push(ZipEntry { name, data, crc32 });
+        let name = unique_zip_name(&mut used, entry_name);
+        entries.push(ZipEntry { name, data });
     }
     Ok(entries)
 }
@@ -376,8 +317,7 @@ pub fn prepare_log_upload_package(
 
     let filename = format!("{}-{}.zip", login_id, format_now());
     let password = date_md5_password(request.password_date_key.as_deref().unwrap_or(""));
-    let zip = create_password_zip_with_system(&entries, &password)
-        .unwrap_or_else(|_| create_stored_zip(&entries).unwrap_or_default());
+    let zip = create_password_zip_with_system(&entries, &password)?;
     if zip.is_empty() {
         return Err("create log zip failed".to_string());
     }
@@ -398,4 +338,61 @@ pub fn prepare_log_upload_package(
         body_base64: general_purpose::STANDARD.encode(zip),
         password,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_log_upload_files, date_md5_password};
+    use std::fs;
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("log-upload-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn collects_storage_and_normalizes_key_names_like_old_im() {
+        let root = temp_dir();
+        let logs = root.join("logs");
+        let storage = root.join("storage");
+        let code_cache = root.join("Code Cache");
+        fs::create_dir_all(&logs).unwrap();
+        fs::create_dir_all(&storage).unwrap();
+        fs::create_dir_all(&code_cache).unwrap();
+        fs::write(logs.join("app.log"), b"log").unwrap();
+        fs::write(
+            storage.join("ocs-storage-100-account-config.json"),
+            b"account",
+        )
+        .unwrap();
+        fs::write(storage.join("100-friend-keys-objs.json"), b"friend").unwrap();
+        fs::write(code_cache.join("100-friend-keys-objs.json"), b"duplicate").unwrap();
+        fs::write(storage.join("100-channel-key-objs.json"), b"channel").unwrap();
+        fs::write(storage.join("100-group-key-objs.json"), b"group").unwrap();
+
+        let mut names = collect_log_upload_files(&root)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        names.sort();
+
+        assert_eq!(
+            names,
+            vec![
+                "DATA_0-100-cnk",
+                "DATA_0-100-dc",
+                "DATA_0-100-fnk",
+                "DATA_0-100-gnk",
+                "DATA_0-app.log",
+            ]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn derives_zip_password_from_upload_date_key() {
+        assert_eq!(date_md5_password("202606/16"), "8093361e57");
+    }
 }

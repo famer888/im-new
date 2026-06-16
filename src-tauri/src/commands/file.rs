@@ -121,6 +121,7 @@ pub struct OssPutObjectRequest {
     pub security_token: String,
     pub content_type: String,
     pub body_base64: String,
+    pub progress_event: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +144,15 @@ pub struct OssPutObjectResult {
     pub status: u16,
     pub ok: bool,
     pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OssUploadProgress {
+    pub progress: f64,
+    pub total_bytes: u64,
+    pub uploaded_bytes: u64,
+    pub status: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2078,10 +2088,18 @@ pub async fn upload_file(
 }
 
 #[tauri::command]
-pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObjectResult, String> {
+pub async fn upload_oss_object(
+    app: tauri::AppHandle,
+    request: OssPutObjectRequest,
+) -> Result<OssPutObjectResult, String> {
     let body = general_purpose::STANDARD
         .decode(request.body_base64.trim())
         .map_err(|e| format!("decode upload body failed: {}", e))?;
+    let progress_target = request
+        .progress_event
+        .as_ref()
+        .filter(|event| !event.trim().is_empty())
+        .map(|event| (app, event.clone()));
     put_oss_bytes(
         request.url,
         request.bucket,
@@ -2091,6 +2109,7 @@ pub async fn upload_oss_object(request: OssPutObjectRequest) -> Result<OssPutObj
         request.security_token,
         request.content_type,
         body,
+        progress_target,
     )
     .await
 }
@@ -2118,6 +2137,7 @@ pub async fn upload_oss_local_file(
         request.security_token,
         request.content_type,
         body,
+        None,
     )
     .await
 }
@@ -2160,6 +2180,7 @@ async fn put_oss_bytes(
     security_token: String,
     content_type: String,
     body: Vec<u8>,
+    progress_target: Option<(tauri::AppHandle, String)>,
 ) -> Result<OssPutObjectResult, String> {
     let oss_date = oss_rfc1123_date();
     let content_type = if content_type.trim().is_empty() {
@@ -2203,13 +2224,47 @@ async fn put_oss_bytes(
         string_to_sign.len(),
     );
 
-    let response = reqwest::Client::new()
+    let body_len = body.len() as u64;
+    let request = reqwest::Client::new()
         .put(url)
         .header("Authorization", authorization)
         .header("x-oss-date", oss_date)
         .header("Content-Type", content_type)
-        .header("x-oss-security-token", security_token)
-        .body(body)
+        .header("x-oss-security-token", security_token);
+
+    // 上传日志对齐旧 im 的 ali-oss progress 回调：按请求体分块上送，并把已送出的字节数回传给前端。
+    let request = if let Some((app, progress_event)) = progress_target {
+        let mut uploaded_bytes = 0u64;
+        let chunks = body
+            .chunks(512 * 1024)
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        let stream = futures_util::stream::iter(chunks.into_iter().map(move |chunk| {
+            uploaded_bytes += chunk.len() as u64;
+            let progress = if body_len > 0 {
+                (uploaded_bytes as f64 / body_len as f64).min(1.0)
+            } else {
+                1.0
+            };
+            let _ = app.emit(
+                &progress_event,
+                OssUploadProgress {
+                    progress,
+                    total_bytes: body_len,
+                    uploaded_bytes,
+                    status: "uploading".to_string(),
+                },
+            );
+            Ok::<Vec<u8>, std::io::Error>(chunk)
+        }));
+        request
+            .header(reqwest::header::CONTENT_LENGTH, body_len)
+            .body(reqwest::Body::wrap_stream(stream))
+    } else {
+        request.body(body)
+    };
+
+    let response = request
         .send()
         .await
         .map_err(|e| format!("oss put request failed: {}", e))?;
