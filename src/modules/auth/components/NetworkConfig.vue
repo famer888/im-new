@@ -95,14 +95,30 @@ async function checkQrCode(url: string): Promise<200 | 0> {
 /** 只获取本地动态域名池（不含 baseBuildUrl 兜底，与老 im getTrendsDomainPool 一致） */
 function getLocalPoolDomains(): string[] {
   // 对齐老 im：网络检测只展示后台原始 moduleCode=webBiz 的域名，不吃 biz/friend/group/login 兼容归一化。
-  return getDomainsByOriginalModuleCode('webBiz').map(d => d.domain)
+  return getDomainsByOriginalModuleCode('webBiz')
+    .map(d => d.domain)
+    .filter(isBenchmarkWebBizDomain)
+}
+
+function isBenchmarkWebBizDomain(url: string): boolean {
+  try {
+    const host = new URL(String(url || '').trim()).host.toLowerCase()
+    // 网络检测窗口只展示真正的 webBiz 节点，避免 OSS/预埋兜底里的 login、domain-api、biz 别名混入。
+    return host.includes('webbiz')
+  } catch {
+    return String(url || '').toLowerCase().includes('webbiz')
+  }
 }
 
 async function getStrictWebBizDomains(): Promise<string[]> {
-  const apiDomains = await getDynamicDomainListByOriginalModule('webBiz')
+  // 对齐老 im：网络窗口优先消费启动阶段已预热的 domainList，避免打开后再等远程 listDomain。
+  const localDomains = getLocalPoolDomains()
+  if (localDomains.length) return localDomains
+
+  const apiDomains = (await getDynamicDomainListByOriginalModule('webBiz')).filter(isBenchmarkWebBizDomain)
   if (apiDomains.length) return apiDomains
   // 旧版本可能已经把归一化后的域名写入本地池；只有远程严格列表不可用时才退回本地池。
-  return getLocalPoolDomains()
+  return []
 }
 
 async function checkDomainsFromIndex(startIndex: number) {
@@ -135,7 +151,7 @@ async function checkDomainsFromIndex(startIndex: number) {
  */
 async function fetchAndUpdateDomainPool() {
   try {
-    const apiDomains = await getDynamicDomainListByOriginalModule('webBiz')
+    const apiDomains = (await getDynamicDomainListByOriginalModule('webBiz')).filter(isBenchmarkWebBizDomain)
     const newUrls = apiDomains.filter(url => !checkedUrls.value.includes(url))
 
     if (newUrls.length) {
@@ -168,7 +184,7 @@ async function loadAndCheckDomains() {
 
   const domainUrls = [...poolDomains]
   const base = getRawBaseUrl()
-  if (base && !domainUrls.includes(base)) {
+  if (base && isBenchmarkWebBizDomain(base) && !domainUrls.includes(base)) {
     domainUrls.push(base)
   }
 

@@ -211,9 +211,8 @@ function applyPreferredDomains(newDomains: string[] | undefined, options: { shou
   qrCodeUrlError.value = false
   isOutTime.value = false
   clearTimers()
-  setTimeout(() => {
-    handleGetQrCodeUrl()
-  }, 500)
+  // 网络检测返回有效域名后立刻用新域名拉二维码，不再保留旧 im 的 0.5s 等待。
+  handleGetQrCodeUrl()
 }
 
 function activateResolvedBaseUrl(baseUrl: string) {

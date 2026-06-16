@@ -194,8 +194,9 @@ function startWindowDrag(e: MouseEvent) {
       @valid-domain-list="handleValidDomainList"
       @close="showNetworkConfig = false"
     />
+    <!-- 对齐老 im：网络检测只是覆盖层，返回时不能卸载并重建二维码登录组件。 -->
     <QRCodeLogin
-      v-else-if="isLoginWindow && !isRestoring"
+      v-if="isLoginWindow && !isRestoring"
       :key="qrLoginKey"
       :loading="isLoading"
       :extra-domains="extraDomains"
