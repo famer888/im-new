@@ -126,12 +126,13 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
     case ConversationType.Friend:
       // 对齐旧 im：官方号不依赖通讯录存在，也要保留在会话列表。
       if (isOfficialAccountTargetId(conv.targetId)) return true
-      return contactIdSet.value.has(conv.targetId)
+      // 关系列表远端刷新期间先保留本地会话，避免大账号启动时左侧列表长期空白。
+      return contactIdSet.value.has(conv.targetId) || contactStore.loading
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
-      return groupByIdMap.value.has(conv.targetId)
+      return groupByIdMap.value.has(conv.targetId) || groupStore.loading
     case ConversationType.Channel:
-      return channelByIdMap.value.has(conv.targetId)
+      return channelByIdMap.value.has(conv.targetId) || channelStore.loading
     default:
       return false
   }

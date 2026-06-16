@@ -445,10 +445,15 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (conv.type === ConversationType.Friend) {
     // 对齐旧 im：官方号 9900 不是普通通讯录联系人，也不能被初始化清理掉。
     if (isOfficialAccountTargetId(conv.targetId)) return true
-    return Boolean(contactStore.getContact(conv.targetId))
+    // 桌面端启动时先显示本地会话；远端通讯录仍在刷新时不能把会话当作未知项提前删掉。
+    return Boolean(contactStore.getContact(conv.targetId)) || contactStore.loading
   }
-  if (conv.type === ConversationType.Group) return Boolean(groupStore.getGroup(conv.targetId))
-  if (conv.type === ConversationType.Channel) return Boolean(channelStore.getChannel(conv.targetId))
+  if (conv.type === ConversationType.Group) {
+    return Boolean(groupStore.getGroup(conv.targetId)) || groupStore.loading
+  }
+  if (conv.type === ConversationType.Channel) {
+    return Boolean(channelStore.getChannel(conv.targetId)) || channelStore.loading
+  }
   return false
 }
 
@@ -497,6 +502,49 @@ function ensureChannelPlaceholdersFromConversations() {
   }
 }
 
+function seedConversationsFromRelations(skipBootstrapAfterLogoutClear: boolean) {
+  // 对齐旧 im：本地没有真实会话时，才用通讯录关系补一个可点击的最近列表；已有缓存会话时不重建。
+  const hasRealConversations = chatStore.conversations.some(
+    (c) => !isFileHelperTargetId(c.targetId) && isConversationInCurrentRelations(c),
+  )
+  if (hasRealConversations || skipBootstrapAfterLogoutClear) return
+
+  initDiag('seed conversations from relations start', {
+    contactCount: contactStore.contacts.length,
+    groupCount: groupStore.groups.length,
+    channelCount: channelStore.channels.length,
+  })
+  for (const contact of contactStore.contacts) {
+    if (contact.id && contact.status > 0) {
+      chatStore.ensureConversation(0, contact.id)
+    }
+  }
+  for (const group of groupStore.groups) {
+    if (group.id) {
+      chatStore.ensureConversation(1, group.id)
+    }
+  }
+  for (const channel of channelStore.channels) {
+    if (channel.id) {
+      chatStore.ensureConversation(2, channel.id)
+    }
+  }
+  initDiag('seed conversations from relations done', {
+    conversationCount: chatStore.conversations.length,
+  })
+}
+
+function finalizeBackgroundRelationRefresh(skipBootstrapAfterLogoutClear: boolean) {
+  initDiag('background refresh final prune start')
+  ensureChannelPlaceholdersFromConversations()
+  pruneUnknownConversations()
+  seedConversationsFromRelations(skipBootstrapAfterLogoutClear)
+  initDiag('background refresh final prune done', {
+    conversationCount: chatStore.conversations.length,
+    channelCount: channelStore.channels.length,
+  })
+}
+
 onMounted(async () => {
   initTraceStartedAt = Date.now()
   initDiag('bootstrap mounted', {
@@ -542,38 +590,48 @@ onMounted(async () => {
       )
       setInitText(t('数据载入'))
       if (firstInitProgressVisible.value) {
-        uiStore.setChatListNamesReady(true)
-        await traceInitStep('first init contacts', () => contactStore.loadContacts(authStore.uid), { rethrow: true })
-        setFirstInitProgress(100, 0)
+        if ((window as any).__TAURI_INTERNALS__) {
+          uiStore.setChatListNamesReady(false)
+          // 首次进入桌面端也先走本地缓存，避免联系人/群/频道远端全量接口慢时挡住会话列表。
+          await Promise.all([
+            traceInitStep('first desktop cache conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true }),
+            traceInitStep('first desktop cache contacts', () => contactStore.loadContacts(authStore.uid, { fallbackToApi: false, refreshRemote: false }), { rethrow: true }),
+            traceInitStep('first desktop cache groups', () => groupStore.loadGroups(authStore.uid, { fallbackToApi: false }), { rethrow: true }),
+            traceInitStep('first desktop cache channels', () => channelStore.loadChannels(authStore.uid, { refreshRemote: false }), { rethrow: true }),
+            traceInitStep('first desktop cache settings', () => settingStore.loadSettings({ syncRemote: false }), { rethrow: true }),
+          ])
+          setFirstInitProgress(100, 100)
+          chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid)
+            .finally(() => finalizeBackgroundRelationRefresh(skipBootstrapAfterLogoutClear))
+          initDiag('first desktop cache loaded, background refresh started')
+        } else {
+          uiStore.setChatListNamesReady(true)
+          await traceInitStep('first init contacts', () => contactStore.loadContacts(authStore.uid), { rethrow: true })
+          setFirstInitProgress(100, 0)
 
-        await Promise.all([
-          traceInitStep('first init groups', () => groupStore.loadGroups(authStore.uid), { rethrow: true }),
-          traceInitStep('first init channels', () => channelStore.loadChannels(authStore.uid), { rethrow: true }),
-          traceInitStep('first init settings', () => settingStore.loadSettings(), { rethrow: true }),
-        ])
+          await Promise.all([
+            traceInitStep('first init groups', () => groupStore.loadGroups(authStore.uid), { rethrow: true }),
+            traceInitStep('first init channels', () => channelStore.loadChannels(authStore.uid), { rethrow: true }),
+            traceInitStep('first init settings', () => settingStore.loadSettings(), { rethrow: true }),
+          ])
 
-        await traceInitStep('first init conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true })
-        setFirstInitProgress(100, 100)
-        initDiag('first init progress reached 100, post steps start')
+          await traceInitStep('first init conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true })
+          setFirstInitProgress(100, 100)
+          initDiag('first init progress reached 100, post steps start')
+        }
       } else if ((window as any).__TAURI_INTERNALS__) {
         // 所有 Tauri 桌面端（macOS/Windows）统一走这里：
         // 已初始化账号优先读本地；联系人名称对齐旧 im，加载后立即后台强刷远端通讯录。
         uiStore.setChatListNamesReady(false)
         await Promise.all([
           traceInitStep('desktop cache conversations', () => chatStore.loadConversations(authStore.uid), { rethrow: true }),
-          traceInitStep('desktop cache contacts', () => contactStore.loadContacts(authStore.uid), { rethrow: true }),
+          traceInitStep('desktop cache contacts', () => contactStore.loadContacts(authStore.uid, { fallbackToApi: false, refreshRemote: false }), { rethrow: true }),
           traceInitStep('desktop cache groups', () => groupStore.loadGroups(authStore.uid, { fallbackToApi: false }), { rethrow: true }),
           traceInitStep('desktop cache channels', () => channelStore.loadChannels(authStore.uid, { refreshRemote: false }), { rethrow: true }),
           traceInitStep('desktop cache settings', () => settingStore.loadSettings({ syncRemote: false }), { rethrow: true }),
         ])
-        chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid).finally(() => {
-          initDiag('background refresh final prune start')
-          pruneUnknownConversations()
-          initDiag('background refresh final prune done', {
-            conversationCount: chatStore.conversations.length,
-            channelCount: channelStore.channels.length,
-          })
-        })
+        chatListNameWarmupPromise = refreshInitializedAccountData(authStore.uid)
+          .finally(() => finalizeBackgroundRelationRefresh(skipBootstrapAfterLogoutClear))
       } else {
         uiStore.setChatListNamesReady(true)
         await Promise.all([
@@ -598,36 +656,7 @@ onMounted(async () => {
       pruneUnknownConversations()
       initDiag('prune conversations done', { afterCount: chatStore.conversations.length })
 
-      // Bootstrap: if no real conversations exist, seed from contacts/groups
-      // (mirrors old im project's behavior of building the chat list from synced data)
-      const hasRealConversations = chatStore.conversations.some(
-        (c) => !isFileHelperTargetId(c.targetId) && isConversationInCurrentRelations(c),
-      )
-      if (!hasRealConversations && !skipBootstrapAfterLogoutClear) {
-        initDiag('seed conversations from relations start', {
-          contactCount: contactStore.contacts.length,
-          groupCount: groupStore.groups.length,
-          channelCount: channelStore.channels.length,
-        })
-        for (const contact of contactStore.contacts) {
-          if (contact.id && contact.status > 0) {
-            chatStore.ensureConversation(0, contact.id)
-          }
-        }
-        for (const group of groupStore.groups) {
-          if (group.id) {
-            chatStore.ensureConversation(1, group.id)
-          }
-        }
-        for (const channel of channelStore.channels) {
-          if (channel.id) {
-            chatStore.ensureConversation(2, channel.id)
-          }
-        }
-        initDiag('seed conversations from relations done', {
-          conversationCount: chatStore.conversations.length,
-        })
-      }
+      seedConversationsFromRelations(skipBootstrapAfterLogoutClear)
       try {
         if ((window as any).__TAURI_INTERNALS__) {
           const { invoke } = await import('@tauri-apps/api/core')
