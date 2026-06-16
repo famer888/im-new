@@ -1,7 +1,7 @@
 {
   "name": "ocs-chat",
   "private": true,
-  "version": "1.6.8",
+  "version": "1.7.1",
   "packageManager": "pnpm@9.15.9",
   "type": "module",
   "scripts": {
