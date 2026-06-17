@@ -2225,7 +2225,12 @@ async fn put_oss_bytes(
     );
 
     let body_len = body.len() as u64;
-    let request = reqwest::Client::new()
+    // 对齐旧 im 的 ali-oss timeout=120000：坏 endpoint 最多等待 120 秒，之后交给前端继续兜底重试。
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("create oss client failed: {}", e))?;
+    let request = client
         .put(url)
         .header("Authorization", authorization)
         .header("x-oss-date", oss_date)

@@ -1,5 +1,4 @@
 import { getUploadToken, getUploadUrl } from '@/api/imBase'
-import { getOssUploadCandidates, reportOssUploadCandidateFailure } from '@/utils/ossUploadDomains'
 
 interface PrepareLogUploadResult {
   success: boolean
@@ -65,8 +64,17 @@ function buildLogTextPath(uploadUrl = '', uploadKey = '', loginId = '') {
   const uidSuffix = uid ? `?${uid}` : ''
   const keyPath = String(uploadKey || urlPath)
     .replace(/^\/+/, '')
-    .replace(/^(test\/)?common\/log\//, '')
-  return `logs:${host}/test-${keyPath}${uidSuffix}`
+    // 展示地址必须跟服务端实际 OSS key 一致；生产包不能再硬塞旧 debug 里的 test- 前缀。
+    .replace(/^common\/log\//, '')
+  return `logs:${host}/${keyPath}${uidSuffix}`
+}
+
+function buildPostLogUploadCandidates(responseUrl: string, bucket: string, endpoint: string, objectKey: string) {
+  const candidates = [
+    resolveOssUploadUrl('', bucket, endpoint, objectKey),
+    resolveOssUploadUrl(responseUrl, bucket, endpoint, objectKey),
+  ].filter(Boolean)
+  return [...new Set(candidates)]
 }
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -74,10 +82,27 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
+function createLogUploadProgressEvent(loginId: string) {
+  const random = Math.random().toString(36).slice(2)
+  return `post-log-upload:progress:${loginId}:${Date.now()}:${random}`
+}
+
+async function listenLogUploadProgress(eventName: string, onProgress?: (percent: number) => void) {
+  if (!onProgress || !(window as any).__TAURI_INTERNALS__) return null
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<{ progress?: number }>(eventName, (event) => {
+    const progress = Number(event.payload?.progress || 0)
+    if (!Number.isFinite(progress)) return
+    // OSS 上传只占 65% 之后的阶段，完成响应回来前最高停在 95%，避免误显示已完成。
+    onProgress(Math.min(95, Math.max(65, Math.round(65 + progress * 30))))
+  })
+}
+
 export async function uploadPackagedLog(options: {
   loginId: string
   onProgress?: (percent: number) => void
 }): Promise<UploadPackagedLogResult> {
+  let unlistenProgress: null | (() => void) = null
   try {
     const suffix = 'zip'
     options.onProgress?.(5)
@@ -130,15 +155,18 @@ export async function uploadPackagedLog(options: {
     }
 
     options.onProgress?.(65)
-    const candidates = await getOssUploadCandidates({ responseUrl, bucket, endpoint, objectKey })
+    const progressEvent = createLogUploadProgressEvent(options.loginId)
+    unlistenProgress = await listenLogUploadProgress(progressEvent, options.onProgress)
+    // 对齐旧 im 的日志上传：不先扫动态 OSS 域名，直接用 token endpoint 上传，避免本地环境卡在域名探活阶段。
+    const candidates = buildPostLogUploadCandidates(responseUrl, bucket, endpoint, objectKey)
     let uploadUrl = ''
     let lastError: unknown = null
     for (const candidate of candidates) {
       try {
-        // 对齐老 im：日志包上传也按动态 OSS endpoint 探活后的顺序尝试，失败域名上报后继续兜底。
+        // 对齐旧 im：日志包直接上传到 token endpoint，responseUrl 只作为兼容兜底。
         await tauriInvoke('upload_oss_object', {
           request: {
-            url: candidate.url,
+            url: candidate,
             bucket,
             objectKey,
             accessKeyId,
@@ -146,13 +174,13 @@ export async function uploadPackagedLog(options: {
             securityToken,
             contentType: 'application/zip',
             bodyBase64: prepared.bodyBase64,
+            progressEvent,
           },
         })
-        uploadUrl = candidate.url
+        uploadUrl = candidate
         break
       } catch (error) {
         lastError = error
-        await reportOssUploadCandidateFailure(candidate, error)
       }
     }
     if (!uploadUrl) throw lastError instanceof Error ? lastError : new Error('all oss endpoints failed')
@@ -170,5 +198,7 @@ export async function uploadPackagedLog(options: {
       msg: error instanceof Error ? error.message : 'upload failed',
       filepath: '',
     }
+  } finally {
+    unlistenProgress?.()
   }
 }
