@@ -35,13 +35,17 @@ const memberType = ref<number | null>(null)
 const bfJoinCheck = ref(false)
 const bfResetQrcode = ref(false)
 const groupAliasName = ref('')
+const groupAliasDetailResolved = ref(false)
+const groupAliasDetailFailed = ref(false)
 const notice = ref('')
 const inviteShortLink = ref('')
 const clearMsgTypeList = ref<string[]>([])
-// 群详情异步回填前，先显示“加载中”，避免右侧出现空别名或裸 @。
 const groupAliasDisplayText = computed(() => {
   const alias = groupAliasName.value.trim()
-  return alias ? `@${alias}` : t('加载中')
+  if (alias) return `@${alias}`
+  // 群详情没返回前才显示 loading；返回空别名是明确空态，不能一直停在“加载中”。
+  if (groupAliasDetailFailed.value) return t('数据获取失败')
+  return groupAliasDetailResolved.value ? t('暂无数据') : t('加载中')
 })
 const hasGroupAlias = computed(() => Boolean(groupAliasName.value.trim()))
 
@@ -288,6 +292,8 @@ function applyCachedPanelState(groupId: string) {
   const cachedGroup = groupStore.getGroup(groupId)
   memberType.value = resolveCurrentMemberType(groupStore.getMembers(groupId))
   groupAliasName.value = cachedGroup?.groupAliasName || ''
+  groupAliasDetailResolved.value = false
+  groupAliasDetailFailed.value = false
   notice.value = cachedGroup?.notice || ''
   inviteShortLink.value = ''
   bfResetQrcode.value = false
@@ -322,6 +328,8 @@ async function loadPanelData(groupId: string) {
     }
 
     groupAliasName.value = groupBase?.groupAliasName || detail.groupNickName || ''
+    groupAliasDetailResolved.value = true
+    groupAliasDetailFailed.value = false
     notice.value = detail.groupNotice?.notice || ''
     inviteShortLink.value = String(groupBase?.shortLink || (detail as any)?.shortLink || '').trim()
     bfResetQrcode.value = Boolean(detail.bfResetQrcode)
@@ -344,6 +352,8 @@ async function loadPanelData(groupId: string) {
     if (memberType.value === null) {
       memberType.value = 2
     }
+    groupAliasDetailResolved.value = true
+    groupAliasDetailFailed.value = true
     console.error('[GroupInfoPanel] getGroupDetail failed:', e)
   })
 
@@ -359,6 +369,8 @@ watch(
     if (!groupId) {
       memberType.value = null
       groupAliasName.value = ''
+      groupAliasDetailResolved.value = false
+      groupAliasDetailFailed.value = false
       notice.value = ''
       inviteShortLink.value = ''
       bfResetQrcode.value = false
