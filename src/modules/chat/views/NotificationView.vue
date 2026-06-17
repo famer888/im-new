@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { emit, emitTo, listen } from '@tauri-apps/api/event'
@@ -14,6 +14,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { getNotificationModuleTargetFromConversationId } from '@/utils/notificationNavigation'
 import { buildNotificationEmojiSegments } from '@/utils/notificationEmojiSegments'
+import { API_CONFIG } from '@/api/config'
 
 interface NotificationData {
   conversationId: string
@@ -33,6 +34,7 @@ const replyInput = ref<HTMLInputElement | null>(null)
 const isReplying = ref(false)
 const replyText = ref('')
 const sending = ref(false)
+const avatarLoadFailed = ref(false)
 const sendByEnter = computed(() => settingStore.settings.sendShortcutKey !== 'Ctrl+Enter')
 const replyPlaceholder = computed(() =>
   sendByEnter.value ? t('Enter发送') : t('CtrlEnter发送'),
@@ -42,7 +44,9 @@ const defaultAvatar = computed(() => {
   if (data.value?.conversationType === 'channel') return channelIcon
   return friendIcon
 })
-const avatarSrc = computed(() => safeImageSrc(data.value?.avatar, defaultAvatar.value))
+const avatarSrc = computed(() => (
+  avatarLoadFailed.value ? defaultAvatar.value : safeImageSrc(data.value?.avatar, defaultAvatar.value)
+))
 const isGroup = computed(() => data.value?.conversationType === 'group')
 const messageText = computed(() => String(data.value?.body || ''))
 const messageSegments = computed(() => buildNotificationEmojiSegments(messageText.value))
@@ -52,6 +56,20 @@ const notificationModuleTarget = computed(() =>
 const actionButtonLabel = computed(() => (
   notificationModuleTarget.value ? t('查看') : t('回复')
 ))
+
+function shouldLogNotificationAvatar(): boolean {
+  if (API_CONFIG.env === 'test' || API_CONFIG.env === 'uat') return true
+  try {
+    return localStorage.getItem('debug:notification-avatar') === '1'
+  } catch {
+    return false
+  }
+}
+
+function notificationAvatarDebug(message: string, detail?: Record<string, unknown>, level: 'info' | 'warn' = 'info') {
+  if (!shouldLogNotificationAvatar()) return
+  console[level](`[notification] ${message}`, detail || {})
+}
 
 // 通知 payload 来自跨窗口 query/event，文本虽由 Vue 转义，仍先收窄长度和控制字符。
 function sanitizeText(value: unknown, maxLength: number): string {
@@ -78,7 +96,7 @@ function sanitizeNotificationData(value: unknown): NotificationData | null {
     ? raw.conversationType
     : 'friend'
 
-  return {
+  const sanitized = {
     conversationId: sanitizeText(raw.conversationId, 128),
     title: sanitizeText(raw.title, 120),
     body: sanitizeText(raw.body, 500),
@@ -87,6 +105,13 @@ function sanitizeNotificationData(value: unknown): NotificationData | null {
     senderName: sanitizeText(raw.senderName, 120) || null,
     unreadCount: Math.max(0, Math.min(999, Number(raw.unreadCount || 0))) || null,
   }
+  notificationAvatarDebug('avatar payload sanitized', {
+    conversationId: sanitized.conversationId,
+    conversationType: sanitized.conversationType,
+    rawAvatar: raw.avatar,
+    avatar: sanitized.avatar,
+  })
+  return sanitized
 }
 
 function readNotificationData(raw: unknown): NotificationData | null {
@@ -101,6 +126,10 @@ function readNotificationData(raw: unknown): NotificationData | null {
   }
 }
 
+watch(() => [data.value?.avatar, data.value?.conversationType], () => {
+  avatarLoadFailed.value = false
+})
+
 async function resizeWindow(height: number, pinned: boolean) {
   try {
     await invoke('resize_notification_window', { height, pinned })
@@ -114,9 +143,21 @@ onMounted(async () => {
     await settingStore.loadSettings()
   }
   data.value = readNotificationData(route.query.data)
+  notificationAvatarDebug('mounted payload', {
+    conversationId: data.value?.conversationId,
+    conversationType: data.value?.conversationType,
+    avatar: data.value?.avatar,
+    avatarSrc: avatarSrc.value,
+  })
 
   await listen<NotificationData>('notification:data', (event) => {
     data.value = sanitizeNotificationData(event.payload)
+    notificationAvatarDebug('event payload', {
+      conversationId: data.value?.conversationId,
+      conversationType: data.value?.conversationType,
+      avatar: data.value?.avatar,
+      avatarSrc: avatarSrc.value,
+    })
   })
 })
 
@@ -134,6 +175,27 @@ async function handleClick() {
 async function handleClose() {
   const win = getCurrentWindow()
   await win.close()
+}
+
+function handleAvatarError() {
+  // mac 打包端子窗口里远程头像或旧域名偶发失败时，立即回退默认头像，避免显示坏图问号。
+  notificationAvatarDebug('avatar load failed', {
+    conversationId: data.value?.conversationId,
+    conversationType: data.value?.conversationType,
+    avatar: data.value?.avatar,
+    avatarSrc: avatarSrc.value,
+    defaultAvatar: defaultAvatar.value,
+  }, 'warn')
+  avatarLoadFailed.value = true
+}
+
+function handleAvatarLoad() {
+  notificationAvatarDebug('avatar load ok', {
+    conversationId: data.value?.conversationId,
+    conversationType: data.value?.conversationType,
+    avatar: data.value?.avatar,
+    avatarSrc: avatarSrc.value,
+  })
 }
 
 async function handleReply() {
@@ -193,7 +255,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
   >
     <div class="info-box">
       <div class="img-box">
-        <img class="avatar" :src="avatarSrc" alt="" />
+        <img class="avatar" :src="avatarSrc" alt="" @load="handleAvatarLoad" @error="handleAvatarError" />
       </div>
       <div class="info">
         <div class="nickname-box">

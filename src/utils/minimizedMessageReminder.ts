@@ -13,6 +13,7 @@ import { useSettingStore } from '@/stores/useSettingStore'
 import type { Message } from '@/stores/useMessageStore'
 import { formatSystemNotificationPlainText } from '@/utils/systemNotificationDisplay'
 import { parseGroupNoticeExtraObject, replaceGroupNoticeUidPlaceholders } from '@/utils/groupNoticeDisplay'
+import { canUseNativeImageAvatar, resolveNativeAvatarSrc } from '@/utils/nativeImage'
 import ch from '@/locales/ch.json'
 import en from '@/locales/en.json'
 import pt from '@/locales/pt.json'
@@ -44,6 +45,20 @@ const avatarPreloadPromises = new Map<string, Promise<void>>()
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+}
+
+function shouldLogNotificationAvatar(): boolean {
+  if (API_CONFIG.env === 'test' || API_CONFIG.env === 'uat') return true
+  try {
+    return localStorage.getItem('debug:notification-avatar') === '1'
+  } catch {
+    return false
+  }
+}
+
+function notificationAvatarDebug(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' = 'info') {
+  if (!shouldLogNotificationAvatar()) return
+  console[level](`[messageReminder] ${message}`, data || {})
 }
 
 function t(key: string): string {
@@ -214,7 +229,10 @@ function getConversationAvatar(conversationId: string, message?: any): string | 
     return contactStore.getContact(targetId)?.avatar || null
   }
   if (conversationId.startsWith('1_')) {
-    return groupStore.getGroup(targetId)?.avatar || null
+    const group = groupStore.getGroup(targetId)
+    const extraAvatar = extraString(extra, ['groupAvatar', 'group_avatar', 'avatar', 'icon', 'pic'])
+    // 对齐旧 im：群通知头像优先使用会话对应的群头像；本地群资料未回填时再用消息 extra 里的群头像。
+    return group?.avatar || extraAvatar || null
   }
   if (conversationId.startsWith('2_')) {
     const channel = channelStore.channels.find((item) => item.id === targetId || item.channelId === targetId)
@@ -329,6 +347,50 @@ async function preloadReminderAvatar(avatar: string | null): Promise<void> {
   await preloadTask
 }
 
+async function resolveReminderAvatarSrc(
+  conversationId: string,
+  conversationType: 'friend' | 'group' | 'channel',
+  avatar: string | null,
+): Promise<string | null> {
+  const src = String(avatar || '').trim()
+  const nativeCandidate = canUseNativeImageAvatar(src)
+  notificationAvatarDebug('avatar resolve start', {
+    conversationId,
+    conversationType,
+    rawAvatar: src,
+    nativeCandidate,
+  })
+  if (!src) return null
+  if (!nativeCandidate) return src
+
+  try {
+    // mac 打包端右下角提醒是独立 WebView，远程头像先走 NativeImage 缓存/候选域名，
+    // 但 NativeImage 只是优化，失败时仍要保留原始远程头像给通知窗继续尝试。
+    const nativeAvatar = await resolveNativeAvatarSrc({
+      id: conversationId.split('_')[1] || conversationId,
+      type: conversationType,
+      src,
+    })
+    notificationAvatarDebug('avatar resolve native result', {
+      conversationId,
+      conversationType,
+      rawAvatar: src,
+      nativeAvatar,
+      displayAvatar: nativeAvatar || src,
+    })
+    return nativeAvatar || src
+  } catch (error) {
+    notificationAvatarDebug('avatar resolve native failed', {
+      conversationId,
+      conversationType,
+      rawAvatar: src,
+      displayAvatar: src,
+      error,
+    }, 'warn')
+    return src
+  }
+}
+
 export function isRepeatableGroupInviteReminderMessage(message: Message | any): boolean {
   const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
   if (convId !== '1_invitation') return false
@@ -371,7 +433,12 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     await ensureDirectoryLoadedForReminder(uid, conversationId)
     const conversationType = getConversationType(conversationId)
     const extra = parseExtra(message?.extra)
-    const avatar = getConversationAvatar(conversationId, message)
+    const rawAvatar = getConversationAvatar(conversationId, message)
+    const displayAvatar = await resolveReminderAvatarSrc(
+      conversationId,
+      conversationType,
+      rawAvatar,
+    )
     const senderName = stripText(
       extra.senderName
         ?? extra.nickName
@@ -383,14 +450,23 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     const digest = getMessageDigest(message)
 
     // 右下角提醒窗口是按需新建的，先在主窗口把头像资源拉进缓存，避免首帧偶发显示损坏图标。
-    await preloadReminderAvatar(avatar)
+    await preloadReminderAvatar(displayAvatar)
+
+    notificationAvatarDebug('notification payload', {
+      conversationId,
+      conversationType,
+      rawAvatar,
+      displayAvatar,
+      senderName,
+      unreadCount,
+    })
 
     await invoke('show_notification_window', {
       data: {
         conversationId,
         title: getConversationTitle(conversationId, message),
         body: digest || t('新消息'),
-        avatar,
+        avatar: displayAvatar,
         conversationType,
         senderName: conversationType === 'group' || conversationType === 'channel' ? senderName : null,
         unreadCount,
