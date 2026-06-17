@@ -873,6 +873,45 @@ mod tests {
     }
 
     #[test]
+    fn group_image_message_includes_encrypted_attachment_key() {
+        let rel_key = "0123456789abcdef";
+        let file_key = "1234567890123456";
+        let content = serde_json::json!({
+            "url": "https://oss.example.test/a.png",
+            "thumbnailUrl": "https://oss.example.test/a.png",
+            "width": 320,
+            "height": 180,
+            "size": 1024,
+            "fileKey": file_key,
+        })
+        .to_string();
+        let plain = encode_image_obj(&content);
+        let attachment_file_key = extract_attachment_file_key(&content);
+        let req_bytes = build_send_group_message_req(
+            10086,
+            88,
+            1,
+            &plain,
+            rel_key,
+            1_700_000_000_000,
+            42,
+            vec![],
+            attachment_file_key.as_deref(),
+        )
+        .unwrap();
+
+        let decoded = imweb::SendGroupMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let gm = decoded.group_msg.unwrap();
+        assert_eq!(gm.msg_type, 1);
+        assert_eq!(gm.version, 1);
+        assert!(!gm.attachment_key.is_empty());
+
+        let attachment_cipher = hex::decode(gm.attachment_key).unwrap();
+        let decrypted_file_key = crypto::aes::decrypt_message(&attachment_cipher, rel_key).unwrap();
+        assert_eq!(String::from_utf8(decrypted_file_key).unwrap(), file_key);
+    }
+
+    #[test]
     fn group_dice_is_sent_as_raw_set_image_obj() {
         let plain = encode_set_image_obj("");
         let req_bytes = build_send_group_message_req(

@@ -400,6 +400,20 @@ mod private_decode_tests {
     }
 
     #[test]
+    fn group_attachment_key_decrypts_to_file_key() {
+        let crypto = crate::crypto::CryptoEngine::new();
+        let group_id = "20086";
+        let rel_key = "0123456789abcdef";
+        let file_key = "mobile-group-image-key";
+        let encrypted = crate::crypto::aes::encrypt_message(file_key.as_bytes(), rel_key).unwrap();
+        crypto.set_group_key(group_id, rel_key.to_string());
+
+        let resolved = decrypt_group_attachment_key(&crypto, group_id, &hex::encode(encrypted));
+
+        assert_eq!(resolved.as_deref(), Some(file_key));
+    }
+
+    #[test]
     fn subscriber_remove_without_notice_should_not_emit_fallback_message() {
         assert!(!should_emit_subscriber_remove_fallback(
             2,

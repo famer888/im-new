@@ -764,6 +764,36 @@ async function resolveFileKey(): Promise<string> {
     return API_CONFIG.headAesKey
   }
   const conversationId = String(props.message.conversationId || '')
+  if (conversationId.startsWith('1_') && attachmentKey.value && groupId.value) {
+    // 对齐旧 im：群聊附件的真实 fileKey 以 attachmentKey + 群 relKey 解密结果为准，
+    // 避免手机端群图片携带的其它候选 key 被误当作文件解密密钥。
+    try {
+      if (authStore.uid) {
+        await ensureGroupRelKey(String(authStore.uid), groupId.value)
+      }
+      const { invoke } = await import('@tauri-apps/api/core')
+      const resolved = await invoke<string>('decrypt_group_incoming', {
+        groupId: groupId.value,
+        ciphertextHex: attachmentKey.value,
+        msgType: 0,
+      })
+      const normalized = normalizeResolvedFileKey(resolved)
+      channelImageLog('resolve key: group attachmentKey decrypted', {
+        groupId: groupId.value,
+        attachmentKeyLen: attachmentKey.value.length,
+        fileKeyLen: normalized.length,
+        messageFileKeyLen: fileKey.value.length,
+      })
+      if (normalized) return normalized
+    } catch (error) {
+      channelImageLog('resolve key: group attachmentKey decrypt failed', {
+        groupId: groupId.value,
+        attachmentKeyLen: attachmentKey.value.length,
+        messageFileKeyLen: fileKey.value.length,
+        err: String(error),
+      }, 'warn')
+    }
+  }
   if (conversationId.startsWith('0_') && attachmentKey.value) {
     const senderId = String(props.message.senderId || '').trim()
     for (const candidate of privateAttachmentCandidates.value) {
@@ -843,21 +873,7 @@ async function resolveFileKey(): Promise<string> {
       }, 'warn')
     }
   }
-  if (!attachmentKey.value || !groupId.value) return ''
-
-  try {
-    if (authStore.uid) {
-      await ensureGroupRelKey(String(authStore.uid), groupId.value)
-    }
-    const { invoke } = await import('@tauri-apps/api/core')
-    return await invoke<string>('decrypt_group_incoming', {
-      groupId: groupId.value,
-      ciphertextHex: attachmentKey.value,
-      msgType: 0,
-    })
-  } catch {
-    return ''
-  }
+  return ''
 }
 
 async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) {

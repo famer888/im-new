@@ -247,10 +247,6 @@ const editorMenuItems = computed<MenuItem[]>(() => [
 
 const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
-const MAX_GROUP_IMAGE_DATA_URL_BYTES = 256 * 1024
-const GROUP_IMAGE_MAX_DIMENSION = 1600
-const GROUP_IMAGE_MIN_DIMENSION = 480
-const GROUP_IMAGE_MIN_QUALITY = 0.42
 const FILE_ENCRYPT_CHUNK_SIZE = 102400
 const VISIBLE_TRAILING_SPACE = '\u00a0'
 const EDITOR_EMOJI_CARET_ANCHOR = '\u200b'
@@ -2391,19 +2387,6 @@ function isVideoFile(file: File): boolean {
   return file.type.startsWith('video/') || VIDEO_FILE_EXTENSIONS.has(suffix)
 }
 
-function getDataUrlByteLength(dataUrl: string): number {
-  return new TextEncoder().encode(dataUrl).length
-}
-
-function blobToDataURL(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(blob)
-  })
-}
-
 function createFileKey(): string {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 10).toString(10)).join('')
 }
@@ -3318,95 +3301,6 @@ async function uploadVideoLikeIm(
   }
 }
 
-function loadImageElement(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('load image failed'))
-    img.src = src
-  })
-}
-
-async function prepareGroupImagePayload(file: File): Promise<{
-  dataUrl: string
-  width: number
-  height: number
-  size: number
-}> {
-  const originalDataUrl = await fileToDataURL(file)
-  const originalSize = await getImageSize(originalDataUrl)
-  const originalBytes = getDataUrlByteLength(originalDataUrl)
-  const isAnimatedOrVector = /image\/gif$/i.test(file.type) || /image\/svg\+xml$/i.test(file.type)
-
-  if (originalBytes <= MAX_GROUP_IMAGE_DATA_URL_BYTES || isAnimatedOrVector) {
-    if (originalBytes > MAX_GROUP_IMAGE_DATA_URL_BYTES) {
-      throw new Error('群聊图片过大，请压缩后重试')
-    }
-    return {
-      dataUrl: originalDataUrl,
-      width: originalSize.width,
-      height: originalSize.height,
-      size: file.size,
-    }
-  }
-
-  const img = await loadImageElement(originalDataUrl)
-  let width = img.naturalWidth || originalSize.width || 0
-  let height = img.naturalHeight || originalSize.height || 0
-  if (width <= 0 || height <= 0) {
-    return {
-      dataUrl: originalDataUrl,
-      width: originalSize.width,
-      height: originalSize.height,
-      size: file.size,
-    }
-  }
-
-  const initialScale = Math.min(1, GROUP_IMAGE_MAX_DIMENSION / Math.max(width, height))
-  width = Math.max(1, Math.round(width * initialScale))
-  height = Math.max(1, Math.round(height * initialScale))
-
-  let quality = file.size > 6 * 1024 * 1024
-    ? 0.68
-    : file.size > 3 * 1024 * 1024
-      ? 0.74
-      : 0.82
-
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) break
-    ctx.drawImage(img, 0, 0, width, height)
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', quality)
-    })
-    if (!blob) break
-
-    const compressedDataUrl = await blobToDataURL(blob)
-    if (getDataUrlByteLength(compressedDataUrl) <= MAX_GROUP_IMAGE_DATA_URL_BYTES) {
-      return {
-        dataUrl: compressedDataUrl,
-        width,
-        height,
-        size: blob.size,
-      }
-    }
-
-    quality = Math.max(GROUP_IMAGE_MIN_QUALITY, quality - 0.08)
-    width = width > GROUP_IMAGE_MIN_DIMENSION
-      ? Math.max(GROUP_IMAGE_MIN_DIMENSION, Math.round(width * 0.85))
-      : width
-    height = height > GROUP_IMAGE_MIN_DIMENSION
-      ? Math.max(GROUP_IMAGE_MIN_DIMENSION, Math.round(height * 0.85))
-      : height
-  }
-
-  throw new Error('群聊图片过大，请压缩后重试')
-}
-
 async function handleFileSend(payload: { text: string; files: File[] } | File[]) {
   const files = Array.isArray(payload) ? payload : payload.files
   const text = Array.isArray(payload) ? '' : (payload.text || '').trim()
@@ -3460,79 +3354,56 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
           isGif,
           plannedMsgType: imageMsgType,
         })
-        const prepared = isGroup.value && !isFileHelperChat.value && !isGif
-          ? await prepareGroupImagePayload(sendFile)
-          : null
-        if (prepared) {
-          terminalLog('image send prepared inline payload', {
-            conversationId: convId.value,
-            name: sendFile.name,
-            size: sendFile.size,
-            type: sendFile.type,
-            isGif,
-            msgType: imageMsgType,
-            preparedSize: prepared.size,
-            preparedWidth: prepared.width,
-            preparedHeight: prepared.height,
-          })
-          emit('send', JSON.stringify({
-            url: prepared.dataUrl,
-            thumbnailUrl: prepared.dataUrl,
-            width: prepared.width,
-            height: prepared.height,
-            size: prepared.size,
-            name: sendFile.name,
-          }), imageMsgType, withReadBurnExtra())
-        } else {
-          const previewUrlOverride = isGif ? await fileToDataURL(sendFile) : ''
-          localPreview = await appendLocalImagePreview(sendFile, fileKey, trace, {
-            msgType: imageMsgType,
-            previewUrlOverride,
-          })
-          const uploaded = await uploadImageLikeIm(sendFile, {
-            fileKey,
-            width: localPreview?.width,
-            height: localPreview?.height,
-            trace,
-            msgType: imageMsgType,
-          })
-          traceLog(trace, 'emit uploaded image message', {
-            conversationId: convId.value,
-            optimisticId: localPreview?.optimisticId || '',
-            urlHost: (() => {
-              try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
-            })(),
-            fileKeyHead: safeHead(uploaded.fileKey),
-            fileKeyLen: uploaded.fileKey.length,
-            isGif,
-            msgType: imageMsgType,
-          })
-          terminalLog('image send emit uploaded payload', {
-            conversationId: convId.value,
-            optimisticId: localPreview?.optimisticId || '',
-            name: uploaded.name,
-            size: uploaded.size,
-            isGif,
-            msgType: imageMsgType,
-            urlHead: uploaded.url.slice(0, 120),
-            thumbnailUrlHead: uploaded.thumbnailUrl.slice(0, 120),
-            fileKeyLen: uploaded.fileKey.length,
-          })
-          emit('send', JSON.stringify({
-            url: uploaded.url,
-            thumbnailUrl: uploaded.thumbnailUrl,
-            width: uploaded.width,
-            height: uploaded.height,
-            size: uploaded.size,
-            name: uploaded.name,
-            fileKey: uploaded.fileKey,
-          }), imageMsgType, withReadBurnExtra({
-            fileKey: uploaded.fileKey,
-            ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
-          }))
-          if (!isGif && localPreview?.url.startsWith('blob:')) {
-            window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
-          }
+        // 对齐旧 im：群聊图片也必须走加密上传 + attachmentKey，不发送内联 dataUrl，
+        // 否则手机端按远端图片协议解析时会加载失败。
+        const previewUrlOverride = isGif ? await fileToDataURL(sendFile) : ''
+        localPreview = await appendLocalImagePreview(sendFile, fileKey, trace, {
+          msgType: imageMsgType,
+          previewUrlOverride,
+        })
+        const uploaded = await uploadImageLikeIm(sendFile, {
+          fileKey,
+          width: localPreview?.width,
+          height: localPreview?.height,
+          trace,
+          msgType: imageMsgType,
+        })
+        traceLog(trace, 'emit uploaded image message', {
+          conversationId: convId.value,
+          optimisticId: localPreview?.optimisticId || '',
+          urlHost: (() => {
+            try { return new URL(uploaded.url).host } catch { return uploaded.url.slice(0, 60) }
+          })(),
+          fileKeyHead: safeHead(uploaded.fileKey),
+          fileKeyLen: uploaded.fileKey.length,
+          isGif,
+          msgType: imageMsgType,
+        })
+        terminalLog('image send emit uploaded payload', {
+          conversationId: convId.value,
+          optimisticId: localPreview?.optimisticId || '',
+          name: uploaded.name,
+          size: uploaded.size,
+          isGif,
+          msgType: imageMsgType,
+          urlHead: uploaded.url.slice(0, 120),
+          thumbnailUrlHead: uploaded.thumbnailUrl.slice(0, 120),
+          fileKeyLen: uploaded.fileKey.length,
+        })
+        emit('send', JSON.stringify({
+          url: uploaded.url,
+          thumbnailUrl: uploaded.thumbnailUrl,
+          width: uploaded.width,
+          height: uploaded.height,
+          size: uploaded.size,
+          name: uploaded.name,
+          fileKey: uploaded.fileKey,
+        }), imageMsgType, withReadBurnExtra({
+          fileKey: uploaded.fileKey,
+          ...(localPreview?.optimisticId ? { __clientMsgId: localPreview.optimisticId } : {}),
+        }))
+        if (!isGif && localPreview?.url.startsWith('blob:')) {
+          window.setTimeout(() => URL.revokeObjectURL(localPreview!.url), 5000)
         }
       } catch (error) {
         console.error('[message-input] prepare image payload failed:', error)
