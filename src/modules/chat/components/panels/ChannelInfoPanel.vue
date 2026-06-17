@@ -1209,6 +1209,7 @@ onBeforeUnmount(() => {
     margin: 0;
     font-size: 14px;
     color: #000;
+    font-weight: normal;
   }
 }
 
@@ -1227,7 +1228,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   cursor: pointer;
   word-wrap: break-word;
-  font-weight: 600;
+  font-weight: normal;
 
   &.is-loading {
     color: #999;
@@ -1270,7 +1271,7 @@ onBeforeUnmount(() => {
     margin: 0;
     line-height: 22px;
     color: #787878;
-    font-weight: 600;
+    font-weight: normal;
     word-break: break-word;
     max-height: 44px;
   }
@@ -1286,6 +1287,7 @@ onBeforeUnmount(() => {
     line-height: 32px;
     font-size: 14px;
     color: #000;
+    font-weight: normal;
   }
 }
 
@@ -1302,7 +1304,7 @@ onBeforeUnmount(() => {
   color: #333;
 
   > span {
-    font-weight: 600;
+    font-weight: normal;
   }
 }
 
@@ -1340,7 +1342,7 @@ onBeforeUnmount(() => {
   color: #333;
 
   > span:first-child {
-    font-weight: 600;
+    font-weight: normal;
   }
 
   .arrow {
