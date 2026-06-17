@@ -344,7 +344,7 @@ function handleMemberClick(member: GroupMember) {
   display: block;
   .name {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: normal;
   color: #333;
   user-select: text;
 }
