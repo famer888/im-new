@@ -69,17 +69,9 @@ function buildMediaSlotExtra(index: number): string | null {
 }
 
 function channelMediasLog(message: string, data: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
-  console[level](`[channel-medias] ${message}`, data)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  void import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke('image_send_log', {
-      payload: {
-        level,
-        message: `[channel-medias] ${message}`,
-        data,
-      },
-    }))
-    .catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function buildImageSlotContent(meta: string[], fileKey: string): string {
