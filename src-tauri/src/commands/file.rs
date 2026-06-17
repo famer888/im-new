@@ -2225,9 +2225,10 @@ async fn put_oss_bytes(
     );
 
     let body_len = body.len() as u64;
-    // 对齐旧 im 的 ali-oss timeout=120000：坏 endpoint 最多等待 120 秒，之后交给前端继续兜底重试。
+    // 小文件卡在坏 endpoint 时要尽快失败，交给前端的 OSS 候选域名轮换兜底；大文件仍保留更长上传窗口。
+    let request_timeout = upload_request_timeout(body_len);
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
+        .timeout(request_timeout)
         .build()
         .map_err(|e| format!("create oss client failed: {}", e))?;
     let request = client
@@ -2302,6 +2303,15 @@ async fn put_oss_bytes(
         ok: true,
         body: body_preview,
     })
+}
+
+fn upload_request_timeout(body_len: u64) -> Duration {
+    const MIN_TIMEOUT_SECS: u64 = 18;
+    const MAX_TIMEOUT_SECS: u64 = 120;
+    const BYTES_PER_TIMEOUT_STEP: u64 = 1024 * 1024;
+
+    let size_steps = body_len.div_ceil(BYTES_PER_TIMEOUT_STEP);
+    Duration::from_secs((MIN_TIMEOUT_SECS + size_steps).min(MAX_TIMEOUT_SECS))
 }
 
 #[tauri::command]
