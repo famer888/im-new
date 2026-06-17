@@ -126,7 +126,10 @@ onMounted(async () => {
 
 .login-icon {
   width: 160px;
+  height: 160px;
   display: block;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .brand-number {
