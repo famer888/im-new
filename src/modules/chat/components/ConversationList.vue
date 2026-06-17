@@ -215,6 +215,8 @@ function isConversationWithoutHistory(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return false
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
   if (isChannelNotificationConversation(conv)) return false
+  // 当前打开的频道必须留在左侧；频道历史/权限接口为空或失败时，不能把选中项当空会话隐藏。
+  if (conv.type === ConversationType.Channel && conv.id === chatStore.currentConversationId) return false
   if (shouldShowDraft(conv)) return false
   if (Number(conv.unreadCount || 0) > 0) return false
   if (Number(conv.lastMsgTime || 0) > 0) return false

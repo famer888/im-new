@@ -1152,12 +1152,13 @@ export const useMessageStore = defineStore('message', () => {
     const list = messages ?? getMessages(conversationId)
     const latest = [...list].reverse().find((item) => shouldUseMessageForConversationSummary(conversationId, item)) ?? null
     const digest = latest ? formatGroupIntroDigest(latest, getDigestByMessage(latest.msgType, latest.content)) : null
-
+    // 进入频道时本地快照可能暂时为空；保序刷新不能清掉旧摘要，否则左侧会话会被空历史规则过滤。
+    const preserveEmptySummary = options?.preserveListOrder === true && !latest
     chatStore.addOrUpdateConversation({
       ...existing,
-      lastMsgId: latest?.id || null,
-      lastMsgTime: latest?.sendTime || 0,
-      lastMsgDigest: digest || null,
+      lastMsgId: preserveEmptySummary ? existing.lastMsgId : latest?.id || null,
+      lastMsgTime: preserveEmptySummary ? existing.lastMsgTime : latest?.sendTime || 0,
+      lastMsgDigest: preserveEmptySummary ? existing.lastMsgDigest : digest || null,
       // 进入会话加载历史消息只修正预览，不改变左侧列表位置，避免点击后列表突然重排。
       updatedAt: options?.preserveListOrder ? existing.updatedAt : latest?.sendTime || 0,
     }, { preserveListOrder: options?.preserveListOrder === true })
@@ -1927,7 +1928,7 @@ export const useMessageStore = defineStore('message', () => {
         return
       }
 
-      batchAppendMessages(normalized)
+      batchAppendMessages(normalized, { preserveConversationOrder: true })
       channelHistoryLog('append normalized messages', {
         uid,
         conversationId,
@@ -2799,7 +2800,10 @@ export const useMessageStore = defineStore('message', () => {
     messageMap.value.set(conversationId, next)
   }
 
-  function batchAppendMessages(messages: Message[]) {
+  function batchAppendMessages(
+    messages: Message[],
+    options: { preserveConversationOrder?: boolean } = {},
+  ) {
     const grouped = new Map<string, Message[]>()
     for (const raw of messages as any[]) {
       const msg = normalizeMessage(raw)
@@ -2859,6 +2863,11 @@ export const useMessageStore = defineStore('message', () => {
     for (const [convId, msgs] of grouped) {
       for (const msg of msgs) {
         appendMessage(convId, msg)
+      }
+      if (options.preserveConversationOrder) {
+        // 频道进入会话时补最近历史只修正摘要，不改变 updatedAt，避免点击后左侧列表重排跳动。
+        refreshConversationSummary(convId, getMessages(convId), { preserveListOrder: true })
+        continue
       }
       const latest = [...msgs].reverse().find((item) => shouldUseMessageForConversationSummary(convId, item))
       if (latest) {

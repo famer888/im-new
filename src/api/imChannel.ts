@@ -11,22 +11,18 @@ import { getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
 import { ungzip } from 'pako'
 import * as $protobuf from 'protobufjs/minimal'
 
-let cachedPackagedDesktopProxyRuntime: boolean | null = null
+let cachedDesktopProxyRuntime: boolean | null = null
 
-async function isTauriPackagedDesktopProxyRuntime(): Promise<boolean> {
-  if (cachedPackagedDesktopProxyRuntime !== null) return cachedPackagedDesktopProxyRuntime
+async function isTauriDesktopProxyRuntime(): Promise<boolean> {
+  if (cachedDesktopProxyRuntime !== null) return cachedDesktopProxyRuntime
   if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
-    cachedPackagedDesktopProxyRuntime = false
-    return cachedPackagedDesktopProxyRuntime
+    cachedDesktopProxyRuntime = false
+    return cachedDesktopProxyRuntime
   }
-  if (!import.meta.env.PROD) {
-    cachedPackagedDesktopProxyRuntime = false
-    return cachedPackagedDesktopProxyRuntime
-  }
-  // 复用项目统一的平台判定，Windows/macOS 打包端都走 Tauri 代理，避免 WebView 对二进制频道协议的差异。
+  // Tauri 桌面端开发/打包都走主进程代理，避免 WebView fetch 被频道网关 CORS 或二进制协议差异拦截。
   const platform = await getRuntimePlatform()
-  cachedPackagedDesktopProxyRuntime = platform === 'macos' || platform === 'windows'
-  return cachedPackagedDesktopProxyRuntime
+  cachedDesktopProxyRuntime = platform === 'macos' || platform === 'windows'
+  return cachedDesktopProxyRuntime
 }
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -212,7 +208,7 @@ async function sendChannelRequest<T>(
   headers: Record<string, string>,
   packet: Uint8Array,
 ): Promise<T> {
-  if (await isTauriPackagedDesktopProxyRuntime()) {
+  if (await isTauriDesktopProxyRuntime()) {
     const { invoke } = await import('@tauri-apps/api/core')
     const result = await invoke<{
       ok: boolean
@@ -257,7 +253,7 @@ async function sendChannelRawRequest(
   headers: Record<string, string>,
   packet: Uint8Array,
 ): Promise<ArrayBuffer> {
-  if (await isTauriPackagedDesktopProxyRuntime()) {
+  if (await isTauriDesktopProxyRuntime()) {
     const { invoke } = await import('@tauri-apps/api/core')
     const result = await invoke<{
       ok: boolean
