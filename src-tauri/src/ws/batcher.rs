@@ -232,6 +232,13 @@ fn file_obj_to_json(obj: imweb::FileObj) -> String {
     .to_string()
 }
 
+fn decode_private_raw_file_fallback(msg_type: i32, plain: &[u8]) -> Option<String> {
+    if msg_type != 7 {
+        return None;
+    }
+    imweb::FileObj::decode(plain).ok().map(file_obj_to_json)
+}
+
 fn name_card_obj_to_legacy_content(obj: imweb::NameCardObj) -> String {
     if obj.icon.is_empty() {
         format!("{}*|*|*{}", obj.nick_name, obj.uid)
@@ -382,6 +389,23 @@ mod private_decode_tests {
             &plain,
             "00000000000000000000000000000000"
         ));
+    }
+
+    #[test]
+    fn private_versioned_raw_file_decodes_before_pending_fallback() {
+        let plain = imweb::FileObj {
+            file_url: "https://example.com/0009.xls".to_string(),
+            name: "0009.xls".to_string(),
+            size: 3870,
+            mime_type: "application/vnd.ms-excel".to_string(),
+            r#ref: None,
+        }
+        .encode_to_vec();
+
+        let content = decode_private_raw_file_fallback(7, &plain).unwrap();
+
+        assert!(content.contains("\"name\":\"0009.xls\""));
+        assert!(content.contains("\"size\":3870"));
     }
 
     #[test]
@@ -1826,6 +1850,21 @@ impl MessageBatcher {
                         om.send_uid, om.msg_id, om.msg_type, e
                     );
                     decode_content_obj(om.msg_type, fallback_cipher)
+                } else if let Some(content) =
+                    decode_private_raw_file_fallback(om.msg_type, fallback_cipher)
+                {
+                    // 旧端/服务端可能给带 version/source 的明文 FileObj；先解析文件协议，避免误入密钥等待占位。
+                    warn!(
+                        "[file-recv] PRIVATE_MSG_RECEIVED raw FileObj fallback sender_uid={} msg_id={} version={} source={} content_md5_len={} raw_len={} err={}",
+                        om.send_uid,
+                        om.msg_id,
+                        om.version,
+                        sender_source,
+                        om.content_md5.len(),
+                        fallback_cipher.len(),
+                        e
+                    );
+                    content
                 } else if !allow_plain_fallback {
                     decrypt_pending = true;
                     warn!(

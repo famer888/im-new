@@ -185,6 +185,17 @@ fn message_digest(msg_type: i32, content: Option<&str>) -> String {
     }
 }
 
+fn file_obj_to_json(obj: imweb::FileObj) -> String {
+    serde_json::json!({
+        "url": obj.file_url,
+        "fileUrl": obj.file_url,
+        "name": obj.name,
+        "size": obj.size,
+        "mimeType": obj.mime_type,
+    })
+    .to_string()
+}
+
 fn json_i64(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
     keys.iter().find_map(|key| {
         value.get(*key).and_then(|v| {
@@ -1784,6 +1795,12 @@ pub fn decrypt_private_incoming(
                     "size": obj.file_size,
                 })
                 .to_string());
+            }
+        }
+        7 => {
+            // 文件消息的明文是 FileObj protobuf；重试解密成功后必须转成前端文件卡片使用的 JSON。
+            if let Ok(obj) = crate::proto::imweb::FileObj::decode(plain.as_slice()) {
+                return Ok(file_obj_to_json(obj));
             }
         }
         5 => {
