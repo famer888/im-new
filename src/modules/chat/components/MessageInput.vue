@@ -2437,7 +2437,8 @@ function getFileSuffix(file: File): string {
 }
 
 function getUploadContentType(file: File, suffix: string): string {
-  if (file.type) return file.type
+  // 原生文件选择在 Office 文档上可能只给 application/octet-stream；按后缀补齐 MIME，避免上传和 FileObj 都丢失真实类型。
+  if (file.type && file.type !== 'application/octet-stream') return file.type
   if (suffix === 'jpg' || suffix === 'jpeg') return 'image/jpeg'
   if (suffix === 'png') return 'image/png'
   if (suffix === 'gif') return 'image/gif'
@@ -2446,6 +2447,14 @@ function getUploadContentType(file: File, suffix: string): string {
   if (suffix === 'mov') return 'video/quicktime'
   if (suffix === 'webm') return 'video/webm'
   if (suffix === 'ogg') return 'video/ogg'
+  if (suffix === 'xls') return 'application/vnd.ms-excel'
+  if (suffix === 'xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (suffix === 'doc') return 'application/msword'
+  if (suffix === 'docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (suffix === 'ppt') return 'application/vnd.ms-powerpoint'
+  if (suffix === 'pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (suffix === 'pdf') return 'application/pdf'
+  if (suffix === 'zip') return 'application/zip'
   return 'application/octet-stream'
 }
 

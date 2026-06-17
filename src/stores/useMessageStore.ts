@@ -2234,7 +2234,8 @@ export const useMessageStore = defineStore('message', () => {
       })
     }
 
-    const canReuseClientPlaceholder = isSingleImageMessage(conversationId, msgType) || Number(msgType) === 17
+    // 文件发送在上传前已插入本地占位；复用同一条消息，避免正式发送阶段重新追加导致状态/回执看起来卡住。
+    const canReuseClientPlaceholder = isSingleImageMessage(conversationId, msgType) || Number(msgType) === 7 || Number(msgType) === 17
     const existingClientPlaceholder = clientMsgId && canReuseClientPlaceholder && !isFileHelperSend
       ? getMessages(conversationId).find((m) => m.id === clientMsgId || m.customMsgId === clientMsgId)
       : undefined
