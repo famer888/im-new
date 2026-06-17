@@ -747,9 +747,43 @@ function setLinkResolving(key: string, resolving: boolean) {
   resolvingLinkKeys.value = next
 }
 
+function resolveLocalGroupAliasTarget(context: string, groupId: string): AliasTarget | null {
+  const group = groupStore.groups.find((item) => String(item.groupAliasName || '').trim() === context)
+  if (!group?.id) return null
+
+  // 对齐旧 im：@ 文本先查本地群别名缓存；命中已加入群时直接进入会话或提示当前群。
+  return {
+    type: 'joined-group',
+    target: {
+      id: group.id,
+      name: group.name || group.id,
+      avatar: group.avatar || '',
+      memberCount: group.memberCount || 0,
+      groupAliasName: group.groupAliasName || context,
+      ownerId: group.ownerId || null,
+      addToken: '',
+      bfJoinCheck: false,
+      joinSource: 'alias',
+    },
+  }
+}
+
+function resolveLocalChannelAliasTarget(context: string): AliasTarget | null {
+  const channel = channelStore.channels.find((item) => String(item.alias || '').trim() === context)
+  if (!channel?.channelId) return null
+
+  // 已加入频道的别名本地有缓存时直接打开，远端 searchAliasContent 只作为未命中的兜底。
+  return { type: 'channel', channel: channel as unknown as Record<string, any> }
+}
+
 async function resolveRemoteAliasTarget(label: string, groupId: string): Promise<AliasTarget> {
   const context = label.replace(/^@+/, '').trim()
   if (!context) return { type: 'missing' }
+
+  const localGroupTarget = resolveLocalGroupAliasTarget(context, groupId)
+  if (localGroupTarget) return localGroupTarget
+  const localChannelTarget = resolveLocalChannelAliasTarget(context)
+  if (localChannelTarget) return localChannelTarget
 
   // OpenChat 网关（固定 VITE_APP_OPEN_CHAT_DOMAIN）与业务域名（可为线路池/localStorage）
   // 可能不一致；searchAliasContent 抛错或未命中时仍需走 biz 的 groupOrUserDetail。
@@ -757,6 +791,20 @@ async function resolveRemoteAliasTarget(label: string, groupId: string): Promise
     const aliasResp = await searchAliasContent({ fromUid: authStore.uid || 0, content: context })
     if (Number(aliasResp?.code ?? 0) === 200 && aliasResp?.data) {
       const searchType = Number(aliasResp.data.searchType)
+      if (searchType === 1) {
+        const profile = parseMemberProfile(aliasResp.data)
+        if (profile) return { type: 'member', context, profile }
+      }
+      if (searchType === 0) {
+        // 对齐旧 im：searchAliasContent 的 searchType=0 是群别名，不能只依赖后续 groupOrUserDetail 兜底。
+        const groupTarget = parseGroupTargetFromAlias(aliasResp.data)
+        if (groupTarget) {
+          if (groupTarget.id === groupId || (await isAlreadyInGroup(groupTarget.id, isAliasGroupMember(aliasResp.data)))) {
+            return { type: 'joined-group', target: groupTarget }
+          }
+          return { type: 'add-group', target: groupTarget }
+        }
+      }
       const channelInfo = aliasResp.data.channelInfo
       if (searchType === 2 && channelInfo) {
         return await canOpenChannelDirectly(channelInfo)
@@ -809,7 +857,11 @@ async function openRemoteAliasTarget(
   if (target.type === 'member') {
     uiStore.openMemberInfo(target.profile.userId, groupId, [target.context, target.profile.nickname], target.profile)
   } else if (target.type === 'joined-group') {
-    openGroupConversation(target.target)
+    if (target.target.id === groupId) {
+      eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
+    } else {
+      openGroupConversation(target.target)
+    }
   } else if (target.type === 'add-group') {
     uiStore.setAddGroupTarget(target.target)
     uiStore.setRightPanel('none')
@@ -973,8 +1025,8 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
       : findMentionMember(segment.text, members)
     const possibleUid = String(segment.possibleUid || '').trim()
 
-    if (segment.memberId) {
-      // atUsers/群成员名匹配到的 uid 是高可信来源；即使成员列表未加载，也先按 uid 打开资料卡。
+    if (segment.memberId && member) {
+      // 对齐旧 im：群聊 @ 即使带 uid，也要先在当前群成员里命中后再打开资料卡。
       uiStore.openMemberInfo(segment.memberId, groupId, [cleanLabel])
       return
     }
@@ -1008,12 +1060,17 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
         return
       }
       if (possibleUid) {
-        // 低可信 possibleUid 只在名字/别名都未命中后兜底使用，降低多个 @ 错位时打开错人的风险。
+        // 非群聊才按 possibleUid 强开；群聊场景必须先命中群成员，否则按旧 im 提示不存在。
+        if (groupId) {
+          eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
+          return
+        }
         uiStore.openMemberInfo(possibleUid, groupId, [cleanLabel])
         return
       }
       if (groupId) {
-        // 对齐旧 im：群内未知 @ 文本只走别名查询；未命中时不按原文本强开资料卡，避免频道别名误弹用户信息。
+        // 对齐旧 im：群内未知 @ 文本只走别名查询；未命中时提示不存在，不按原文本强开资料卡。
+        eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
         return
       }
       return
