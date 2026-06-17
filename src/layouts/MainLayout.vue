@@ -843,7 +843,8 @@ async function refreshActiveGroupMembers(reason: string, force = false) {
   }, 'info')
 
   try {
-    const members = await groupStore.loadMembers(uid, groupId, { forceRemote: true })
+    // 定时同步走缓存优先，避免每 5 秒强制全量远端拉群成员拖慢右侧首屏。
+    const members = await groupStore.loadMembers(uid, groupId, { forceRemote: force })
     terminalDebugLog('main-layout', 'active group member sync resolved', {
       reason,
       groupId,
@@ -890,7 +891,8 @@ watch(
       lastActiveGroupMemberSyncAt = 0
     }
     startActiveGroupMemberSyncTimer()
-    void refreshActiveGroupMembers('active-group-change', true)
+    // 切群时先用本地成员缓存出首屏；窗口重新聚焦和邀请/移除后再强制远端刷新。
+    void refreshActiveGroupMembers('active-group-change')
   },
   { immediate: true },
 )

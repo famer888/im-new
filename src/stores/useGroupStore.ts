@@ -255,22 +255,27 @@ export const useGroupStore = defineStore('group', () => {
         memberIds: members.map((member) => member.userId).slice(0, 10),
       })
       members = mergeMembersWithExistingStatuses(groupId, members)
-      if (!previewOnly) {
-        members = await loadMemberOnlineStatuses(groupId, members)
-      }
-      groupMemberRefreshDebug('members loaded after online merge', {
-        groupId,
-        count: members.length,
-        memberIds: members.map((member) => member.userId).slice(0, 10),
-      })
 
       const nextDepth = previewOnly ? 'preview' : 'full'
       const nextDepthMap = new Map(memberLoadDepthMap.value)
       nextDepthMap.set(groupId, nextDepth)
       memberLoadDepthMap.value = nextDepthMap
 
+      // 对齐旧 im：成员资料先进入缓存并渲染，在线状态慢时不阻塞右侧群成员首屏。
       setGroupMembers(groupId, members, {
         updateMemberCount: !previewOnly,
+      })
+
+      if (!previewOnly) {
+        members = await loadMemberOnlineStatuses(groupId, members)
+        setGroupMembers(groupId, members, {
+          updateMemberCount: false,
+        })
+      }
+      groupMemberRefreshDebug('members loaded after online merge', {
+        groupId,
+        count: members.length,
+        memberIds: members.map((member) => member.userId).slice(0, 10),
       })
       return members
     })().finally(() => {
