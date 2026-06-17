@@ -55,14 +55,15 @@ const imageOverwriteDirectoryName = ref('')
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
 let filePreviewer: { destroy?: () => void } | null = null
 let filePreviewToken = 0
+let filePreviewFallbackKey = ''
 let videoPrepareTimer = 0
 let videoPlayWatchTimer = 0
 let videoProbeToken = 0
 let videoPlayReloadRetries = 0
 let videoAutoTranscodeSource = ''
 
-type FilePreviewSource = string | ArrayBuffer
-type FilePreviewSourceKind = 'url' | 'local-array-buffer'
+type FilePreviewSource = string | ArrayBuffer | Blob
+type FilePreviewSourceKind = 'url' | 'local-blob' | 'local-array-buffer'
 
 interface FilePreviewSourceCandidate {
   kind: FilePreviewSourceKind
@@ -70,9 +71,9 @@ interface FilePreviewSourceCandidate {
 }
 
 type FilePreviewModule = {
-  init?: (el: HTMLElement) => { preview?: (src: FilePreviewSource) => Promise<void> | void; destroy?: () => void }
+  init?: (el: HTMLElement, options?: Record<string, unknown>) => { preview?: (src: FilePreviewSource) => Promise<void> | void; destroy?: () => void }
   default?: {
-    init?: (el: HTMLElement) => { preview?: (src: FilePreviewSource) => Promise<void> | void; destroy?: () => void }
+    init?: (el: HTMLElement, options?: Record<string, unknown>) => { preview?: (src: FilePreviewSource) => Promise<void> | void; destroy?: () => void }
   }
 }
 
@@ -81,6 +82,12 @@ interface LocalFilePayload {
   mime?: string
   dataBase64?: string
   data_base64?: string
+}
+
+interface LocalFilePreviewPayload {
+  name: string
+  mime: string
+  data: ArrayBuffer
 }
 
 interface VideoFormatProbe {
@@ -124,23 +131,40 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer
 }
 
-async function readLocalFileArrayBuffer(localPath: string): Promise<ArrayBuffer> {
+async function readLocalFilePreviewPayload(localPath: string): Promise<LocalFilePreviewPayload> {
   const files = await invoke<LocalFilePayload[]>('read_local_files', { paths: [localPath] })
+  const file = files[0]
   const dataBase64 = files[0]?.dataBase64 || files[0]?.data_base64 || ''
   if (!dataBase64) throw new Error('local file read returned empty data')
-  return base64ToArrayBuffer(dataBase64)
+  return {
+    name: file?.name || '',
+    mime: file?.mime || '',
+    data: base64ToArrayBuffer(dataBase64),
+  }
 }
 
 function createFilePreviewSourceCandidates(src: string, localPath: string): FilePreviewSourceCandidate[] {
   const candidates: FilePreviewSourceCandidate[] = []
   const normalizedSrc = String(src || '').trim()
   const normalizedLocalPath = String(localPath || '').trim()
+  let localPayloadPromise: Promise<LocalFilePreviewPayload> | null = null
+  const loadLocalPayload = () => {
+    localPayloadPromise ||= readLocalFilePreviewPayload(normalizedLocalPath)
+    return localPayloadPromise
+  }
 
   // 桌面端优先直接读取本地字节，避免 file/asset URL 在不同 WebView 安全策略下加载失败。
   if ((window as any).__TAURI_INTERNALS__ && normalizedLocalPath) {
     candidates.push({
+      kind: 'local-blob',
+      load: async () => {
+        const file = await loadLocalPayload()
+        return new Blob([file.data], { type: file.mime || 'application/octet-stream' })
+      },
+    })
+    candidates.push({
       kind: 'local-array-buffer',
-      load: () => readLocalFileArrayBuffer(normalizedLocalPath),
+      load: async () => (await loadLocalPayload()).data,
     })
   }
 
@@ -369,6 +393,7 @@ function mediaViewerVideoLog(message: string, data?: Record<string, unknown>, le
 function applyPayload(nextPayload: MediaViewerPayload | null) {
   resetVideoState({ clearSource: !nextPayload || nextPayload.mediaType !== 'video' })
   destroyFilePreviewer()
+  filePreviewFallbackKey = ''
   payload.value = nextPayload
   if (nextPayload?.mediaType === 'video') {
     videoDuration.value = payloadVideoDuration.value
@@ -537,6 +562,20 @@ async function loadFilePreviewModule(kind: MediaPreviewFileKind): Promise<FilePr
   return import('@js-preview/docx') as Promise<FilePreviewModule>
 }
 
+function currentFilePreviewExt(): string {
+  const fromName = normalizeFileExt(getFileExtension(String(payload.value?.fileName || payload.value?.title || '')))
+  if (fromName) return fromName
+  const fromPath = normalizeFileExt(getFileExtension(String(payload.value?.filePath || '')))
+  if (fromPath) return fromPath
+  return normalizeFileExt(getFileExtension(String(payload.value?.src || '')))
+}
+
+function filePreviewInitOptions(kind: MediaPreviewFileKind): Record<string, unknown> | undefined {
+  if (kind !== 'excel') return undefined
+  // js-preview/excel 解析旧 xls 需要显式开启 xls 转换；xlsx 保持默认解析链路。
+  return currentFilePreviewExt() === '.xls' ? { xls: true } : undefined
+}
+
 async function setupFilePreview() {
   const token = ++filePreviewToken
   const mount = filePreviewRef.value
@@ -564,7 +603,7 @@ async function setupFilePreview() {
         const previewSource = await candidate.load()
         if (token !== filePreviewToken) return
         disposeFilePreviewer()
-        const previewer = initPreview(mount)
+        const previewer = initPreview(mount, filePreviewInitOptions(kind))
         filePreviewer = previewer
         await previewer.preview?.(previewSource)
         if (token !== filePreviewToken) return
@@ -587,6 +626,12 @@ async function setupFilePreview() {
       src,
     })
     showToast('文件预览失败，请使用默认应用打开', 'error')
+    const fallbackKey = `${kind}:${localPath || src}`
+    if ((window as any).__TAURI_INTERNALS__ && localPath && filePreviewFallbackKey !== fallbackKey) {
+      filePreviewFallbackKey = fallbackKey
+      // 预览库解析失败时对齐旧 im，自动转默认应用，避免用户卡在空预览窗口。
+      await openWithDefaultApp()
+    }
   }
 }
 
