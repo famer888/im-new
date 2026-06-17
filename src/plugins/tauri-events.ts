@@ -936,8 +936,8 @@ export async function setupTauriListeners() {
         for (const gid of groupIds) {
           try {
             await ensureGroupRelKey(uid, gid)
-          } catch (err) {
-            console.warn('[e2ee] warmup group relKey failed', { gid, err: String(err) })
+          } catch {
+            // relKey 预热失败不阻塞连接流程；真正收消息/发消息时会按原路径重试。
           }
         }
         for (const cid of channelIds) {
@@ -950,8 +950,8 @@ export async function setupTauriListeners() {
         for (const fid of allFriendIds) {
           try {
             await ensureFriendRelKey(uid, fid)
-          } catch (err) {
-            console.warn('[e2ee] warmup friend relKey failed', { fid, err: String(err) })
+          } catch {
+            // 好友 relKey 预热失败不阻塞连接流程；单聊实际解密/发送时会按原路径重试。
           }
         }
       })().finally(() => {

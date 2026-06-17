@@ -26,7 +26,9 @@ const sendingMessage = ref(false)
 const group = computed(() => groupStore.getGroup(props.groupId))
 
 function groupDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
-  console[level](`[GROUP-DIAG] ${message}`, data)
+  void message
+  void data
+  void level
 }
 
 /** 与老项目 im/details/group.vue 一致：store 已按 role 排序，截取前 8 人展示 */

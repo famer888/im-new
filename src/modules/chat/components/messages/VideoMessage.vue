@@ -72,16 +72,9 @@ interface VideoContent {
 }
 
 function videoStreamLog(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
-  const payload = data || {}
-  console.warn(`[video-stream] ${message}`, payload)
-  if (!(window as any).__TAURI_INTERNALS__) return
-  void tauriInvoke('image_send_log', {
-    payload: {
-      level,
-      message: `[video-stream] ${message}`,
-      data: payload,
-    },
-  }).catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function isLikelyBase64ImagePayload(value: string): boolean {

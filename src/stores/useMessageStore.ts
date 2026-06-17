@@ -305,15 +305,9 @@ function channelHistoryLog(
   data: Record<string, unknown> = {},
   level: 'info' | 'warn' | 'error' = 'info',
 ) {
-  console[level](`[channel-history] ${message}`, data)
-  if (!isTauri()) return
-  void tauriInvoke('image_send_log', {
-    payload: {
-      level,
-      message: `[channel-history] ${message}`,
-      data,
-    },
-  }).catch(() => {})
+  void message
+  void data
+  void level
 }
 
 function buildPrivateCipherCandidates(extra: Record<string, unknown>) {
