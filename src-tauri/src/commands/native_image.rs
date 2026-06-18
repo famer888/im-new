@@ -132,7 +132,7 @@ fn sha1_hex(input: &str) -> String {
 }
 
 fn cache_hash(req: &ResolveNativeImageRequest) -> String {
-    // cache key 只取 scope + resourceKey，让同一头像覆盖同一路径；URL 指纹变化由 meta 决定是否重拉。
+    // cache key 只取 scope + resourceKey；前端可通过 resourceKey 决定同一路径复用还是换头像版本。
     sha1_hex(&format!(
         "{}|{}|{}",
         req.scope_kind.trim(),
@@ -152,7 +152,7 @@ fn meta_path(cache_dir: &Path) -> PathBuf {
 }
 
 fn source_url_hash(req: &ResolveNativeImageRequest) -> String {
-    // OSS 签名 query 会轮换；只用去 query 后的地址做指纹，保证同一头像能命中本地缓存。
+    // 同一个 resourceKey 下忽略签名 query 轮换；群头像若要按 query 刷新，会在前端把 query 纳入 resourceKey。
     sha1_hex(strip_url_query(req.url.trim()))
 }
 
@@ -171,7 +171,7 @@ fn response_from_meta(
     if meta.resource_key != req.resource_key {
         return None;
     }
-    // resourceKey 仍保持稳定目录；但完整 URL 变化通常代表头像版本/签名变化，需要重新下载覆盖旧缓存。
+    // 同一 resourceKey 下 URL path 变化通常代表头像版本变化，需要重新下载覆盖旧缓存。
     if meta.source_url_hash != source_url_hash(req) {
         return None;
     }
@@ -272,16 +272,10 @@ fn decrypt_native_image_bytes(bytes: &[u8], key: &str) -> Result<Vec<u8>, Pipeli
         ));
     }
 
-    // 旧 NativeImage 头像按文件分块 AES-128-ECB 解密；这里直接复用新项目文件加密块大小，
-    // 保持与旧 public/worker.js 的 102416 密文块边界一致。
-    let mut plain = Vec::new();
-    for chunk in bytes.chunks(crypto::file_crypto::DECRYPT_CHUNK_SIZE) {
-        let decrypted = crypto::aes::decrypt_message(chunk, key).map_err(|e| {
-            PipelineError::decrypt(ERROR_DECRYPT_FAILED, format!("decrypt failed: {}", e))
-        })?;
-        plain.extend_from_slice(&decrypted);
-    }
-    Ok(plain)
+    // 头像历史数据有两种格式：PC 分块加密与移动端整文件加密；复用文件解密探测避免大头像被误按 102416 分块拆开。
+    crypto::file_crypto::decrypt_file_bytes(bytes, key).map_err(|e| {
+        PipelineError::decrypt(ERROR_DECRYPT_FAILED, format!("decrypt failed: {}", e))
+    })
 }
 
 async fn write_ready_cache(
@@ -605,6 +599,21 @@ mod tests {
         let url = serve_once(200, encrypted).await;
         let root = test_cache_root("encrypted");
         let req = request_for(url, "encrypted-key");
+
+        let result = resolve_native_image_in_dir(root.clone(), req, reqwest::Client::new()).await;
+        assert_eq!(result.state, STATE_READY);
+        assert_eq!(result.mime.as_deref(), Some("image/png"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn whole_file_encrypted_large_avatar_resolves_after_decrypt() {
+        let mut plain = PNG_BYTES.to_vec();
+        plain.resize(crypto::file_crypto::DECRYPT_CHUNK_SIZE + 4096, 0x42);
+        let encrypted = crypto::aes::encrypt_message(&plain, TEST_KEY).unwrap();
+        let url = serve_once(200, encrypted).await;
+        let root = test_cache_root("whole-file-encrypted-large");
+        let req = request_for(url, "whole-file-encrypted-large-key");
 
         let result = resolve_native_image_in_dir(root.clone(), req, reqwest::Client::new()).await;
         assert_eq!(result.state, STATE_READY);

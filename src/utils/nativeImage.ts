@@ -80,9 +80,10 @@ function buildCandidateUrls(src: string): string[] {
   return candidates
 }
 
-export function buildNativeAvatarResourceKey(src: string): string {
-  // OSS 签名会轮换；resourceKey 去掉 query 后保持稳定，避免同一头像重复下载。
-  const normalized = stripUrlQuery(String(src || '').trim())
+export function buildNativeAvatarResourceKey(src: string, type?: string | null): string {
+  // 群头像更新经常只换签名/版本 query；群头像保留完整 URL，避免新增或改头像后继续命中旧缓存。
+  const raw = String(src || '').trim()
+  const normalized = type === 'group' ? raw : stripUrlQuery(raw)
   return stableHash(normalized) || normalized
 }
 
@@ -90,15 +91,17 @@ export async function resolveNativeAvatarSrc(options: ResolveNativeAvatarOptions
   const src = String(options.src || '').trim()
   if (!canUseNativeImageAvatar(src)) return null
 
+  const resourceKey = buildNativeAvatarResourceKey(src, options.type)
+  const candidateUrls = buildCandidateUrls(src)
   // 解析命令返回磁盘路径，展示层再转成 Tauri asset URL，保证 mac/Windows 路径规则由 Tauri 处理。
   const response = await invoke<ResolveNativeImageResponse>('resolve_native_image', {
     request: {
       scopeKind: 'avatar',
       scopeId: String(options.id ?? ''),
       sub: String(options.type || 'friend'),
-      resourceKey: buildNativeAvatarResourceKey(src),
+      resourceKey,
       url: src,
-      candidateUrls: buildCandidateUrls(src),
+      candidateUrls,
       encryptKey: options.encryptKey ?? API_CONFIG.headAesKey,
     },
   })

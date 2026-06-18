@@ -19,6 +19,7 @@ import { isRepeatableGroupInviteReminderMessage, showMinimizedMessageReminder } 
 import { eventBus } from '@/utils/eventBus'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
+import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -65,6 +66,9 @@ type GroupEventMemberPatch = {
   role: number
 }
 
+const pendingGroupInfoRefreshIds = new Set<string>()
+let pendingGroupInfoRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
 function getGroupEventUserId(raw: any): string {
   return String(raw?.userId ?? raw?.uid ?? raw?.id ?? raw?.user?.uid ?? '').trim()
 }
@@ -82,6 +86,54 @@ function getGroupEventUserName(raw: any): string | null {
 
 function getGroupEventUserAvatar(raw: any): string | null {
   return String(raw?.avatar ?? raw?.icon ?? raw?.user?.icon ?? '').trim() || null
+}
+
+function getGroupEventAvatar(raw: any): string | null {
+  const candidates = [
+    raw?.pic,
+    raw?.icon,
+    raw?.headerImage,
+    raw?.header_image,
+    raw?.avatar,
+    raw?.groupAvatar,
+    raw?.group_avatar,
+    raw?.headImage,
+    raw?.head_image,
+    raw?.faceUrl,
+    raw?.face_url,
+  ]
+
+  for (const value of candidates) {
+    // 群事件也按群列表规则过滤远程默认头像；否则会误判“事件已有头像”而跳过后续补拉。
+    const avatar = String(value ?? '').trim()
+    if (avatar && !isRemoteDefaultGroupIcon(avatar)) return avatar
+  }
+  return null
+}
+
+function scheduleGroupInfoRefresh(
+  groupStore: ReturnType<typeof useGroupStore>,
+  uid: string,
+  groupId: string,
+) {
+  if (!uid || !groupId) return
+  pendingGroupInfoRefreshIds.add(groupId)
+  if (pendingGroupInfoRefreshTimer) return
+
+  // 对齐旧 im：新群事件只带简略资料时，延迟补拉通讯录群列表，避免头像长期停留在默认图。
+  pendingGroupInfoRefreshTimer = setTimeout(() => {
+    pendingGroupInfoRefreshTimer = null
+    const refreshingIds = Array.from(pendingGroupInfoRefreshIds)
+    pendingGroupInfoRefreshIds.clear()
+    void groupStore.loadGroups(uid, { forceApi: true }).then(() => {
+      const stillMissingAvatar = refreshingIds.some(id => !groupStore.getGroup(id)?.avatar)
+      if (stillMissingAvatar) {
+        window.setTimeout(() => {
+          void groupStore.loadGroups(uid, { forceApi: true })
+        }, 3000)
+      }
+    })
+  }, 800)
 }
 
 function normalizeGroupEventMember(
@@ -1598,6 +1650,7 @@ export async function setupTauriListeners() {
         const cachedMemberMapCount = groupStore.getMembers(groupId).length
         const eventMemberCount = Number(extra?.memberCount || 0)
         const nextMemberCount = Math.max(cachedMemberCount, cachedMemberMapCount, eventMemberCount)
+        const eventGroupAvatar = getGroupEventAvatar(extra)
         groupInviteDebug('upsert group before append message', {
           conversationId: convId,
           groupId,
@@ -1612,11 +1665,14 @@ export async function setupTauriListeners() {
           id: groupId,
           groupId,
           name: String(extra?.groupName || existingGroup?.name || groupId),
-          avatar: extra?.groupAvatar || null,
+          avatar: eventGroupAvatar,
           memberCount: nextMemberCount,
           isMuted: Boolean(extra?.groupMuted || false),
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         })
+        if (!eventGroupAvatar && !existingGroup?.avatar) {
+          scheduleGroupInfoRefresh(groupStore, currentUid, groupId)
+        }
 
         enrichGroupEventNoticeExtra(groupStore, groupId, extra)
         applyGroupEventMemberPatch(groupStore, groupId, extra)

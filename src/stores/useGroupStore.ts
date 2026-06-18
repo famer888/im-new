@@ -46,6 +46,30 @@ function normalizeGroupAvatar(value: unknown): string | null {
   return isRemoteDefaultGroupIcon(avatar) ? null : avatar
 }
 
+function pickGroupAvatar(item: Record<string, any>): string | null {
+  const candidates = [
+    ['pic', item.pic],
+    ['icon', item.icon],
+    ['headerImage', item.headerImage],
+    ['header_image', item.header_image],
+    ['avatar', item.avatar],
+    ['groupAvatar', item.groupAvatar],
+    ['group_avatar', item.group_avatar],
+    ['headImage', item.headImage],
+    ['head_image', item.head_image],
+    ['faceUrl', item.faceUrl],
+    ['face_url', item.face_url],
+  ] as const
+
+  for (const [, value] of candidates) {
+    // 对齐旧 im 的“有值才用”语义：空字符串或远程默认图不能阻断后续真实头像字段。
+    const avatar = normalizeGroupAvatar(value)
+    if (avatar) return avatar
+  }
+
+  return null
+}
+
 export interface Group {
   id: string
   name: string | null
@@ -118,9 +142,9 @@ export const useGroupStore = defineStore('group', () => {
   function normalizeGroup(item: any): Group {
     return {
       id: String(item.id ?? item.groupId ?? item.group_id ?? ''),
-      // 兼容旧 im 与不同接口返回：有些群资料用 groupName/groupAvatar，不兼容会退回显示数字 ID。
+      // 兼容旧 im 与不同接口返回：有些群资料用 groupName/icon/headerImage，不兼容会退回显示数字 ID/默认头像。
       name: item.name ?? item.groupName ?? item.group_name ?? null,
-      avatar: normalizeGroupAvatar(item.avatar ?? item.pic ?? item.groupAvatar ?? item.group_avatar ?? null),
+      avatar: pickGroupAvatar(item),
       ownerId: item.ownerId ?? item.owner_id ?? (item.hostId ? String(item.hostId) : null) ?? null,
       memberCount: Number(item.memberCount ?? item.member_count ?? 0),
       notice: item.notice ?? null,
