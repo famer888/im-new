@@ -14,6 +14,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { getNotificationModuleTargetFromConversationId } from '@/utils/notificationNavigation'
 import { buildNotificationEmojiSegments } from '@/utils/notificationEmojiSegments'
+import { getRuntimePlatform } from '@/utils/runtimePlatform'
 import { API_CONFIG } from '@/api/config'
 
 interface NotificationData {
@@ -56,6 +57,7 @@ const notificationModuleTarget = computed(() =>
 const actionButtonLabel = computed(() => (
   notificationModuleTarget.value ? t('查看') : t('回复')
 ))
+let notificationWindowRevealStarted = false
 
 function shouldLogNotificationAvatar(): boolean {
   if (API_CONFIG.env === 'test' || API_CONFIG.env === 'uat') return true
@@ -126,6 +128,29 @@ function readNotificationData(raw: unknown): NotificationData | null {
   }
 }
 
+function waitForWindowsRevealDelay(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 50)
+  })
+}
+
+async function revealWindowsNotificationAfterPaint() {
+  if (notificationWindowRevealStarted || !data.value) return
+  notificationWindowRevealStarted = true
+
+  // Windows 端通知窗先隐藏创建，等 Vue 首帧完成后再显示，避免 WebView2 默认白底闪一下。
+  if (await getRuntimePlatform() !== 'windows') return
+
+  try {
+    await nextTick()
+    // 隐藏 WebView 在 Windows 上可能不触发 requestAnimationFrame；短定时器更适合做显示前缓冲。
+    await waitForWindowsRevealDelay()
+    await getCurrentWindow().show()
+  } catch (error) {
+    console.warn('[notification] reveal window failed:', error)
+  }
+}
+
 watch(() => [data.value?.avatar, data.value?.conversationType], () => {
   avatarLoadFailed.value = false
 })
@@ -140,7 +165,10 @@ async function resizeWindow(height: number, pinned: boolean) {
 
 onMounted(async () => {
   if (!settingStore.loaded) {
-    await settingStore.loadSettings()
+    // 设置只影响回复快捷键，不能阻塞 Windows 隐藏通知窗的首屏显示。
+    void settingStore.loadSettings().catch((error) => {
+      console.warn('[notification] load settings failed:', error)
+    })
   }
   data.value = readNotificationData(route.query.data)
   notificationAvatarDebug('mounted payload', {
@@ -149,6 +177,7 @@ onMounted(async () => {
     avatar: data.value?.avatar,
     avatarSrc: avatarSrc.value,
   })
+  void revealWindowsNotificationAfterPaint()
 
   await listen<NotificationData>('notification:data', (event) => {
     data.value = sanitizeNotificationData(event.payload)
@@ -158,6 +187,7 @@ onMounted(async () => {
       avatar: data.value?.avatar,
       avatarSrc: avatarSrc.value,
     })
+    void revealWindowsNotificationAfterPaint()
   })
 })
 
