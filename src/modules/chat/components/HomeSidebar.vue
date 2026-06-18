@@ -471,12 +471,16 @@ async function openFileHelper() {
 }
 
 function handleSidebarTabClick(tab: 'chats' | 'contacts' | 'transfer') {
+  if (uiStore.sidebarTab === tab) return
   // 与用户预期一致：点击左侧三个主入口时，都先收起右侧资料面板，避免沿用上一会话状态。
   uiStore.setRightPanel('none')
   if (tab === 'transfer') {
     void openFileHelper()
     return
   }
+  // 对齐旧 im 的 ComNav：切到消息/通讯录主入口会发送 activeChange=null，右侧不继续停留在“新的好友”等详情页。
+  chatStore.setCurrentConversation(null)
+  uiStore.setDetailView('none')
   uiStore.setSidebarTab(tab)
 }
 
