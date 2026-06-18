@@ -450,10 +450,36 @@ function shouldPreserveConversationOrderForUpdate(existing: Conversation | undef
   const nextPinned = Boolean(payload?.isPinned ?? payload?.is_pinned ?? existing.isPinned)
   if (nextPinned !== existing.isPinned) return false
 
-  const nextLastMsgTime = numericPayloadField(payload?.lastMsgTime ?? payload?.last_msg_time ?? existing.lastMsgTime)
+  const hasLastMsgTime = payload?.lastMsgTime !== undefined || payload?.last_msg_time !== undefined
+  const hasLastMsgId = payload?.lastMsgId !== undefined || payload?.last_msg_id !== undefined
+  const hasLastMsgDigest = payload?.lastMsgDigest !== undefined || payload?.last_msg_digest !== undefined
+  const rawNextLastMsgTime = payload?.lastMsgTime !== undefined
+    ? payload.lastMsgTime
+    : payload?.last_msg_time !== undefined ? payload.last_msg_time : existing.lastMsgTime
+  const rawNextLastMsgId = payload?.lastMsgId !== undefined
+    ? payload.lastMsgId
+    : payload?.last_msg_id !== undefined ? payload.last_msg_id : existing.lastMsgId
+  const rawNextLastMsgDigest = payload?.lastMsgDigest !== undefined
+    ? payload.lastMsgDigest
+    : payload?.last_msg_digest !== undefined ? payload.last_msg_digest : ''
+  const nextLastMsgTime = numericPayloadField(rawNextLastMsgTime)
+  const nextLastMsgId = stringPayloadField(rawNextLastMsgId)
+  const nextLastMsgDigest = stringPayloadField(rawNextLastMsgDigest)
+  const isGroupOrChannel = existing.type === 1 || existing.type === 2
+  // 清空聊天记录会把摘要清成空，但旧 im 只清内容不移动会话窗口；这里保留原列表位置，避免看起来像会话消失。
+  if (
+    isGroupOrChannel
+    && hasLastMsgTime
+    && hasLastMsgId
+    && nextLastMsgTime <= 0
+    && !nextLastMsgId
+    && (!hasLastMsgDigest || !nextLastMsgDigest)
+  ) {
+    return true
+  }
+
   if (nextLastMsgTime !== numericPayloadField(existing.lastMsgTime)) return false
 
-  const nextLastMsgId = stringPayloadField(payload?.lastMsgId ?? payload?.last_msg_id ?? existing.lastMsgId)
   if (nextLastMsgId !== stringPayloadField(existing.lastMsgId)) return false
 
   // 对齐旧 im：资料、未读、已读回执、摘要修正不改变 sendTime，所以只替换当前项，不触发左侧列表重排。

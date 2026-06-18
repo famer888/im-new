@@ -505,8 +505,17 @@ async function handleClearSubmit(index: number) {
   // 第二项沿用现有清空协议，通知其它端同步清空频道消息。
   const isRemoteDeletion = index === 1
   const conversationId = conv.value.id
+  const channelConversation = { ...conv.value }
   clearMsgTypeList.value = []
   await messageStore.clearConversationHistory(conversationId, isRemoteDeletion)
+  // 清空频道消息只清内容，不删除会话；先补回当前会话，避免异步摘要刷新导致右侧窗口被置空。
+  chatStore.addOrUpdateConversation({
+    ...channelConversation,
+    lastMsgDigest: null,
+    lastMsgId: null,
+    unreadCount: 0,
+  }, { preserveListOrder: true })
+  chatStore.setCurrentConversation(conversationId)
   chatStore.updateConversation({
     id: conversationId,
     lastMsgDigest: null,

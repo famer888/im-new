@@ -133,7 +133,9 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
       return groupByIdMap.value.has(conv.targetId) || groupStore.loading
     case ConversationType.Channel:
-      return channelByIdMap.value.has(conv.targetId) || channelStore.loading
+      // 对齐旧 im：频道会话来自 MessageChannelList，不能因为频道列表/详情短暂没命中就从左侧消失；
+      // 真正退出、解散或被移除频道时，ChannelStore 会显式 deleteConversation。
+      return true
     default:
       return false
   }
@@ -215,8 +217,8 @@ function isConversationWithoutHistory(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return false
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
   if (isChannelNotificationConversation(conv)) return false
-  // 当前打开的频道必须留在左侧；频道历史/权限接口为空或失败时，不能把选中项当空会话隐藏。
-  if (conv.type === ConversationType.Channel && conv.id === chatStore.currentConversationId) return false
+  // 对齐旧 im：群/频道清空消息只清内容，不应把会话从左侧列表隐藏；退出、解散、移除仍走显式删除。
+  if (conv.type === ConversationType.Group || conv.type === ConversationType.Channel) return false
   if (shouldShowDraft(conv)) return false
   if (Number(conv.unreadCount || 0) > 0) return false
   if (Number(conv.lastMsgTime || 0) > 0) return false
@@ -229,8 +231,9 @@ const groupByIdMap = computed(() => new Map(groupStore.groups.map((group) => [gr
 const channelByIdMap = computed(() => {
   const map = new Map<string, (typeof channelStore.channels)[number]>()
   for (const channel of channelStore.channels) {
-    if (channel.id) map.set(channel.id, channel)
-    if (channel.channelId) map.set(channel.channelId, channel)
+    // 频道接口和本地缓存可能混用 number/string；统一字符串 key，避免清空摘要后关系匹配抖动导致列表隐藏。
+    if (channel.id) map.set(String(channel.id), channel)
+    if (channel.channelId) map.set(String(channel.channelId), channel)
   }
   return map
 })

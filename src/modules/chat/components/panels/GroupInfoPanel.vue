@@ -500,10 +500,20 @@ async function handleClearSubmit(index: number) {
     clearMsgTypeList.value = []
     return
   }
+  const conversationId = conv.value.id
+  const groupConversation = { ...conv.value }
   try {
-    await messageStore.clearConversationHistory(conv.value.id, index === 1)
+    await messageStore.clearConversationHistory(conversationId, index === 1)
+    // 清空群消息只清内容，不删除会话；补回并保持当前会话，避免列表过滤后右侧窗口被置空。
+    chatStore.addOrUpdateConversation({
+      ...groupConversation,
+      lastMsgDigest: null,
+      lastMsgId: null,
+      unreadCount: 0,
+    }, { preserveListOrder: true })
+    chatStore.setCurrentConversation(conversationId)
     chatStore.updateConversation({
-      id: conv.value.id,
+      id: conversationId,
       lastMsgDigest: null,
       lastMsgId: null,
       unreadCount: 0,
