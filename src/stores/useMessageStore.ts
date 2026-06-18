@@ -58,6 +58,9 @@ function recordSendDiagnosticTrace(message: string, data?: Record<string, unknow
   void level
 }
 
+const CHANNEL_SYSTEM_MESSAGE_TYPE = 6
+const CHANNEL_DELETE_CONTROL_MSG_ID = 1
+
 function messageUsesWsSend(convType: number, msgType: number): boolean {
   // msgType 17 是频道多图消息，和图片/视频一样必须走实时发送链路。
   const wsTypes = [0, 1, 2, 3, 7, 8, 9, 12, 17, 18]
@@ -1158,6 +1161,13 @@ export const useMessageStore = defineStore('message', () => {
     }, { preserveListOrder: options?.preserveListOrder === true })
   }
 
+  function isChannelDeleteControlMessage(conversationId: string, messageId: string | number, msgType: string | number): boolean {
+    // 对齐旧 im：频道 msgId=1 + msgType=6 是删除/清空控制信号，不应作为普通加密内容展示或重试解密。
+    return Boolean(getChannelIdFromConversationId(conversationId))
+      && toFiniteNumber(messageId) === CHANNEL_DELETE_CONTROL_MSG_ID
+      && Number(msgType) === CHANNEL_SYSTEM_MESSAGE_TYPE
+  }
+
   function normalizeMessage(raw: any): Message {
     const extraObj = parseExtraObject(raw.extra)
     const extraStr = stringifyExtra(raw.extra)
@@ -1166,18 +1176,22 @@ export const useMessageStore = defineStore('message', () => {
       quoteMessage = extraObj.quoteMessage as QuoteMessageInfo
     }
     const { snapchatTime, deleteSeconds } = extractReadBurnMeta(raw, extraObj)
+    const id = String(raw.id ?? raw.msgId ?? raw.msg_id ?? '')
+    const conversationId = String(raw.conversationId ?? raw.conversation_id ?? '')
+    const msgType = Number(raw.msgType ?? raw.msg_type ?? 0)
+    const isChannelDeleteControl = isChannelDeleteControlMessage(conversationId, id, msgType)
     return {
-      id: String(raw.id ?? raw.msgId ?? raw.msg_id ?? ''),
+      id,
       customMsgId: raw.customMsgId ?? raw.custom_msg_id ?? null,
-      conversationId: String(raw.conversationId ?? raw.conversation_id ?? ''),
+      conversationId,
       senderId: String(raw.senderId ?? raw.sender_id ?? ''),
-      msgType: Number(raw.msgType ?? raw.msg_type ?? 0),
+      msgType,
       content: raw.content ?? null,
       sendTime: Number(raw.sendTime ?? raw.send_time ?? Date.now()),
       status: Number(raw.status ?? 0),
       readStatus: Number(raw.readStatus ?? raw.read_status ?? 0),
       version: Number(raw.version ?? 0),
-      isDeleted: Boolean(raw.isDeleted ?? raw.is_deleted ?? false),
+      isDeleted: Boolean(raw.isDeleted ?? raw.is_deleted ?? false) || isChannelDeleteControl,
       extra: extraStr,
       snapchatTime,
       deleteSeconds,
@@ -1544,7 +1558,6 @@ export const useMessageStore = defineStore('message', () => {
         })
         .filter((channelId) => !!channelId),
     ))
-
     for (const channelId of pendingChannelIds) {
       try {
         await ensureChannelRelKey(uid, channelId)
@@ -1566,6 +1579,19 @@ export const useMessageStore = defineStore('message', () => {
       const extra = parseExtraObject(message.extra) || {}
       const cipherHex = String(extra.cipherHex || '')
       if (!extra.decryptPending || !cipherHex) continue
+      if (isChannelDeleteControlMessage(conversationId, message.id, message.msgType)) {
+        const nextExtra = {
+          ...extra,
+          decryptPending: false,
+          skippedDecryptReason: 'channel-delete-control',
+        } as Record<string, unknown>
+        // 旧缓存里已落成普通 pending 的频道删除/清空控制信号，不能继续送进 AES 解密。
+        message.content = ''
+        message.isDeleted = true
+        message.extra = stringifyExtra(nextExtra)
+        persisted.push(message)
+        continue
+      }
 
       try {
         const plain = await tauriInvoke<string>('decrypt_channel_incoming', {
@@ -1705,6 +1731,9 @@ export const useMessageStore = defineStore('message', () => {
     item: ChannelHistoryMessage,
   ): Promise<Message | null> {
     if (!item.msgId || !item.channelId || String(item.channelId) !== channelId) return null
+    if (isChannelDeleteControlMessage(conversationId, item.msgId, item.msgType)) {
+      return null
+    }
     let content = '[加密消息，等待密钥同步]'
     let decryptPending = false
     try {
