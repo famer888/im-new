@@ -5,8 +5,8 @@ import { API_CONFIG } from '@/api/config'
 import { useFileStore } from '@/stores/useFileStore'
 import pkg from '../../../../package.json'
 import logo45 from '../../../../resources/icons_45/logo.png'
-import logo55 from '../../../../resources/icons_55/logo.png'
 import logo97 from '../../../../resources/icons_97/logo.png'
+import legacy55Logo from '@/assets/images/headNav/message/send-helper-logo-55.png'
 
 const { t } = useI18n()
 const fileStore = useFileStore()
@@ -14,9 +14,9 @@ const fileStore = useFileStore()
 const appVersion = ref(String(pkg.version ?? '1.0.0'))
 const brandLogoMap = {
   '45': logo45,
-  '55': logo55,
   '97': logo97,
 } as const
+type StandardBrandId = keyof typeof brandLogoMap
 
 const activeTasks = computed(() =>
   Array.from(fileStore.tasks.values()).filter((t) => t.status !== 'done'),
@@ -30,9 +30,14 @@ const hasAnyTasks = computed(
   () => activeTasks.value.length > 0 || completedTasks.value.length > 0,
 )
 
-// 文件助手品牌图要跟随当前打包品牌切换，避免 55/45 包仍显示固定的 97 素材。
-const brandLogo = computed(() => brandLogoMap[API_CONFIG.brandId] || logo97)
+// 55 传输助手沿用老 im 的独立 logo 位图，避免包图标的圆角素材误用到这里。
+const isLegacy55Brand = computed(() => API_CONFIG.brandId === '55')
+const brandLogo = computed(() =>
+  isLegacy55Brand.value ? legacy55Logo : (brandLogoMap[API_CONFIG.brandId as StandardBrandId] || logo97),
+)
 const brandNumber = computed(() => API_CONFIG.brandId)
+// 数字色值按品牌包对齐：45 默认沿用 55 蓝色，97 使用 97 紫蓝色。
+const brandNumberColor = computed(() => API_CONFIG.brandId === '97' ? 'rgb(63, 85, 200)' : 'rgb(22, 138, 255)')
 
 function formatProgress(progress: number): string {
   return Math.round(progress * 100) + '%'
@@ -57,7 +62,7 @@ onMounted(async () => {
         <div>
           <img class="login-icon" :src="brandLogo" alt="" />
         </div>
-        <h1 class="brand-number">{{ brandNumber }}</h1>
+        <h1 class="brand-number" :style="{ color: brandNumberColor }">{{ brandNumber }}</h1>
         <div class="version">{{ t('版本信息') }} {{ appVersion }}</div>
       </div>
     </div>
@@ -126,10 +131,8 @@ onMounted(async () => {
 
 .login-icon {
   width: 160px;
-  height: 160px;
+  height: auto;
   display: block;
-  border-radius: 50%;
-  object-fit: cover;
 }
 
 .brand-number {
@@ -144,7 +147,6 @@ onMounted(async () => {
   // 用轻微倾斜替代 italic，避免倾斜角度过大。
   display: inline-block;
   transform: skewX(-8deg);
-  color: #3369fe;
 }
 
 .version {
