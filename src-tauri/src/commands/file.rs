@@ -1,12 +1,12 @@
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{Local, NaiveDate};
-use futures_util::StreamExt;
+use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 #[cfg(target_os = "windows")]
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, SeekFrom};
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -2126,9 +2126,8 @@ pub async fn upload_oss_local_file(
         return Err("upload file key is empty".to_string());
     }
 
-    // 桌面端直接从本地路径分块加密，避免大媒体先转成 base64 再跨 IPC 传给 Rust。
-    let body = encrypt_local_file_to_bytes(&path, &request.file_key)?;
-    put_oss_bytes(
+    // 桌面端大视频直接边读边加密边上传，避免线上慢网时先把完整密文堆进内存再开始 PUT。
+    put_oss_local_file_stream(
         request.url,
         request.bucket,
         request.object_key,
@@ -2136,39 +2135,169 @@ pub async fn upload_oss_local_file(
         request.access_key_secret,
         request.security_token,
         request.content_type,
-        body,
-        None,
+        path,
+        request.file_key,
     )
     .await
 }
 
-fn encrypt_local_file_to_bytes(path: &Path, file_key: &str) -> Result<Vec<u8>, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("open upload file failed: {}", e))?;
-    let mut output = Vec::new();
-    let mut buffer = vec![0u8; crypto::file_crypto::ENCRYPT_CHUNK_SIZE];
+fn encrypted_upload_size(plain_size: u64) -> u64 {
+    if plain_size == 0 {
+        return 0;
+    }
+    let chunk_size = crypto::file_crypto::ENCRYPT_CHUNK_SIZE as u64;
+    let mut encrypted_size = 0;
+    let mut offset = 0;
+    while offset < plain_size {
+        let current_chunk = (plain_size - offset).min(chunk_size);
+        let remainder = current_chunk % 16;
+        // 每个明文分块独立做 PKCS7，恰好 16 字节对齐时也会补一个完整 block。
+        encrypted_size += current_chunk + if remainder == 0 { 16 } else { 16 - remainder };
+        offset += current_chunk;
+    }
+    encrypted_size
+}
 
-    loop {
-        let mut filled = 0usize;
-        while filled < buffer.len() {
-            let read = file
-                .read(&mut buffer[filled..])
-                .map_err(|e| format!("read upload file failed: {}", e))?;
-            if read == 0 {
-                break;
-            }
-            filled += read;
-        }
-        if filled == 0 {
-            break;
-        }
-        output.extend_from_slice(&crypto::file_crypto::encrypt_file_chunk(
-            &buffer[..filled],
+fn encrypted_local_file_stream(
+    file: tokio::fs::File,
+    file_key: String,
+) -> impl futures_util::Stream<Item = Result<Vec<u8>, std::io::Error>> {
+    struct State {
+        file: tokio::fs::File,
+        file_key: String,
+        buffer: Vec<u8>,
+    }
+
+    stream::try_unfold(
+        State {
+            file,
             file_key,
+            buffer: vec![0u8; crypto::file_crypto::ENCRYPT_CHUNK_SIZE],
+        },
+        |mut state| async move {
+            let mut filled = 0usize;
+            while filled < state.buffer.len() {
+                let read = state.file.read(&mut state.buffer[filled..]).await?;
+                if read == 0 {
+                    break;
+                }
+                filled += read;
+            }
+            if filled == 0 {
+                return Ok(None);
+            }
+
+            // 保持旧 im 的 PC 文件协议：100KiB 明文块逐块 AES 加密后顺序拼接上传。
+            let encrypted =
+                crypto::file_crypto::encrypt_file_chunk(&state.buffer[..filled], &state.file_key);
+            Ok(Some((encrypted, state)))
+        },
+    )
+}
+
+async fn put_oss_local_file_stream(
+    request_url: String,
+    bucket: String,
+    object_key: String,
+    access_key_id: String,
+    access_key_secret: String,
+    security_token: String,
+    content_type: String,
+    path: PathBuf,
+    file_key: String,
+) -> Result<OssPutObjectResult, String> {
+    let plain_size = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("stat upload file failed: {}", e))?
+        .len();
+    let body_len = encrypted_upload_size(plain_size);
+    let oss_date = oss_rfc1123_date();
+    let content_type = if content_type.trim().is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        content_type.trim().to_string()
+    };
+    let url =
+        url::Url::parse(&request_url).map_err(|e| format!("invalid oss upload url: {}", e))?;
+    let object_path = url.path().trim_start_matches('/');
+    let object_key = if object_path.is_empty() {
+        object_key.trim_start_matches('/')
+    } else {
+        object_path
+    };
+    let canonical_resource = format!("/{}/{}", bucket.trim(), object_key);
+    let canonical_headers = format!(
+        "x-oss-date:{}\nx-oss-security-token:{}\n",
+        oss_date, security_token
+    );
+    let string_to_sign = format!(
+        "PUT\n\n{}\n{}\n{}{}",
+        content_type, oss_date, canonical_headers, canonical_resource
+    );
+    let signature = hmac_sha1_base64(&access_key_secret, &string_to_sign);
+    let authorization = format!("OSS {}:{}", &access_key_id, signature);
+
+    tracing::info!(
+        target: "image-send",
+        "rust oss local stream put start url_host={} plain_bytes={} encrypted_bytes={} bucket={} object_key_head={} object_key_len={} content_type={}",
+        url.host_str().unwrap_or_default(),
+        plain_size,
+        body_len,
+        bucket,
+        object_key.chars().take(24).collect::<String>(),
+        object_key.len(),
+        content_type,
+    );
+
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| format!("open upload file failed: {}", e))?;
+    let request_timeout = upload_request_timeout(body_len);
+    let client = reqwest::Client::builder()
+        .timeout(request_timeout)
+        .build()
+        .map_err(|e| format!("create oss client failed: {}", e))?;
+    let stream = encrypted_local_file_stream(file, file_key);
+    let response = client
+        .put(url)
+        .header("Authorization", authorization)
+        .header("x-oss-date", oss_date)
+        .header("Content-Type", content_type)
+        .header("x-oss-security-token", security_token)
+        .header(reqwest::header::CONTENT_LENGTH, body_len)
+        .body(reqwest::Body::wrap_stream(stream))
+        .send()
+        .await
+        .map_err(|e| format!("oss put request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .unwrap_or_else(|e| format!("read oss response failed: {}", e));
+    let body_preview: String = text.chars().take(4000).collect();
+
+    tracing::info!(
+        target: "image-send",
+        "rust oss local stream put response status={} ok={} body_head={}",
+        status.as_u16(),
+        status.is_success(),
+        body_preview,
+    );
+
+    if !status.is_success() {
+        return Err(format!(
+            "oss put failed: HTTP {} {}",
+            status.as_u16(),
+            body_preview
         ));
     }
 
-    Ok(output)
+    Ok(OssPutObjectResult {
+        status: status.as_u16(),
+        ok: true,
+        body: body_preview,
+    })
 }
 
 async fn put_oss_bytes(
@@ -3471,6 +3600,44 @@ mod tests {
                 "https://b.example.com/file.png".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn encrypted_upload_size_matches_pc_chunk_padding() {
+        assert_eq!(encrypted_upload_size(0), 0);
+        assert_eq!(encrypted_upload_size(1), 16);
+        assert_eq!(encrypted_upload_size(16), 32);
+        assert_eq!(encrypted_upload_size(102_400), 102_416);
+        assert_eq!(encrypted_upload_size(102_401), 102_432);
+    }
+
+    #[tokio::test]
+    async fn encrypted_local_file_stream_matches_chunk_protocol() {
+        let key = "0123456789abcdef";
+        let mut plain = vec![0u8; crypto::file_crypto::ENCRYPT_CHUNK_SIZE + 17];
+        for (index, byte) in plain.iter_mut().enumerate() {
+            *byte = (index % 251) as u8;
+        }
+        let path = std::env::temp_dir().join(format!("ocs-stream-upload-{}.bin", Uuid::new_v4()));
+        tokio::fs::write(&path, &plain).await.expect("write temp upload file");
+
+        let file = tokio::fs::File::open(&path)
+            .await
+            .expect("open temp upload file");
+        let stream = encrypted_local_file_stream(file, key.to_string());
+        futures_util::pin_mut!(stream);
+        let mut actual = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            actual.extend_from_slice(&chunk.expect("read encrypted stream chunk"));
+        }
+        let _ = tokio::fs::remove_file(&path).await;
+
+        let mut expected = Vec::new();
+        for chunk in plain.chunks(crypto::file_crypto::ENCRYPT_CHUNK_SIZE) {
+            expected.extend_from_slice(&crypto::file_crypto::encrypt_file_chunk(chunk, key));
+        }
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len() as u64, encrypted_upload_size(plain.len() as u64));
     }
 
     #[tokio::test]

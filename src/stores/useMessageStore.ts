@@ -366,6 +366,11 @@ function isSingleImageMessage(conversationId: string, msgType: number): boolean 
   return String(conversationId || '').startsWith('0_') && (type === 1 || type === 9)
 }
 
+function isReusableLocalImagePlaceholder(conversationId: string, msgType: number): boolean {
+  const type = Number(msgType)
+  return /^(0|1)_/.test(String(conversationId || '')) && (type === 1 || type === 9)
+}
+
 function isSingleVideoMessage(conversationId: string, msgType: number): boolean {
   return String(conversationId || '').startsWith('0_') && Number(msgType) === 3
 }
@@ -473,11 +478,10 @@ function parseImageContentObject(content: string | null | undefined): Record<str
   }
 }
 
-function mergeSingleImageLocalPreviewContent(
+function mergeImageLocalPreviewContent(
   incomingContent: string | null | undefined,
   previousContent: string | null | undefined,
 ): string | null {
-  // 只合并单聊图片的本地预览字段，避免把本机 localPath 写进协议发送内容或影响群/频道消息。
   const incoming = parseImageContentObject(incomingContent)
   const previous = parseImageContentObject(previousContent)
   if (!incoming || !previous) return null
@@ -485,13 +489,24 @@ function mergeSingleImageLocalPreviewContent(
   const previousLocalPath = String(
     previous.localPath || previous.local_path || previous.filePath || previous.file_path || previous.local || '',
   ).trim()
-  if (!previousLocalPath) return null
+  const previousPreviewUrl = String(previous.localPreviewUrl || previous.local_preview_url || '').trim()
+    || [previous.thumbnailUrl, previous.thumbUrl, previous.url]
+      .map(value => String(value || '').trim())
+      .find(value => /^(data:image\/|blob:)/i.test(value))
+    || ''
 
-  // 单聊图片发送成功后保留本地预览路径，但让远端 url/fileKey 继续来自发送结果。
+  if (!previousLocalPath && !previousPreviewUrl) return null
+
+  // 发送成功后只在本地状态里保留预览，远端 url/fileKey 仍来自发送结果，避免改动真实协议内容。
   return JSON.stringify({
     ...incoming,
-    local: String(previous.local || previousLocalPath),
-    localPath: previousLocalPath,
+    ...(previousLocalPath
+      ? {
+          local: String(previous.local || previousLocalPath),
+          localPath: previousLocalPath,
+        }
+      : {}),
+    ...(previousPreviewUrl ? { localPreviewUrl: previousPreviewUrl } : {}),
   })
 }
 
@@ -2264,7 +2279,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     // 文件发送在上传前已插入本地占位；复用同一条消息，避免正式发送阶段重新追加导致状态/回执看起来卡住。
-    const canReuseClientPlaceholder = isSingleImageMessage(conversationId, msgType) || Number(msgType) === 7 || Number(msgType) === 17
+    const canReuseClientPlaceholder = isReusableLocalImagePlaceholder(conversationId, msgType) || Number(msgType) === 7 || Number(msgType) === 17
     const existingClientPlaceholder = clientMsgId && canReuseClientPlaceholder && !isFileHelperSend
       ? getMessages(conversationId).find((m) => m.id === clientMsgId || m.customMsgId === clientMsgId)
       : undefined
@@ -2791,8 +2806,8 @@ export const useMessageStore = defineStore('message', () => {
       const incomingDiceResult = getDiceResultFromContent(message.content)
       const previousDiceResult = getDiceResultFromContent(previous.content)
       const incomingHasContent = String(message.content ?? '').trim().length > 0
-      const mergedSingleImageContent = isSingleImageMessage(conversationId, message.msgType)
-        ? mergeSingleImageLocalPreviewContent(message.content, previous.content)
+      const mergedSingleImageContent = isReusableLocalImagePlaceholder(conversationId, message.msgType)
+        ? mergeImageLocalPreviewContent(message.content, previous.content)
         : null
       let nextContent = message.content
       if (mergedSingleImageContent) {

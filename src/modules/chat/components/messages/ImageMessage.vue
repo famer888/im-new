@@ -136,13 +136,15 @@ const imageData = computed((): {
   thumbnailUrl: string
   name: string
   localPath: string
+  localPreviewUrl: string
   fileKey: string
   width: number
   height: number
   size: number
 } => {
+  const empty = { url: '', thumbnailUrl: '', name: '', localPath: '', localPreviewUrl: '', fileKey: '', width: 0, height: 0, size: 0 }
   const raw = (props.message.content ?? '').trim()
-  if (!raw) return { url: '', thumbnailUrl: '', name: '', localPath: '', fileKey: '', width: 0, height: 0, size: 0 }
+  if (!raw) return empty
 
   try {
     const parsed = JSON.parse(raw)
@@ -158,11 +160,16 @@ const imageData = computed((): {
       parsed.thumbnailUrl || parsed.thumbUrl || parsed.thumbnail || parsed.thumbBase64 || parsed.thumb_base64 || url,
       parsed.thumbMimeType || parsed.thumb_mime_type || parsed.mimeType || parsed.mime_type || parsed.mime,
     )
+    const localPreviewUrl = normalizeImageSrc(
+      parsed.localPreviewUrl || parsed.local_preview_url || '',
+      parsed.mimeType || parsed.mime_type || parsed.mime,
+    )
     return {
       url,
       thumbnailUrl,
       name,
       localPath,
+      localPreviewUrl,
       fileKey: String(parsed.fileKey || parsed.file_key || '').trim(),
       width: Number(parsed.width || 0),
       height: Number(parsed.height || 0),
@@ -178,6 +185,7 @@ const imageData = computed((): {
       thumbnailUrl: normalizedThumbUrl || normalizedUrl,
       name: '',
       localPath: '',
+      localPreviewUrl: '',
       fileKey: '',
       width: 0,
       height: 0,
@@ -206,9 +214,26 @@ const isOwnImageMessage = computed(() => {
   return (type === 1 || type === 9)
     && String(props.message.senderId || '') === String(authStore.uid || '')
 })
-const localPreviewSrc = computed(() => localSourcePath.value ? toDisplayImageSrc(localSourcePath.value) : '')
-// 有本地路径时先显示本地资源，规避 Tauri WebView 对 blob: 图片的加载限制。
-const shouldUseLocalPreview = computed(() => isOwnImageMessage.value && Boolean(localPreviewSrc.value))
+const localPreviewSrc = computed(() => {
+  if (localSourcePath.value) return toDisplayImageSrc(localSourcePath.value)
+  return toDisplayImageSrc(imageData.value.localPreviewUrl)
+})
+const hasLocalPreviewPayload = computed(() => Boolean(
+  localPreviewSrc.value
+  && (
+    imageData.value.localPath
+    || imageData.value.localPreviewUrl
+    || /^data:image\//i.test(imageData.value.thumbnailUrl)
+    || /^blob:/i.test(imageData.value.thumbnailUrl)
+  ),
+))
+// 发送成功回包可能先更新 status/senderId，再合并本地预览；只要内容里还带本地预览，就优先稳定显示本地图。
+const shouldUseLocalPreview = computed(() => {
+  const type = Number(props.message.msgType)
+  return (type === 1 || type === 9)
+    && hasLocalPreviewPayload.value
+    && (isOwnImageMessage.value || Boolean(extraData.value.__clientMsgId))
+})
 const downloadUrl = computed(() => {
   const original = imageData.value.url
   const thumbnail = thumbnailUrl.value
@@ -319,6 +344,7 @@ const imageCacheKey = computed(() => [
   props.message.customMsgId || '',
   imageData.value.name || '',
   localSourcePath.value || '',
+  imageData.value.localPreviewUrl || '',
   downloadUrl.value || imageData.value.url || '',
   thumbnailUrl.value || '',
   fileKey.value || '',
@@ -537,6 +563,15 @@ async function retryAfterInvalidLocalCache(): Promise<boolean> {
 
 async function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
+  if (shouldUseLocalPreview.value && activeSrc.value !== localPreviewSrc.value) {
+    // 远端源切换瞬间失败时回到本地预览，不把可恢复错误展示成“图片加载失败”。
+    localFilePath.value = localSourcePath.value
+    activeSrc.value = localPreviewSrc.value
+    isLoaded.value = false
+    loadError.value = false
+    markLoadedIfImageAlreadyComplete()
+    return
+  }
   if (fallbackFromLocalPreviewError()) return
   if (await retryAfterInvalidLocalCache()) return
   const originalUrl = imageData.value.url
