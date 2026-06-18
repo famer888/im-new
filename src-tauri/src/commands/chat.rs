@@ -1384,10 +1384,9 @@ pub fn derive_channel_rel_key(
         Ok(rel) => {
             tracing::info!(
                 target: "e2ee",
-                "derive_channel_rel_key OK channel_id={} relkey_len={} relkey_head={}",
+                "derive_channel_rel_key OK channel_id={} relkey_len={}",
                 channel_id,
-                rel.len(),
-                safe_head(&rel, 8)
+                rel.len()
             );
             Ok(rel)
         }
@@ -2247,14 +2246,20 @@ pub async fn mark_message_sent(
     db.with_connection(&uid, |conn| {
         let local_row = conn
             .query_row(
-                "SELECT msg_type, content FROM messages WHERE custom_msg_id = ?1 AND conversation_id = ?2",
+                "SELECT rowid, msg_type, content FROM messages WHERE custom_msg_id = ?1 AND conversation_id = ?2",
                 rusqlite::params![request.custom_msg_id, request.conversation_id],
-                |row| Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         let local_exists = local_row.is_some();
-        let (local_msg_type, local_content) = local_row.unwrap_or((0, None));
+        let (local_rowid, local_msg_type, local_content) = local_row.unwrap_or((0, 0, None));
 
         let duplicate = if local_exists {
             conn.query_row(
@@ -2340,10 +2345,11 @@ pub async fn mark_message_sent(
         }
 
         if local_exists {
+            // 回执和历史/推送可能先后写入同一条服务端消息；升级本地 flag 前先清掉同会话里的服务端 id 重复行。
             conn.execute(
                 "DELETE FROM messages
-                 WHERE id = ?1 AND conversation_id = ?2 AND COALESCE(custom_msg_id, '') <> ?3",
-                rusqlite::params![server_id, request.conversation_id, request.custom_msg_id],
+                 WHERE id = ?1 AND conversation_id = ?2 AND rowid <> ?3",
+                rusqlite::params![server_id, request.conversation_id, local_rowid],
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         }
