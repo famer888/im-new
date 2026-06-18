@@ -38,6 +38,10 @@ function imageKeyDebugLog(message: string, data: Record<string, unknown> = {}, l
   void level
 }
 
+function safeKeyHead(value: unknown, size = 12): string {
+  return String(value || '').slice(0, size)
+}
+
 /** 账号维度持久化到 localStorage 的 key lifecycle 数据。 */
 interface OwnKeyPair {
   /** 32 字节 curve25519 私钥（HEX 大写）。 */
@@ -826,16 +830,21 @@ export async function ensureGroupRelKey(
       e2eeDebugLog('[e2ee] ensureGroupRelKey DONE', {
         gid,
         relKeyLen: relKey.length,
-        relKeyHead: relKey.slice(0, 8),
       })
       return relKey
     } catch (err) {
-      console.error('[e2ee] derive_group_rel_key FAILED', {
+      // 诊断群密钥失败时只输出长度和短摘要，避免把完整 publicKey/msgKey 打进日志。
+      const safeErrorData = {
+        uid: String(uid),
         gid,
         err: String(err),
-        publicKey: String(gkp.publicKey),
-        msgKey: String(gkp.msgKey),
-      })
+        publicKeyLen: String(gkp.publicKey).length,
+        publicKeyHead: safeKeyHead(gkp.publicKey),
+        msgKeyLen: String(gkp.msgKey).length,
+        msgKeyHead: safeKeyHead(gkp.msgKey),
+        keyVersion: gkp?.keyVersion,
+      }
+      console.error('[e2ee] derive_group_rel_key FAILED', safeErrorData)
       throw err
     }
   })().finally(() => {
@@ -927,16 +936,21 @@ export async function ensureChannelRelKey(
       e2eeDebugLog('[e2ee] ensureChannelRelKey DONE', {
         cid,
         relKeyLen: relKey.length,
-        relKeyHead: relKey.slice(0, 8),
       })
       return relKey
     } catch (err) {
-      console.error('[e2ee] derive_channel_rel_key FAILED', {
+      // 诊断频道密钥失败时只输出长度和短摘要，避免把完整 publicKey/msgKey 打进日志。
+      const safeErrorData = {
+        uid: String(uid),
         cid,
         err: String(err),
-        publicKey: String(ckp.publicKey),
-        msgKey: String(ckp.msgKey),
-      })
+        publicKeyLen: String(ckp.publicKey).length,
+        publicKeyHead: safeKeyHead(ckp.publicKey),
+        msgKeyLen: String(ckp.msgKey).length,
+        msgKeyHead: safeKeyHead(ckp.msgKey),
+        keyVersion: ckp?.keyVersion,
+      }
+      console.error('[e2ee] derive_channel_rel_key FAILED', safeErrorData)
       throw err
     }
   })().finally(() => {
