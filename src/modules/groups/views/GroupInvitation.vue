@@ -661,11 +661,11 @@ async function verifyGroupAvailableBeforeOpen(item: GroupReqItem): Promise<boole
   groupDetailCheckCache.set(groupId, { valid: isAvailable, checkedAt: Date.now() })
   if (!isAvailable) return false
 
-  // 详情校验通过后回填群资料，避免进入会话后显示旧名称/旧头像。
+  // 详情校验通过后回填群资料；接口可能返回空字符串，需保留群通知里的名称避免进入空标题会话。
   groupStore.upsertGroup({
     id: groupId,
-    name: groupBase.name ?? groupBase.groupName ?? item.groupName,
-    avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar ?? item.pic ?? null,
+    name: groupBase.name || groupBase.groupName || item.groupName || groupId,
+    avatar: groupBase.pic || groupBase.avatar || groupBase.groupAvatar || item.pic || null,
     ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
     memberCount: Number(groupBase.memberCount ?? 0),
     groupAliasName: groupBase.groupAliasName ?? null,

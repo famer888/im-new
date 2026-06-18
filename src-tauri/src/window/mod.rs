@@ -328,19 +328,43 @@ impl WindowManager {
             url::form_urlencoded::byte_serialize(data_json.as_bytes()).collect::<String>();
         let notification_url = format!("/#/notification?data={}", data_query);
 
-        let window =
+        let builder =
             WebviewWindowBuilder::new(app, &label, WebviewUrl::App(notification_url.into()))
                 .title("Notification")
                 .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
                 .resizable(false)
                 .decorations(false)
                 .transparent(true)
-                .always_on_top(true)
-                .build()
-                .map_err(|e| WindowError::TauriError(e.to_string()))?;
+                .always_on_top(true);
+
+        #[cfg(target_os = "windows")]
+        let builder = {
+            // Windows WebView2 can expose its default white surface before Vue paints;
+            // keep the reminder hidden until the page has rendered its first frame.
+            builder.skip_taskbar(true).visible(false)
+        };
+
+        let window = builder
+            .build()
+            .map_err(|e| WindowError::TauriError(e.to_string()))?;
 
         // Keep the reminder above the Dock/taskbar by using the monitor work area.
         Self::position_notification_window(&window, index, NOTICE_HEIGHT);
+
+        #[cfg(target_os = "windows")]
+        {
+            let app_for_reveal = app.clone();
+            let label_for_reveal = label.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                // Windows 通知窗由前端首帧后主动 show；这里兜底，避免隐藏窗口因 JS 时序异常一直不可见。
+                if let Some(w) = app_for_reveal.get_webview_window(&label_for_reveal) {
+                    if !w.is_visible().ok().unwrap_or(false) {
+                        let _ = w.show();
+                    }
+                }
+            });
+        }
 
         labels.push_back(label);
 
