@@ -286,7 +286,7 @@ function parseGroupTarget(groupInfo: GroupDetailFromQrCodeResp): AddGroupTarget 
   return {
     id,
     name: String(groupBase.name ?? groupBase.groupName ?? ''),
-    avatar: String(groupBase.pic ?? groupBase.icon ?? groupBase.avatar ?? ''),
+    avatar: String(groupBase.pic ?? groupBase.icon ?? groupBase.avatar ?? groupBase.groupAvatar ?? ''),
     memberCount: Number(groupBase.memberCount ?? groupBase.member_count ?? 0),
     groupAliasName: String(groupBase.groupAliasName ?? groupBase.groupAlias ?? ''),
     ownerId: groupBase.hostId == null ? null : String(groupBase.hostId),
@@ -350,11 +350,15 @@ function parseMemberProfile(raw: any): MemberInfoProfile | null {
 }
 
 async function isAlreadyInGroup(groupId: string, serverMember: boolean): Promise<boolean> {
-  if (serverMember || groupStore.getGroup(groupId)) return true
+  if (groupStore.getGroup(groupId)) return true
   if (authStore.uid && groupStore.groups.length === 0) {
     await groupStore.loadGroups(authStore.uid)
   }
-  return Boolean(groupStore.getGroup(groupId))
+  if (!groupStore.getGroup(groupId) && serverMember && authStore.uid) {
+    // 服务端确认已在群时，主动刷新群通讯录，避免只用链接返回的空资料创建占位群会话。
+    await groupStore.loadGroups(authStore.uid, { forceApi: true })
+  }
+  return serverMember || Boolean(groupStore.getGroup(groupId))
 }
 
 async function isAlreadyInChannel(channelId: string, serverMember: boolean): Promise<boolean> {
@@ -366,13 +370,15 @@ async function isAlreadyInChannel(channelId: string, serverMember: boolean): Pro
 }
 
 function openGroupConversation(target: AddGroupTarget) {
+  const cachedGroup = groupStore.getGroup(target.id)
   groupStore.upsertGroup({
     id: target.id,
-    name: target.name || target.id,
-    avatar: target.avatar,
-    ownerId: target.ownerId,
-    memberCount: target.memberCount,
-    groupAliasName: target.groupAliasName,
+    // 已在群时优先沿用本地群资料，防止群链接接口空字段把会话名/头像降级成占位展示。
+    name: target.name || cachedGroup?.name || target.id,
+    avatar: target.avatar || cachedGroup?.avatar || '',
+    ownerId: target.ownerId || cachedGroup?.ownerId || null,
+    memberCount: target.memberCount || cachedGroup?.memberCount || 0,
+    groupAliasName: target.groupAliasName || cachedGroup?.groupAliasName || '',
     updatedAt: Date.now(),
   })
 
