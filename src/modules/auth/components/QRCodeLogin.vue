@@ -31,7 +31,8 @@ const loginToken = ref('')
 const officialUrl = ref(API_CONFIG.officialUrl)
 const isOutTime = ref(false)
 const qrCodeUrlError = ref(false)
-const isLoading = ref(false)
+// 对齐老 im：登录首屏始终保留二维码布局，加载只覆盖二维码区域。
+const isLoading = ref(true)
 const isScanned = ref(false)
 const isScanCancelled = ref(false)
 const hasLoadedFirstQr = ref(false)
@@ -70,7 +71,6 @@ const lastAvatarDisplaySrc = computed(() => {
 })
 
 const qrCodeValue = computed(() => {
-  if (!loginToken.value) return ''
   return `${officialUrl.value}?token=${loginToken.value}&imQrCodeType=2`
 })
 
@@ -81,14 +81,8 @@ const currentBaseUrl = computed(() => {
 })
 
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
-const showStartupLoading = computed(() => !hasLoadedFirstQr.value && !loginToken.value && !qrCodeUrlError.value)
 const overlayText = computed(() => {
   if (qrCodeUrlError.value) return t('登录二维码获取失败!')
-  return ''
-})
-const scanMaskText = computed(() => {
-  if (isScanCancelled.value) return t('用户已取消扫码')
-  if (isScanned.value) return t('用户已扫码请在手机确认')
   return ''
 })
 
@@ -731,54 +725,36 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="comEcode">
-    <template v-if="showStartupLoading">
-      <div class="startupBox">
-        <img :src="defaultLogo" />
-        <span class="startupSpinner"></span>
-      </div>
-    </template>
-
-    <template v-else>
-      <div class="lastBox">
-        <img
-          :src="lastAvatarDisplaySrc"
-          @error="handleLastAvatarError"
-          @click="emit('show-network')"
+    <div class="lastBox">
+      <img
+        :src="lastAvatarDisplaySrc"
+        @error="handleLastAvatarError"
+        @click="emit('show-network')"
+      />
+      <div v-if="lastLoginInfo.name">{{ lastLoginInfo.name }}</div>
+    </div>
+    <section @click="handleReGetQrCodeUrl">
+      <div class="qrCodeBox">
+        <qrcode-vue
+          class="ecode"
+          :value="qrCodeValue"
+          level="H"
+          :size="160"
         />
-        <div v-if="lastLoginInfo.name">{{ lastLoginInfo.name }}</div>
-      </div>
-      <section @click="handleReGetQrCodeUrl">
-        <div class="qrCodeBox">
-          <qrcode-vue
-            v-if="loginToken"
-            class="ecode"
-            :value="qrCodeValue"
-            level="H"
-            :size="160"
+        <p v-if="showOverlay">
+          <img
+            :src="freshIcon"
+            :class="{ load: isLoading }"
           />
-          <div v-else class="ecode ecode-placeholder" />
-          <div
-            v-if="scanMaskText"
-            class="scanMask"
-            :class="{ cancelled: isScanCancelled }"
-          >
-            <span>{{ scanMaskText }}</span>
-          </div>
-          <p v-if="showOverlay">
-            <img
-              :src="freshIcon"
-              :class="{ load: isLoading }"
-            />
-            <span v-if="overlayText">{{ overlayText }}</span>
-          </p>
-        </div>
-      </section>
-      <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
-      <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
-      <button class="primaryBtn" @click="emit('show-import')">
-        {{ t('载入账户设置') }}
-      </button>
-    </template>
+          <span v-if="overlayText">{{ overlayText }}</span>
+        </p>
+      </div>
+    </section>
+    <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
+    <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
+    <button class="primaryBtn" @click="emit('show-import')">
+      {{ t('载入账户设置') }}
+    </button>
   </div>
 </template>
 
@@ -787,30 +763,6 @@ onBeforeUnmount(() => {
   position: relative;
   text-align: center;
   margin-top: 40px;
-
-  .startupBox {
-    height: 340px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 18px;
-
-    > img {
-      width: 64px;
-      height: 64px;
-      object-fit: contain;
-    }
-  }
-
-  .startupSpinner {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    border: 2px solid rgba(51, 105, 254, 0.16);
-    border-top-color: #3369fe;
-    animation: load 0.8s linear infinite;
-  }
 
   a {
     position: relative;
@@ -838,36 +790,6 @@ onBeforeUnmount(() => {
     .ecode {
       display: block;
       margin: 0 auto;
-    }
-
-    .ecode-placeholder {
-      width: 160px;
-      height: 160px;
-      border-radius: 12px;
-      background:
-        linear-gradient(135deg, rgba(51, 105, 254, 0.08), rgba(51, 105, 254, 0.16));
-      border: 1px solid rgba(51, 105, 254, 0.12);
-    }
-
-    .scanMask {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
-      background-color: rgba(255, 255, 255, 0.9);
-
-      > span {
-        color: #3369fe;
-        font-size: 14px;
-        line-height: 20px;
-        font-weight: 500;
-      }
-
-      &.cancelled > span {
-        color: #f44e5a;
-      }
     }
 
     .qrCodeBox > p {
