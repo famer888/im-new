@@ -1,4 +1,5 @@
 export const MEDIA_VIEWER_STORAGE_KEY = 'media_viewer_state'
+const MEDIA_VIEWER_CHANNEL = 'media_viewer_state_channel'
 
 export type MediaViewerType = 'image' | 'video' | 'file'
 export type MediaViewerFileKind = 'excel' | 'pdf' | 'docx'
@@ -37,16 +38,26 @@ function parsePayload(raw: string | null): MediaViewerPayload | null {
 
 class MediaViewerState {
   private listeners = new Set<Listener>()
+  private channel: BroadcastChannel | null = null
 
   constructor() {
     if (typeof window !== 'undefined') {
       window.addEventListener('storage', this.handleStorage)
+      if (typeof BroadcastChannel !== 'undefined') {
+        this.channel = new BroadcastChannel(MEDIA_VIEWER_CHANNEL)
+        this.channel.addEventListener('message', this.handleBroadcast)
+      }
     }
   }
 
   private handleStorage = (event: StorageEvent) => {
     if (event.key !== MEDIA_VIEWER_STORAGE_KEY) return
     const payload = parsePayload(event.newValue)
+    this.listeners.forEach((listener) => listener(payload))
+  }
+
+  private handleBroadcast = (event: MessageEvent) => {
+    const payload = parsePayload(JSON.stringify(event.data ?? null))
     this.listeners.forEach((listener) => listener(payload))
   }
 
@@ -62,6 +73,9 @@ class MediaViewerState {
       timestamp: Date.now(),
     }
     window.localStorage.setItem(MEDIA_VIEWER_STORAGE_KEY, JSON.stringify(nextPayload))
+    // Tauri 多窗口里 storage 事件偶尔不到达已打开的预览窗口；广播通道确保连续打开文件时不会沿用上一份预览数据。
+    this.channel?.postMessage(nextPayload)
+    this.listeners.forEach((listener) => listener(nextPayload))
   }
 
   subscribe(listener: Listener) {
