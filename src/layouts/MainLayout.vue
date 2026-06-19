@@ -112,6 +112,15 @@ let activeGroupMemberSyncInFlight = false
 let lastActiveGroupMemberSyncAt = 0
 let imageOverwriteResolver: ((value: boolean) => void) | null = null
 const GROUP_NOTICE_UID_PLACEHOLDER_RE = /#\{uids:([^}]+)\}/
+const LEGACY_TEXT_COPY_MESSAGE_TYPES = new Set<number>([
+  MessageType.Text,
+  MessageType.Html2,
+  MessageType.System,
+  MessageType.Notice,
+  50,
+  51,
+  52,
+])
 let initTraceStartedAt = 0
 let initHeartbeatTimer: number | null = null
 let currentInitStep = ''
@@ -294,6 +303,64 @@ function terminalDebugLog(
   void message
   void data
   void level
+}
+
+function copyDebugPreview(value: unknown, limit = 160): string {
+  const text = String(value ?? '')
+  return text.length > limit ? `${text.slice(0, limit)}...(len=${text.length})` : text
+}
+
+function copyDebugLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
+  console.warn(`[copy-debug] ${message}`, data)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[copy-debug] ${message}`,
+        data,
+      },
+    }))
+    .catch(() => {})
+}
+
+function getCopyDebugMessageData(data: Record<string, unknown>): Record<string, unknown> {
+  const content = String(data.content || '')
+  const selectedText = String(data.selectedText || '')
+  const extraText = typeof data.extra === 'string' ? data.extra : JSON.stringify(data.extra || {})
+  const msgType = Number(data.msgType ?? 0)
+  const readBurn = isReadBurnMessage(data)
+  return {
+    currentConversationId: chatStore.currentConversationId,
+    currentConversationType: chatStore.currentConversation?.type ?? null,
+    currentTargetId: chatStore.currentConversation?.targetId ?? '',
+    dataConversationType: data.conversationType ?? null,
+    messageId: data.messageId || data.msgId || data.id || '',
+    customMsgId: data.customMsgId || '',
+    senderId: data.senderId || '',
+    senderName: data.senderName || '',
+    isSelf: data.isSelf ?? null,
+    avatarMenu: data.avatarMenu ?? false,
+    msgTypeRaw: data.msgType,
+    msgTypeNumber: msgType,
+    readStatus: data.readStatus ?? null,
+    deleteSeconds: data.deleteSeconds ?? 0,
+    readBurn,
+    isGroupIntroNotice: data.isGroupIntroNotice ?? false,
+    contentLength: content.length,
+    contentHead: copyDebugPreview(content),
+    contentTail: content.length > 160 ? content.slice(-160) : '',
+    selectedTextLength: selectedText.length,
+    selectedTextHead: copyDebugPreview(selectedText),
+    selectedTextTail: selectedText.length > 160 ? selectedText.slice(-160) : '',
+    extraType: typeof data.extra,
+    extraHead: copyDebugPreview(extraText),
+    imageSrcHead: copyDebugPreview(data.imageSrc),
+    imagePath: data.imagePath || '',
+    supportsTextCopy: messageSupportsCopy(data.msgType),
+    supportsImageCopy: messageSupportsImageCopy(data),
+    supportsVideoCopy: messageSupportsVideoCopy(data),
+  }
 }
 
 function pathBaseName(filePath: string): string {
@@ -931,11 +998,8 @@ function handleGlobalInviteInvited(payload?: { message?: string; type?: 'success
 
 function messageSupportsCopy(msgType: unknown): boolean {
   const t = Number(msgType)
-  // 对齐旧 im：通知类提示消息也允许复制，便于用户转贴给客服或同事排查。
-  return t === MessageType.Text
-    || t === MessageType.Html2
-    || t === MessageType.System
-    || t === MessageType.Notice
+  // 对齐旧 im：50/51/52 是服务端下发的文本类通知，仍按文本消息允许右键复制。
+  return LEGACY_TEXT_COPY_MESSAGE_TYPES.has(t)
 }
 
 function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
@@ -1086,7 +1150,35 @@ function normalizeCopyTextContent(rawContent: unknown, extraData: Record<string,
 
 async function writeTextClipboard(text: string) {
   // 文本复制统一走兼容工具：桌面原生优先，Web Clipboard 失败后回落到旧 im 的 execCommand。
+  copyDebugLog('write text clipboard start', {
+    textLength: String(text || '').length,
+    textHead: copyDebugPreview(text),
+    textTail: String(text || '').length > 160 ? String(text || '').slice(-160) : '',
+    isTauri: Boolean((window as any).__TAURI_INTERNALS__),
+    hasNavigatorClipboard: Boolean(navigator.clipboard?.writeText),
+  }, 'info')
   await writeClipboardText(text)
+  if ((window as any).__TAURI_INTERNALS__) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const actual = await invoke<string>('read_clipboard_text')
+      // 复制成功后立刻读回，判断系统剪贴板是否真的变成目标文本。
+      copyDebugLog('write text clipboard readback', {
+        expectedLength: String(text || '').length,
+        actualLength: String(actual || '').length,
+        exactMatch: String(actual || '') === String(text || ''),
+        actualHead: copyDebugPreview(actual),
+        actualTail: String(actual || '').length > 160 ? String(actual || '').slice(-160) : '',
+      }, String(actual || '') === String(text || '') ? 'info' : 'warn')
+    } catch (error) {
+      copyDebugLog('write text clipboard readback failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }, 'warn')
+    }
+  }
+  copyDebugLog('write text clipboard success', {
+    textLength: String(text || '').length,
+  }, 'info')
 }
 
 function getGroupReadTotal(data: Record<string, unknown>): number {
@@ -2317,6 +2409,13 @@ async function copyMessageText(data: Record<string, unknown>) {
   // 选中消息局部文字后右键复制时，优先复制选区；未选中时保持复制整条消息。
   const selectedText = String(data.selectedText || '')
   const text = selectedText || normalizeCopyTextContent(data.content, parseMessageExtra(data))
+  copyDebugLog('copy message text resolved', {
+    ...getCopyDebugMessageData(data),
+    copySource: selectedText ? 'selectedText' : 'messageContent',
+    resolvedTextLength: text.length,
+    resolvedTextHead: copyDebugPreview(text),
+    resolvedTextTail: text.length > 160 ? text.slice(-160) : '',
+  }, 'info')
   await writeTextClipboard(text)
 }
 
@@ -2630,15 +2729,22 @@ const contextMenuItems = computed((): MenuItem[] => {
     if (data.avatarMenu === true && data.conversationType === ConversationType.Group) {
       // 对齐旧 im：群聊头像右键只显示“@成员”，避免出现复制/删除等消息菜单。
       const memberName = String(data.senderName || '').replace(/^@+/, '').trim()
-      if (!memberName) return []
-      return [{ key: 'at_member', label: `@${memberName}` }]
+      const avatarItems = memberName ? [{ key: 'at_member', label: `@${memberName}` }] : []
+      copyDebugLog('message menu built for avatar', {
+        ...getCopyDebugMessageData(data),
+        itemKeys: avatarItems.map((item) => item.key),
+      }, 'info')
+      return avatarItems
     }
 
     const items: MenuItem[] = []
     const readBurnOnlyDelete = isReadBurnMessage(data)
     const isGroupIntroNoticeMenu = Boolean(data.isGroupIntroNotice)
+    const supportsTextCopy = messageSupportsCopy(data.msgType)
+    const supportsImageCopy = messageSupportsImageCopy(data)
+    const supportsVideoCopy = messageSupportsVideoCopy(data)
 
-    if (!readBurnOnlyDelete && (messageSupportsCopy(data.msgType) || messageSupportsImageCopy(data) || messageSupportsVideoCopy(data))) {
+    if (!readBurnOnlyDelete && (supportsTextCopy || supportsImageCopy || supportsVideoCopy)) {
       items.push({ key: 'copy', label: t('复制'), iconSrc: menuCopy })
     }
 
@@ -2682,6 +2788,16 @@ const contextMenuItems = computed((): MenuItem[] => {
         children: getGroupReadUserMenuItems(data),
       })
     }
+    copyDebugLog('message menu built', {
+      ...getCopyDebugMessageData(data),
+      itemKeys: items.map((item) => item.key),
+      hasCopyItem: items.some((item) => item.key === 'copy'),
+      readBurnOnlyDelete,
+      isGroupIntroNoticeMenu,
+      supportsTextCopy,
+      supportsImageCopy,
+      supportsVideoCopy,
+    }, 'info')
     return items
   }
   return []
@@ -2712,25 +2828,48 @@ async function handleContextMenuSelect(key: string) {
   if (data.type === 'message') {
     const msgId = data.messageId as string
     const convId = chatStore.currentConversationId
-    if (isReadBurnMessage(data) && key !== 'delete_everyone' && key !== 'delete_local') return
+    copyDebugLog('message menu select', {
+      ...getCopyDebugMessageData(data),
+      key,
+    }, 'info')
+    if (isReadBurnMessage(data) && key !== 'delete_everyone' && key !== 'delete_local') {
+      copyDebugLog('message menu select ignored by read burn', {
+        ...getCopyDebugMessageData(data),
+        key,
+      }, 'warn')
+      return
+    }
     switch (key) {
       case 'copy': {
         if (messageSupportsImageCopy(data)) {
           try {
             await copyMessageImage(data)
+            copyDebugLog('copy image success', getCopyDebugMessageData(data), 'info')
             showToast(t('复制成功'))
           } catch (error) {
             console.warn('[clipboard] copy image failed:', error)
+            copyDebugLog('copy image failed', {
+              ...getCopyDebugMessageData(data),
+              error: error instanceof Error ? error.message : String(error),
+            }, 'error')
             showToast(t('复制失败'), 'error')
           }
           break
         }
-        if (!messageSupportsCopy(data.msgType)) break
+        if (!messageSupportsCopy(data.msgType)) {
+          copyDebugLog('copy text ignored by unsupported msgType', getCopyDebugMessageData(data), 'warn')
+          break
+        }
         try {
           await copyMessageText(data)
+          copyDebugLog('copy text success', getCopyDebugMessageData(data), 'info')
           showToast(t('复制成功'))
         } catch (error) {
           console.warn('[clipboard] copy text failed:', error)
+          copyDebugLog('copy text failed', {
+            ...getCopyDebugMessageData(data),
+            error: error instanceof Error ? error.message : String(error),
+          }, 'error')
           showToast(t('复制失败'), 'error')
         }
         break

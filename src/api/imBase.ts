@@ -30,6 +30,28 @@ function concatUint8Arrays(...arrays: Uint8Array[]): Uint8Array {
   return result
 }
 
+function isTauriRuntime(): boolean {
+  if (typeof window === 'undefined') return false
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
+}
+
+function decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(String(base64 || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes.buffer
+}
+
 function getSignedJsonHeaders() {
   return getSignedApiHeaders()
 }
@@ -70,24 +92,74 @@ function logUploadConfigResponse(path: string, data: unknown) {
   }
 }
 
+type SignedJsonHttpResponse = {
+  ok: boolean
+  status: number
+  arrayBuffer: () => Promise<ArrayBuffer>
+  errorText?: string
+}
+
+type TauriBinaryProxyResponse = {
+  ok: boolean
+  status: number
+  bodyBase64: string
+  error?: string
+}
+
+async function sendSignedJsonRequest(
+  url: string,
+  headers: Record<string, string>,
+  packet: Uint8Array,
+): Promise<SignedJsonHttpResponse> {
+  // Tauri 没有旧 im/Electron 的 CORS hook，桌面端签名 JSON 请求也交给主进程发送，避免 Windows WebView2 报 Failed to fetch。
+  if (isTauriRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<TauriBinaryProxyResponse>('proxy_http_binary', {
+      request: {
+        url,
+        method: 'POST',
+        headers,
+        bodyBase64: encodeBase64(packet),
+      },
+    }).catch((error) => {
+      throw new Error(error instanceof Error ? error.message : String(error))
+    })
+    const responseBodyBuffer = decodeBase64ToArrayBuffer(result.bodyBase64 || '')
+    return {
+      ok: !!result.ok,
+      status: Number(result.status || 0),
+      arrayBuffer: async () => responseBodyBuffer,
+      errorText: result.error || '',
+    }
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: packet.buffer as ArrayBuffer,
+  })
+  return {
+    ok: response.ok,
+    status: response.status,
+    arrayBuffer: () => response.arrayBuffer(),
+  }
+}
+
 async function requestSignedJson<T>(
   path: string,
   data: Record<string, unknown>,
   options?: { baseUrl?: string; headers?: Record<string, string> },
 ): Promise<T> {
   const base = options?.baseUrl || getBaseUrl()
-  const response = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      Accept: 'application/json',
-      ...(options?.headers || getSignedJsonHeaders()),
-    },
-    body: encodeSignedJsonPacket(data).buffer as ArrayBuffer,
-  })
+  const headers = {
+    'Content-Type': 'application/octet-stream',
+    Accept: 'application/json',
+    ...(options?.headers || getSignedJsonHeaders()),
+  }
+  const response = await sendSignedJsonRequest(`${base}${path}`, headers, encodeSignedJsonPacket(data))
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+    throw new Error(response.errorText || `HTTP ${response.status}`)
   }
 
   const decoded = decodeSignedJsonPacket(await response.arrayBuffer()) as T

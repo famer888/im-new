@@ -1,10 +1,10 @@
 use base64::{engine::general_purpose, Engine as _};
 use md5::{Digest, Md5};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tauri::Manager;
 
 const SCAN_LOG_DIR: &str = "logs";
@@ -221,53 +221,186 @@ fn date_md5_password(date_key: &str) -> String {
     hex.chars().take(10).collect()
 }
 
-fn create_password_zip_with_system(
-    entries: &[ZipEntry],
-    password: &str,
-) -> Result<Vec<u8>, String> {
+fn crc32_update(crc: u32, byte: u8) -> u32 {
+    let mut value = crc ^ u32::from(byte);
+    for _ in 0..8 {
+        if value & 1 == 1 {
+            value = (value >> 1) ^ 0xedb88320;
+        } else {
+            value >>= 1;
+        }
+    }
+    value
+}
+
+fn crc32_bytes(data: &[u8]) -> u32 {
+    let crc = data
+        .iter()
+        .fold(0xffffffff, |crc, byte| crc32_update(crc, *byte));
+    !crc
+}
+
+struct ZipCrypto {
+    key0: u32,
+    key1: u32,
+    key2: u32,
+}
+
+impl ZipCrypto {
+    fn new(password: &[u8]) -> Self {
+        let mut crypto = Self {
+            key0: 0x12345678,
+            key1: 0x23456789,
+            key2: 0x34567890,
+        };
+        for byte in password {
+            crypto.update_keys(*byte);
+        }
+        crypto
+    }
+
+    fn update_keys(&mut self, byte: u8) {
+        self.key0 = crc32_update(self.key0, byte);
+        self.key1 = self
+            .key1
+            .wrapping_add(self.key0 & 0xff)
+            .wrapping_mul(134775813)
+            .wrapping_add(1);
+        self.key2 = crc32_update(self.key2, (self.key1 >> 24) as u8);
+    }
+
+    fn encrypt_byte(&mut self, plain: u8) -> u8 {
+        let temp = self.key2 | 2;
+        let mask = ((temp.wrapping_mul(temp ^ 1)) >> 8) as u8;
+        let encrypted = plain ^ mask;
+        self.update_keys(plain);
+        encrypted
+    }
+
+    fn encrypt(&mut self, data: &[u8]) -> Vec<u8> {
+        data.iter().map(|byte| self.encrypt_byte(*byte)).collect()
+    }
+}
+
+#[derive(Clone)]
+struct WrittenZipEntry {
+    name: String,
+    crc32: u32,
+    compressed_size: u32,
+    uncompressed_size: u32,
+    local_header_offset: u32,
+}
+
+fn push_u16_le(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32_le(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn checked_u32(value: usize, label: &str) -> Result<u32, String> {
+    u32::try_from(value).map_err(|_| format!("{} too large for zip32", label))
+}
+
+fn checked_u16(value: usize, label: &str) -> Result<u16, String> {
+    u16::try_from(value).map_err(|_| format!("{} too long for zip", label))
+}
+
+fn encrypted_zip_payload(entry: &ZipEntry, password: &str, crc32: u32) -> Vec<u8> {
+    let mut header = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut header[..11]);
+    // 保持旧 im `zip -P` 的 ZipCrypto 兼容格式：第 12 字节用 CRC 高位校验密码。
+    header[11] = (crc32 >> 24) as u8;
+
+    let mut crypto = ZipCrypto::new(password.as_bytes());
+    let mut payload = crypto.encrypt(&header);
+    payload.extend(crypto.encrypt(&entry.data));
+    payload
+}
+
+fn create_password_zip(entries: &[ZipEntry], password: &str) -> Result<Vec<u8>, String> {
     if password.trim().is_empty() {
         return Err("password is empty".to_string());
     }
 
-    let temp_dir = std::env::temp_dir().join(format!("ocs-log-upload-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("create log temp dir failed: {}", e))?;
-    let zip_path = temp_dir.join("log.zip");
-    let mut file_paths = Vec::new();
+    let mut out = Vec::new();
+    let mut written_entries = Vec::new();
+    let mod_time = 0u16;
+    let mod_date = 33u16; // 1980-01-01, the DOS date lower bound used by ZIP.
+    let flags = 0x0801u16; // encrypted + UTF-8 filename
 
-    let result = (|| {
-        for entry in entries {
-            let path = temp_dir.join(&entry.name);
-            fs::write(&path, &entry.data)
-                .map_err(|e| format!("write log temp file failed {}: {}", entry.name, e))?;
-            file_paths.push(path);
-        }
+    for entry in entries {
+        let name_bytes = entry.name.as_bytes();
+        let name_len = checked_u16(name_bytes.len(), "zip entry name")?;
+        let crc32 = crc32_bytes(&entry.data);
+        let encrypted_payload = encrypted_zip_payload(entry, password, crc32);
+        let compressed_size = checked_u32(encrypted_payload.len(), "zip entry payload")?;
+        let uncompressed_size = checked_u32(entry.data.len(), "zip entry data")?;
+        let local_header_offset = checked_u32(out.len(), "zip local header offset")?;
 
-        let mut command = Command::new("zip");
-        command
-            .arg("-j")
-            .arg("-q")
-            .arg("-P")
-            .arg(password)
-            .arg(&zip_path);
-        for path in &file_paths {
-            command.arg(path);
-        }
+        push_u32_le(&mut out, 0x04034b50);
+        push_u16_le(&mut out, 20);
+        push_u16_le(&mut out, flags);
+        push_u16_le(&mut out, 0);
+        push_u16_le(&mut out, mod_time);
+        push_u16_le(&mut out, mod_date);
+        push_u32_le(&mut out, crc32);
+        push_u32_le(&mut out, compressed_size);
+        push_u32_le(&mut out, uncompressed_size);
+        push_u16_le(&mut out, name_len);
+        push_u16_le(&mut out, 0);
+        out.extend_from_slice(name_bytes);
+        out.extend_from_slice(&encrypted_payload);
 
-        let output = command
-            .output()
-            .map_err(|e| format!("system zip unavailable: {}", e))?;
-        if !output.status.success() {
-            return Err(format!(
-                "system zip failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
+        written_entries.push(WrittenZipEntry {
+            name: entry.name.clone(),
+            crc32,
+            compressed_size,
+            uncompressed_size,
+            local_header_offset,
+        });
+    }
 
-        fs::read(&zip_path).map_err(|e| format!("read zipped log package failed: {}", e))
-    })();
+    let central_directory_offset = checked_u32(out.len(), "zip central directory offset")?;
+    for entry in &written_entries {
+        let name_bytes = entry.name.as_bytes();
+        let name_len = checked_u16(name_bytes.len(), "zip central entry name")?;
+        push_u32_le(&mut out, 0x02014b50);
+        push_u16_le(&mut out, 20);
+        push_u16_le(&mut out, 20);
+        push_u16_le(&mut out, flags);
+        push_u16_le(&mut out, 0);
+        push_u16_le(&mut out, mod_time);
+        push_u16_le(&mut out, mod_date);
+        push_u32_le(&mut out, entry.crc32);
+        push_u32_le(&mut out, entry.compressed_size);
+        push_u32_le(&mut out, entry.uncompressed_size);
+        push_u16_le(&mut out, name_len);
+        push_u16_le(&mut out, 0);
+        push_u16_le(&mut out, 0);
+        push_u16_le(&mut out, 0);
+        push_u16_le(&mut out, 0);
+        push_u32_le(&mut out, 0);
+        push_u32_le(&mut out, entry.local_header_offset);
+        out.extend_from_slice(name_bytes);
+    }
 
-    let _ = fs::remove_dir_all(&temp_dir);
-    result
+    let central_directory_size = checked_u32(
+        out.len().saturating_sub(central_directory_offset as usize),
+        "zip central directory size",
+    )?;
+    let entry_count = checked_u16(written_entries.len(), "zip entry count")?;
+    push_u32_le(&mut out, 0x06054b50);
+    push_u16_le(&mut out, 0);
+    push_u16_le(&mut out, 0);
+    push_u16_le(&mut out, entry_count);
+    push_u16_le(&mut out, entry_count);
+    push_u32_le(&mut out, central_directory_size);
+    push_u32_le(&mut out, central_directory_offset);
+    push_u16_le(&mut out, 0);
+
+    Ok(out)
 }
 
 fn build_zip_entries(app_data_dir: &Path) -> Result<Vec<ZipEntry>, String> {
@@ -317,7 +450,7 @@ pub fn prepare_log_upload_package(
 
     let filename = format!("{}-{}.zip", login_id, format_now());
     let password = date_md5_password(request.password_date_key.as_deref().unwrap_or(""));
-    let zip = create_password_zip_with_system(&entries, &password)?;
+    let zip = create_password_zip(&entries, &password)?;
     if zip.is_empty() {
         return Err("create log zip failed".to_string());
     }
@@ -342,8 +475,9 @@ pub fn prepare_log_upload_package(
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_log_upload_files, date_md5_password};
+    use super::{collect_log_upload_files, create_password_zip, date_md5_password, ZipEntry};
     use std::fs;
+    use std::io::{Cursor, Read};
 
     fn temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("log-upload-test-{}", uuid::Uuid::new_v4()));
@@ -394,5 +528,22 @@ mod tests {
     #[test]
     fn derives_zip_password_from_upload_date_key() {
         assert_eq!(date_md5_password("202606/16"), "8093361e57");
+    }
+
+    #[test]
+    fn creates_password_zip_without_system_zip_command() {
+        let entries = vec![ZipEntry {
+            name: "DATA_0-app.log".to_string(),
+            data: b"hello log".to_vec(),
+        }];
+        let zip_bytes = create_password_zip(&entries, "8093361e57").unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes)).unwrap();
+        let mut file = archive
+            .by_name_decrypt("DATA_0-app.log", b"8093361e57")
+            .unwrap();
+        let mut text = String::new();
+        file.read_to_string(&mut text).unwrap();
+
+        assert_eq!(text, "hello log");
     }
 }

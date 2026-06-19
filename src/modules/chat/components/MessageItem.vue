@@ -224,6 +224,25 @@ const showAvatar = computed(
 const showReadBurnFire = computed(() => Boolean(props.message.deleteSeconds))
 let itemResizeObserver: ResizeObserver | null = null
 
+function copyDebugPreview(value: unknown, limit = 120): string {
+  const text = String(value ?? '')
+  return text.length > limit ? `${text.slice(0, limit)}...(len=${text.length})` : text
+}
+
+function copyDebugLog(message: string, data: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
+  console.warn(`[copy-debug] ${message}`, data)
+  if (!(window as any).__TAURI_INTERNALS__) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('image_send_log', {
+      payload: {
+        level,
+        message: `[copy-debug] ${message}`,
+        data,
+      },
+    }))
+    .catch(() => {})
+}
+
 function getSelectedTextInside(node: EventTarget | null): string {
   if (!(node instanceof HTMLElement)) return ''
   const selection = window.getSelection()
@@ -253,6 +272,36 @@ function handleContextMenu(e: MouseEvent, options?: { isAvatar?: boolean }) {
   const imagePath = imageEl instanceof HTMLImageElement
     ? (imageEl.dataset.localPath || '')
     : ''
+  const selectedText = isAvatarMenu ? '' : getSelectedTextInside(e.currentTarget)
+  // 线上复制问题需要先确认右键事件是否命中消息，以及传给全局菜单的消息类型/正文是否符合预期。
+  copyDebugLog('message contextmenu captured', {
+    messageId: props.message.id,
+    customMsgId: props.message.customMsgId,
+    conversationId: props.message.conversationId,
+    currentConversationId: chatStore.currentConversationId,
+    currentConversationType: chatStore.currentConversation?.type ?? null,
+    currentTargetId: chatStore.currentConversation?.targetId ?? '',
+    senderId: props.message.senderId,
+    isSelf: isSelf.value,
+    displayAsSelf: displayAsSelf.value,
+    avatarMenu: isAvatarMenu,
+    msgTypeRaw: props.message.msgType,
+    msgTypeNumber: Number(props.message.msgType || 0),
+    isGroupIntroNotice: isGroupIntroNotice.value,
+    readStatus: props.message.readStatus,
+    deleteSeconds: props.message.deleteSeconds ?? 0,
+    contentLength: String(props.message.content || '').length,
+    contentHead: copyDebugPreview(props.message.content),
+    selectedTextLength: selectedText.length,
+    selectedTextHead: copyDebugPreview(selectedText),
+    extraType: typeof props.message.extra,
+    extraHead: copyDebugPreview(typeof props.message.extra === 'string' ? props.message.extra : JSON.stringify(props.message.extra || {})),
+    imageSrcHead: copyDebugPreview(imageSrc),
+    imagePath,
+    clientX: e.clientX,
+    clientY: e.clientY,
+    menuX,
+  })
   uiStore.showContextMenu(menuX, e.clientY, {
     type: 'message',
     ...props.message,
@@ -270,7 +319,7 @@ function handleContextMenu(e: MouseEvent, options?: { isAvatar?: boolean }) {
     content: props.message.content,
     extra: props.message.extra,
     senderName: senderName.value,
-    selectedText: isAvatarMenu ? '' : getSelectedTextInside(e.currentTarget),
+    selectedText,
     imageSrc,
     imagePath,
   })

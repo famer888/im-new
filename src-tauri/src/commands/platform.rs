@@ -198,10 +198,7 @@ pub fn system_beep() -> Result<(), String> {
 pub fn read_clipboard_text() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("pbpaste")
-            .output()
-            .map_err(|e| e.to_string())?;
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        return read_clipboard_text_macos();
     }
 
     #[cfg(target_os = "windows")]
@@ -227,27 +224,7 @@ pub fn read_clipboard_text() -> Result<String, String> {
 pub fn write_clipboard_text(text: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        use std::io::Write as _;
-
-        let mut child = std::process::Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?;
-
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "failed to open pbcopy stdin".to_string())?;
-        stdin
-            .write_all(text.as_bytes())
-            .map_err(|e| e.to_string())?;
-        drop(stdin);
-
-        let status = child.wait().map_err(|e| e.to_string())?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("pbcopy failed with status: {}", status));
+        return write_clipboard_text_macos(&text);
     }
 
     #[cfg(target_os = "windows")]
@@ -284,6 +261,33 @@ pub fn write_clipboard_text(text: String) -> Result<(), String> {
     {
         let _ = text;
         Err("clipboard text write is not supported on this platform".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_clipboard_text_macos() -> Result<String, String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+
+    let pasteboard = NSPasteboard::generalPasteboard();
+    Ok(pasteboard
+        .stringForType(unsafe { NSPasteboardTypeString })
+        .map(|value| value.to_string())
+        .unwrap_or_default())
+}
+
+#[cfg(target_os = "macos")]
+fn write_clipboard_text_macos(text: &str) -> Result<(), String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use objc2_foundation::NSString;
+
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let text = NSString::from_str(text);
+    // mac 打包环境里 pbcopy 可能返回成功但剪贴板为空；直接走 NSPasteboard 写入系统剪贴板。
+    pasteboard.clearContents();
+    if pasteboard.setString_forType(&text, unsafe { NSPasteboardTypeString }) {
+        Ok(())
+    } else {
+        Err("failed to write text to pasteboard".to_string())
     }
 }
 
