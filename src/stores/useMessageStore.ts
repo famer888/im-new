@@ -3169,7 +3169,15 @@ export const useMessageStore = defineStore('message', () => {
     const current = next[idx]
     const duplicateDiceResult = getDiceResultFromContent(duplicateContent)
     const currentDiceResult = getDiceResultFromContent(current.content)
-    const nextContent = current.msgType === 12
+    // 服务端副本可能先到；发送成功回执合并时保留远端协议字段，
+    // 同时带回本地预览字段，避免已发送图片在窗口恢复后重新下载。
+    const remoteOrCurrentContent = duplicateContent && duplicateContent.length > 0 ? duplicateContent : current.content
+    const mergedReceiptImageContent = isReusableLocalImagePlaceholder(params.conversationId, current.msgType)
+      ? mergeImageLocalPreviewContent(remoteOrCurrentContent, current.content)
+      : null
+    const nextContent = mergedReceiptImageContent
+      ? mergedReceiptImageContent
+      : current.msgType === 12
       ? (
           resultRef
             ? resultRef.result
@@ -3187,7 +3195,7 @@ export const useMessageStore = defineStore('message', () => {
                 ? duplicateContent
                 : current.content
           )
-      : (duplicateContent && duplicateContent.length > 0 ? duplicateContent : current.content)
+      : remoteOrCurrentContent
     if (current.msgType === 12 || duplicate?.msgType === 12) {
       diceLog('applySendReceipt merge start', {
         conversationId: params.conversationId,

@@ -75,6 +75,20 @@ function deleteCachedImage(key: string) {
   imageDisplayCache.delete(key)
 }
 
+function cacheActiveLocalPreview(markLoaded = false) {
+  if (!activeSrc.value) return
+  // 发送成功回执会把 optimisticId 换成服务端 id；这里用当前最终 key 立即缓存本地预览，
+  // 避免窗口恢复或组件重挂载时重新进入远端下载/解密 loading。
+  setCachedImage(imageCacheKey.value, {
+    src: activeSrc.value,
+    localFilePath: localFilePath.value,
+  })
+  if (markLoaded) {
+    loadError.value = false
+    isLoaded.value = true
+  }
+}
+
 function isLikelyBase64ImagePayload(value: string): boolean {
   const raw = value.trim()
   if (!raw || raw.length < 32 || raw.length % 4 !== 0) return false
@@ -407,6 +421,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
     cleanupDownloadEvents()
     localFilePath.value = localSourcePath.value
     activeSrc.value = localPreviewSrc.value
+    cacheActiveLocalPreview(true)
     materializeDataImageForDrag()
     markLoadedIfImageAlreadyComplete()
     return
@@ -422,6 +437,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
       localFilePath.value = localSourcePath.value
     }
     activeSrc.value = thumbnailUrl.value
+    cacheActiveLocalPreview(true)
     materializeDataImageForDrag()
     markLoadedIfImageAlreadyComplete()
     return
