@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getRawBaseUrl } from '@/api/config'
-import { getDomainsByOriginalModuleCode } from '@/utils/domainPool'
-import { getDynamicDomainListByOriginalModule } from '@/api/imDomain'
+import { getCachedNetworkBenchmarkDomains, preloadNetworkBenchmarkDomains } from '../utils/networkBenchmarkDomains'
 
 interface DomainCheckItem {
   url: string
@@ -12,6 +10,10 @@ interface DomainCheckItem {
 }
 
 const { t } = useI18n()
+
+const props = defineProps<{
+  preloadedDomains?: string[]
+}>()
 
 const emit = defineEmits<{
   (e: 'validDomainList', urls: string[]): void
@@ -59,20 +61,21 @@ function getQrStatusText(status: null | -1 | 0 | 200) {
   return String(status)
 }
 
-/** 检测域名是否可达（服务器有响应即视为可达，不强要求 200） */
+/** 检测域名是否可达：对齐老 im 的 checkDomainIsNormal，必须 CORS GET 返回 200 才算通过。 */
 async function checkDns(url: string): Promise<1 | 0> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 2000)
   try {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 5000)
-    await fetch(url.replace(/\/$/, ''), {
+    const response = await fetch(url.replace(/\/$/, ''), {
       method: 'GET',
-      mode: 'no-cors',
+      mode: 'cors',
       signal: controller.signal,
     })
-    clearTimeout(timeoutId)
-    return 1
+    return response.ok && response.status === 200 ? 1 : 0
   } catch {
     return 0
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 
@@ -85,6 +88,8 @@ async function checkQrCode(url: string): Promise<200 | 0> {
       reqType: proto.QrCodeUrlReq,
       respType: proto.QrCodeUrlResp,
       withSessionId: false,
+      // Benchmark 必须检测当前行域名本身，不能触发请求层的 webBiz 兜底切换。
+      disableWebBizFallback: true,
     })
     return res?.token ? 200 : 0
   } catch {
@@ -92,33 +97,21 @@ async function checkQrCode(url: string): Promise<200 | 0> {
   }
 }
 
-/** 只获取本地动态域名池（不含 baseBuildUrl 兜底，与老 im getTrendsDomainPool 一致） */
-function getLocalPoolDomains(): string[] {
-  // 对齐老 im：网络检测只展示后台原始 moduleCode=webBiz 的域名，不吃 biz/friend/group/login 兼容归一化。
-  return getDomainsByOriginalModuleCode('webBiz')
-    .map(d => d.domain)
-    .filter(isBenchmarkWebBizDomain)
-}
+function appendDomainsForCheck(urls: string[]): number {
+  const newUrls = [...new Set(urls)]
+    .map(url => String(url || '').trim())
+    .filter(url => url && !checkedUrls.value.includes(url))
+  if (!newUrls.length) return -1
 
-function isBenchmarkWebBizDomain(url: string): boolean {
-  try {
-    const host = new URL(String(url || '').trim()).host.toLowerCase()
-    // 网络检测窗口只展示真正的 webBiz 节点，避免 OSS/预埋兜底里的 login、domain-api、biz 别名混入。
-    return host.includes('webbiz')
-  } catch {
-    return String(url || '').toLowerCase().includes('webbiz')
-  }
+  checkedUrls.value = [...checkedUrls.value, ...newUrls]
+  const startIndex = domainList.value.length
+  const newItems = newUrls.map(url => ({ url, dnsStatus: null as null, qrStatus: null as null }))
+  domainList.value = [...domainList.value, ...newItems]
+  return startIndex
 }
 
 async function getStrictWebBizDomains(): Promise<string[]> {
-  // 对齐老 im：网络窗口优先消费启动阶段已预热的 domainList，避免打开后再等远程 listDomain。
-  const localDomains = getLocalPoolDomains()
-  if (localDomains.length) return localDomains
-
-  const apiDomains = (await getDynamicDomainListByOriginalModule('webBiz')).filter(isBenchmarkWebBizDomain)
-  if (apiDomains.length) return apiDomains
-  // 旧版本可能已经把归一化后的域名写入本地池；只有远程严格列表不可用时才退回本地池。
-  return []
+  return preloadNetworkBenchmarkDomains()
 }
 
 async function checkDomainsFromIndex(startIndex: number) {
@@ -151,17 +144,10 @@ async function checkDomainsFromIndex(startIndex: number) {
  */
 async function fetchAndUpdateDomainPool() {
   try {
-    const apiDomains = (await getDynamicDomainListByOriginalModule('webBiz')).filter(isBenchmarkWebBizDomain)
-    const newUrls = apiDomains.filter(url => !checkedUrls.value.includes(url))
-
-    if (newUrls.length) {
-      checkedUrls.value = [...checkedUrls.value, ...newUrls]
-      const newItems = newUrls.map(url => ({ url, dnsStatus: null as null, qrStatus: null as null }))
-      const startIndex = domainList.value.length
-      domainList.value = [...domainList.value, ...newItems]
+    const startIndex = appendDomainsForCheck(await preloadNetworkBenchmarkDomains())
+    if (startIndex >= 0) {
       await checkDomainsFromIndex(startIndex)
     }
-
   } catch (err) {
     console.error('[NetworkCheck] fetchAndUpdateDomainPool error:', err)
   }
@@ -182,20 +168,8 @@ async function loadAndCheckDomains() {
     poolDomains = await getStrictWebBizDomains()
   }
 
-  const domainUrls = [...poolDomains]
-  const base = getRawBaseUrl()
-  if (base && isBenchmarkWebBizDomain(base) && !domainUrls.includes(base)) {
-    domainUrls.push(base)
-  }
-
-  const newUrls = [...new Set(domainUrls)].filter(url => !checkedUrls.value.includes(url))
-  if (!newUrls.length) return
-
-  checkedUrls.value = [...checkedUrls.value, ...newUrls]
-  const newItems = newUrls.map(url => ({ url, dnsStatus: null as null, qrStatus: null as null }))
-  const startIndex = domainList.value.length
-  domainList.value = [...domainList.value, ...newItems]
-  await checkDomainsFromIndex(startIndex)
+  const startIndex = appendDomainsForCheck(poolDomains)
+  if (startIndex >= 0) await checkDomainsFromIndex(startIndex)
 }
 
 /**
@@ -213,6 +187,17 @@ async function fetchDomainList() {
   domainList.value = []
 
   try {
+    // 点开弹窗时先渲染登录页提前预热好的候选列表，再逐行更新检测状态。
+    const firstPaintDomains = props.preloadedDomains?.length
+      ? props.preloadedDomains
+      : getCachedNetworkBenchmarkDomains()
+    const startIndex = appendDomainsForCheck(firstPaintDomains)
+    if (startIndex >= 0) {
+      await checkDomainsFromIndex(startIndex)
+    } else {
+      await loadAndCheckDomains()
+    }
+    // 首屏不等远程 listDomain；首批检测后再补齐预热结果，保持旧 im 的“先有列表再更新状态”交互。
     await loadAndCheckDomains()
 
     if (validCount.value === 0 && retryCount.value < 2 && !cancelled.value) {
@@ -245,6 +230,21 @@ function handleButtonClick() {
 onMounted(() => {
   fetchDomainList()
 })
+
+watch(
+  () => props.preloadedDomains,
+  async (urls) => {
+    if (!urls?.length || cancelled.value) return
+    const startIndex = appendDomainsForCheck(urls)
+    if (startIndex < 0 || isChecking.value) return
+
+    isChecking.value = true
+    isCompleted.value = false
+    await checkDomainsFromIndex(startIndex)
+    isChecking.value = false
+    isCompleted.value = true
+  },
+)
 
 onBeforeUnmount(() => {
   cancelled.value = true

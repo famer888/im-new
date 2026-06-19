@@ -10,6 +10,10 @@ import { getOrCreateInstallCode } from '@/utils/installCode'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
 import FileImport from '../components/FileImport.vue'
+import {
+  getCachedNetworkBenchmarkDomains,
+  preloadNetworkBenchmarkDomains,
+} from '../utils/networkBenchmarkDomains'
 import top3Icon from '@/assets/images/system/top3.png'
 
 const router = useRouter()
@@ -25,8 +29,10 @@ const isRestoring = ref(true)
 const isMac = ref(false)
 const isLoginWindow = ref(!isTauri())
 const extraDomains = ref<string[]>([])
+const networkBenchmarkDomains = ref<string[]>(getCachedNetworkBenchmarkDomains())
 const qrLoginKey = ref(0)
 const LOGIN_RESTORE_STEP_TIMEOUT_MS = 10000
+let networkBenchmarkPreloadPromise: Promise<string[]> | null = null
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -35,6 +41,20 @@ function isTauri(): boolean {
 function loginDiag(message: string, data?: Record<string, unknown>) {
   void message
   void data
+}
+
+function startNetworkBenchmarkPreload() {
+  if (networkBenchmarkPreloadPromise) return networkBenchmarkPreloadPromise
+
+  // 对齐老 im 的交互：benchmark 打开前就准备候选域名，避免点进去后空窗等待 listDomain。
+  networkBenchmarkPreloadPromise = preloadNetworkBenchmarkDomains()
+    .then((domains) => {
+      if (domains.length) networkBenchmarkDomains.value = domains
+      return domains
+    })
+    .catch(() => networkBenchmarkDomains.value)
+
+  return networkBenchmarkPreloadPromise
 }
 
 async function withRestoreTimeout<T>(label: string, task: Promise<T>): Promise<T> {
@@ -58,6 +78,7 @@ async function withRestoreTimeout<T>(label: string, task: Promise<T>): Promise<T
 
 onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
+  void startNetworkBenchmarkPreload()
   loginDiag('mounted', {
     isTauri: isTauri(),
     route: route.fullPath,
@@ -137,6 +158,17 @@ function handleValidDomainList(urls: string[]) {
   extraDomains.value = merged
 }
 
+function handleShowNetwork() {
+  networkBenchmarkDomains.value = [
+    ...new Set([
+      ...networkBenchmarkDomains.value,
+      ...getCachedNetworkBenchmarkDomains(),
+    ]),
+  ]
+  void startNetworkBenchmarkPreload()
+  showNetworkConfig.value = true
+}
+
 async function handleLoginSuccess(session: {
   sessionUrl: string
   wsUrl: string
@@ -191,6 +223,7 @@ function startWindowDrag(e: MouseEvent) {
 
     <NetworkConfig
       v-if="showNetworkConfig"
+      :preloaded-domains="networkBenchmarkDomains"
       @valid-domain-list="handleValidDomainList"
       @close="showNetworkConfig = false"
     />
@@ -201,7 +234,7 @@ function startWindowDrag(e: MouseEvent) {
       :loading="isLoading"
       :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
-      @show-network="showNetworkConfig = true"
+      @show-network="handleShowNetwork"
       @show-import="showFileImport = true"
     />
 
