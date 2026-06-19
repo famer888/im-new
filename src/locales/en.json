@@ -214,6 +214,7 @@
   "阅后即焚": "Burn after reading",
   "加入黑名单": "Block contact",
   "删除联系人": "Delete contact",
+  "删除该联系人,会同时删除与该联系人的聊天记录": "Deleting this contact will also delete the chat history with this contact.",
   "确认移除黑名单吗": "Remove from blocklist?",
   "加入黑名单后，你将不再接收到对方的任何消息": "After blocking, you will no longer receive messages from this user.",
   "加入成功": "Added",
