@@ -90,10 +90,7 @@ const MODULE_CODE_ALIAS_MAP: Record<string, string> = {
   biz: 'webBiz',
   config: 'domain',
   domainConfig: 'domain',
-  // 对齐旧 im：媒体下载只认这四个 OSS 桶；新版接口里的聊天图片桶先归一到旧桶名复用现有下载/上传链路。
-  ossChatPicUrl: 'ossChatUrl',
-  ossChatPicLowRateUrl: 'ossLowRateUrl',
-  ossChatPicEndpoint: 'ossEndpoint',
+  // 新版聊天图片 OSS 模块必须保留原名；上传要优先走 v2 图片桶，不能再并入旧图片域名池。
 }
 
 function isProdEnv(): boolean {

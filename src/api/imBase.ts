@@ -1,8 +1,8 @@
 /**
  * Login & base API endpoints using the binary protobuf+AES pipeline.
  */
-import { requestProto, proto, getSignedApiHeaders } from './request'
-import { API_CONFIG, getBaseUrl } from './config'
+import { requestProto, proto, getSignedApiHeaders, getOpenChatSignedApiHeaders } from './request'
+import { API_CONFIG, getBaseUrl, getOpenChatBaseUrl } from './config'
 import * as $protobuf from 'protobufjs/minimal'
 import {
   GroupMemberOnLineStatusListReq,
@@ -63,14 +63,25 @@ function decodeSignedJsonPacket(buffer: ArrayBuffer): any {
   }
 }
 
-async function requestSignedJson<T>(path: string, data: Record<string, unknown>): Promise<T> {
-  const base = getBaseUrl()
+function logUploadConfigResponse(path: string, data: unknown) {
+  // 只打印上传配置接口解密结果，用于对照 Network 里加密二进制响应。
+  if (String(path).includes('/sys/unauthorized/uploadConfig/')) {
+    console.log(`${path} 后面是解密的数据`, data)
+  }
+}
+
+async function requestSignedJson<T>(
+  path: string,
+  data: Record<string, unknown>,
+  options?: { baseUrl?: string; headers?: Record<string, string> },
+): Promise<T> {
+  const base = options?.baseUrl || getBaseUrl()
   const response = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
       Accept: 'application/json',
-      ...getSignedJsonHeaders(),
+      ...(options?.headers || getSignedJsonHeaders()),
     },
     body: encodeSignedJsonPacket(data).buffer as ArrayBuffer,
   })
@@ -79,7 +90,27 @@ async function requestSignedJson<T>(path: string, data: Record<string, unknown>)
     throw new Error(`HTTP ${response.status}`)
   }
 
-  return decodeSignedJsonPacket(await response.arrayBuffer()) as T
+  const decoded = decodeSignedJsonPacket(await response.arrayBuffer()) as T
+  logUploadConfigResponse(path, decoded)
+  return decoded
+}
+
+interface OpenChatUploadConfigResp<T> {
+  code?: number
+  msg?: string
+  data?: T
+}
+
+function unwrapOpenChatUploadResp<T>(response: OpenChatUploadConfigResp<T> | T): T {
+  // 新上传配置接口返回 { code, data }，这里还原成调用方原来消费的上传配置对象。
+  if (response && typeof response === 'object' && 'code' in response && 'data' in response) {
+    const wrapped = response as OpenChatUploadConfigResp<T>
+    if (wrapped.code !== undefined && wrapped.code !== 200) {
+      throw new Error(wrapped.msg || `upload config api error: ${wrapped.code}`)
+    }
+    return (wrapped.data || {}) as T
+  }
+  return response as T
 }
 
 export interface CheckUidListResp {
@@ -769,24 +800,42 @@ export async function checkUidList(
   })
 }
 
-export async function getUploadToken(baseUrl?: string): Promise<proto.GetUploadTokenResp> {
-  const base = baseUrl || getBaseUrl()
-  return requestProto({
-    url: `${base}/sys/getUploadToken`,
-    reqType: proto.GetUploadTokenReq,
-    respType: proto.GetUploadTokenResp,
-  })
+export async function getUploadToken(
+  dataOrBaseUrl?: { ossSceneType?: number } | string,
+  baseUrl?: string,
+): Promise<proto.GetUploadTokenResp> {
+  const data = typeof dataOrBaseUrl === 'string' ? {} : (dataOrBaseUrl || {})
+  const resolvedBaseUrl = typeof dataOrBaseUrl === 'string' ? dataOrBaseUrl : baseUrl
+  // 对齐老 im：上传配置走 openchat gateway，并把聊天图片场景传给后端选 v2 图片桶。
+  const ossSceneType = Number.isFinite(Number(data.ossSceneType)) ? Number(data.ossSceneType) : 0
+  const response = await requestSignedJson<OpenChatUploadConfigResp<proto.GetUploadTokenResp>>(
+    '/sys/unauthorized/uploadConfig/getUploadToken',
+    { ossSceneType },
+    {
+      baseUrl: resolvedBaseUrl || getOpenChatBaseUrl(),
+      headers: getOpenChatSignedApiHeaders(),
+    },
+  )
+  return unwrapOpenChatUploadResp(response)
 }
 
 export async function getUploadUrl(
-  data: { attachType: number; attachWorkspaceType: number; fileSize: number; suffix: string },
+  data: { attachType: number; attachWorkspaceType: number; fileSize: number; suffix: string; ossSceneType?: number },
   baseUrl?: string,
 ): Promise<proto.GetUploadUrlResp> {
-  const base = baseUrl || getBaseUrl()
-  return requestProto({
-    url: `${base}/sys/getUploadUrl`,
-    reqType: proto.GetUploadUrlReq,
-    respType: proto.GetUploadUrlResp,
-    data: data as Partial<proto.GetUploadUrlReq>,
-  })
+  // 对齐老 im：fileSize 和 ossSceneType 参与服务端选桶/选通道，不能被前端类型丢掉。
+  const requestData = {
+    ...data,
+    fileSize: Number(data.fileSize || 0),
+    ossSceneType: Number.isFinite(Number(data.ossSceneType)) ? Number(data.ossSceneType) : 0,
+  }
+  const response = await requestSignedJson<OpenChatUploadConfigResp<proto.GetUploadUrlResp>>(
+    '/sys/unauthorized/uploadConfig/getUploadUrl',
+    requestData,
+    {
+      baseUrl: baseUrl || getOpenChatBaseUrl(),
+      headers: getOpenChatSignedApiHeaders(),
+    },
+  )
+  return unwrapOpenChatUploadResp(response)
 }

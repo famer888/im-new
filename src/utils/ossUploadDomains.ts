@@ -5,6 +5,7 @@ export interface OssUploadCandidate {
   url: string
   domainUrl: string
   source: 'dynamic' | 'token' | 'response'
+  moduleCode?: string
 }
 
 function toHttpsUrl(url = ''): string {
@@ -41,6 +42,19 @@ function responseUrlToCandidate(responseUrl: string): OssUploadCandidate | null 
   return { url, domainUrl: url, source: 'response' }
 }
 
+function resolveUploadModuleCode(channelType: unknown, ossSceneType?: unknown): string {
+  const value = Number(channelType)
+  const scene = Number(ossSceneType)
+  const isChatPicScene = Number.isFinite(scene) && scene === 1
+  if (value === 1) return isChatPicScene ? 'ossChatPicUrl' : 'ossChatUrl'
+  if (value === 2) return isChatPicScene ? 'ossChatPicLowRateUrl' : 'ossLowRateUrl'
+  // 聊天图片 v2 桶的 endpoint 也有独立域名池，不能复用旧 ossEndpoint。
+  if (isChatPicScene && (value === 0 || value === 9)) return 'ossChatPicEndpoint'
+  // 对齐老 im：非聊天图片的默认通道仍使用通用 ossEndpoint 动态池。
+  if (value === 0 || value === 9) return 'ossEndpoint'
+  return isChatPicScene ? 'ossChatPicUrl' : 'ossDefaultUrl'
+}
+
 function uniqCandidates(candidates: OssUploadCandidate[]): OssUploadCandidate[] {
   const seen = new Set<string>()
   return candidates.filter(candidate => {
@@ -59,14 +73,14 @@ async function probeEndpoint(endpoint: string): Promise<{ ok: boolean; status: n
   return invoke<{ ok: boolean; status: number }>('probe_url', { url: probeUrl })
 }
 
-async function reportUploadDomainFailure(domainUrl: string, errorDesc: string, httpStatus = 0) {
-  markDomainError('ossEndpoint', domainUrl)
+async function reportUploadDomainFailure(domainUrl: string, errorDesc: string, httpStatus = 0, moduleCode = 'ossEndpoint') {
+  markDomainError(moduleCode, domainUrl)
   await reportErrorDomain({
     domainUrl,
     errorPath: domainUrl,
     errorDesc,
     httpStatus,
-    moduleCode: 'ossEndpoint',
+    moduleCode,
   })
 }
 
@@ -75,11 +89,14 @@ export async function getOssUploadCandidates(options: {
   bucket: string
   endpoint: string
   objectKey: string
+  channelType?: unknown
+  ossSceneType?: unknown
 }): Promise<OssUploadCandidate[]> {
   const { responseUrl, bucket, endpoint, objectKey } = options
+  const moduleCode = resolveUploadModuleCode(options.channelType, options.ossSceneType)
   const dynamicDomains = [
-    ...getAllDomains('ossEndpoint').map(item => item.domain),
-    ...await getDynamicDomainList('ossEndpoint'),
+    ...getAllDomains(moduleCode).map(item => item.domain),
+    ...await getDynamicDomainList(moduleCode),
   ]
 
   const candidates: OssUploadCandidate[] = []
@@ -88,18 +105,18 @@ export async function getOssUploadCandidates(options: {
       // 对齐老 im：上传前先探活动态 OSS endpoint，明显不可用的域名不上送 ali-oss / Rust 上传。
       const probe = await probeEndpoint(domainUrl)
       if (!probe.ok) {
-        await reportUploadDomainFailure(domainUrl, `oss 上传域名探活失败:HTTP ${probe.status}`, probe.status)
+        await reportUploadDomainFailure(domainUrl, `oss 上传域名探活失败:HTTP ${probe.status}`, probe.status, moduleCode)
         continue
       }
       const uploadUrl = resolveUploadUrlFromEndpoint(domainUrl, bucket, objectKey)
-      if (uploadUrl) candidates.push({ url: uploadUrl, domainUrl, source: 'dynamic' })
+      if (uploadUrl) candidates.push({ url: uploadUrl, domainUrl, source: 'dynamic', moduleCode })
     } catch (error) {
-      await reportUploadDomainFailure(domainUrl, `oss 上传域名探活异常:${(error as Error)?.message || String(error)}`)
+      await reportUploadDomainFailure(domainUrl, `oss 上传域名探活异常:${(error as Error)?.message || String(error)}`, 0, moduleCode)
     }
   }
 
   const tokenUrl = resolveUploadUrlFromEndpoint(endpoint, bucket, objectKey)
-  if (tokenUrl) candidates.push({ url: tokenUrl, domainUrl: endpointToBaseUrl(endpoint), source: 'token' })
+  if (tokenUrl) candidates.push({ url: tokenUrl, domainUrl: endpointToBaseUrl(endpoint), source: 'token', moduleCode })
   const responseCandidate = responseUrlToCandidate(responseUrl)
   if (responseCandidate) candidates.push(responseCandidate)
   return uniqCandidates(candidates)
@@ -112,5 +129,6 @@ export async function reportOssUploadCandidateFailure(candidate: OssUploadCandid
     candidate.domainUrl,
     `oss 上传异常:${(error as Error)?.message || String(error)}`,
     status,
+    candidate.moduleCode || 'ossEndpoint',
   )
 }

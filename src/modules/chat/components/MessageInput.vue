@@ -2444,9 +2444,20 @@ function getUploadContentType(file: File, suffix: string): string {
 function getUploadAttachType(msgType: MessageType): number {
   if (msgType === MessageType.Image) return 0
   if (msgType === MessageType.Audio) return 1
-  if (msgType === MessageType.Video) return 2
+  // 对齐旧 im 的真实上传映射：视频主文件 attachType 传 1，不按 proto 枚举名改成 2。
+  if (msgType === MessageType.Video) return 1
   if (msgType === MessageType.DynamicImage) return 4
   return 3
+}
+
+function resolveUploadOssSceneType(msgType: MessageType): number {
+  // 对齐旧 im：只有普通聊天图片走聊天图片 OSS 场景；GIF、视频主文件、普通文件都走通用 OSS。
+  return msgType === MessageType.Image ? 1 : 0
+}
+
+function getUploadChannelType(uploadUrlInfo: proto.GetUploadUrlResp): unknown {
+  // openchat 上传接口已下发 channelType，但当前生成类型还没包含该字段，先做兼容读取。
+  return (uploadUrlInfo as proto.GetUploadUrlResp & { channelType?: unknown }).channelType
 }
 
 function normalizeOssEndpoint(endpoint: string): string {
@@ -2511,6 +2522,8 @@ async function putObjectWithOssCandidates(options: {
   fileKey?: string
   plainSize?: number
   contentType: string
+  channelType?: unknown
+  ossSceneType?: number
   trace?: ImageSendTrace
   logPrefix?: string
 }): Promise<{ uploadUrl: string; candidate: OssUploadCandidate }> {
@@ -2558,6 +2571,8 @@ async function putObjectWithOssCandidates(options: {
     bucket: options.bucket,
     endpoint: options.endpoint,
     objectKey: options.objectKey,
+    channelType: options.channelType,
+    ossSceneType: options.ossSceneType,
   }).then((items) => items.filter((item) => item.url !== primaryCandidate?.url))
 
   for (const candidate of candidates) {
@@ -2765,6 +2780,8 @@ async function uploadImageLikeIm(
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
   const encryptedBytes = encrypted?.byteLength ?? getEncryptedUploadSize(file.size)
+  const msgType = options?.msgType ?? MessageType.Image
+  const ossSceneType = resolveUploadOssSceneType(msgType)
   traceLog(trace, 'encrypt done', {
     originalBytes: file.size,
     encryptedBytes,
@@ -2776,12 +2793,13 @@ async function uploadImageLikeIm(
   })
   const [uploadUrlInfo, token] = await Promise.all([
     getUploadUrl({
-      attachType: getUploadAttachType(options?.msgType ?? MessageType.Image),
+      attachType: getUploadAttachType(msgType),
       attachWorkspaceType: 1,
       fileSize: encryptedBytes,
       suffix,
+      ossSceneType,
     }),
-    getUploadToken(),
+    getUploadToken({ ossSceneType }),
   ])
   traceLog(trace, 'upload api response', {
     fileIdHead: safeHead(String(uploadUrlInfo.fileId || ''), 24),
@@ -2791,6 +2809,8 @@ async function uploadImageLikeIm(
     })(),
     ossEndpoint: String(token.ossEndpoint || ''),
     ossBucket: String(token.ossBucket || ''),
+    channelType: Number(getUploadChannelType(uploadUrlInfo) ?? 0),
+    ossSceneType,
     hasAccessKeyId: Boolean(token.accessKeyId),
     hasAccessKeySecret: Boolean(token.accessKeySecret),
     hasSecurityToken: Boolean(token.securityToken),
@@ -2821,6 +2841,8 @@ async function uploadImageLikeIm(
     fileKey,
     plainSize: file.size,
     contentType,
+    channelType: getUploadChannelType(uploadUrlInfo),
+    ossSceneType,
     trace,
   })
 
@@ -2868,6 +2890,7 @@ async function uploadFileLikeIm(
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
   const encryptedBytes = encrypted?.byteLength ?? getEncryptedUploadSize(file.size)
+  const ossSceneType = resolveUploadOssSceneType(MessageType.File)
   fileTraceLog(trace, 'encrypt done', {
     originalBytes: file.size,
     encryptedBytes,
@@ -2882,6 +2905,7 @@ async function uploadFileLikeIm(
     attachWorkspaceType: 1,
     fileSize: encryptedBytes,
     suffix,
+    ossSceneType,
   })
   const [uploadUrlInfo, token] = await Promise.all([
     getUploadUrl({
@@ -2889,8 +2913,9 @@ async function uploadFileLikeIm(
       attachWorkspaceType: 1,
       fileSize: encryptedBytes,
       suffix,
+      ossSceneType,
     }),
-    getUploadToken(),
+    getUploadToken({ ossSceneType }),
   ])
   fileTraceLog(trace, 'upload api done', {
     fileIdHead: safeHead(String(uploadUrlInfo.fileId || ''), 24),
@@ -2900,6 +2925,8 @@ async function uploadFileLikeIm(
     })(),
     ossEndpoint: String(token.ossEndpoint || ''),
     ossBucket: String(token.ossBucket || ''),
+    channelType: Number(getUploadChannelType(uploadUrlInfo) ?? 0),
+    ossSceneType,
     hasAccessKeyId: Boolean(token.accessKeyId),
     hasAccessKeySecret: Boolean(token.accessKeySecret),
     hasSecurityToken: Boolean(token.securityToken),
@@ -2930,6 +2957,8 @@ async function uploadFileLikeIm(
     fileKey,
     plainSize: file.size,
     contentType,
+    channelType: getUploadChannelType(uploadUrlInfo),
+    ossSceneType,
     trace,
     logPrefix: '[file-send] ',
   })
@@ -3230,6 +3259,7 @@ async function uploadVideoLikeIm(
   const suffix = getFileSuffix(file)
   const contentType = getUploadContentType(file, suffix)
   const encryptedBytes = encrypted?.byteLength ?? getEncryptedUploadSize(file.size)
+  const ossSceneType = resolveUploadOssSceneType(MessageType.Video)
   fileTraceLog(trace, 'video encrypt done', {
     originalBytes: file.size,
     encryptedBytes,
@@ -3245,8 +3275,9 @@ async function uploadVideoLikeIm(
       attachWorkspaceType: 1,
       fileSize: encryptedBytes,
       suffix,
+      ossSceneType,
     }),
-    getUploadToken(),
+    getUploadToken({ ossSceneType }),
   ])
 
   const objectKey = String(uploadUrlInfo.fileId || '').trim()
@@ -3273,6 +3304,8 @@ async function uploadVideoLikeIm(
     fileKey,
     plainSize: file.size,
     contentType,
+    channelType: getUploadChannelType(uploadUrlInfo),
+    ossSceneType,
     trace,
     logPrefix: '[video-send] ',
   })
