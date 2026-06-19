@@ -258,16 +258,16 @@ const extraData = computed((): Record<string, any> => {
 })
 const isOwnSingleImageUploadPlaceholder = computed(() => {
   const type = Number(props.message.msgType)
-  // 与旧版发送交互对齐：只要是自己发送中的图片消息（status=0），单聊/群聊/频道都显示同款 loading 蒙层。
+  // 自己发送的图片会先插入本地预览；这里只识别发送中占位，不直接决定遮罩显示。
   return (type === 1 || type === 9)
     && String(props.message.senderId || '') === String(authStore.uid || '')
     && Number(props.message.status) === 0
 })
-const isOwnSingleImageUploading = computed(() =>
-  isOwnSingleImageUploadPlaceholder.value && Number(props.message.status) === 0,
-)
 const showImageLoading = computed(() => {
-  if (isOwnSingleImageUploadPlaceholder.value) return isOwnSingleImageUploading.value
+  if (isOwnSingleImageUploadPlaceholder.value && activeSrc.value) {
+    // 发送图片时本地预览已可用就按普通图片展示，避免 status=0 回执等待期间继续盖 loading 蒙层。
+    return !isLoaded.value && !loadError.value
+  }
   return !activeSrc.value || (!isLoaded.value && !loadError.value)
 })
 const showImageOverlay = computed(() => !loadError.value && showImageLoading.value)
