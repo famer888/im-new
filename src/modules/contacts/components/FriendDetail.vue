@@ -269,7 +269,7 @@ async function saveDepict() {
 
       .name {
         font-size: 16px;
-        font-weight: 600;
+        font-weight: normal;
         user-select: text;
       }
 
@@ -338,7 +338,7 @@ async function saveDepict() {
           display: flex;
           align-items: center;
           color: #333;
-          font-weight: 600;
+          font-weight: normal;
           font-size: 14px;
 
           > input {

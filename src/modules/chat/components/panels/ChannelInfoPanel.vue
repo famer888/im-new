@@ -1874,7 +1874,7 @@ onBeforeUnmount(() => {
     .btn-title {
       font-size: 12px;
       color: #000;
-      font-weight: 600;
+      font-weight: 300;
     }
   }
 }
