@@ -97,7 +97,7 @@ function groupIntroTagTrace(conv: Conversation, data: Record<string, unknown>) {
   ].join('|')
   if (groupIntroTagTraceCache.get(conv.id) === key) return
   groupIntroTagTraceCache.set(conv.id, key)
-  console.info('[conversation-list] group intro unread tag decision', data)
+  // console.info('[conversation-list] group intro unread tag decision', data)
 }
 
 /** 传输助手仅通过侧栏「传输」进入，不在会话列表重复展示（与 im 一致） */
@@ -669,7 +669,7 @@ function resolveUidNick(id: string, groupId?: string, extra?: Record<string, unk
 
   const contactName = contactStore.getDisplayName(uid)
   if (contactName && contactName !== uid) {
-    groupNoticeDebug('resolve uid by contact', { uid, groupId: groupId || '', contactName }, 'info')
+    // groupNoticeDebug('resolve uid by contact', { uid, groupId: groupId || '', contactName }, 'info')
     return contactName
   }
 
@@ -760,13 +760,13 @@ function getMessageDigest(message: Message): string {
       contextMembers: isGroupNotification ? [] : getGroupNoticeContextMembers(extra),
       resolveUidPlaceholder: (id) => resolveUidNick(id, groupId, extra),
     })
-    groupNoticeDebug('message digest formatted', {
-      conversationId: message.conversationId,
-      groupId: groupId || '',
-      rawContent: raw,
-      formattedContent: formatted,
-      isGroupNotification,
-    }, 'info')
+    // groupNoticeDebug('message digest formatted', {
+    //   conversationId: message.conversationId,
+    //   groupId: groupId || '',
+    //   rawContent: raw,
+    //   formattedContent: formatted,
+    //   isGroupNotification,
+    // }, 'info')
     if (isHiddenGroupNoticeDigest(formatted)) return ''
     const normalized = extra && formatted.includes('邀请') && formatted.includes('加入群聊')
       ? formatted.replace(PURE_UID_RE, (uid) => resolveUidNick(uid, groupId, extra))
@@ -841,12 +841,12 @@ function repairGroupDigestPreview(conv: Conversation) {
 
 function refreshConversationListPreview(reason = 'manual') {
   const candidates = getPreviewRepairCandidates()
-  groupNoticeDebug('refresh preview', {
-    reason,
-    uid: authStore.uid || '',
-    currentConversationId: chatStore.currentConversationId || '',
-    count: candidates.length,
-  })
+  // groupNoticeDebug('refresh preview', {
+  //   reason,
+  //   uid: authStore.uid || '',
+  //   currentConversationId: chatStore.currentConversationId || '',
+  //   count: candidates.length,
+  // })
   for (const conv of candidates) {
     const channel = conv.type === ConversationType.Channel ? channelByIdMap.value.get(conv.targetId) : null
     const repairKey = [
@@ -924,18 +924,18 @@ function getLoadedLatestDigest(conv: Conversation): string {
 
   if (!summaryNeedsRepair && !isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
   const digest = getMessageDigest(latest)
-  groupNoticeDebug('loaded latest digest', {
-    conversationId: conv.id,
-    name: getName(conv),
-    isCurrentConversation,
-    summaryNeedsRepair,
-    latestId: latest.id || latest.customMsgId || '',
-    latestTime,
-    convTime,
-    latestMatchesSummary,
-    rawDigest: conv.lastMsgDigest || '',
-    digest,
-  }, digest ? 'info' : 'warn')
+  // groupNoticeDebug('loaded latest digest', {
+  //   conversationId: conv.id,
+  //   name: getName(conv),
+  //   isCurrentConversation,
+  //   summaryNeedsRepair,
+  //   latestId: latest.id || latest.customMsgId || '',
+  //   latestTime,
+  //   convTime,
+  //   latestMatchesSummary,
+  //   rawDigest: conv.lastMsgDigest || '',
+  //   digest,
+  // }, digest ? 'info' : 'warn')
   return digest
 }
 
@@ -956,12 +956,12 @@ function getDigest(conv: Conversation): string {
         replacedRaw = replacedRaw.replace(PURE_UID_RE, (uid) => resolveUidNick(uid))
       }
       const replaced = formatDigestText(replacedRaw)
-      groupNoticeDebug('group conv.lastMsgDigest replaced', {
-        conversationId: conv.id,
-        rawDigest: conv.lastMsgDigest,
-        placeholders,
-        replacedDigest: replaced,
-      }, 'info')
+      // groupNoticeDebug('group conv.lastMsgDigest replaced', {
+      //   conversationId: conv.id,
+      //   rawDigest: conv.lastMsgDigest,
+      //   placeholders,
+      //   replacedDigest: replaced,
+      // }, 'info')
       return replaced
     }
     return formatDigestText(conv.lastMsgDigest)
@@ -1181,26 +1181,26 @@ watch(
   ],
   () => {
     if (isConversationListDebugEnabled()) {
-      groupNoticeDebug('sidebar data', {
-        uid: authStore.uid || '',
-        currentConversationId: chatStore.currentConversationId || '',
-        items: visibleConversationRows.value.map((conv) => ({
-          id: conv.id,
-          type: conv.type,
-          targetId: conv.targetId,
-          name: getName(conv),
-          lastMsgId: conv.lastMsgId,
-          lastMsgTime: conv.lastMsgTime,
-          lastMsgDigest: conv.lastMsgDigest,
-          channelName: conv.type === ConversationType.Channel
-            ? channelByIdMap.value.get(conv.targetId)?.channelName || channelByIdMap.value.get(conv.targetId)?.name || ''
-            : '',
-          loadedCount: messageStore.getMessages(conv.id).length,
-          shouldRepair: shouldRepairGroupDigestPreview(conv),
-          shouldRepairChannelName: shouldRepairChannelName(conv),
-          digest: getDigest(conv),
-        })),
-      })
+      // groupNoticeDebug('sidebar data', {
+      //   uid: authStore.uid || '',
+      //   currentConversationId: chatStore.currentConversationId || '',
+      //   items: visibleConversationRows.value.map((conv) => ({
+      //     id: conv.id,
+      //     type: conv.type,
+      //     targetId: conv.targetId,
+      //     name: getName(conv),
+      //     lastMsgId: conv.lastMsgId,
+      //     lastMsgTime: conv.lastMsgTime,
+      //     lastMsgDigest: conv.lastMsgDigest,
+      //     channelName: conv.type === ConversationType.Channel
+      //       ? channelByIdMap.value.get(conv.targetId)?.channelName || channelByIdMap.value.get(conv.targetId)?.name || ''
+      //       : '',
+      //     loadedCount: messageStore.getMessages(conv.id).length,
+      //     shouldRepair: shouldRepairGroupDigestPreview(conv),
+      //     shouldRepairChannelName: shouldRepairChannelName(conv),
+      //     digest: getDigest(conv),
+      //   })),
+      // })
     }
     scheduleRefreshConversationListPreview('watch')
   },

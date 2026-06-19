@@ -1970,15 +1970,15 @@ export async function setupTauriListeners() {
       })
       return
     }
-    if (String(payload?.id ?? '') === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
-      console.warn('[group-notification-unread] conv:update', {
-        id: payload?.id,
-        currentConversationId: chatStore.currentConversationId || '',
-        unreadCount: Number(payload?.unreadCount ?? payload?.unread_count ?? 0),
-        lastMsgTime,
-        lastMsgDigest: String(payload?.lastMsgDigest ?? payload?.last_msg_digest ?? ''),
-      })
-    }
+    // if (String(payload?.id ?? '') === `1_${GROUP_NOTIFICATION_TARGET_ID}`) {
+    //   console.warn('[group-notification-unread] conv:update', {
+    //     id: payload?.id,
+    //     currentConversationId: chatStore.currentConversationId || '',
+    //     unreadCount: Number(payload?.unreadCount ?? payload?.unread_count ?? 0),
+    //     lastMsgTime,
+    //     lastMsgDigest: String(payload?.lastMsgDigest ?? payload?.last_msg_digest ?? ''),
+    //   })
+    // }
     const existingConversation = chatStore.conversations.find((conv) => conv.id === conversationId)
     chatStore.addOrUpdateConversation(event.payload, {
       preserveListOrder: shouldPreserveConversationOrderForUpdate(existingConversation, payload),
