@@ -35,7 +35,10 @@ function handleOpenNotificationModule() {
 <template>
   <div v-if="parsedNotice.prefix || parsedNotice.text" class="system-notification">
     <span class="text">
-      <strong v-if="parsedNotice.prefix">{{ parsedNotice.prefix }}</strong>{{ parsedNotice.text }}
+      <strong
+        v-if="parsedNotice.prefix"
+        :class="{ highlight: parsedNotice.highlightPrefix }"
+      >{{ parsedNotice.prefix }}</strong>{{ parsedNotice.text }}
     </span>
     <button
       v-if="notificationActionTarget"
@@ -71,6 +74,10 @@ function handleOpenNotificationModule() {
       font-size: 12px;
       font-weight: 600;
       color: #333;
+
+      &.highlight {
+        color: #3369fe;
+      }
     }
   }
 
