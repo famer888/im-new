@@ -499,6 +499,53 @@ mod private_decode_tests {
     }
 
     #[test]
+    fn group_create_invite_summary_id_should_not_collide_with_accept_event() {
+        let group_id = 20260620;
+        let inviter_uid = 68;
+        let invited_uid = 892;
+        let item = imweb::GroupReqEventMsgDto {
+            receive_uid: 0,
+            from_uid: inviter_uid,
+            group_req_type: 1,
+            group_req_status: 1,
+            group_member: vec![imweb::GroupMemberBase {
+                user: Some(imweb::UserBase {
+                    uid: invited_uid,
+                    nick_name: "892".to_string(),
+                    ..Default::default()
+                }),
+                group_id,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let create_common = imweb::CommonMsgDto {
+            msg_id: 0,
+            msg_type: 1,
+            ..Default::default()
+        };
+        let accept_common = imweb::CommonMsgDto {
+            msg_id: 9001,
+            msg_type: 4,
+            ..Default::default()
+        };
+        let accept_common_without_msg_id = imweb::CommonMsgDto {
+            msg_id: 0,
+            msg_type: 4,
+            ..Default::default()
+        };
+
+        // app 会同时展示创群邀请汇总和后续同意入群提示；两条系统消息不能共用同一个本地 id。
+        let create_id = group_req_event_notice_message_id(&item, &create_common, group_id);
+        let accept_id = group_req_event_notice_message_id(&item, &accept_common, group_id);
+        let fallback_accept_id =
+            group_req_event_notice_message_id(&item, &accept_common_without_msg_id, group_id);
+
+        assert_ne!(create_id, accept_id);
+        assert_ne!(create_id, fallback_accept_id);
+    }
+
+    #[test]
     fn group_live_send_gift_payload_decodes_to_frontend_event() {
         let payload = imweb::PushGroupLiveSendGiftMsg {
             group_id: 123,
@@ -1447,7 +1494,7 @@ impl MessageBatcher {
                 format!("1_{}", group.group_id)
             };
 
-            let notice_msg_id = group_req_event_notice_message_id(&item, group.group_id);
+            let notice_msg_id = group_req_event_notice_message_id(&item, common, group.group_id);
             out.push(DecodedMessage {
                 cmd: cmds::GROUP_EVENT_PUSH,
                 msg_id: notice_msg_id.clone(),
@@ -2889,16 +2936,33 @@ fn stable_group_req_notice_id(
     )
 }
 
-fn group_req_event_notice_message_id(item: &imweb::GroupReqEventMsgDto, group_id: i64) -> String {
-    stable_group_req_notice_id(
-        group_id,
+fn group_req_event_notice_message_id(
+    item: &imweb::GroupReqEventMsgDto,
+    common: &imweb::CommonMsgDto,
+    group_id: i64,
+) -> String {
+    if common.msg_id > 0 {
+        return format!(
+            "group-event-{}-{}-{}",
+            group_id.max(0),
+            common.msg_type,
+            common.msg_id
+        );
+    }
+
+    let receive_uid = if item.receive_uid > 0 {
+        item.receive_uid
+    } else {
+        first_group_req_event_member_uid(item)
+    };
+    // 创群事件可能没有服务端 msgId；fallback 仍要带 msgType，避免“创群邀请汇总”和“同意入群”覆盖成一条。
+    format!(
+        "group-req-notice-{}-{}-{}-{}-{}",
+        group_id.max(0),
         item.group_req_type,
-        item.from_uid,
-        if item.receive_uid > 0 {
-            item.receive_uid
-        } else {
-            first_group_req_event_member_uid(item)
-        },
+        common.msg_type,
+        item.from_uid.max(0),
+        receive_uid.max(0),
     )
 }
 
