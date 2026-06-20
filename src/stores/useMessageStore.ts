@@ -34,7 +34,10 @@ import {
   getGroupNoticeGroupId,
 } from '@/utils/groupNoticeDisplay'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
-import { isGroupRemoveNoticeHiddenForCurrentUser } from '@/utils/chatUnreadVisibility'
+import {
+  isGroupMemberLeaveNoticeHiddenForCurrentUser,
+  isGroupRemoveNoticeHiddenForCurrentUser,
+} from '@/utils/chatUnreadVisibility'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -620,12 +623,31 @@ function isHiddenGroupEventPlaceholderMessage(conversationId: string, message: M
   return String(extra?.source || '') === 'group-event'
 }
 
+function getCurrentGroupMemberRole(conversationId: string, currentUid: string): number | null {
+  if (!conversationId.startsWith('1_') || conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`) return null
+  const groupId = conversationId.slice(2)
+  if (!groupId || !currentUid) return null
+  const groupStore = useGroupStore()
+  const memberRole = groupStore.getMembers(groupId).find((member) => member.userId === currentUid)?.role
+  if (Number.isFinite(Number(memberRole))) return Number(memberRole)
+  const ownerId = groupStore.getGroup(groupId)?.ownerId
+  return ownerId ? (ownerId === currentUid ? 0 : 2) : null
+}
+
 function shouldUseMessageForConversationSummary(conversationId: string, message: Message): boolean {
+  const currentUid = useAuthStore().uid
+  const currentGroupMemberRole = getCurrentGroupMemberRole(conversationId, currentUid)
   return !isHiddenMessageType(message.msgType)
     && !isPendingGroupReqChatMessage(message)
     && !isRejectedGroupInviteNoticeForNotification(conversationId, message)
     && !isHiddenGroupEventPlaceholderMessage(conversationId, message)
-    && !isGroupRemoveNoticeHiddenForCurrentUser(conversationId, message, useAuthStore().uid)
+    && !isGroupMemberLeaveNoticeHiddenForCurrentUser(
+      conversationId,
+      message,
+      currentUid,
+      { currentGroupMemberRole },
+    )
+    && !isGroupRemoveNoticeHiddenForCurrentUser(conversationId, message, currentUid)
 }
 
 function cloneGroupNoticeToNotificationMessage(conversationId: string, message: Message): Message {
