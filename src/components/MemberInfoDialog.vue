@@ -162,6 +162,8 @@ async function saveRemark() {
     const errMsg = String((res as any)?.commonResult?.errMsg || '').trim()
     if (errCode === 200 || errCode === 0) {
       contactStore.patchContact(userId.value, { remark: newRemark || null })
+      // 旧 im 会把好友备注变更同步到已打开的群成员列表；这里同步已加载的群成员缓存。
+      groupStore.patchMemberRemarkName(userId.value, newRemark || null)
       editingRemark.value = false
       showToast(t('修改成功'), 'success')
     } else {

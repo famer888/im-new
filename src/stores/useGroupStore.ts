@@ -404,11 +404,19 @@ export const useGroupStore = defineStore('group', () => {
     const contact = useContactStore().getContact(userId)
     const authStore = useAuthStore()
     const isSelf = userId && String(authStore.uid || '') === userId
+    const relationRemark = String(
+      user.friendRelation?.remarkName
+        ?? user.friend_relation?.remark_name
+        ?? item.friendRelation?.remarkName
+        ?? item.friend_relation?.remark_name
+        ?? contact?.remark
+        ?? '',
+    ).trim()
     return {
       groupId: String(item.groupId ?? item.group_id ?? groupId),
       userId,
-      // 对齐旧 im：群成员资料缺字段时，用好友备注/头像和当前账号资料补齐首屏展示。
-      nickname: item.nickname ?? user.nickName ?? contact?.remark ?? contact?.nickname ?? (isSelf ? authStore.nickname : null) ?? null,
+      // 对齐旧 im：群成员优先显示好友备注；无备注时用通讯录昵称压过本地成员缓存里的旧展示名。
+      nickname: relationRemark || (contact?.nickname ?? item.nickname ?? user.nickName ?? (isSelf ? authStore.nickname : null) ?? null),
       avatar: item.avatar ?? item.icon ?? user.icon ?? contact?.avatar ?? (isSelf ? authStore.avatar : null) ?? null,
       role: Number(item.role ?? item.type ?? 0),
       online:
@@ -534,6 +542,39 @@ export const useGroupStore = defineStore('group', () => {
     })
   }
 
+  function patchMemberRemarkName(userId: string, remarkName: string | null) {
+    const normalizedUserId = String(userId || '').trim()
+    if (!normalizedUserId || !memberMap.value.size) return
+
+    const contact = useContactStore().getContact(normalizedUserId)
+    const displayName = String(remarkName || contact?.remark || contact?.nickname || '').trim()
+    const next = new Map(memberMap.value)
+    let changed = false
+
+    for (const [groupId, members] of next.entries()) {
+      let groupChanged = false
+      const updatedMembers = members.map((member) => {
+        if (member.userId !== normalizedUserId) return member
+        if (!displayName || member.nickname === displayName) return member
+        groupChanged = true
+        return {
+          ...member,
+          nickname: displayName,
+        }
+      })
+
+      if (groupChanged) {
+        // 备注变更只影响本地展示名；重新排序可保持角色/在线排序逻辑一致。
+        next.set(groupId, sortMembersForDisplay(updatedMembers))
+        changed = true
+      }
+    }
+
+    if (changed) {
+      memberMap.value = next
+    }
+  }
+
   function getGroup(id: string): Group | undefined {
     return groups.value.find((g) => g.id === id)
   }
@@ -570,5 +611,6 @@ export const useGroupStore = defineStore('group', () => {
     getMembers,
     removeGroup,
     applyOnlineStatusUpdates,
+    patchMemberRemarkName,
   }
 })

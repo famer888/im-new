@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useContactStore } from '@/stores/useContactStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useGroupStore } from '@/stores/useGroupStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import { updateContacts } from '@/api/imBase'
@@ -16,6 +17,7 @@ const { t } = useI18n()
 const contactStore = useContactStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
+const groupStore = useGroupStore()
 
 const contact = computed(() => contactStore.getContact(props.contactId))
 // 对齐旧 im：资料面板里的 ID 只展示好友号 identify，不回退内部 uid。
@@ -102,6 +104,8 @@ async function saveRemark() {
     const errMsg = String((res as any)?.commonResult?.errMsg || '').trim()
     if (errCode === 200 || errCode === 0) {
       contactStore.patchContact(targetId, { remark: nextRemark || null })
+      // 旧 im 会同步好友备注到群成员列表；通讯录侧修改也要刷新已加载的群成员展示名。
+      groupStore.patchMemberRemarkName(targetId, nextRemark || null)
       editingRemark.value = false
       showToast(t('修改成功'), 'success')
     } else {

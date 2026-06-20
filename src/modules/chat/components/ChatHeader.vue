@@ -297,6 +297,8 @@ async function saveRemark() {
     }
     if (contact) {
       contactStore.patchContact(contact.id, { remark: val || null })
+      // 备注名也会作为群成员展示名，保持右侧群成员列表与好友资料同步。
+      groupStore.patchMemberRemarkName(contact.id, val || null)
     } else {
       // 官方号等特殊会话可能尚未进入通讯录列表，这里补一条本地联系人以承接备注展示。
       await contactStore.upsertContact({
@@ -306,6 +308,8 @@ async function saveRemark() {
         status: 1,
         updatedAt: Date.now(),
       }, { persist: false, source: 'local' })
+      // upsert 后同步已加载群成员缓存，避免列表继续显示旧昵称。
+      groupStore.patchMemberRemarkName(targetId, val || null)
     }
     showToast(t('修改成功'), 'success')
   } catch (e) {

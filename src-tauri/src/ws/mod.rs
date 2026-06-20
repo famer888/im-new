@@ -201,13 +201,6 @@ impl WsManager {
 
         // mac 段目前按老 im WEB 默认行为不带（老 im 仅在 `TRENDS_AES_KEY` 配置下带 mac）。
         let packet = codec::encode_packet(cmd, msg_id, protobuf_payload, &aes_key, None)?;
-        tracing::warn!(
-            "[notification-reply] ws send_packet cmd={} msg_id={} payload_bytes={} packet_bytes={}",
-            cmd,
-            msg_id,
-            protobuf_payload.len(),
-            packet.len()
-        );
         self.send(packet)
     }
 
