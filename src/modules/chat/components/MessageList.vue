@@ -19,6 +19,7 @@ const props = withDefaults(defineProps<{
   unreadCount?: number
   unreadMessageIds?: string[]
   atMentionMessageIds?: string[]
+  currentGroupMemberRole?: number | null
   /** 对齐旧 im：少量消息从顶部开始排列，不做吸底留白 */
   alignTop?: boolean
   /** 仅在好友开启阅后即焚时显示中间背景图 */
@@ -56,6 +57,7 @@ const sortedMessages = computed(() =>
       props.conversationId,
       message,
       String(authStore.uid || ''),
+      { currentGroupMemberRole: props.currentGroupMemberRole ?? null },
     )),
   ),
 )
@@ -96,7 +98,12 @@ const visibleAtMentionIds = computed(() =>
 
 function isMessageEligibleForUnreadSnapshotAnchor(message: Message): boolean {
   const uid = String(authStore.uid || '')
-  if (!isMessageVisibleInTimeline(props.conversationId, message, uid)) return false
+  if (!isMessageVisibleInTimeline(
+    props.conversationId,
+    message,
+    uid,
+    { currentGroupMemberRole: props.currentGroupMemberRole ?? null },
+  )) return false
   if (String(message.senderId || '') === uid) return false
   if (message.msgType === 6) return false
   if (message.msgType === 8 && !isGroupIntroNoticeMessage(message)) return false

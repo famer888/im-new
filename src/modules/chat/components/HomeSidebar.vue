@@ -147,6 +147,15 @@ function isPendingInviteConversationPreview(conv: Conversation): boolean {
     && chatStore.isPendingGroupInviteConversation(conv.targetId)
 }
 
+function getCurrentGroupMemberRole(groupId: string): number | null {
+  const uid = String(authStore.uid || '')
+  if (!groupId || !uid) return null
+  const memberRole = groupStore.getMembers(groupId).find((member) => member.userId === uid)?.role
+  if (Number.isFinite(Number(memberRole))) return Number(memberRole)
+  const ownerId = groupStore.getGroup(groupId)?.ownerId
+  return ownerId ? (ownerId === uid ? 0 : 2) : null
+}
+
 function getConversationDisplayUnreadCount(conv: Conversation): number {
   const unreadCount = Math.max(0, Number(conv.unreadCount || 0))
   if (conv.id === chatStore.currentConversationId) {
@@ -154,7 +163,12 @@ function getConversationDisplayUnreadCount(conv: Conversation): number {
     const loadedMessages = messageStore.getMessages(conv.id)
     if (loadedMessages.length === 0) return unreadCount
     const loadedEligibleUnreadCount = loadedMessages.filter((message) =>
-      isMessageEligibleForUnreadAnchor(conv.id, message, currentUid),
+      isMessageEligibleForUnreadAnchor(
+        conv.id,
+        message,
+        currentUid,
+        { currentGroupMemberRole: getCurrentGroupMemberRole(conv.targetId) },
+      ),
     ).length
     return loadedEligibleUnreadCount
   }

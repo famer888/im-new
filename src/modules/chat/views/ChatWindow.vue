@@ -62,6 +62,15 @@ const currentGroupId = computed(() => {
   return conversationId.value.startsWith('1_') ? conversationId.value.slice(2) : ''
 })
 const isGroupConversation = computed(() => Boolean(currentGroupId.value))
+const currentGroupMemberRole = computed(() => {
+  const groupId = currentGroupId.value
+  const uid = String(authStore.uid || '')
+  if (!groupId || !uid) return null
+  const memberRole = groupStore.getMembers(groupId).find((member) => member.userId === uid)?.role
+  if (Number.isFinite(Number(memberRole))) return Number(memberRole)
+  const ownerId = groupStore.getGroup(groupId)?.ownerId
+  return ownerId ? (ownerId === uid ? 0 : 2) : null
+})
 const groupNoticeDialogVisible = ref(false)
 const groupNoticeDialogHistory = ref<{ notice: string; editorId: string; groupId: string } | null>(null)
 const dismissedGroupNoticeKey = ref('')
@@ -193,7 +202,12 @@ function collectUnreadCandidates(convId: string, uid: string): Message[] {
 function collectEligibleUnreadMessageIds(convId: string, uid: string, limit = 0): string[] {
   const ids = new Set<string>()
   const candidates = collectUnreadCandidates(convId, uid)
-    .filter((message) => isMessageEligibleForUnreadAnchor(convId, message, uid))
+    .filter((message) => isMessageEligibleForUnreadAnchor(
+      convId,
+      message,
+      uid,
+      { currentGroupMemberRole: currentGroupMemberRole.value },
+    ))
   const scopedCandidates = limit > 0 && candidates.length > limit
     ? candidates.slice(candidates.length - limit)
     : candidates
@@ -255,7 +269,12 @@ function collectAtMentionMessageIds(messagesForCheck: Message[], uid: string): s
 }
 
 function isMessageEligibleForUnreadCountFallback(convId: string, message: Message, uid: string): boolean {
-  if (!isMessageVisibleInTimeline(convId, message, uid)) return false
+  if (!isMessageVisibleInTimeline(
+    convId,
+    message,
+    uid,
+    { currentGroupMemberRole: currentGroupMemberRole.value },
+  )) return false
   if (String(message.senderId || '') === uid) return false
   if (message.msgType === 6) return false
   if (message.msgType === 8 && !isGroupIntroNoticeMessage(message)) return false
@@ -743,6 +762,7 @@ onBeforeUnmount(() => {
       :unread-count="sessionInitialUnread"
       :unread-message-ids="sessionUnreadMessageIds"
       :at-mention-message-ids="sessionAtMentionMessageIds"
+      :current-group-member-role="currentGroupMemberRole"
       :show-read-burn-background="showReadBurnBackground"
       align-top
       @load-more="handleLoadMore"

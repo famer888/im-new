@@ -30,7 +30,11 @@ import {
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
-import { isGroupRemoveNoticeHiddenForCurrentUser, isSelfLeaveGroupSystemMessage } from '@/utils/chatUnreadVisibility'
+import {
+  isGroupMemberLeaveNoticeHiddenForCurrentUser,
+  isGroupRemoveNoticeHiddenForCurrentUser,
+  isSelfLeaveGroupSystemMessage,
+} from '@/utils/chatUnreadVisibility'
 import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
@@ -662,6 +666,16 @@ function getGroupNoticeContextMembers(extra: Record<string, unknown> | null) {
   return groupId ? groupStore.getMembers(groupId) : []
 }
 
+function getCurrentGroupMemberRole(conversationId: string | undefined): number | null {
+  const uid = String(authStore.uid || '')
+  const groupId = conversationId?.startsWith('1_') ? conversationId.slice(2) : ''
+  if (!uid || !groupId || groupId === GROUP_NOTIFICATION_TARGET_ID) return null
+  const memberRole = groupStore.getMembers(groupId).find((member) => member.userId === uid)?.role
+  if (Number.isFinite(Number(memberRole))) return Number(memberRole)
+  const ownerId = groupStore.getGroup(groupId)?.ownerId
+  return ownerId ? (ownerId === uid ? 0 : 2) : null
+}
+
 function resolveUidNick(id: string, groupId?: string, extra?: Record<string, unknown> | null): string {
   const uid = String(id || '').trim()
   if (!uid) return ''
@@ -751,6 +765,9 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 18) return `[${t('扑克牌')}]`
   if (isHiddenMessageType(message.msgType)) return ''
   if (message.msgType === 8) {
+    if (isGroupMemberLeaveNoticeHiddenForCurrentUser(message.conversationId, message, authStore.uid, {
+      currentGroupMemberRole: getCurrentGroupMemberRole(message.conversationId),
+    })) return ''
     if (isGroupRemoveNoticeHiddenForCurrentUser(message.conversationId, message, authStore.uid)) return ''
     const extra = parseGroupNoticeExtraObject(message.extra)
     const isGroupNotification = message.conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
@@ -901,6 +918,9 @@ function getLoadedLatestVisibleMessage(conv: Conversation): Message | null {
       && String(parseGroupNoticeExtraObject(message.extra)?.source || '') === 'group-event'
     )
     && !isSelfLeaveGroupSystemMessage(conv.id, message, authStore.uid)
+    && !isGroupMemberLeaveNoticeHiddenForCurrentUser(conv.id, message, authStore.uid, {
+      currentGroupMemberRole: getCurrentGroupMemberRole(conv.id),
+    })
     && !isGroupRemoveNoticeHiddenForCurrentUser(conv.id, message, authStore.uid)
     && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
   )) ?? null

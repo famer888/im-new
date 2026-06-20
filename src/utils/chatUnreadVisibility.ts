@@ -11,6 +11,10 @@ interface NoticeFormatOptions {
   resolveUidPlaceholder?: (uid: string) => string
 }
 
+interface MessageVisibilityOptions {
+  currentGroupMemberRole?: number | null
+}
+
 function normalizeText(value: unknown): string {
   return String(value ?? '').trim()
 }
@@ -112,6 +116,38 @@ export function isSelfLeaveGroupSystemMessage(
   return Boolean(affectedMemberId && affectedMemberId === uid)
 }
 
+export function isGroupMemberLeaveNoticeHiddenForCurrentUser(
+  conversationId: string | undefined,
+  message: Message,
+  currentUid = '',
+  options: MessageVisibilityOptions = {},
+): boolean {
+  if (!isGroupConversation(conversationId)) return false
+  const target = isGroupConversationTarget(conversationId)
+  if (!target || target === 'invitation') return false
+  if (message.msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  if (!extra) return false
+  if (String(extra.source ?? '') !== 'group-event') return false
+  if (Number(extra.groupReqType ?? 0) !== 7) return false
+
+  const uid = normalizeText(currentUid)
+  if (!uid) return false
+
+  const members = Array.isArray(extra.members) ? extra.members : []
+  const affectedMemberId = members.map(getNoticeUserId).find(Boolean)
+    || getNoticeUserId(extra.targetUser)
+    || normalizeText(extra.fromUid ?? extra.sendUid)
+  if (affectedMemberId && affectedMemberId === uid) return true
+
+  const currentRole = Number(options.currentGroupMemberRole)
+  if (!Number.isFinite(currentRole)) return false
+
+  // 对齐旧 im：成员主动退群只通知群主（role/type=0），普通成员和管理员只更新成员状态，不显示系统提示。
+  return currentRole !== 0
+}
+
 export function isGroupRemoveNoticeHiddenForCurrentUser(
   conversationId: string | undefined,
   message: Message,
@@ -143,11 +179,13 @@ export function isMessageVisibleInTimeline(
   conversationId: string | undefined,
   message: Message,
   currentUid = '',
+  options: MessageVisibilityOptions = {},
 ): boolean {
   if (message.isDeleted) return false
   if (isHiddenMessageType(message.msgType)) return false
   if (isLegacyGroupInviteRejectionInGroupChat(conversationId, message)) return false
   if (isSelfLeaveGroupSystemMessage(conversationId, message, currentUid)) return false
+  if (isGroupMemberLeaveNoticeHiddenForCurrentUser(conversationId, message, currentUid, options)) return false
   if (isGroupRemoveNoticeHiddenForCurrentUser(conversationId, message, currentUid)) return false
   if (isGroupIntroHidden(message)) return false
   if (message.msgType === 6) return formatSystemNotificationText(message, { currentUid }) !== ''
@@ -161,8 +199,9 @@ export function isMessageEligibleForUnreadAnchor(
   conversationId: string | undefined,
   message: Message,
   currentUid = '',
+  options: MessageVisibilityOptions = {},
 ): boolean {
-  if (!isMessageVisibleInTimeline(conversationId, message, currentUid)) return false
+  if (!isMessageVisibleInTimeline(conversationId, message, currentUid, options)) return false
   if (normalizeText(message.senderId) === normalizeText(currentUid)) return false
   if (Number(message.readStatus || 0) !== 0) return false
   if (message.msgType === 6) return false
