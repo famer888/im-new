@@ -54,7 +54,6 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { writeClipboardText } from '@/utils/clipboard'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
-import { getOrCreateInstallCode } from '@/utils/installCode'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
@@ -727,14 +726,13 @@ onMounted(async () => {
               // key prewarm best effort; do not block WS connect forever
             }
           }
-          const wsUrl = authStore.wsConnectConfig?.wsUrl?.trim() || ''
-          const aesKey = authStore.wsConnectConfig?.aesKey?.trim() || ''
           const sessionId = String(authStore.session?.sessionId || '').trim()
-          const installCode = authStore.wsConnectConfig?.installCode || getOrCreateInstallCode()
-          if (wsUrl && aesKey) {
-            await traceOptionalInitStep('connect ws', () => invoke('connect_ws', { url: wsUrl, aesKey, sessionId, installCode, uid }))
+          if (sessionId && uid) {
+            // 启动恢复登录时 authStore 可能还没有 wsUrl/aesKey；复用发送前连接逻辑从域名池恢复 WS。
+            await traceOptionalInitStep('connect ws', () => messageStore.ensureWsConnected())
           } else if (uid) {
             networkStore.setWsStatus('disconnected')
+            // 10001 必须带登录 session；缺失时跳过 WS，避免空 session 重连导致消息只显示本地气泡。
             console.warn('[AUTH-DIAG][ws] skipped connect: missing ws config', {
               uid,
               hasSessionId: !!sessionId,

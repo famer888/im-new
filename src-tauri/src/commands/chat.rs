@@ -898,6 +898,17 @@ pub async fn send_message(
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(now);
     let msg_id = client_flag.to_string();
+    warn!(
+        "[notification-reply] rust send_message entry uid={} conversation={} conv_type={} target={} msg_type={} custom_msg_id={:?} client_flag={} content={}",
+        uid,
+        request.conversation_id,
+        conv_type,
+        target_id,
+        request.msg_type,
+        request.custom_msg_id,
+        client_flag,
+        request.content
+    );
 
     // 先按 "sending" 状态入库（老 im UI 是乐观追加，之后靠 20201 回执更新）。
     let mut extra_value = request.extra.unwrap_or(serde_json::Value::Null);
@@ -997,6 +1008,13 @@ pub async fn send_message(
     // “仅落本地”行为，避免误伤其它模块。
     match (conv_type, request.msg_type) {
         (1, 0) => {
+            warn!(
+                "[notification-reply] rust before send_group_text conversation={} target={} flag={} content={}",
+                request.conversation_id,
+                target_id,
+                client_flag,
+                request.content
+            );
             if let Err(e) = pipeline::send_group_text(
                 &ws_mgr,
                 &crypto,
@@ -1023,6 +1041,12 @@ pub async fn send_message(
                 });
                 return Err(e.to_string());
             }
+            warn!(
+                "[notification-reply] rust send_group_text ok conversation={} target={} flag={}",
+                request.conversation_id,
+                target_id,
+                client_flag
+            );
         }
         (0, 0) => {
             if let Err(e) = pipeline::send_private_text(

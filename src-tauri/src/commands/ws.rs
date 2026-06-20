@@ -28,6 +28,14 @@ pub async fn connect_ws(
     uid: Option<String>,
 ) -> Result<(), String> {
     let url = normalize_ws_url(&url);
+    let session_id = session_id.map(|value| value.trim().to_string());
+    let uid = uid.map(|value| value.trim().to_string());
+    // 10001 登录包没有 sessionId/uid 会被服务端直接拒绝；禁止启动这种空登录重连循环。
+    if session_id.as_deref().unwrap_or_default().is_empty()
+        || uid.as_deref().unwrap_or_default().is_empty()
+    {
+        return Err("missing websocket login session".to_string());
+    }
     tracing::info!(
         target: "ws",
         "connect_ws called url={} aes_key_len={}",

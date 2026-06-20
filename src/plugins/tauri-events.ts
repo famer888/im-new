@@ -769,6 +769,8 @@ const tauriListenersGlobal = globalThis as typeof globalThis & {
   __OCS_TAURI_LISTENER_UNLISTENS__?: Array<() => void>
   __OCS_TAURI_DOM_LISTENERS_BOUND__?: boolean
   __OCS_TRAY_UNREAD_WATCH_STOP__?: WatchStopHandle
+  __OCS_NOTIFICATION_REPLY_IDS__?: Map<string, number>
+  __OCS_NOTIFICATION_REPLY_FINGERPRINTS__?: Map<string, number>
 }
 
 type TauriEvent<T> = { payload: T }
@@ -776,6 +778,48 @@ type TauriListen = <T>(
   eventName: string,
   handler: (event: TauriEvent<T>) => void | Promise<void>,
 ) => Promise<() => void>
+type NotificationReplyPayload = {
+  requestId?: string
+  conversationId?: string
+  content?: string
+}
+const NOTIFICATION_REPLY_DEDUP_MS = 30_000
+const NOTIFICATION_REPLY_FINGERPRINT_DEDUP_MS = 3_000
+
+function cleanupNotificationReplyMap(map: Map<string, number>, now: number, ttl: number) {
+  for (const [id, createdAt] of map) {
+    if (now - createdAt > ttl) map.delete(id)
+  }
+}
+
+function consumeNotificationReplyRequest(requestId: string, conversationId: string, content: string): boolean {
+  const now = Date.now()
+  const seenIds = tauriListenersGlobal.__OCS_NOTIFICATION_REPLY_IDS__
+    ?? new Map<string, number>()
+  const seenFingerprints = tauriListenersGlobal.__OCS_NOTIFICATION_REPLY_FINGERPRINTS__
+    ?? new Map<string, number>()
+  tauriListenersGlobal.__OCS_NOTIFICATION_REPLY_IDS__ = seenIds
+  tauriListenersGlobal.__OCS_NOTIFICATION_REPLY_FINGERPRINTS__ = seenFingerprints
+
+  cleanupNotificationReplyMap(seenIds, now, NOTIFICATION_REPLY_DEDUP_MS)
+  cleanupNotificationReplyMap(seenFingerprints, now, NOTIFICATION_REPLY_FINGERPRINT_DEDUP_MS)
+  if (requestId && seenIds.has(requestId)) {
+    console.warn('[notification-reply] dedup by requestId', { requestId, conversationId, content })
+    return false
+  }
+
+  const fingerprint = `${conversationId}\u0000${content}`
+  if (seenFingerprints.has(fingerprint)) {
+    console.warn('[notification-reply] dedup by fingerprint', { requestId, conversationId, content })
+    return false
+  }
+
+  // 右下角通知回复可能因双击或热更新残留监听重复到达；同一请求只允许主发送链路消费一次。
+  if (requestId) seenIds.set(requestId, now)
+  // 也按会话和内容做短窗口去重，防止双击或热更新残留监听用不同 requestId 重复消费。
+  seenFingerprints.set(fingerprint, now)
+  return true
+}
 
 function isScreenshotShortcut(e: KeyboardEvent): boolean {
   const isA = e.key.toLowerCase() === 'a' || e.code === 'KeyA'
@@ -1091,6 +1135,51 @@ export async function setupTauriListeners() {
     }
     if (router.currentRoute.value.path !== '/home') {
       await router.replace('/home').catch(() => {})
+    }
+  })
+
+  listen<NotificationReplyPayload>('notification:reply:v3', async (event) => {
+    const payload = event.payload || {}
+
+    try {
+      const requestId = String(payload.requestId || '')
+      const conversationId = String(payload.conversationId || '')
+      const content = String(payload.content || '').trim()
+      console.warn('[notification-reply] main received', {
+        requestId,
+        conversationId,
+        content,
+        route: router.currentRoute.value.fullPath,
+        currentUid: String(useAuthStore().uid || localStorage.getItem('current-uid') || ''),
+      })
+      if (!conversationId || !content) throw new Error('invalid notification reply')
+      if (!consumeNotificationReplyRequest(requestId, conversationId, content)) return
+
+      const authStore = useAuthStore()
+      const uid = String(authStore.uid || localStorage.getItem('current-uid') || '')
+      if (!uid) throw new Error('missing uid')
+
+      const [convTypeRaw, convTargetId = ''] = conversationId.split('_')
+      const convType = Number(convTypeRaw)
+      if ([0, 1, 2].includes(convType) && convTargetId) {
+        // 对齐旧 im：通知回复也回到主窗口既有发送链路，先保证会话壳存在再发送。
+        useChatStore().ensureConversation(convType, convTargetId)
+      }
+      console.warn('[notification-reply] before sendMessage', {
+        requestId,
+        uid,
+        conversationId,
+        content,
+      })
+      await useMessageStore().sendMessage(uid, conversationId, 0, content)
+      console.warn('[notification-reply] sendMessage resolved', {
+        requestId,
+        uid,
+        conversationId,
+        content,
+      })
+    } catch (error) {
+      console.warn('[notification] reply send failed in main:', error)
     }
   })
 

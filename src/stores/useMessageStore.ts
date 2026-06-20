@@ -50,8 +50,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 const MAX_WS_CONNECT_CANDIDATES = 8
-const WS_CONNECT_STATUS_CHECK_COUNT = 20
+const WS_CONNECT_STATUS_CHECK_COUNT = 10
 const WS_CONNECT_STATUS_CHECK_DELAY_MS = 150
+const LAST_SUCCESSFUL_WS_URL_KEY = 'last-successful-ws-url'
 
 function recordSendDiagnosticTrace(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
   void message
@@ -161,7 +162,8 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
 
 async function resolveWsConnectCandidates(): Promise<WsConnectConfig[]> {
   const primary = await resolveWsConnectConfig()
-  const urls = [primary.wsUrl]
+  const lastSuccessfulWsUrl = normalizeWsUrl(localStorage.getItem(LAST_SUCCESSFUL_WS_URL_KEY) || '')
+  const urls = [lastSuccessfulWsUrl, primary.wsUrl]
 
   try {
     const { collectAllDomainUrls } = await import('@/api/imDomain')
@@ -869,13 +871,14 @@ export const useMessageStore = defineStore('message', () => {
   async function ensureWsConnected(): Promise<void> {
     if (!isTauri()) return
 
+    const candidates = await resolveWsConnectCandidates()
+    if (!candidates[0]?.wsUrl || !candidates[0]?.aesKey || !candidates[0]?.sessionId || !candidates[0]?.uid) {
+      // 发送前必须具备完整 10001 登录上下文；否则服务端会拒绝 WS，消息不能只停留在本地乐观气泡。
+      throw new Error('[ws] connect config missing (wsUrl/aesKey/sessionId/uid)')
+    }
+
     const status = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
     if (status === 'connected') return
-
-    const candidates = await resolveWsConnectCandidates()
-    if (!candidates[0]?.wsUrl || !candidates[0]?.aesKey) {
-      throw new Error('[ws] connect config missing (wsUrl/aesKey)')
-    }
 
     if (!pendingWsConnect) {
       pendingWsConnect = (async () => {
@@ -905,7 +908,11 @@ export const useMessageStore = defineStore('message', () => {
 
           for (let i = 0; i < WS_CONNECT_STATUS_CHECK_COUNT; i++) {
             const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
-            if (s === 'connected') return
+            if (s === 'connected') {
+              // 发送链路记录实际可用的 WS，下次重连优先尝试它，避免坏域名排在前面导致消息长时间发送中。
+              localStorage.setItem(LAST_SUCCESSFUL_WS_URL_KEY, candidate.wsUrl)
+              return
+            }
             await sleep(WS_CONNECT_STATUS_CHECK_DELAY_MS)
           }
         }
