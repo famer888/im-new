@@ -46,11 +46,9 @@ const list = ref<GroupReqItem[]>([])
 const listLoading = ref(false)
 const notificationConversationId = `1_${GROUP_NOTIFICATION_TARGET_ID}`
 const SELF_INVITE_REQ_TYPES = new Set([1, 2, 15])
-const GROUP_DETAIL_CHECK_TTL_MS = 30 * 1000
 let groupInvitationRefreshSeq = 0
 let groupInvitationRefreshRunning = false
 let groupInvitationRefreshQueuedReason = ''
-const groupDetailCheckCache = new Map<string, { valid: boolean; checkedAt: number }>()
 
 function groupInvitationRefreshLog(message: string, data?: Record<string, unknown>) {
   console.warn(`[group-invitation-refresh] ${message}`, data || {})
@@ -632,57 +630,62 @@ async function handleCheck(item: GroupReqItem, flag: boolean, index: number) {
   }
 }
 
-function canOpenGroup(item: GroupReqItem): boolean {
-  // 群通知仅“已同意”允许跳转，待同意/已拒绝/已失效等状态都必须禁止打开。
-  return Boolean(item.groupId && Number(item.groupReqStatus) === 1)
+function canOpenJoinedGroup(item: GroupReqItem): boolean {
+  return Boolean(
+    item.groupId
+    && Number(item.groupReqStatus) === 1
+    && SELF_INVITE_REQ_TYPES.has(Number(item.groupReqType || 0)),
+  )
 }
 
-function getCachedGroupDetailCheck(groupId: string): boolean | null {
-  const cached = groupDetailCheckCache.get(groupId)
-  if (!cached) return null
-  if (Date.now() - cached.checkedAt > GROUP_DETAIL_CHECK_TTL_MS) {
-    groupDetailCheckCache.delete(groupId)
-    return null
-  }
-  return cached.valid
-}
-
-async function verifyGroupAvailableBeforeOpen(item: GroupReqItem): Promise<boolean> {
-  const groupId = String(item.groupId || '')
+async function ensureJoinedGroupReady(item: GroupReqItem): Promise<boolean> {
+  const groupId = String(item.groupId || '').trim()
   if (!groupId) return false
 
-  const cachedResult = getCachedGroupDetailCheck(groupId)
-  if (cachedResult !== null) return cachedResult
+  if (!groupStore.getGroup(groupId) && authStore.uid) {
+    await groupStore.loadGroups(authStore.uid, { forceApi: true }).catch(() => undefined)
+  }
 
-  const detail = await getGroupDetail({ groupId })
-  const code = Number((detail as any)?.commonResult?.errCode ?? 200)
-  const groupBase = (detail as any)?.group
-  const isAvailable = (code === 0 || code === 200) && Boolean(groupBase)
-  groupDetailCheckCache.set(groupId, { valid: isAvailable, checkedAt: Date.now() })
-  if (!isAvailable) return false
+  if (!groupStore.getGroup(groupId)) {
+    try {
+      const detail = await getGroupDetail({ groupId })
+      const code = Number((detail as any)?.commonResult?.errCode ?? 200)
+      const groupBase = (detail as any)?.group
+      if ((code !== 0 && code !== 200) || !groupBase) return false
 
-  // 详情校验通过后回填群资料；接口可能返回空字符串，需保留群通知里的名称避免进入空标题会话。
-  groupStore.upsertGroup({
-    id: groupId,
-    name: groupBase.name || groupBase.groupName || item.groupName || groupId,
-    avatar: groupBase.pic || groupBase.avatar || groupBase.groupAvatar || item.pic || null,
-    ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
-    memberCount: Number(groupBase.memberCount ?? 0),
-    groupAliasName: groupBase.groupAliasName ?? null,
-  })
+      // 对齐旧 im：已同意入群后先补齐群资料，再切到群会话，避免打开只有 id 的空会话。
+      groupStore.upsertGroup({
+        id: groupId,
+        name: groupBase.name || groupBase.groupName || item.groupName || groupId,
+        avatar: groupBase.pic || groupBase.avatar || groupBase.groupAvatar || item.pic || null,
+        ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
+        memberCount: Number(groupBase.memberCount ?? 0),
+        groupAliasName: groupBase.groupAliasName ?? null,
+        updatedAt: Date.now(),
+      })
+    } catch {
+      return false
+    }
+  }
+
+  const cached = groupStore.getGroup(groupId)
+  if (!cached) return false
+  if (!cached.name && item.groupName) {
+    // 群列表接口偶发只给 id 时，保留群通知里的群名，避免聊天头部空标题。
+    groupStore.upsertGroup({ ...cached, name: item.groupName, avatar: cached.avatar || item.pic || null })
+  }
+  chatStore.clearPendingGroupInviteConversation(groupId)
   return true
 }
 
 async function handleGroupClick(item: GroupReqItem) {
-  if (!canOpenGroup(item)) return
-  try {
-    const available = await verifyGroupAvailableBeforeOpen(item)
-    if (!available) throw new Error('group unavailable')
-  } catch {
-    item.groupReqStatus = 3
-    eventBus.emit('show-toast', { message: t('该群聊已解散'), type: 'error' })
+  if (!canOpenJoinedGroup(item)) return
+  const ready = await ensureJoinedGroupReady(item)
+  if (!ready) {
+    eventBus.emit('show-toast', { message: t('数据获取失败'), type: 'error' })
     return
   }
+
   const conv = chatStore.ensureConversation(ConversationType.Group, item.groupId)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setRightPanel('none')
@@ -711,7 +714,7 @@ function handleGroupInvitationUpdate() {
       <li
         v-for="(item, index) in list"
         :key="item.localId || item.groupReqId"
-        :class="{ clickable: canOpenGroup(item) }"
+        :class="{ clickable: canOpenJoinedGroup(item) }"
         @click="handleGroupClick(item)"
       >
         <TextAvatar
@@ -763,7 +766,7 @@ function handleGroupInvitationUpdate() {
     align-items: center;
     border-bottom: 1px solid #eee;
     font-size: 16px;
-    font-weight: 700;
+    font-weight: 400;
     color: #333;
     flex-shrink: 0;
   }
