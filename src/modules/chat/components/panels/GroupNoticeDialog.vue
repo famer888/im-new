@@ -83,6 +83,13 @@ function handleConfirm() {
   confirmVisible.value = false
 }
 
+function resetConfirm() {
+  confirmVisible.value = false
+  confirmTitle.value = ''
+  confirmContent.value = ''
+  confirmAction.value = null
+}
+
 const displayUserType = computed(() => {
   if (typeof editUser.value?.role === 'number') return editUser.value.role
   const userId = String(editUser.value?.userId ?? editUser.value?.uid ?? '').trim()
@@ -137,6 +144,13 @@ function applyHistoryNoticeEditor() {
   }
 }
 
+function resetToViewState() {
+  // 旧 im 关闭群简介会销毁弹窗；这里组件会复用，所以每次关闭/打开都要先清掉编辑态。
+  isEdit.value = false
+  bfAll.value = false
+  resetConfirm()
+}
+
 async function loadNoticeDetail() {
   if (!props.groupId || !props.visible) return
   const seq = ++loadSeq
@@ -168,8 +182,7 @@ async function loadNoticeDetail() {
     if (props.historyNotice) {
       applyHistoryNoticeEditor()
     }
-    isEdit.value = false
-    bfAll.value = false
+    resetToViewState()
   } catch (e) {
     console.error('get group detail failed:', e)
   } finally {
@@ -185,9 +198,13 @@ watch(
     resetToast()
     if (!visible) {
       loadSeq += 1
+      resetToViewState()
       detailLoading.value = false
       return
     }
+    resetToViewState()
+    // 先用当前已知简介进入查看态，远端详情回来后再刷新内容，避免短暂显示上次编辑态。
+    noticeText.value = props.historyNotice?.notice ?? group.value?.notice ?? ''
     void loadNoticeDetail()
     void nextTick(updatePublisherNameOverflow)
   },
@@ -199,6 +216,7 @@ watch(displayUserName, () => {
 })
 
 function handleActivateEdit() {
+  if (detailLoading.value) return
   isEdit.value = true
   noticeText.value = ''
   
@@ -211,9 +229,16 @@ function handleActivateEdit() {
 }
 
 function handleCancel() {
-  isEdit.value = false
+  resetToViewState()
   // 恢复打开弹窗时正在查看的简介
   noticeText.value = props.historyNotice?.notice ?? loadedLatestNotice.value ?? group.value?.notice ?? ''
+}
+
+function handleClose() {
+  loadSeq += 1
+  detailLoading.value = false
+  resetToViewState()
+  emit('close')
 }
 
 function handleOk() {
@@ -278,8 +303,7 @@ async function handleSendNotice(notifyAll: boolean) {
       bfAll: notifyAll,
     })
     showToast($t('发布成功'))
-    isEdit.value = false
-    emit('close')
+    handleClose()
   } catch (e) {
     console.error('set notice failed:', e)
     showToast($t('发布失败'), 'error')
@@ -290,9 +314,9 @@ async function handleSendNotice(notifyAll: boolean) {
 </script>
 
 <template>
-  <div v-if="visible" class="comGroupNoticeDialog" @click.stop="emit('close')">
+  <div v-if="visible" class="comGroupNoticeDialog" @click.stop="handleClose">
     <div @click.stop>
-      <picture @click.stop="emit('close')">
+      <picture @click.stop="handleClose">
         <img src="@/assets/images/common/close-icon.png" />
       </picture>
       <div class="top">
@@ -333,14 +357,20 @@ async function handleSendNotice(notifyAll: boolean) {
           :content="noticeText"
           :group-id="props.groupId"
           height="203px"
-          @navigated="emit('close')"
+          @navigated="handleClose"
         />
         <span v-if="loginIsHost && !isHistoryView && isEdit">{{ 800 - noticeText.length }}</span>
       </section>
       
       <template v-if="loginIsHost && !isHistoryView">
         <div v-if="!isEdit" class="bottom">
-          <span @click.stop="handleActivateEdit">{{ $t('发布新简介') }}</span>
+          <span
+            :class="{ loading: detailLoading }"
+            @click.stop="handleActivateEdit"
+          >
+            <i v-if="detailLoading" aria-hidden="true"></i>
+            {{ detailLoading ? $t('加载中...') : $t('发布新简介') }}
+          </span>
         </div>
         <div v-if="isEdit" class="bfAll">
           {{ $t('通知所有成员') }}
@@ -575,6 +605,24 @@ async function handleSendNotice(notifyAll: boolean) {
 
         &:hover {
           opacity: 0.8;
+        }
+
+        &.loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          opacity: 0.75;
+          cursor: not-allowed;
+
+          > i {
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.4);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: group-notice-loading-spin 0.8s linear infinite;
+          }
         }
 
         &:nth-child(2) {
