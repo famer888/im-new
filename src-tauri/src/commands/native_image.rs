@@ -273,9 +273,8 @@ fn decrypt_native_image_bytes(bytes: &[u8], key: &str) -> Result<Vec<u8>, Pipeli
     }
 
     // 头像历史数据有两种格式：PC 分块加密与移动端整文件加密；复用文件解密探测避免大头像被误按 102416 分块拆开。
-    crypto::file_crypto::decrypt_file_bytes(bytes, key).map_err(|e| {
-        PipelineError::decrypt(ERROR_DECRYPT_FAILED, format!("decrypt failed: {}", e))
-    })
+    crypto::file_crypto::decrypt_file_bytes(bytes, key)
+        .map_err(|e| PipelineError::decrypt(ERROR_DECRYPT_FAILED, format!("decrypt failed: {}", e)))
 }
 
 async fn write_ready_cache(

@@ -111,6 +111,20 @@ function getExtraActorRole(extra: Record<string, unknown> | null): number | null
   return values.map(getNumericValue).find((value): value is number => value !== null) ?? null
 }
 
+function getExtraOwnerId(extra: Record<string, unknown> | null): string {
+  if (!extra) return ''
+  return [
+    extra.groupHostUid,
+    extra.groupHostId,
+    extra.hostUid,
+    extra.hostId,
+    extra.ownerUid,
+    extra.ownerId,
+    extra.groupOwnerUid,
+    extra.groupOwnerId,
+  ].map(str).find(Boolean) || ''
+}
+
 /**
  * 群通知提醒与会话内系统消息必须共用同一套 UID 解析规则，避免桌面提醒泄露 `#{uids:...}`。
  */
@@ -127,7 +141,8 @@ export function formatSystemNotificationDisplayParts(
   const actorId = getGroupNoticeActorId(extra)
   const extraUserNameById = getExtraUserNameById(extra)
   const contextMembers = groupId ? groupStore.getMembers(groupId) : []
-  const ownerId = groupStore.getGroup(groupId)?.ownerId || ''
+  const extraOwnerId = getExtraOwnerId(extra)
+  const ownerId = groupStore.getGroup(groupId)?.ownerId || extraOwnerId
   const ownerMember = contextMembers.find((member) => member.role === 0)
     || contextMembers.find((member) => ownerId && member.userId === ownerId)
   const extraActorRole = getExtraActorRole(extra)
@@ -155,15 +170,17 @@ export function formatSystemNotificationDisplayParts(
   const isGroupOwnerDisplayName = (name: string): boolean => {
     const normalizedName = normalizeComparableName(name)
     const effectiveOwnerId = ownerMember?.userId || ownerId
+    const actorIsDeclaredOwner = Boolean(actorId && (extraActorRole === 0 || (extraOwnerId && actorId === extraOwnerId)))
     if (!normalizedName) return false
-    if (!effectiveOwnerId && !(actorId && extraActorRole === 0)) return false
+    if (!effectiveOwnerId && !actorIsDeclaredOwner) return false
     const ownerDisplayNames = [
       effectiveOwnerId ? contactStore.getDisplayName(effectiveOwnerId) : '',
       ownerMember?.nickname || '',
       effectiveOwnerId ? extraUserNameById.get(effectiveOwnerId) || '' : '',
       effectiveOwnerId,
     ]
-    if (!effectiveOwnerId && actorId && extraActorRole === 0) {
+    if (!effectiveOwnerId && actorIsDeclaredOwner) {
+      // 刚入群时群成员/群详情可能尚未同步；如果通知本身已声明邀请人是群主，先用邀请人显示名完成首屏高亮。
       ownerDisplayNames.push(resolveUidDisplay(actorId))
     }
     // 入群成功通知只在“邀请人是群主”时高亮；备注和群成员昵称都纳入比对，避免备注覆盖后漏高亮。

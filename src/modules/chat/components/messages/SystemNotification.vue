@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useGroupStore } from '@/stores/useGroupStore'
 import { formatSystemNotificationDisplayParts } from '@/utils/systemNotificationDisplay'
+import {
+  getGroupNoticeGroupId,
+  parseGroupNoticeExtraObject,
+} from '@/utils/groupNoticeDisplay'
 import {
   openNotificationModule,
   resolveNotificationModuleTargetFromMessage,
@@ -15,6 +20,8 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const authStore = useAuthStore()
+const groupStore = useGroupStore()
+const warmedOwnerGroupIds = new Set<string>()
 
 const parsedNotice = computed(() => {
   return formatSystemNotificationDisplayParts(props.message, {
@@ -24,6 +31,40 @@ const parsedNotice = computed(() => {
 })
 
 const notificationActionTarget = computed(() => resolveNotificationModuleTargetFromMessage(props.message))
+
+const inviteNoticeGroupId = computed(() => {
+  const extra = parseGroupNoticeExtraObject(props.message.extra)
+  const extraGroupId = getGroupNoticeGroupId(extra)
+  if (extraGroupId) return extraGroupId
+  const conversationId = String(props.message.conversationId || '')
+  return conversationId.startsWith('1_') ? conversationId.slice(2) : ''
+})
+
+const hasGroupOwnerData = computed(() => {
+  const groupId = inviteNoticeGroupId.value
+  if (!groupId) return false
+  if (groupStore.getGroup(groupId)?.ownerId) return true
+  return groupStore.getMembers(groupId).some((member) => member.role === 0)
+})
+
+watch(
+  () => ({
+    groupId: inviteNoticeGroupId.value,
+    ownerReady: hasGroupOwnerData.value,
+    text: `${parsedNotice.value.prefix}${parsedNotice.value.text}`,
+  }),
+  ({ groupId, ownerReady, text }) => {
+    if (!groupId || ownerReady || warmedOwnerGroupIds.has(groupId) || !authStore.uid) return
+    if (!text.includes('邀请') || !text.includes('加入群聊')) return
+
+    warmedOwnerGroupIds.add(groupId)
+    // 刚加入群时群主/成员数据可能晚于消息到达；主动拉一次成员，让高亮不必等后台同步。
+    void groupStore.loadMembers(String(authStore.uid), groupId, { forceRemote: true }).catch((error) => {
+      console.warn('[SystemNotification] warm group owner failed:', error)
+    })
+  },
+  { immediate: true },
+)
 
 function handleOpenNotificationModule() {
   const target = notificationActionTarget.value
