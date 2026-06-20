@@ -251,18 +251,11 @@ async function handleSend() {
   const requestId = `${getCurrentWindow().label}-${Date.now()}-${Math.random().toString(36).slice(2)}`
   try {
     // 对齐旧 im：通知窗只把回复派发给主窗口，点击发送后立即关闭，不等待真实发送回执。
-    console.warn('[notification-reply] popup emit', {
-      requestId,
-      windowLabel: getCurrentWindow().label,
-      conversationId: data.value.conversationId,
-      content,
-    })
     await emitTo('main', 'notification:reply:v3', {
       requestId,
       conversationId: data.value.conversationId,
       content,
     })
-    console.warn('[notification-reply] popup emit ok', { requestId })
     await handleClose()
   } catch (error) {
     console.warn('[notification] reply send failed:', error)
