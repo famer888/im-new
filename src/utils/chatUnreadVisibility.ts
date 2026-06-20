@@ -64,6 +64,7 @@ export function formatSystemNotificationText(
 ): string {
   const raw = normalizeText(message.content)
   if (!raw) return ''
+  if (isGroupRemoveNoticeHiddenForCurrentUser(undefined, message, options.currentUid || '')) return ''
   const extra = parseGroupNoticeExtraObject(message.extra)
   const formatted = normalizeText(formatGroupNoticeDisplayText(raw, extra, options))
   if (!formatted || formatted === HIDDEN_GROUP_NOTICE_TEXT) return ''
@@ -111,6 +112,33 @@ export function isSelfLeaveGroupSystemMessage(
   return Boolean(affectedMemberId && affectedMemberId === uid)
 }
 
+export function isGroupRemoveNoticeHiddenForCurrentUser(
+  conversationId: string | undefined,
+  message: Message,
+  currentUid = '',
+): boolean {
+  if (conversationId && !isGroupConversation(conversationId)) return false
+  const target = conversationId ? isGroupConversationTarget(conversationId) : ''
+  if (target === 'invitation') return false
+  if (message.msgType !== 8) return false
+
+  const extra = parseGroupNoticeExtraObject(message.extra)
+  if (!extra) return false
+  if (String(extra.source ?? '') !== 'group-event') return false
+  if (Number(extra.groupReqType ?? 0) !== 6) return false
+
+  const uid = normalizeText(currentUid)
+  if (!uid) return false
+
+  const members = Array.isArray(extra.members) ? extra.members : []
+  const removedMemberId = members.map(getNoticeUserId).find(Boolean)
+    || getNoticeUserId(extra.targetUser)
+  const actorId = normalizeText(extra.fromUid ?? extra.sendUid ?? message.senderId)
+
+  // 旧库里已经落地的踢人提示也要按当前用户兜底：只让被踢者和踢人者看到，其它管理员/群主隐藏。
+  return Boolean(removedMemberId && uid !== removedMemberId && uid !== actorId)
+}
+
 export function isMessageVisibleInTimeline(
   conversationId: string | undefined,
   message: Message,
@@ -120,6 +148,7 @@ export function isMessageVisibleInTimeline(
   if (isHiddenMessageType(message.msgType)) return false
   if (isLegacyGroupInviteRejectionInGroupChat(conversationId, message)) return false
   if (isSelfLeaveGroupSystemMessage(conversationId, message, currentUid)) return false
+  if (isGroupRemoveNoticeHiddenForCurrentUser(conversationId, message, currentUid)) return false
   if (isGroupIntroHidden(message)) return false
   if (message.msgType === 6) return formatSystemNotificationText(message, { currentUid }) !== ''
   if (message.msgType === 8 && !isGroupIntroNoticeMessage(message)) {

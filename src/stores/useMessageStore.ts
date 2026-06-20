@@ -34,6 +34,7 @@ import {
   getGroupNoticeGroupId,
 } from '@/utils/groupNoticeDisplay'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
+import { isGroupRemoveNoticeHiddenForCurrentUser } from '@/utils/chatUnreadVisibility'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -622,6 +623,7 @@ function shouldUseMessageForConversationSummary(conversationId: string, message:
     && !isPendingGroupReqChatMessage(message)
     && !isRejectedGroupInviteNoticeForNotification(conversationId, message)
     && !isHiddenGroupEventPlaceholderMessage(conversationId, message)
+    && !isGroupRemoveNoticeHiddenForCurrentUser(conversationId, message, useAuthStore().uid)
 }
 
 function cloneGroupNoticeToNotificationMessage(conversationId: string, message: Message): Message {

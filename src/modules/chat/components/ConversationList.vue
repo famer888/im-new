@@ -30,7 +30,7 @@ import {
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
-import { isSelfLeaveGroupSystemMessage } from '@/utils/chatUnreadVisibility'
+import { isGroupRemoveNoticeHiddenForCurrentUser, isSelfLeaveGroupSystemMessage } from '@/utils/chatUnreadVisibility'
 import { emojiObj } from '@/utils/emoji'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
@@ -751,6 +751,7 @@ function getMessageDigest(message: Message): string {
   if (message.msgType === 18) return `[${t('扑克牌')}]`
   if (isHiddenMessageType(message.msgType)) return ''
   if (message.msgType === 8) {
+    if (isGroupRemoveNoticeHiddenForCurrentUser(message.conversationId, message, authStore.uid)) return ''
     const extra = parseGroupNoticeExtraObject(message.extra)
     const isGroupNotification = message.conversationId === `1_${GROUP_NOTIFICATION_TARGET_ID}`
     const groupId = getGroupNoticeGroupId(extra)
@@ -900,6 +901,7 @@ function getLoadedLatestVisibleMessage(conv: Conversation): Message | null {
       && String(parseGroupNoticeExtraObject(message.extra)?.source || '') === 'group-event'
     )
     && !isSelfLeaveGroupSystemMessage(conv.id, message, authStore.uid)
+    && !isGroupRemoveNoticeHiddenForCurrentUser(conv.id, message, authStore.uid)
     && !isRejectedGroupInviteNoticeInGroupChat(conv.id, message)
   )) ?? null
 }

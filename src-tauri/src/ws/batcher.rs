@@ -498,6 +498,48 @@ mod private_decode_tests {
         assert_eq!(channel_removed_reason(1, None, Some(6)), None);
     }
 
+    fn group_remove_event(actor_uid: i64, removed_uid: i64) -> imweb::GroupReqEventMsgDto {
+        imweb::GroupReqEventMsgDto {
+            from_uid: actor_uid,
+            group_req_type: 6,
+            group_member: vec![imweb::GroupMemberBase {
+                user: Some(imweb::UserBase {
+                    uid: removed_uid,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn group_remove_notice_should_stay_visible_for_removed_member() {
+        let item = group_remove_event(1001, 2002);
+
+        assert!(!should_hide_group_remove_notice_for_current_user(
+            &item, "2002"
+        ));
+    }
+
+    #[test]
+    fn group_remove_notice_should_stay_visible_for_actor() {
+        let item = group_remove_event(1001, 2002);
+
+        assert!(!should_hide_group_remove_notice_for_current_user(
+            &item, "1001"
+        ));
+    }
+
+    #[test]
+    fn group_remove_notice_should_hide_for_other_admin_or_owner() {
+        let item = group_remove_event(1001, 2002);
+
+        assert!(should_hide_group_remove_notice_for_current_user(
+            &item, "3003"
+        ));
+    }
+
     #[test]
     fn group_create_invite_summary_id_should_not_collide_with_accept_event() {
         let group_id = 20260620;
@@ -1482,7 +1524,11 @@ impl MessageBatcher {
                 continue;
             }
 
-            let content = group_event_content(&item, common);
+            let mut content = group_event_content(&item, common);
+            if should_hide_group_remove_notice_for_current_user(&item, self.uid.trim()) {
+                // 对齐旧 im：踢人事件只给操作者和被移除本人展示，群主/管理员之间不互相弹可见提示。
+                content = "群聊事件".to_string();
+            }
             if content.trim().is_empty() {
                 continue;
             }
@@ -2919,6 +2965,28 @@ fn first_group_req_event_member_uid(item: &imweb::GroupReqEventMsgDto) -> i64 {
         .iter()
         .find_map(|member| member.user.as_ref().map(|user| user.uid))
         .unwrap_or(0)
+}
+
+fn should_hide_group_remove_notice_for_current_user(
+    item: &imweb::GroupReqEventMsgDto,
+    current_uid: &str,
+) -> bool {
+    if item.group_req_type != 6 {
+        return false;
+    }
+
+    let current_uid = current_uid.trim().parse::<i64>().unwrap_or(0);
+    if current_uid <= 0 {
+        return false;
+    }
+
+    let removed_uid = first_group_req_event_member_uid(item);
+    if removed_uid <= 0 {
+        return false;
+    }
+
+    // 被移除本人和踢人者需要收到提示；其它群主/管理员只接收隐藏占位用于刷新成员状态。
+    current_uid != removed_uid && current_uid != item.from_uid
 }
 
 fn stable_group_req_notice_id(
