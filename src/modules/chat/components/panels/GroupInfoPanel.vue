@@ -6,7 +6,7 @@ import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useI18n } from 'vue-i18n'
-import { getGroupDetail, groupUpdate, disableGroup, groupExit, groupMember } from '@/api/imBase'
+import { getGroupDetail, groupUpdate, disableGroup, groupExit, groupMember, groupRemoveAdmin } from '@/api/imBase'
 import AppSwitch from '@/components/AppSwitch.vue'
 import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -128,6 +128,8 @@ const qrCodeVisible = ref(false)
 const inviteVisible = ref(false)
 const noticeVisible = ref(false)
 const removeMemberVisible = ref(false)
+const managerDialogVisible = ref(false)
+const removingAdminId = ref('')
 
 const existingMemberIds = computed(() => {
   return new Set(allMembers.value.map(m => m.userId))
@@ -287,6 +289,46 @@ const members = computed(() => {
 const totalCount = computed(() => group.value?.memberCount || groupStore.getMembers(conv.value?.targetId ?? '').length)
 
 const isOwner = computed(() => effectiveMemberType.value === 0)
+const groupOwner = computed(() => allMembers.value.find((member) => Number(member.role) === 0) ?? null)
+const groupManagers = computed(() => allMembers.value.filter((member) => Number(member.role) === 1))
+
+function openManagerDialog() {
+  managerDialogVisible.value = true
+}
+
+function closeManagerDialog() {
+  if (removingAdminId.value) return
+  managerDialogVisible.value = false
+}
+
+async function removeManager(member: GroupMember) {
+  if (!conv.value || !isOwner.value || removingAdminId.value) return
+  removingAdminId.value = member.userId
+  try {
+    const resp = await groupRemoveAdmin({
+      groupId: conv.value.targetId,
+      adminUid: member.userId,
+    })
+    const code = getResponseCode(resp)
+    if (code !== 200 && code !== 0) {
+      showToast(getResponseErrorMessage(resp, t('操作失败')), 'error')
+      return
+    }
+
+    showToast(t('移除成功'))
+    const groupId = conv.value.targetId
+    const nextMembers = groupStore.getMembers(groupId).map((item) =>
+      item.userId === member.userId ? { ...item, role: 2 } : item,
+    )
+    // 移除管理员成功后立即同步本地角色，避免弹窗和右侧成员角标继续显示旧管理员身份。
+    groupStore.setGroupMembers(groupId, nextMembers, { updateMemberCount: false })
+  } catch (error) {
+    console.error('[GroupInfoPanel] remove manager failed:', error)
+    showToast(t('操作失败'), 'error')
+  } finally {
+    removingAdminId.value = ''
+  }
+}
 
 function applyCachedPanelState(groupId: string) {
   const cachedGroup = groupStore.getGroup(groupId)
@@ -644,7 +686,10 @@ function handleOnlineTime(member: any) {
 
         <!-- 管理员 (同 im index.vue 管理员 label) -->
         <ul v-if="effectiveMemberType !== null && effectiveMemberType !== 2" class="manager-label">
-          <li>{{ t('管理员') }}</li>
+          <li @click="openManagerDialog">
+            <span>{{ t('管理员') }}</span>
+            <img class="icon-arrow" src="@/assets/images/common/right-arrow-a.png" alt="" />
+          </li>
         </ul>
 
         <!-- 群成员 (同 im member-list.vue) -->
@@ -818,6 +863,61 @@ function handleOnlineTime(member: any) {
       @close="removeMemberVisible = false"
       @removed="handleRemoved"
     />
+
+    <!-- 对齐旧 im：管理员标题点击后展示群主和管理员列表，群主可移除管理员。 -->
+    <Teleport to="body">
+      <div v-if="managerDialogVisible" class="groupManageDialog" @click="closeManagerDialog">
+        <div @click.stop>
+          <picture @click="closeManagerDialog">
+            <img src="@/assets/images/common/close-icon.png" alt="" />
+          </picture>
+          <div class="title">{{ t('群主') }}</div>
+          <div class="member-list manager-dialog-list">
+            <div v-if="groupOwner" class="member-item">
+              <TextAvatar
+                class="member-avatar"
+                :name="groupOwner.nickname || groupOwner.userId"
+                :src="groupOwner.avatar || null"
+                :size="30"
+                rounded
+              />
+              <div class="member-detail">
+                <h2>{{ groupOwner.nickname || groupOwner.userId }}</h2>
+                <p>{{ handleOnlineTime(groupOwner) }}</p>
+              </div>
+            </div>
+          </div>
+          <div class="title">{{ t('管理员') }}（{{ groupManagers.length }}/20）</div>
+          <div class="member-list manager-dialog-list">
+            <div
+              v-for="member in groupManagers"
+              :key="member.userId"
+              class="member-item"
+              :class="{ 'has-remove-btn': isOwner }"
+            >
+              <TextAvatar
+                class="member-avatar"
+                :name="member.nickname || member.userId"
+                :src="member.avatar || null"
+                :size="30"
+                rounded
+              />
+              <div class="member-detail">
+                <h2>{{ member.nickname || member.userId }}</h2>
+                <p>{{ handleOnlineTime(member) }}</p>
+              </div>
+              <span
+                v-if="isOwner"
+                class="remove-manage cursor"
+                @click.stop="removeManager(member)"
+              >
+                {{ removingAdminId === member.userId ? `${t('加载中')}...` : t('移除') }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1089,10 +1189,109 @@ function handleOnlineTime(member: any) {
   flex-shrink: 0;
 
   > li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 8px 10px;
     font-size: 14px;
     color: #333;
     font-weight: normal;
+    cursor: pointer;
+
+    .icon-arrow {
+      height: 10px;
+    }
+
+    &:hover {
+      background: #f5f5f5;
+    }
+  }
+}
+
+.groupManageDialog {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  background: rgba(0, 0, 0, 0.2);
+
+  > div {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 400px;
+    max-width: calc(100vw - 32px);
+    padding: 10px 16px;
+    box-sizing: border-box;
+    border-radius: 8px;
+    background: #fff;
+    transform: translate(-50%, -50%);
+
+    > picture {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+
+      &:hover {
+        opacity: 0.8;
+      }
+    }
+
+    .title {
+      padding: 10px;
+      box-sizing: border-box;
+      color: #333;
+      background: #fff;
+      font-size: 14px;
+      font-weight: normal;
+    }
+  }
+}
+
+.manager-dialog-list {
+  width: 100%;
+  max-height: 350px;
+  margin-top: 10px;
+  padding-bottom: 10px;
+  overflow-y: auto;
+  background: #fff;
+
+  .member-item {
+    position: relative;
+    height: 40px;
+    padding: 5px 10px;
+    box-sizing: border-box;
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+
+    &.has-remove-btn {
+      padding-right: 54px;
+    }
+
+    .member-avatar {
+      flex-shrink: 0;
+    }
+
+    .remove-manage {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      color: #333;
+      font-size: 14px;
+      transform: translateY(-50%);
+
+      &:hover {
+        color: #3369fe;
+      }
+    }
   }
 }
 

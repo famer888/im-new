@@ -795,6 +795,22 @@ export async function groupMember(
   })
 }
 
+export async function groupRemoveAdmin(
+  data: { groupId: number | string; adminUid: number | string },
+  baseUrl?: string,
+): Promise<proto.GroupRemoveAdminResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/group/groupRemoveAdmin`,
+    reqType: proto.GroupRemoveAdminReq,
+    respType: proto.GroupRemoveAdminResp,
+    data: {
+      groupId: data.groupId,
+      adminUid: data.adminUid,
+    },
+  })
+}
+
 export async function groupUpdate(
   data: { op: number; groupParam: Record<string, unknown> },
   baseUrl?: string,
