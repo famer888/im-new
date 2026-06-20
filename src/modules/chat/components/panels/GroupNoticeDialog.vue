@@ -37,6 +37,7 @@ const loadedLatestNotice = ref('')
 const isEdit = ref(false)
 const bfAll = ref(false)
 const submitting = ref(false)
+const detailLoading = ref(false)
 const loginIsHost = ref(false)
 const editUser = ref<any>(null)
 const memberType = ref(-1)
@@ -117,6 +118,7 @@ const displayUserLabel = computed(() => {
 // 对齐旧 im：普通群成员查看群简介时，也要显示发布人的管理身份，而不是只看当前查看者权限。
 const showBadge = computed(() => displayUserType.value === 0 || displayUserType.value === 1)
 const isHistoryView = computed(() => Boolean(props.historyNotice))
+const showNoticeLoading = computed(() => detailLoading.value && !isEdit.value && !isHistoryView.value)
 
 function findMemberById(userId: string) {
   if (!userId) return null
@@ -138,9 +140,10 @@ function applyHistoryNoticeEditor() {
 async function loadNoticeDetail() {
   if (!props.groupId || !props.visible) return
   const seq = ++loadSeq
+  detailLoading.value = true
   try {
     const detail = await getGroupDetail({ groupId: props.groupId })
-    if (seq !== loadSeq) return
+    if (seq !== loadSeq || !props.visible) return
     memberType.value = detail.memberType ?? 2
     loadedLatestNotice.value = detail.groupNotice?.notice ?? ''
     noticeText.value = props.historyNotice?.notice ?? loadedLatestNotice.value
@@ -169,6 +172,10 @@ async function loadNoticeDetail() {
     bfAll.value = false
   } catch (e) {
     console.error('get group detail failed:', e)
+  } finally {
+    if (seq === loadSeq) {
+      detailLoading.value = false
+    }
   }
 }
 
@@ -176,7 +183,11 @@ watch(
   () => [props.visible, props.groupId, props.historyNotice?.notice, props.historyNotice?.editorId],
   ([visible]) => {
     resetToast()
-    if (!visible) return
+    if (!visible) {
+      loadSeq += 1
+      detailLoading.value = false
+      return
+    }
     void loadNoticeDetail()
     void nextTick(updatePublisherNameOverflow)
   },
@@ -312,6 +323,10 @@ async function handleSendNotice(notifyAll: boolean) {
           maxlength="800"
           :placeholder="$t('请输入内容')"
         />
+        <div v-else-if="showNoticeLoading" class="notice-view notice-loading">
+          <i aria-hidden="true"></i>
+          <span>{{ $t('加载中...') }}</span>
+        </div>
         <GroupNoticeContent
           v-else
           class="notice-view"
@@ -513,6 +528,24 @@ async function handleSendNotice(notifyAll: boolean) {
         overflow-y: auto;
       }
 
+      .notice-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: #999;
+        font-size: 13px;
+
+        > i {
+          width: 14px;
+          height: 14px;
+          border: 2px solid rgba(51, 105, 254, 0.2);
+          border-top-color: #3369fe;
+          border-radius: 50%;
+          animation: group-notice-loading-spin 0.8s linear infinite;
+        }
+      }
+
       > span {
         position: absolute;
         right: 10px;
@@ -574,6 +607,12 @@ async function handleSendNotice(notifyAll: boolean) {
         top: 27px;
       }
     }
+  }
+}
+
+@keyframes group-notice-loading-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>
