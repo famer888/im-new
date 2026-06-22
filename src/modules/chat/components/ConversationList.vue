@@ -399,6 +399,13 @@ function shouldShowNamePlaceholder(conv: Conversation): boolean {
   if (!(window as any).__TAURI_INTERNALS__) return false
   if (isChannelNotificationConversation(conv)) return false
   if (conv.type === ConversationType.Group && conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  if (conv.type === ConversationType.Channel) {
+    const channel = channelByIdMap.value.get(conv.targetId)
+    const status = channelStore.getChannelDetailStatus(conv.targetId)
+    // 频道详情失败或已结束但没拿到名称时，降级显示频道号，避免左侧列表永久停在骨架加载态。
+    return !explicitConversationName(conv)
+      && (status === 'loading' || (status === 'idle' && (channelStore.loading || !!channel)))
+  }
   return !explicitConversationName(conv)
 }
 
