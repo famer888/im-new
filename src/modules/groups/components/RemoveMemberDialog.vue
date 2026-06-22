@@ -52,6 +52,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import AppCheckbox from '@/components/AppCheckbox.vue'
 import Toast from '@/components/Toast.vue'
 import { groupMember } from '@/api/imBase'
+import { eventBus } from '@/utils/eventBus'
 
 const { t: $t } = useI18n()
 
@@ -80,7 +81,15 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
+function resetToast() {
+  toastVisible.value = false
+  toastMessage.value = ''
+  toastType.value = 'success'
+}
+
 watch(() => props.visible, (v) => {
+  // 弹窗复用同一个组件实例，打开/关闭时清掉上一次操作留下的本地提示状态。
+  resetToast()
   if (v) {
     searchKey.value = ''
     selectedIds.value.clear()
@@ -147,7 +156,8 @@ async function handleConfirm() {
     
     const code = (res as any)?.commonResult?.errCode
     if (code === 200) {
-      showToast($t('移除成功'))
+      // 成功后弹窗会立即关闭，提示交给全局 Toast，避免下次打开弹窗时复用旧提示。
+      eventBus.emit('show-toast', { message: $t('移除成功'), type: 'success' })
       emit('removed')
       emit('close')
     } else {

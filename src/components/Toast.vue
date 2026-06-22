@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { onBeforeUnmount, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   message: string
@@ -13,11 +13,28 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
-watch(() => props.visible, (v) => {
-  if (v && props.duration > 0) {
-    setTimeout(() => emit('update:visible', false), props.duration)
-  }
-})
+let hideTimer: ReturnType<typeof window.setTimeout> | null = null
+
+function clearHideTimer() {
+  if (!hideTimer) return
+  window.clearTimeout(hideTimer)
+  hideTimer = null
+}
+
+function scheduleHide() {
+  clearHideTimer()
+  if (!props.visible || props.duration <= 0) return
+
+  // Toast 可能以 visible=true 的状态重新挂载；每次可见或文案变化都重置关闭计时。
+  hideTimer = window.setTimeout(() => {
+    hideTimer = null
+    emit('update:visible', false)
+  }, props.duration)
+}
+
+watch(() => [props.visible, props.message, props.duration] as const, scheduleHide, { immediate: true })
+
+onBeforeUnmount(clearHideTimer)
 </script>
 
 <template>
