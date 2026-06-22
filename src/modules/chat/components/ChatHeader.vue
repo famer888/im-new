@@ -106,6 +106,10 @@ const isFileHelper = computed(
 const isFriendChat = computed(
   () => conversation.value?.type === ConversationType.Friend && !isFileHelper.value,
 )
+const isGroupOrChannelChat = computed(
+  () => conversation.value?.type === ConversationType.Group
+    || conversation.value?.type === ConversationType.Channel,
+)
 const isOfficialAccountChat = computed(
   () => {
     const conv = conversation.value
@@ -414,7 +418,13 @@ watch(
                 @blur="saveRemark"
                 @keyup.enter="saveRemark"
               />
-              <span v-else class="title">{{ title }}</span>
+              <span
+                v-else
+                class="title"
+                :class="{ 'title-strong': isGroupOrChannelChat }"
+              >
+                {{ title }}
+              </span>
               <img
                 v-if="isFriendChat && !editingRemark"
                 class="friend-edit-icon"
@@ -592,6 +602,11 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  &.title-strong {
+    font-weight: 700;
+    font-family: PingFangSC-Bold, sans-serif;
+  }
 }
 
 .friend-edit-icon {
