@@ -2499,19 +2499,6 @@ function getEncryptedUploadSize(plainSize: number): number {
   return encryptedSize
 }
 
-function resolveOssUploadUrl(responseUrl: string, bucket: string, endpoint: string, objectKey: string): string {
-  const key = objectKey.replace(/^\/+/, '')
-  // 对齐老 im：上传 endpoint / 服务端回传上传 URL 一律走 HTTPS，避免 HTTP 下被 CORS 预检或代理链路拦截。
-  if (responseUrl) return toHttpsUrl(stripQuery(responseUrl))
-
-  const normalizedEndpoint = normalizeOssEndpoint(endpoint)
-  if (/aliyuncs\.com$/i.test(normalizedEndpoint)) {
-    return `https://${bucket}.${normalizedEndpoint}/${key}`
-  }
-
-  return `https://${normalizedEndpoint}/${key}`
-}
-
 async function putObjectWithOssCandidates(options: {
   responseUrl: string
   bucket: string
@@ -2530,45 +2517,9 @@ async function putObjectWithOssCandidates(options: {
   trace?: ImageSendTrace
   logPrefix?: string
 }): Promise<{ uploadUrl: string; candidate: OssUploadCandidate }> {
-  const primaryUploadUrl = resolveOssUploadUrl(
-    options.responseUrl,
-    options.bucket,
-    options.endpoint,
-    options.objectKey,
-  )
-  const primaryCandidate: OssUploadCandidate | null = primaryUploadUrl
-    ? {
-        url: primaryUploadUrl,
-        domainUrl: primaryUploadUrl,
-        source: options.responseUrl ? 'response' : 'token',
-      }
-    : null
   let lastError: unknown = null
 
-  if (primaryCandidate) {
-    try {
-      await putObjectToOss({
-        url: primaryCandidate.url,
-        bucket: options.bucket,
-        objectKey: options.objectKey,
-        accessKeyId: options.accessKeyId,
-        accessKeySecret: options.accessKeySecret,
-        securityToken: options.securityToken,
-        body: options.body,
-        localPath: options.localPath,
-        fileKey: options.fileKey,
-        plainSize: options.plainSize,
-        contentType: options.contentType,
-        trace: options.trace,
-        logPrefix: options.logPrefix,
-      })
-      return { uploadUrl: primaryCandidate.url, candidate: primaryCandidate }
-    } catch (error) {
-      lastError = error
-      await reportOssUploadCandidateFailure(primaryCandidate, error)
-    }
-  }
-
+  // 对齐老 im：上传先走动态 OSS 域名池，token endpoint / 接口回传 URL 只作为兜底。
   const candidates = await getOssUploadCandidates({
     responseUrl: options.responseUrl,
     bucket: options.bucket,
@@ -2576,7 +2527,7 @@ async function putObjectWithOssCandidates(options: {
     objectKey: options.objectKey,
     channelType: options.channelType,
     ossSceneType: options.ossSceneType,
-  }).then((items) => items.filter((item) => item.url !== primaryCandidate?.url))
+  })
 
   for (const candidate of candidates) {
     try {

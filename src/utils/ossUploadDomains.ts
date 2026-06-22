@@ -1,4 +1,4 @@
-import { getDynamicDomainList, reportErrorDomain } from '@/api/imDomain'
+import { reportErrorDomain } from '@/api/imDomain'
 import { getAllDomains, markDomainError } from '@/utils/domainPool'
 
 export interface OssUploadCandidate {
@@ -46,13 +46,13 @@ function resolveUploadModuleCode(channelType: unknown, ossSceneType?: unknown): 
   const value = Number(channelType)
   const scene = Number(ossSceneType)
   const isChatPicScene = Number.isFinite(scene) && scene === 1
-  if (value === 1) return isChatPicScene ? 'ossChatPicUrl' : 'ossChatUrl'
-  if (value === 2) return isChatPicScene ? 'ossChatPicLowRateUrl' : 'ossLowRateUrl'
-  // 聊天图片 v2 桶的 endpoint 也有独立域名池，不能复用旧 ossEndpoint。
-  if (isChatPicScene && (value === 0 || value === 9)) return 'ossChatPicEndpoint'
+  // v2 聊天图片上传要走专用 endpoint 域名池；ossChatPicUrl 是访问/下载域名，拿来 PUT 会先探一圈再回落直连 OSS。
+  if (isChatPicScene) return 'ossChatPicEndpoint'
+  if (value === 1) return 'ossChatUrl'
+  if (value === 2) return 'ossLowRateUrl'
   // 对齐老 im：非聊天图片的默认通道仍使用通用 ossEndpoint 动态池。
   if (value === 0 || value === 9) return 'ossEndpoint'
-  return isChatPicScene ? 'ossChatPicUrl' : 'ossDefaultUrl'
+  return 'ossDefaultUrl'
 }
 
 function uniqCandidates(candidates: OssUploadCandidate[]): OssUploadCandidate[] {
@@ -70,17 +70,31 @@ async function probeEndpoint(endpoint: string): Promise<{ ok: boolean; status: n
   const { invoke } = await import('@tauri-apps/api/core')
   const probeUrl = endpointToBaseUrl(endpoint)
   if (!probeUrl) return { ok: false, status: 0 }
-  return invoke<{ ok: boolean; status: number }>('probe_url', { url: probeUrl })
+  let timer = 0
+  try {
+    // 对齐旧 im 的 2s 域名检测窗口，坏域名不能把每次媒体发送都拖到 Tauri 诊断超时。
+    return await Promise.race([
+      invoke<{ ok: boolean; status: number }>('probe_url', { url: probeUrl }),
+      new Promise<{ ok: boolean; status: number }>((resolve) => {
+        timer = window.setTimeout(() => resolve({ ok: false, status: 0 }), 2200)
+      }),
+    ])
+  } finally {
+    if (timer) window.clearTimeout(timer)
+  }
 }
 
 async function reportUploadDomainFailure(domainUrl: string, errorDesc: string, httpStatus = 0, moduleCode = 'ossEndpoint') {
-  markDomainError(moduleCode, domainUrl)
-  await reportErrorDomain({
+  await markDomainError(moduleCode, domainUrl)
+  // 老 im 的域名异常上报不阻塞当前上传；这里后台上报，避免慢网络下发送一直转圈。
+  void reportErrorDomain({
     domainUrl,
     errorPath: domainUrl,
     errorDesc,
     httpStatus,
     moduleCode,
+  }).catch((error) => {
+    console.warn('[ossUploadDomains] report upload domain failure failed:', error)
   })
 }
 
@@ -94,10 +108,10 @@ export async function getOssUploadCandidates(options: {
 }): Promise<OssUploadCandidate[]> {
   const { responseUrl, bucket, endpoint, objectKey } = options
   const moduleCode = resolveUploadModuleCode(options.channelType, options.ossSceneType)
-  const dynamicDomains = [
-    ...getAllDomains(moduleCode).map(item => item.domain),
-    ...await getDynamicDomainList(moduleCode),
-  ]
+  // 对齐旧 im：发送链路只读已缓存的 domainList，不在每张图片/视频上传前实时请求 listDomain。
+  const dynamicDomains = getAllDomains(moduleCode)
+    .filter(item => item.status !== 'error')
+    .map(item => item.domain)
 
   const candidates: OssUploadCandidate[] = []
   for (const domainUrl of [...new Set(dynamicDomains.map(toHttpsUrl).filter(Boolean))]) {
