@@ -1392,7 +1392,6 @@ onBeforeUnmount(() => {
         :data-local-path="localFilePath || undefined"
         :draggable="!shouldUseNativeFileDrag"
         :alt="dragFileName"
-        :title="dragFileName"
         :class="{ loaded: isLoaded }"
         @dragstart="handleImageDragStart"
         @dragend="handleImageDragEnd"

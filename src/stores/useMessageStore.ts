@@ -956,68 +956,70 @@ export const useMessageStore = defineStore('message', () => {
   async function ensureWsConnected(): Promise<void> {
     if (!isTauri()) return
 
-    const candidates = await resolveWsConnectCandidates()
-    if (!candidates[0]?.wsUrl || !candidates[0]?.aesKey || !candidates[0]?.sessionId || !candidates[0]?.uid) {
-      // 发送前必须具备完整 10001 登录上下文；否则服务端会拒绝 WS，消息不能只停留在本地乐观气泡。
-      throw new Error('[ws] connect config missing (wsUrl/aesKey/sessionId/uid)')
-    }
-
     const status = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
     if (status === 'connected') {
       const currentWsUrl = await resolveCurrentConnectedWsUrl()
+      // 已连接时直接走快路径，避免每次发送消息都解析域名池或触发 listDomain 相关等待。
       if (!currentWsUrl || isWsUrlCompatibleWithEnv(currentWsUrl)) return
       // 当前已连接的 WS 可能来自环境切换前的测试缓存；断开后才能重新选择线上 webSession。
       await tauriInvoke('disconnect_ws').catch(() => undefined)
       await sleep(80)
     }
 
-    if (!pendingWsConnect) {
-      pendingWsConnect = (async () => {
-        for (const [index, candidate] of candidates.entries()) {
-          const currentStatus = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
-          if (currentStatus === 'connected') return
+    // 如果已有连接任务在跑，复用同一个 Promise；不要为并发发送重复解析候选域名。
+    if (pendingWsConnect) return pendingWsConnect
 
-          // Tauri 的重连循环会固定当前 URL；切换候选前先断开，才能真正换到下一个 webSession。
-          if (currentStatus !== 'disconnected') {
-            await tauriInvoke('disconnect_ws').catch(() => undefined)
-            await sleep(80)
-          }
-
-          console.warn('[ws] ensureWsConnected: reconnecting...', {
-            status: currentStatus,
-            wsUrl: candidate.wsUrl,
-            candidateIndex: index + 1,
-            candidateTotal: candidates.length,
-          })
-          await tauriInvoke('connect_ws', {
-            url: candidate.wsUrl,
-            aesKey: candidate.aesKey,
-            sessionId: candidate.sessionId,
-            installCode: candidate.installCode,
-            uid: candidate.uid,
-            appVer: candidate.appVer,
-            packageCode: candidate.packageCode,
-            plat: candidate.plat,
-            language: candidate.language,
-            sysMac: candidate.sysMac,
-            sysModel: candidate.sysModel,
-          })
-
-          for (let i = 0; i < WS_CONNECT_STATUS_CHECK_COUNT; i++) {
-            const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
-            if (s === 'connected') {
-              // 发送链路记录实际可用的 WS，下次重连优先尝试它，避免坏域名排在前面导致消息长时间发送中。
-              localStorage.setItem(LAST_SUCCESSFUL_WS_URL_KEY, candidate.wsUrl)
-              return
-            }
-            await sleep(WS_CONNECT_STATUS_CHECK_DELAY_MS)
-          }
-        }
-        throw new Error('[ws] reconnect timeout: status did not become connected')
-      })().finally(() => {
-        pendingWsConnect = null
-      })
+    const candidates = await resolveWsConnectCandidates()
+    if (!candidates[0]?.wsUrl || !candidates[0]?.aesKey || !candidates[0]?.sessionId || !candidates[0]?.uid) {
+      // 发送前必须具备完整 10001 登录上下文；否则服务端会拒绝 WS，消息不能只停留在本地乐观气泡。
+      throw new Error('[ws] connect config missing (wsUrl/aesKey/sessionId/uid)')
     }
+
+    pendingWsConnect = (async () => {
+      for (const [index, candidate] of candidates.entries()) {
+        const currentStatus = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
+        if (currentStatus === 'connected') return
+
+        // Tauri 的重连循环会固定当前 URL；切换候选前先断开，才能真正换到下一个 webSession。
+        if (currentStatus !== 'disconnected') {
+          await tauriInvoke('disconnect_ws').catch(() => undefined)
+          await sleep(80)
+        }
+
+        console.warn('[ws] ensureWsConnected: reconnecting...', {
+          status: currentStatus,
+          wsUrl: candidate.wsUrl,
+          candidateIndex: index + 1,
+          candidateTotal: candidates.length,
+        })
+        await tauriInvoke('connect_ws', {
+          url: candidate.wsUrl,
+          aesKey: candidate.aesKey,
+          sessionId: candidate.sessionId,
+          installCode: candidate.installCode,
+          uid: candidate.uid,
+          appVer: candidate.appVer,
+          packageCode: candidate.packageCode,
+          plat: candidate.plat,
+          language: candidate.language,
+          sysMac: candidate.sysMac,
+          sysModel: candidate.sysModel,
+        })
+
+        for (let i = 0; i < WS_CONNECT_STATUS_CHECK_COUNT; i++) {
+          const s = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
+          if (s === 'connected') {
+            // 发送链路记录实际可用的 WS，下次重连优先尝试它，避免坏域名排在前面导致消息长时间发送中。
+            localStorage.setItem(LAST_SUCCESSFUL_WS_URL_KEY, candidate.wsUrl)
+            return
+          }
+          await sleep(WS_CONNECT_STATUS_CHECK_DELAY_MS)
+        }
+      }
+      throw new Error('[ws] reconnect timeout: status did not become connected')
+    })().finally(() => {
+      pendingWsConnect = null
+    })
 
     return pendingWsConnect
   }
