@@ -1541,7 +1541,6 @@ onBeforeUnmount(() => {
     ref="videoMessageRef"
     class="video-message"
     :class="{ preparing: videoPreparingForDrag }"
-    :title="dragFileName"
     @click.stop="handleVideoClick"
     @mousedown.left="handleNativeDragMouseDown"
     @mouseenter="preloadEncryptedVideoStream"
