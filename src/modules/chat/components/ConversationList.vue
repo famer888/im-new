@@ -788,7 +788,7 @@ function getMessageDigest(message: Message): string {
     if (isHiddenGroupNoticeDigest(formatted)) return ''
     const normalized = extra && formatted.includes('邀请') && formatted.includes('加入群聊')
       ? formatted.replace(PURE_UID_RE, (uid) => resolveUidNick(uid, groupId, extra))
-      : formatted
+      : formatBareUidGroupLeaveDigest(formatted, (uid) => resolveUidNick(uid, groupId, extra))
     const digest = normalized ? formatDigestText(normalized) : ''
     if (isGroupIntroNoticeMessage(message)) {
       if (!digest) return `[${t('群简介')}]`
@@ -820,10 +820,26 @@ function isRejectedGroupInviteDigestInGroupChat(conv: Conversation): boolean {
   )
 }
 
+function isBareUidGroupLeaveDigestInGroupChat(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
+  return /^\d{5,}\s*退出群聊$/.test(String(conv.lastMsgDigest || '').trim())
+}
+
+function formatBareUidGroupLeaveDigest(rawDigest: string, resolveName?: (uid: string) => string): string {
+  const match = rawDigest.trim().match(/^(\d{5,})\s*退出群聊$/)
+  if (!match) return rawDigest
+  const resolvedName = resolveName?.(match[1])
+  if (resolvedName && resolvedName !== match[1]) return `${resolvedName}退出群聊`
+  // 对齐旧 im：群成员名未同步前，用“会员id xxx”兜底，避免把裸 uid 当成昵称展示。
+  return `会员id ${match[1]} 退出群聊`
+}
+
 function shouldRepairGroupDigestPreview(conv: Conversation): boolean {
   if (conv.type !== ConversationType.Group || conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return false
   const digest = String(conv.lastMsgDigest || '').trim()
-  return isHiddenGroupNoticeDigest(digest) || isRejectedGroupInviteDigestInGroupChat(conv)
+  return isHiddenGroupNoticeDigest(digest)
+    || isRejectedGroupInviteDigestInGroupChat(conv)
+    || isBareUidGroupLeaveDigestInGroupChat(conv)
 }
 
 function repairGroupDigestPreview(conv: Conversation) {
@@ -969,11 +985,15 @@ function getDigest(conv: Conversation): string {
     if (isHiddenGroupNoticeDigest(conv.lastMsgDigest)) return ''
     if (isRejectedGroupInviteDigestInGroupChat(conv)) return ''
     if (conv.type === ConversationType.Group) {
+      if (isBareUidGroupLeaveDigestInGroupChat(conv) && messageStore.getMessages(conv.id).length > 0) return ''
       const placeholders = Array.from(String(conv.lastMsgDigest).matchAll(GROUP_NOTICE_UID_PLACEHOLDER_RE))
         .flatMap((match) => String(match[1] || '').split(/[,，]/))
         .map((id) => id.trim())
         .filter(Boolean)
-      let replacedRaw = replaceGroupNoticeUidPlaceholders(conv.lastMsgDigest, (id) => resolveUidNick(id))
+      let replacedRaw = replaceGroupNoticeUidPlaceholders(
+        formatBareUidGroupLeaveDigest(conv.lastMsgDigest, (id) => resolveUidNick(id)),
+        (id) => resolveUidNick(id),
+      )
       if (replacedRaw.includes('邀请') && replacedRaw.includes('加入群聊')) {
         replacedRaw = replacedRaw.replace(PURE_UID_RE, (uid) => resolveUidNick(uid))
       }
