@@ -45,10 +45,16 @@ function getFirstNormalOpenChatChannelDomain(): string {
   }
 }
 
-const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co'
-const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co'
-const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || 'https://test-gateway.68chat.co'
-const ENV_NAME = String(import.meta.env.VITE_APP_ENV || 'test').trim().toLowerCase() || 'test'
+const IS_PRODUCTION_BUILD = Boolean(import.meta.env.PROD)
+// 生产打包缺少 env 注入时也不能回落到 test 域名；dev 模式仍保留 test 默认值便于本地调试。
+const DEFAULT_ENV_NAME = IS_PRODUCTION_BUILD ? 'prod' : 'test'
+const DEFAULT_BASE_URL = IS_PRODUCTION_BUILD ? 'https://webbiz.imono.xyz' : 'https://test-webbiz.68chat.co'
+const DEFAULT_DOMAIN_URL = IS_PRODUCTION_BUILD ? 'https://a1.lenghu.xyz' : 'https://test-domain-api.68chat.co'
+const DEFAULT_OPEN_CHAT_DOMAIN = IS_PRODUCTION_BUILD ? 'https://openchat-channel.fangcunjiaoyu.xyz' : 'https://test-gateway.68chat.co'
+const RAW_BASE_URL = import.meta.env.VITE_APP_BASE_API || DEFAULT_BASE_URL
+const RAW_DOMAIN_URL = import.meta.env.VITE_APP_BASE_DOMAIN || DEFAULT_DOMAIN_URL
+const RAW_OPEN_CHAT_DOMAIN = import.meta.env.VITE_APP_OPEN_CHAT_DOMAIN || DEFAULT_OPEN_CHAT_DOMAIN
+const ENV_NAME = String(import.meta.env.VITE_APP_ENV || DEFAULT_ENV_NAME).trim().toLowerCase() || DEFAULT_ENV_NAME
 
 function normalizeBrandId(input?: string): '45' | '55' | '97' {
   const value = String(input || '').trim()

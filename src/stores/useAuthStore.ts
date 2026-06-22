@@ -4,6 +4,7 @@ import { getUserInfo } from '@/api/imBase'
 import { API_CONFIG, setBaseUrl } from '@/api/config'
 import { clearActiveSessionContext, setActiveSessionContext } from '@/api/sessionContext'
 import { getOrCreateInstallCode } from '@/utils/installCode'
+import { isProdSafeDomain } from '@/utils/domainSafety'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -90,7 +91,11 @@ function isWsConnectConfigCompatibleWithEnv(wsUrl: string): boolean {
   if (API_CONFIG.env === 'prod' || API_CONFIG.env === 'production') {
     try {
       const parsed = new URL(raw)
-      return parsed.protocol === 'wss:' && !/(^|[.-])(test|stage|dev|uat|sit)[.-]/i.test(parsed.host.toLowerCase())
+      const host = parsed.host.toLowerCase()
+      // 生产环境不能复用测试 WS/IP 缓存；否则服务端回包 AES key 与当前环境不一致。
+      return parsed.protocol === 'wss:'
+        && !/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(host)
+        && isProdSafeDomain(raw)
     } catch {
       return false
     }
@@ -213,6 +218,15 @@ export const useAuthStore = defineStore('auth', () => {
       wsUrl: normalizeWsUrl(config.wsUrl),
       aesKey: String(config.aesKey || '').trim(),
       installCode: String(config.installCode || '').trim() || getOrCreateInstallCode(),
+    }
+    if (!isWsConnectConfigCompatibleWithEnv(normalized.wsUrl)) {
+      // 登录接口偶尔会回历史测试 session 地址；生产包丢弃后让消息模块走 webSession 域名池兜底。
+      clearWsConnectConfig()
+      authDiag('ignored incompatible ws config on save', {
+        env: API_CONFIG.env,
+        wsHost: safeUrlHost(normalized.wsUrl),
+      })
+      return
     }
     wsConnectConfig.value = normalized
     localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(normalized))

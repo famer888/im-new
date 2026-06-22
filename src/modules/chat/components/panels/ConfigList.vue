@@ -60,10 +60,20 @@ async function handleClearSubmit(index: number) {
     return
   }
   const isRemoteDeletion = index === 1
+  const conversationId = conv.value.id
+  const conversationSnapshot = { ...conv.value }
   try {
-    await messageStore.clearConversationHistory(conv.value.id, isRemoteDeletion)
+    await messageStore.clearConversationHistory(conversationId, isRemoteDeletion)
+    // 通用设置入口同样只清消息内容，不删除会话；补回当前项并保持原列表位置。
+    chatStore.addOrUpdateConversation({
+      ...conversationSnapshot,
+      lastMsgDigest: null,
+      lastMsgId: null,
+      unreadCount: 0,
+    }, { preserveListOrder: true })
+    chatStore.setCurrentConversation(conversationId)
     chatStore.updateConversation({
-      id: conv.value.id,
+      id: conversationId,
       lastMsgDigest: null,
       lastMsgId: null,
       unreadCount: 0,

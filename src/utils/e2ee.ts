@@ -176,6 +176,8 @@ export function clearE2eeKeyCaches(loginUid: string | number) {
   // 对齐老 im 的“消息解密失败 → 修复”：只清空会话密钥缓存，
   // 不主动遍历会话拉钥匙，避免无公钥会话把内部错误弹给用户。
   friendKeyCacheByLogin.delete(uid)
+  ensuredOwnKeyByUid.delete(uid)
+  ensuredFriendRelKeyIds.clear()
   pendingGroupKeys.clear()
   pendingChannelKeys.clear()
   pendingFriendKeys.clear()
@@ -316,10 +318,17 @@ let pendingOwnKey: Promise<OwnKeyPair> | null = null
 let pendingOwnKeyServerCheck: Promise<void> | null = null
 let lastOwnKeyServerCheckAt = 0
 const OWN_KEY_SERVER_CHECK_INTERVAL_MS = 5 * 60 * 1000
+const ensuredOwnKeyByUid = new Map<string, OwnKeyPair>()
+const ensuredFriendRelKeyIds = new Set<string>()
 
 export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair> {
   if (!isTauri()) {
     throw new Error('ensureOwnKeyPair: Tauri only')
+  }
+  const uidKey = String(uid || '').trim()
+  const ensured = ensuredOwnKeyByUid.get(uidKey)
+  if (ensured) {
+    return ensured
   }
   const startedAt = Date.now()
   e2eeDiag('ensure own key start', { uid })
@@ -527,6 +536,8 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       keyVersion: cached.keyVersion,
       totalDurationMs: Date.now() - startedAt,
     })
+    // 发送热路径只需要保证 Rust 本轮进程已注入过私钥；同一登录态后续发送直接复用。
+    ensuredOwnKeyByUid.set(uidKey, cached)
     return cached
   }
 
@@ -680,6 +691,7 @@ export async function ensureOwnKeyPair(uid: string | number): Promise<OwnKeyPair
       totalDurationMs: Date.now() - startedAt,
     })
 
+    ensuredOwnKeyByUid.set(uidKey, kp)
     return kp
   })().finally(() => {
     pendingOwnKey = null
@@ -973,6 +985,10 @@ export async function ensureFriendRelKey(
     throw new Error('ensureFriendRelKey: Tauri only')
   }
   const fid = String(friendId)
+  const ensuredKey = `${String(uid || '').trim()}:${fid}`
+  if (!forceRefresh && ensuredFriendRelKeyIds.has(ensuredKey)) {
+    return ''
+  }
   const startedAt = Date.now()
   e2eeDiag('ensure friend rel key start', { uid, friendId: fid, forceRefresh })
   e2eeDebugLog('[e2ee] ensureFriendRelKey: start', { uid, fid })
@@ -991,12 +1007,15 @@ export async function ensureFriendRelKey(
         friendId: fid,
         totalDurationMs: Date.now() - startedAt,
       })
+      // 同一进程里 Rust relKey 已确认存在，后续连续发消息不再重复跨进程检查。
+      ensuredFriendRelKeyIds.add(ensuredKey)
       return ''
     }
   }
 
   if (forceRefresh) {
     pendingFriendKeys.delete(fid)
+    ensuredFriendRelKeyIds.delete(ensuredKey)
     try {
       await tauriInvoke<void>('clear_friend_rel_key', { friendId: fid })
     } catch (err) {
@@ -1099,6 +1118,7 @@ export async function ensureFriendRelKey(
       })
       e2eeDebugLog('[e2ee] derive self web rel_key OK(send warmup)', { uid, len: last.length })
     }
+    ensuredFriendRelKeyIds.add(ensuredKey)
     return last
   })().finally(() => {
     pendingFriendKeys.delete(fid)

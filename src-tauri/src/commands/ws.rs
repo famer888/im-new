@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::ws::WsManager;
+use crate::ws::{WsLoginClientInfo, WsManager};
 
 fn normalize_ws_url(url: &str) -> String {
     let trimmed = url.trim();
@@ -26,6 +26,12 @@ pub async fn connect_ws(
     session_id: Option<String>,
     install_code: Option<String>,
     uid: Option<String>,
+    app_ver: Option<i32>,
+    package_code: Option<i32>,
+    plat: Option<i32>,
+    language: Option<i32>,
+    sys_mac: Option<String>,
+    sys_model: Option<String>,
 ) -> Result<(), String> {
     let url = normalize_ws_url(&url);
     let session_id = session_id.map(|value| value.trim().to_string());
@@ -49,8 +55,28 @@ pub async fn connect_ws(
             url
         );
     }
+    // 10001 LoginReq 的 clientInfo 必须和 HTTP 登录头保持一致，否则线上 WS 可能连上但不回消息 ACK。
+    let default_client_info = WsLoginClientInfo::default();
+    let login_client_info = WsLoginClientInfo {
+        app_ver: app_ver.unwrap_or(default_client_info.app_ver),
+        package_code: package_code.unwrap_or(default_client_info.package_code),
+        plat: plat.unwrap_or(default_client_info.plat),
+        language: language.unwrap_or(default_client_info.language),
+        sys_mac: sys_mac.unwrap_or_default().trim().to_string(),
+        sys_model: sys_model
+            .unwrap_or(default_client_info.sys_model)
+            .trim()
+            .to_string(),
+    };
     ws_mgr
-        .connect(&url, &aes_key, session_id, install_code, uid)
+        .connect(
+            &url,
+            &aes_key,
+            session_id,
+            install_code,
+            uid,
+            login_client_info,
+        )
         .await
         .map_err(|e| e.to_string())
 }

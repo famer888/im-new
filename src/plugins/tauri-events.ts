@@ -517,11 +517,9 @@ function shouldPreserveConversationOrderForUpdate(existing: Conversation | undef
   const nextLastMsgTime = numericPayloadField(rawNextLastMsgTime)
   const nextLastMsgId = stringPayloadField(rawNextLastMsgId)
   const nextLastMsgDigest = stringPayloadField(rawNextLastMsgDigest)
-  const isGroupOrChannel = existing.type === 1 || existing.type === 2
-  // 清空聊天记录会把摘要清成空，但旧 im 只清内容不移动会话窗口；这里保留原列表位置，避免看起来像会话消失。
+  // 清空聊天记录会把摘要清成空，但旧 im 只清内容不移动会话窗口；这里保留原列表位置，避免单聊/群/频道看起来像会话消失。
   if (
-    isGroupOrChannel
-    && hasLastMsgTime
+    hasLastMsgTime
     && hasLastMsgId
     && nextLastMsgTime <= 0
     && !nextLastMsgId

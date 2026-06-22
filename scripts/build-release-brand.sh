@@ -105,6 +105,20 @@ fi
 APP_NAME="${APP_NAME:-OCS Chat $BRAND_ID}"
 PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.$BRAND_ID.chat}"
 OFFICIAL_URL="${OFFICIAL_URL:-${BRAND_ID}chat.com}"
+TAURI_BUILD_MODE="${TAURI_BUILD_MODE:-production}"
+case "$TAURI_BUILD_MODE" in
+  production)
+    VITE_ENV_NAME="prod"
+    ;;
+  test|uat)
+    VITE_ENV_NAME="$TAURI_BUILD_MODE"
+    ;;
+  *)
+    echo "Unknown TAURI_BUILD_MODE: $TAURI_BUILD_MODE" >&2
+    exit 1
+    ;;
+esac
+VITE_PACKNAME="${VITE_APP_PACKNAME:-$BRAND_ID-im}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-$ROOT_DIR/release-dist/$PLATFORM/icons_$BRAND_ID}"
 # Keep the temp config beside tauri.conf.json so relative icon paths resolve
 # against src-tauri, otherwise Tauri can fall back to the default 97 icons.
@@ -226,7 +240,10 @@ echo "Building $APP_NAME ($PKG_IDENTIFIER) with icons_$BRAND_ID for $PLATFORM"
 if [[ "$PLATFORM" == "mac" ]]; then
   APP_NAME="$APP_NAME" \
   PKG_IDENTIFIER="$PKG_IDENTIFIER" \
+  TAURI_BUILD_MODE="$TAURI_BUILD_MODE" \
+  VITE_APP_ENV="$VITE_ENV_NAME" \
   VITE_APP_BRAND_ID="$BRAND_ID" \
+  VITE_APP_PACKNAME="$VITE_PACKNAME" \
   VITE_APP_OFFICIAL_URL="$OFFICIAL_URL" \
   RELEASE_DIST_DIR="$RELEASE_DIST_DIR" \
   TAURI_CONFIG="$TAURI_CONFIG_FILE" \
@@ -235,7 +252,10 @@ if [[ "$PLATFORM" == "mac" ]]; then
   COPY_DMG="${COPY_DMG:-1}" \
   bash "$ROOT_DIR/scripts/build-release-dist-macos.sh"
 else
+  TAURI_BUILD_MODE="$TAURI_BUILD_MODE" \
+  VITE_APP_ENV="$VITE_ENV_NAME" \
   VITE_APP_BRAND_ID="$BRAND_ID" \
+  VITE_APP_PACKNAME="$VITE_PACKNAME" \
   VITE_APP_OFFICIAL_URL="$OFFICIAL_URL" \
   RELEASE_DIST_DIR="$RELEASE_DIST_DIR" \
   TAURI_CONFIG="$TAURI_CONFIG_FILE" \

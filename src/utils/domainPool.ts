@@ -48,17 +48,19 @@ function shouldUsePreloadedSnapshot(): boolean {
 }
 
 function getEnvName(): string {
-  return String(import.meta.env.VITE_APP_ENV || 'default').trim().toLowerCase() || 'default'
+  // 生产打包缺 env 时按 prod 隔离缓存和域名池，避免落回 default/test 缓存。
+  const fallback = Boolean(import.meta.env.PROD) ? 'prod' : 'default'
+  return String(import.meta.env.VITE_APP_ENV || fallback).trim().toLowerCase() || fallback
 }
 
 const ENV_NAME = getEnvName()
 const IS_PROD_ENV = ENV_NAME === 'prod' || ENV_NAME === 'production'
 const STORAGE_KEY = `domain-pool-cache:${ENV_NAME}`
 const RAW_PREPARED_WEB_BIZ_DOMAIN = String(
-  import.meta.env.VITE_APP_BASE_API || 'https://test-webbiz.68chat.co',
+  import.meta.env.VITE_APP_BASE_API || (IS_PROD_ENV ? 'https://webbiz.imono.xyz' : 'https://test-webbiz.68chat.co'),
 ).trim()
 const RAW_PREPARED_DOMAIN_API = String(
-  import.meta.env.VITE_APP_BASE_DOMAIN || 'https://test-domain-api.68chat.co',
+  import.meta.env.VITE_APP_BASE_DOMAIN || (IS_PROD_ENV ? 'https://a1.lenghu.xyz' : 'https://test-domain-api.68chat.co'),
 ).trim()
 
 const DIRECT_FALLBACK_DOMAINS: Record<string, string[]> = IS_PROD_ENV

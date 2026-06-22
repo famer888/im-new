@@ -1,6 +1,6 @@
 use super::{
     batcher::MessageBatcher, ConnectionStatus, PendingMessage, WsCloseRecord, WsDiagnostics,
-    WsError, WsErrorRecord,
+    WsError, WsErrorRecord, WsLoginClientInfo,
 };
 use crate::proto::imweb;
 use crate::ws::{codec, commands};
@@ -25,6 +25,7 @@ pub async fn run_connection(
     uid: String,
     session_id: Arc<RwLock<String>>,
     install_code: Arc<RwLock<String>>,
+    login_client_info: Arc<RwLock<WsLoginClientInfo>>,
     status: Arc<RwLock<ConnectionStatus>>,
     send_tx: Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: AppHandle,
@@ -48,6 +49,7 @@ pub async fn run_connection(
             &uid,
             &session_id,
             &install_code,
+            &login_client_info,
             &status,
             &send_tx,
             &app_handle,
@@ -104,6 +106,7 @@ async fn connect_and_run(
     uid: &str,
     session_id: &Arc<RwLock<String>>,
     install_code: &Arc<RwLock<String>>,
+    login_client_info: &Arc<RwLock<WsLoginClientInfo>>,
     status: &Arc<RwLock<ConnectionStatus>>,
     send_tx: &Arc<RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>>,
     app_handle: &AppHandle,
@@ -142,7 +145,8 @@ async fn connect_and_run(
     // 对齐老 im：连接建立后立即发送 10001 登录包，确保后续 10201 可被服务端接受。
     let sid = session_id.read().clone();
     let code = install_code.read().clone();
-    let login_packet = build_login_packet(aes_key, &sid, &code)?;
+    let client_info = login_client_info.read().clone();
+    let login_packet = build_login_packet(aes_key, &sid, &code, &client_info)?;
     ws_sink
         .send(Message::Binary(login_packet.into()))
         .await
@@ -159,9 +163,11 @@ async fn connect_and_run(
             WsError::SendFailed
         })?;
     info!(
-        "WebSocket login packet sent cmd=10001 session_id_len={} install_code_len={}",
+        "WebSocket login packet sent cmd=10001 session_id_len={} install_code_len={} app_ver={} package_code={}",
         sid.len(),
-        code.len()
+        code.len(),
+        client_info.app_ver,
+        client_info.package_code
     );
 
     let mut batcher = MessageBatcher::new(app_handle.clone(), aes_key.to_string(), uid.to_string());
@@ -288,20 +294,33 @@ fn build_login_packet(
     aes_key: &str,
     session_id: &str,
     install_code: &str,
+    client_info: &WsLoginClientInfo,
 ) -> Result<Vec<u8>, WsError> {
-    let sys_model = if cfg!(target_os = "macos") {
-        "MAC"
+    let default_client_info = WsLoginClientInfo::default();
+    let app_ver = if client_info.app_ver > 0 {
+        client_info.app_ver
     } else {
-        "WINDOWS"
+        default_client_info.app_ver
+    };
+    let package_code = if client_info.package_code > 0 {
+        client_info.package_code
+    } else {
+        default_client_info.package_code
+    };
+    let sys_model = if client_info.sys_model.trim().is_empty() {
+        default_client_info.sys_model.as_str()
+    } else {
+        client_info.sys_model.trim()
     };
     let req = imweb::LoginReq {
+        // 线上服务会校验 WS 登录元数据；这里必须跟前端 HTTP clientInfo 使用同一套环境值。
         client_info: Some(imweb::ClientInfo {
             session_id: session_id.to_string(),
-            app_ver: 168,
-            package_code: 7100,
-            plat: 4, // Platform::WIN（与老 im 保持一致）
-            language: 2,
-            sys_mac: String::new(),
+            app_ver,
+            package_code,
+            plat: client_info.plat,
+            language: client_info.language,
+            sys_mac: client_info.sys_mac.trim().to_string(),
             sys_model: sys_model.to_string(),
         }),
         install_code: install_code.to_string(),

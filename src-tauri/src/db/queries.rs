@@ -391,7 +391,7 @@ pub fn refresh_conversation_summary(
     conn: &Connection,
     conversation_id: &str,
 ) -> Result<(), DbError> {
-    // 会话摘要始终跟随“最后一条可见未删除消息”，避免左侧列表被红包/转账等隐藏消息推进。
+    // 会话摘要始终跟随“最后一条可见未删除消息”；清空到无消息时保留 updated_at，避免会话被重排到列表底部。
     conn.execute(
         "UPDATE conversations
          SET last_msg_id = (
@@ -459,7 +459,7 @@ pub fn refresh_conversation_summary(
                    )
                  ORDER BY m.send_time DESC
                  LIMIT 1
-             ), 0)
+             ), updated_at)
          WHERE id = ?1",
         params![conversation_id],
     )
@@ -640,4 +640,42 @@ pub fn get_group_members(conn: &Connection, group_id: &str) -> Result<Vec<GroupM
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| DbError::SqliteError(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::migrations::run_migrations;
+
+    #[test]
+    fn refresh_summary_keeps_conversation_order_when_history_is_cleared() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        run_migrations(&conn).expect("run migrations");
+        conn.execute_batch(
+            "
+            INSERT INTO conversations (
+                id, type, target_id, last_msg_id, last_msg_time, last_msg_digest, updated_at
+            ) VALUES (
+                '0_42', 0, '42', 'm1', 123456, 'hello', 123456
+            );
+            INSERT INTO messages (
+                id, conversation_id, sender_id, msg_type, content, send_time, is_deleted
+            ) VALUES (
+                'm1', '0_42', '42', 0, 'hello', 123456, 1
+            );
+            ",
+        )
+        .expect("seed cleared conversation");
+
+        refresh_conversation_summary(&conn, "0_42").expect("refresh summary");
+
+        let conv = get_conversation_by_id(&conn, "0_42")
+            .expect("query conversation")
+            .expect("conversation remains");
+        // 清空聊天记录只清消息摘要，不重置排序时间；否则左侧会话会掉到底部，看起来像被删除。
+        assert_eq!(conv.last_msg_id, None);
+        assert_eq!(conv.last_msg_time, 0);
+        assert_eq!(conv.last_msg_digest, None);
+        assert_eq!(conv.updated_at, 123456);
+    }
 }

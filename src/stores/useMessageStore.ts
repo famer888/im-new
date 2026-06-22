@@ -21,6 +21,8 @@ import {
   resolvePrivateAttachmentFileKey,
 } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
+import { getDeviceConfig, getPlatformSysModel } from '@/api/request'
+import { isProdSafeDomain } from '@/utils/domainSafety'
 import {
   getChannelHistoryMessages,
   getChannelLastMsgInfo,
@@ -55,7 +57,8 @@ function sleep(ms: number): Promise<void> {
 const MAX_WS_CONNECT_CANDIDATES = 8
 const WS_CONNECT_STATUS_CHECK_COUNT = 10
 const WS_CONNECT_STATUS_CHECK_DELAY_MS = 150
-const LAST_SUCCESSFUL_WS_URL_KEY = 'last-successful-ws-url'
+const LEGACY_LAST_SUCCESSFUL_WS_URL_KEY = 'last-successful-ws-url'
+const LAST_SUCCESSFUL_WS_URL_KEY = `${LEGACY_LAST_SUCCESSFUL_WS_URL_KEY}:${API_CONFIG.env}:${API_CONFIG.brandId}`
 
 function recordSendDiagnosticTrace(message: string, data?: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info') {
   void message
@@ -87,12 +90,50 @@ function normalizeWsUrl(input: string): string {
   return `wss://${raw}`
 }
 
+function isIpAddressHost(host: string): boolean {
+  const normalized = String(host || '').trim().toLowerCase()
+  return /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(normalized)
+}
+
+function isWsUrlCompatibleWithEnv(input: string): boolean {
+  const raw = normalizeWsUrl(input)
+  if (!raw) return false
+  if (API_CONFIG.env !== 'prod' && API_CONFIG.env !== 'production') return true
+  try {
+    const parsed = new URL(raw)
+    // 生产 WS 必须走 TLS 且不能复用测试 IP/域名缓存，否则回包会用另一套 AES key 导致全部解密失败。
+    return parsed.protocol === 'wss:'
+      && !isIpAddressHost(parsed.host)
+      && isProdSafeDomain(raw)
+  } catch {
+    return false
+  }
+}
+
+async function resolveCurrentConnectedWsUrl(): Promise<string> {
+  try {
+    const diagnostics = await tauriInvoke<{ events?: Array<{ event?: string; detail?: string }> }>('get_ws_diagnostics')
+    const latestConnected = [...(diagnostics.events || [])]
+      .reverse()
+      .find(item => item?.event === 'CONNECTED' || item?.event === 'CONNECT_JOB_BEGIN' || item?.event === 'CONNECT_START')
+    return normalizeWsUrl(latestConnected?.detail || '')
+  } catch {
+    return ''
+  }
+}
+
 interface WsConnectConfig {
   wsUrl: string
   aesKey: string
   sessionId: string
   installCode: string
   uid: string
+  appVer: number
+  packageCode: number
+  plat: number
+  language: number
+  sysMac: string
+  sysModel: string
 }
 
 async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
@@ -109,9 +150,16 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
       const raw = localStorage.getItem('ws-connect-config')
       if (raw) {
         const parsed = JSON.parse(raw) as { wsUrl?: string; aesKey?: string; installCode?: string }
-        wsUrl = wsUrl || String(parsed.wsUrl || '').trim()
-        aesKey = aesKey || String(parsed.aesKey || '').trim()
-        installCode = installCode || String(parsed.installCode || '').trim()
+        const storedWsUrl = normalizeWsUrl(String(parsed.wsUrl || '').trim())
+        const compatibleStoredWs = isWsUrlCompatibleWithEnv(storedWsUrl)
+        if (compatibleStoredWs) {
+          if (!wsUrl) wsUrl = storedWsUrl
+          aesKey = aesKey || String(parsed.aesKey || '').trim()
+          installCode = installCode || String(parsed.installCode || '').trim()
+        } else {
+          // 环境切换后旧 WS 缓存可能仍指向测试 IP；连上后会导致线上 AES 回包解密失败。
+          localStorage.removeItem('ws-connect-config')
+        }
       }
     } catch {
       // ignore parse errors
@@ -151,8 +199,12 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
   if (wsUrl && /webbiz/i.test(wsUrl)) {
     wsUrl = wsUrl.replace(/webbiz/gi, 'websession')
   }
+  if (wsUrl && !isWsUrlCompatibleWithEnv(wsUrl)) {
+    wsUrl = ''
+  }
   if (!aesKey) aesKey = API_CONFIG.aesKey
   installCode = installCode || getOrCreateInstallCode()
+  const device = getDeviceConfig()
 
   return {
     wsUrl: normalizeWsUrl(wsUrl),
@@ -160,12 +212,23 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
     sessionId,
     installCode,
     uid,
+    // WS 10001 登录包要和 HTTP 登录 clientInfo 一致，避免线上服务已连接但不回发送 ACK。
+    appVer: API_CONFIG.appVer,
+    packageCode: API_CONFIG.packageCode,
+    plat: API_CONFIG.plat,
+    language: API_CONFIG.language,
+    sysMac: device.sysMac,
+    sysModel: getPlatformSysModel(),
   }
 }
 
 async function resolveWsConnectCandidates(): Promise<WsConnectConfig[]> {
   const primary = await resolveWsConnectConfig()
   const lastSuccessfulWsUrl = normalizeWsUrl(localStorage.getItem(LAST_SUCCESSFUL_WS_URL_KEY) || '')
+  const legacyLastSuccessfulWsUrl = normalizeWsUrl(localStorage.getItem(LEGACY_LAST_SUCCESSFUL_WS_URL_KEY) || '')
+  if (legacyLastSuccessfulWsUrl && !isWsUrlCompatibleWithEnv(legacyLastSuccessfulWsUrl)) {
+    localStorage.removeItem(LEGACY_LAST_SUCCESSFUL_WS_URL_KEY)
+  }
   const urls = [lastSuccessfulWsUrl, primary.wsUrl]
 
   try {
@@ -179,7 +242,7 @@ async function resolveWsConnectCandidates(): Promise<WsConnectConfig[]> {
   const normalizedUrls = [...new Set(
     urls
       .map(url => normalizeWsUrl(url))
-      .filter(Boolean),
+      .filter(url => url && isWsUrlCompatibleWithEnv(url)),
   )].slice(0, MAX_WS_CONNECT_CANDIDATES)
 
   return normalizedUrls.map(wsUrl => ({
@@ -900,7 +963,13 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     const status = await tauriInvoke<string>('get_ws_status').catch(() => 'disconnected')
-    if (status === 'connected') return
+    if (status === 'connected') {
+      const currentWsUrl = await resolveCurrentConnectedWsUrl()
+      if (!currentWsUrl || isWsUrlCompatibleWithEnv(currentWsUrl)) return
+      // 当前已连接的 WS 可能来自环境切换前的测试缓存；断开后才能重新选择线上 webSession。
+      await tauriInvoke('disconnect_ws').catch(() => undefined)
+      await sleep(80)
+    }
 
     if (!pendingWsConnect) {
       pendingWsConnect = (async () => {
@@ -926,6 +995,12 @@ export const useMessageStore = defineStore('message', () => {
             sessionId: candidate.sessionId,
             installCode: candidate.installCode,
             uid: candidate.uid,
+            appVer: candidate.appVer,
+            packageCode: candidate.packageCode,
+            plat: candidate.plat,
+            language: candidate.language,
+            sysMac: candidate.sysMac,
+            sysModel: candidate.sysModel,
           })
 
           for (let i = 0; i < WS_CONNECT_STATUS_CHECK_COUNT; i++) {
@@ -2593,9 +2668,8 @@ export const useMessageStore = defineStore('message', () => {
       if (extraJson && !normalized.extra) {
         normalized.extra = extraJson
       }
-      appendMessage(conversationId, normalized)
-      syncConversationSummary(conversationId, normalized)
-      logSendStep('sendMessage success appended', {
+      // Rust 返回只表示消息已落本地并压入 WS 队列；成功状态统一等 msg:sent 回执更新，避免重复合并 sending 气泡。
+      logSendStep('sendMessage queued by Rust', {
         totalMs: Math.round(performance.now() - sendStartedAt),
         normalizedId: normalized.id,
         normalizedCustomMsgId: normalized.customMsgId,
@@ -2648,9 +2722,8 @@ export const useMessageStore = defineStore('message', () => {
           if (extraJson && !normalized.extra) {
             normalized.extra = extraJson
           }
-          appendMessage(conversationId, normalized)
-          syncConversationSummary(conversationId, normalized)
-          logSendStep('sendMessage retry after group key success appended', {
+          // 重试返回同样只是重新入队，界面仍等待服务端回执来更新真实 msgId/状态。
+          logSendStep('sendMessage retry after group key queued by Rust', {
             totalMs: Math.round(performance.now() - sendStartedAt),
             normalizedId: normalized.id,
             status: normalized.status,
@@ -2696,9 +2769,8 @@ export const useMessageStore = defineStore('message', () => {
           if (extraJson && !normalized.extra) {
             normalized.extra = extraJson
           }
-          appendMessage(conversationId, normalized)
-          syncConversationSummary(conversationId, normalized)
-          logSendStep('sendMessage retry after ws success appended', {
+          // 重连后的发送返回不再重复 append，避免发送中状态被本地返回值覆盖回去。
+          logSendStep('sendMessage retry after ws queued by Rust', {
             totalMs: Math.round(performance.now() - sendStartedAt),
             normalizedId: normalized.id,
             status: normalized.status,
