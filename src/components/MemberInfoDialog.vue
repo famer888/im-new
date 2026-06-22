@@ -435,7 +435,7 @@ async function handleConfirmAdd() {
 .member-dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1800;
+  z-index: 12000;
   display: flex;
   align-items: center;
   justify-content: center;
