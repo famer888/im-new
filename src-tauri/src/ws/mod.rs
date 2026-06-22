@@ -34,6 +34,38 @@ pub struct WsManager {
     /// WS 登录上下文：用于连接建立后立刻发送 10001 LoginReq。
     session_id: Arc<RwLock<String>>,
     install_code: Arc<RwLock<String>>,
+    login_client_info: Arc<RwLock<WsLoginClientInfo>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WsLoginClientInfo {
+    pub app_ver: i32,
+    pub package_code: i32,
+    pub plat: i32,
+    pub language: i32,
+    pub sys_mac: String,
+    pub sys_model: String,
+}
+
+impl Default for WsLoginClientInfo {
+    fn default() -> Self {
+        Self {
+            app_ver: 168,
+            package_code: 5520,
+            plat: 4,
+            language: 2,
+            sys_mac: String::new(),
+            sys_model: default_sys_model().to_string(),
+        }
+    }
+}
+
+fn default_sys_model() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "MAC"
+    } else {
+        "WINDOWS"
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +126,7 @@ impl WsManager {
             aes_key: Arc::new(RwLock::new(None)),
             session_id: Arc::new(RwLock::new(String::new())),
             install_code: Arc::new(RwLock::new(String::new())),
+            login_client_info: Arc::new(RwLock::new(WsLoginClientInfo::default())),
         }
     }
 
@@ -104,6 +137,7 @@ impl WsManager {
         session_id: Option<String>,
         install_code: Option<String>,
         uid: Option<String>,
+        login_client_info: WsLoginClientInfo,
     ) -> Result<(), WsError> {
         if url.trim().is_empty() {
             *self.status.write() = ConnectionStatus::Disconnected;
@@ -126,6 +160,7 @@ impl WsManager {
         *self.aes_key.write() = Some(aes_key.to_string());
         *self.session_id.write() = session_id.unwrap_or_default();
         *self.install_code.write() = install_code.unwrap_or_default();
+        *self.login_client_info.write() = login_client_info;
 
         let url = url.to_string();
         let aes_key = aes_key.to_string();
@@ -137,6 +172,7 @@ impl WsManager {
         let pending = self.pending_messages.clone();
         let session_id = self.session_id.clone();
         let install_code = self.install_code.clone();
+        let login_client_info = self.login_client_info.clone();
         let uid = uid.unwrap_or_default();
 
         let handle = tokio::spawn(async move {
@@ -146,6 +182,7 @@ impl WsManager {
                 uid,
                 session_id,
                 install_code,
+                login_client_info,
                 status,
                 send_tx,
                 app_handle,
@@ -176,6 +213,7 @@ impl WsManager {
         *self.aes_key.write() = None;
         *self.session_id.write() = String::new();
         *self.install_code.write() = String::new();
+        *self.login_client_info.write() = WsLoginClientInfo::default();
         self.reconnect_count
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.record_event("DISCONNECT", "manual disconnect");
