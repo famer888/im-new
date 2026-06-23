@@ -861,7 +861,12 @@ async function openRemoteAliasTarget(
 
   const target = await request
   if (target.type === 'member') {
-    uiStore.openMemberInfo(target.profile.userId, groupId, [target.context, target.profile.nickname], target.profile)
+    if (target.profile.isFriend) {
+      // 已是好友时直接进入单聊；资料弹窗只留给非好友或不能确定好友关系的别名结果。
+      openFriendMentionConversation(target.profile.userId)
+    } else {
+      uiStore.openMemberInfo(target.profile.userId, groupId, [target.context, target.profile.nickname], target.profile)
+    }
   } else if (target.type === 'joined-group') {
     if (target.target.id === groupId) {
       eventBus.emit('show-toast', { message: t('已在群聊中'), type: 'success' })
@@ -994,15 +999,19 @@ function findMentionMember(label: string, members: GroupMember[]): GroupMember |
   })
 }
 
+function normalizeMentionLookup(value: unknown): string {
+  return String(value || '').trim().replace(/^@+/, '')
+}
+
 function resolveMentionLocalFriend(cleanLabel: string): { userId: string; nickname: string; avatar: string; remark: string | null; depict: string | null; isFriend: boolean } | null {
-  const text = cleanLabel.trim()
+  const text = normalizeMentionLookup(cleanLabel)
   if (!text) return null
 
   const contact = contactStore.contacts.find((item) =>
-    String(item.id || '').trim() === text
-    || String(item.nickname || '').trim() === text
-    || String(item.remark || '').trim() === text
-    || String(item.identify || '').trim() === text,
+    normalizeMentionLookup(item.id) === text
+    || normalizeMentionLookup(item.nickname) === text
+    || normalizeMentionLookup(item.remark) === text
+    || normalizeMentionLookup(item.identify) === text,
   )
   if (!contact?.id) return null
 
@@ -1037,15 +1046,27 @@ function resolveFriendConversationMention(
   return resolveMentionLocalFriend(cleanLabel)
 }
 
+function resolveLocalFriendMention(
+  cleanLabel: string,
+  possibleUid: string,
+): { userId: string; nickname: string; avatar: string; remark: string | null; depict: string | null; isFriend: boolean } | null {
+  // 本地好友是确定关系，应优先于远端群/频道别名；同名时避免把好友标识误跳成群。
+  if (possibleUid) {
+    const byUid = contactStore.getContact(possibleUid)
+    if (byUid) return contactToMentionProfile(byUid)
+  }
+  return resolveMentionLocalFriend(cleanLabel)
+}
+
 function contactMatchesMentionLabel(contact: { id?: unknown; nickname?: unknown; remark?: unknown; identify?: unknown }, cleanLabel: string): boolean {
-  const text = cleanLabel.trim()
+  const text = normalizeMentionLookup(cleanLabel)
   if (!text) return false
   return [
     contact.id,
     contact.nickname,
     contact.remark,
     contact.identify,
-  ].some((value) => String(value || '').trim() === text)
+  ].some((value) => normalizeMentionLookup(value) === text)
 }
 
 function contactToMentionProfile(contact: { id: string; nickname?: string | null; avatar?: string | null; remark?: string | null; depict?: string | null }) {
@@ -1057,6 +1078,16 @@ function contactToMentionProfile(contact: { id: string; nickname?: string | null
     depict: contact.depict || null,
     isFriend: true,
   }
+}
+
+function openFriendMentionConversation(friendId: string) {
+  if (!friendId) return
+  // 好友会话里点击 @ 好友要直接进入单聊，而不是先弹资料窗再让用户点“发送消息”。
+  const conv = chatStore.ensureConversation(ConversationType.Friend, friendId)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('chat')
 }
 
 async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
@@ -1075,6 +1106,7 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
       : findMentionMember(segment.text, members)
     const possibleUid = String(segment.possibleUid || '').trim()
     const friendMention = resolveFriendConversationMention(cleanLabel, possibleUid)
+    const localFriendMention = resolveLocalFriendMention(cleanLabel, possibleUid)
 
     if (segment.memberId && member) {
       // 对齐旧 im：群聊 @ 即使带 uid，也要先在当前群成员里命中后再打开资料卡。
@@ -1084,8 +1116,19 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
     if (!groupId && messageConversation.value.type === ConversationType.Friend) {
       if (friendMention) {
-        uiStore.openMemberInfo(friendMention.userId, '', [cleanLabel], friendMention)
+        openFriendMentionConversation(friendMention.userId)
       } else {
+        const slowTimer = window.setTimeout(() => {
+          setMentionResolving(openingKey, true)
+        }, 350)
+        try {
+          // 对齐旧 im：好友会话裸 @ 文本本地没命中时，继续走别名搜索，而不是直接判定不存在。
+          const remoteTarget = await openRemoteAliasTarget(cleanLabel, '', { suppressMissingToast: true })
+          if (remoteTarget.type !== 'missing') return
+        } finally {
+          window.clearTimeout(slowTimer)
+          setMentionResolving(openingKey, false)
+        }
         eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
       }
       return
@@ -1101,6 +1144,11 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
         return
       }
 
+      if (localFriendMention) {
+        openFriendMentionConversation(localFriendMention.userId)
+        return
+      }
+
       const slowTimer = window.setTimeout(() => {
         setMentionResolving(openingKey, true)
       }, 350)
@@ -1113,12 +1161,6 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
         setMentionResolving(openingKey, false)
       }
 
-      const localFriend = resolveMentionLocalFriend(cleanLabel)
-      if (localFriend) {
-        // 群聊里的 @ 文本可能是备注/昵称，先映射到好友 uid 再打开，确保展示“发送消息”入口。
-        uiStore.openMemberInfo(localFriend.userId, groupId, [cleanLabel], localFriend)
-        return
-      }
       if (possibleUid) {
         // 非群聊才按 possibleUid 强开；群聊场景必须先命中群成员，否则按旧 im 提示不存在。
         if (groupId) {

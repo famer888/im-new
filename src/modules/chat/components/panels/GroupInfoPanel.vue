@@ -369,7 +369,8 @@ async function loadPanelData(groupId: string) {
       memberType.value = 2
     }
 
-    groupAliasName.value = groupBase?.groupAliasName || detail.groupNickName || ''
+    // 群别名只能使用 groupBase.groupAliasName；groupNickName 是成员/群昵称，不能兜底成群别名。
+    groupAliasName.value = groupBase?.groupAliasName || ''
     groupAliasDetailResolved.value = true
     groupAliasDetailFailed.value = false
     notice.value = detail.groupNotice?.notice || ''
