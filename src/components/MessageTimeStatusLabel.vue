@@ -139,7 +139,7 @@ async function handleResend() {
   .channel-read {
     display: flex;
     align-items: center;
-    margin-right: 2px;
+    margin-right: 10px;
 
     .channel-read-icon {
       width: 14px;
