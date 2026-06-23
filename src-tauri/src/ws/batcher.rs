@@ -513,6 +513,29 @@ mod private_decode_tests {
         }
     }
 
+    fn group_admin_change_event(
+        req_type: i32,
+        actor_uid: i64,
+        target_uid: i64,
+    ) -> imweb::GroupReqEventMsgDto {
+        imweb::GroupReqEventMsgDto {
+            from_uid: actor_uid,
+            receive_uid: target_uid,
+            group_req_type: req_type,
+            group_req_status: 1,
+            group_member: vec![imweb::GroupMemberBase {
+                user: Some(imweb::UserBase {
+                    uid: target_uid,
+                    nick_name: "target".to_string(),
+                    ..Default::default()
+                }),
+                r#type: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn group_remove_notice_should_stay_visible_for_removed_member() {
         let item = group_remove_event(1001, 2002);
@@ -538,6 +561,67 @@ mod private_decode_tests {
         assert!(should_hide_group_remove_notice_for_current_user(
             &item, "3003"
         ));
+    }
+
+    #[test]
+    fn group_set_admin_for_current_user_should_emit_invitation_notice() {
+        let item = group_admin_change_event(8, 1001, 2002);
+        let common = imweb::CommonMsgDto {
+            msg_id: 8001,
+            msg_type: 8,
+            update_time: 1_700_000_000,
+            ..Default::default()
+        };
+        let group = imweb::GroupBaseInfo {
+            group_id: 3003,
+            group_name: "测试群".to_string(),
+            ..Default::default()
+        };
+
+        let msg = group_admin_change_invitation_message(&item, &common, &group, "2002").unwrap();
+
+        assert_eq!(msg.conversation_id, "1_invitation");
+        assert_eq!(msg.content, "#{uids:1001}将你设置为管理员");
+        assert_eq!(msg.msg_id, "group-event-3003-8-8001-invitation");
+        assert_eq!(msg.extra["groupReqType"], 8);
+        assert_eq!(msg.extra["receiveUid"], "2002");
+        assert_eq!(msg.extra["sendUid"], "1001");
+    }
+
+    #[test]
+    fn group_set_admin_for_other_user_should_not_emit_invitation_notice() {
+        let item = group_admin_change_event(8, 1001, 2002);
+        let common = imweb::CommonMsgDto::default();
+        let group = imweb::GroupBaseInfo {
+            group_id: 3003,
+            ..Default::default()
+        };
+
+        assert!(group_admin_change_invitation_message(&item, &common, &group, "4004").is_none());
+    }
+
+    #[test]
+    fn group_remove_admin_for_current_user_should_emit_invitation_notice() {
+        let item = group_admin_change_event(9, 1001, 2002);
+        let common = imweb::CommonMsgDto {
+            msg_id: 8002,
+            msg_type: 9,
+            update_time: 1_700_000_001,
+            ..Default::default()
+        };
+        let group = imweb::GroupBaseInfo {
+            group_id: 3003,
+            group_name: "测试群".to_string(),
+            ..Default::default()
+        };
+
+        let msg = group_admin_change_invitation_message(&item, &common, &group, "2002").unwrap();
+
+        assert_eq!(msg.conversation_id, "1_invitation");
+        assert_eq!(msg.content, "你的管理员身份已被移除");
+        assert_eq!(msg.msg_id, "group-event-3003-9-8002-invitation");
+        assert_eq!(msg.extra["groupReqType"], 9);
+        assert_eq!(msg.extra["receiveUid"], "2002");
     }
 
     #[test]
@@ -1582,6 +1666,12 @@ impl MessageBatcher {
                     "notificationIdentity": notice_msg_id,
                 }),
             });
+
+            if let Some(notification) =
+                group_admin_change_invitation_message(&item, common, group, self.uid.trim())
+            {
+                out.push(notification);
+            }
         }
 
         for item in resp.group_update_event_msg_dto {
@@ -2977,6 +3067,70 @@ fn group_req_event_goes_to_invitation_only(item: &imweb::GroupReqEventMsgDto) ->
     // “群通知”伪会话；管理员拒绝申请也只进入群通知，避免未入群用户看到正式群会话。
     matches!(item.group_req_type, 1 | 2 | 15) && item.group_req_status != 1
         || matches!(item.group_req_type, 3 | 4) && item.group_req_status == 2
+}
+
+fn group_admin_change_invitation_message(
+    item: &imweb::GroupReqEventMsgDto,
+    common: &imweb::CommonMsgDto,
+    group: &imweb::GroupBaseInfo,
+    current_uid: &str,
+) -> Option<DecodedMessage> {
+    if !matches!(item.group_req_type, 8 | 9) {
+        return None;
+    }
+
+    let current_uid = current_uid.trim().parse::<i64>().unwrap_or(0);
+    if current_uid <= 0 {
+        return None;
+    }
+
+    let target_uid = first_group_req_event_member_uid(item);
+    if target_uid != current_uid {
+        return None;
+    }
+
+    let notice_msg_id = group_req_event_notice_message_id(item, common, group.group_id);
+    let content = match item.group_req_type {
+        8 if item.from_uid > 0 => format!("#{{uids:{}}}将你设置为管理员", item.from_uid),
+        8 => "你已成为本群管理员".to_string(),
+        9 => "你的管理员身份已被移除".to_string(),
+        _ => return None,
+    };
+
+    // 对齐旧 im：自己的管理员身份变化时，除群内系统消息外，还要刷新“群通知”伪会话摘要和未读。
+    Some(DecodedMessage {
+        cmd: cmds::GROUP_EVENT_PUSH,
+        msg_id: format!("{}-invitation", notice_msg_id),
+        conversation_id: "1_invitation".to_string(),
+        sender_id: item.from_uid.to_string(),
+        msg_type: 8,
+        content,
+        send_time: normalize_timestamp(common.update_time),
+        status: 1,
+        read_status: 0,
+        extra: serde_json::json!({
+            "source": "group-event-admin-notification",
+            "groupId": group.group_id.to_string(),
+            "groupName": group.group_name,
+            "groupAvatar": group.pic,
+            "groupMuted": group.group_shutup,
+            "groupReadCancel": group.group_read_cancel,
+            "groupMsgCancelTime": group.group_msg_cancel_time,
+            "memberCount": item.group_member.len(),
+            "members": item.group_member.iter().map(group_member_to_json).collect::<Vec<_>>(),
+            "groupReqType": item.group_req_type,
+            "groupReqStatus": item.group_req_status,
+            "eventType": common.even_type,
+            "groupEventMsgId": common.msg_id.to_string(),
+            "groupMsgType": common.msg_type,
+            "receiveUid": item.receive_uid.to_string(),
+            "fromUid": item.from_uid.to_string(),
+            "sendUid": item.from_uid.to_string(),
+            "checkUid": item.check_uid.to_string(),
+            "incrementUnread": true,
+            "notificationIdentity": notice_msg_id,
+        }),
+    })
 }
 
 fn first_group_req_event_member_uid(item: &imweb::GroupReqEventMsgDto) -> i64 {

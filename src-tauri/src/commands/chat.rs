@@ -385,8 +385,15 @@ pub async fn upsert_incoming_messages(
                         .map(|time| msg.send_time > time)
                         .unwrap_or(true)
                     {
-                        let count = notification_unread_count(msg).unwrap_or(1).max(1);
-                        notification_unread_counts.insert(msg.conversation_id.clone(), count);
+                        if should_increment_notification_unread(msg) {
+                            // 本地派生的群通知没有服务端总未读数；按旧 im 行为递增，避免覆盖已有群通知未读。
+                            if existing_send_time.is_none() {
+                                *unread_delta.entry(msg.conversation_id.clone()).or_insert(0) += 1;
+                            }
+                        } else {
+                            let count = notification_unread_count(msg).unwrap_or(1).max(1);
+                            notification_unread_counts.insert(msg.conversation_id.clone(), count);
+                        }
                     }
                     continue;
                 }
@@ -810,6 +817,30 @@ fn notification_unread_count(msg: &models::Message) -> Option<i32> {
         })?;
 
     Some(count.clamp(0, i32::MAX as i64) as i32)
+}
+
+fn should_increment_notification_unread(msg: &models::Message) -> bool {
+    if msg.conversation_id != "1_invitation" && msg.conversation_id != "0_channelNotice" {
+        return false;
+    }
+
+    let Some(extra) = parse_message_extra(msg) else {
+        return false;
+    };
+    json_bool(
+        &extra,
+        &["incrementUnread", "increment_unread", "unreadIncrement"],
+    )
+    .unwrap_or(false)
+}
+
+fn parse_message_extra(msg: &models::Message) -> Option<serde_json::Value> {
+    let value = serde_json::from_str::<serde_json::Value>(msg.extra.as_deref()?).ok()?;
+    match value {
+        serde_json::Value::String(raw) => serde_json::from_str::<serde_json::Value>(&raw).ok(),
+        serde_json::Value::Object(_) => Some(value),
+        _ => None,
+    }
 }
 
 fn parse_extra_map(extra: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
@@ -3691,4 +3722,56 @@ pub async fn clear_all_local_chat_history(
         Ok(())
     })
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notification_message(extra: serde_json::Value) -> models::Message {
+        models::Message {
+            id: "msg-1".to_string(),
+            custom_msg_id: None,
+            conversation_id: "1_invitation".to_string(),
+            sender_id: "1001".to_string(),
+            msg_type: 8,
+            content: Some("通知".to_string()),
+            send_time: 1,
+            status: 1,
+            read_status: 0,
+            version: 0,
+            is_deleted: false,
+            extra: Some(extra.to_string()),
+        }
+    }
+
+    #[test]
+    fn local_admin_notification_should_increment_unread_instead_of_setting_count() {
+        let msg = notification_message(serde_json::json!({
+            "source": "group-event-admin-notification",
+            "incrementUnread": true,
+            "groupId": "3003",
+            "groupReqType": 8,
+            "sendUid": "1001",
+            "receiveUid": "2002",
+        }));
+
+        assert!(should_increment_notification_unread(&msg));
+        assert_eq!(notification_unread_count(&msg), None);
+    }
+
+    #[test]
+    fn server_group_notification_should_keep_absolute_unread_count() {
+        let msg = notification_message(serde_json::json!({
+            "source": "group-event-req",
+            "groupId": "3003",
+            "groupReqType": 1,
+            "sendUid": "1001",
+            "receiveUid": "2002",
+            "unReadNum": 7,
+        }));
+
+        assert!(!should_increment_notification_unread(&msg));
+        assert_eq!(notification_unread_count(&msg), Some(7));
+    }
 }
