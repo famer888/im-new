@@ -67,6 +67,15 @@ type GroupEventMemberPatch = {
   role: number
 }
 
+type GroupPatchPayload = {
+  id?: string | number
+  groupId?: string | number
+  name?: string | null
+  avatar?: string | null
+  ownerId?: string | number | null
+  memberCount?: number | string | null
+}
+
 const pendingGroupInfoRefreshIds = new Set<string>()
 let pendingGroupInfoRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -1042,6 +1051,31 @@ export async function setupTauriListeners() {
       await router.replace('/home').catch(() => {})
     }
     uiStore.openSettings()
+  })
+
+  listen<GroupPatchPayload>('group:patch', (event) => {
+    const groupStore = useGroupStore()
+    const chatStore = useChatStore()
+    const payload = event.payload || {}
+    const groupId = String(payload.id ?? payload.groupId ?? '').trim()
+    if (!groupId) return
+
+    const existingGroup = groupStore.getGroup(groupId)
+    const hasGroupConversation = chatStore.conversations.some((conv) => conv.type === 1 && conv.targetId === groupId)
+    if (!existingGroup && !hasGroupConversation) {
+      // 跨窗口 patch 只修正当前窗口已知的群，避免群详情/搜索预览把未加入群插入其它窗口。
+      return
+    }
+
+    const memberCount = Number(payload.memberCount ?? 0)
+    // 多窗口场景下，群成员远端刷新只发生在当前窗口；这里接收广播后同步其它窗口标题人数。
+    groupStore.upsertGroup({
+      id: groupId,
+      name: payload.name ?? existingGroup?.name ?? groupId,
+      avatar: payload.avatar ?? existingGroup?.avatar ?? null,
+      ownerId: payload.ownerId === null || payload.ownerId === undefined ? existingGroup?.ownerId ?? null : String(payload.ownerId),
+      ...(Number.isFinite(memberCount) && memberCount > 0 ? { memberCount } : {}),
+    })
   })
 
   listen<TrayLogoutPayload>('tray:logout', async (event) => {

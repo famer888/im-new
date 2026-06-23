@@ -386,7 +386,7 @@ async function loadPanelData(groupId: string) {
       || Object.prototype.hasOwnProperty.call(groupBase, 'groupReadCancel')
     )
     const hasReadBurnTime = groupBase && Object.prototype.hasOwnProperty.call(groupBase, 'groupMsgCancelTime')
-    groupStore.upsertGroup({
+    groupStore.upsertRemoteGroup({
       id: groupId,
       name: groupBase?.name ?? groupBase?.groupName,
       avatar: groupBase?.pic ?? groupBase?.avatar ?? groupBase?.groupAvatar,

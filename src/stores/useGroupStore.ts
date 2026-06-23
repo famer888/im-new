@@ -8,11 +8,19 @@ import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const MEMBER_PREVIEW_COUNT = 8
 const memberLoadRequestMap = new Map<string, Promise<GroupMember[]>>()
+const GROUP_PATCH_EVENT = 'group:patch'
 
 interface LoadMembersOptions {
   forceRemote?: boolean
   /** 通讯录详情页仅需头像预览，不拉全量成员与在线状态 */
   previewOnly?: boolean
+}
+
+type MemberCountSource = 'remote-full' | 'fallback'
+type LoadedMembersSource = 'local' | 'remote'
+type LoadMembersViaApiResult = {
+  members: GroupMember[]
+  complete: boolean
 }
 
 function isTauri(): boolean {
@@ -32,6 +40,16 @@ function groupMemberRefreshDebug(message: string, data?: Record<string, unknown>
   void message
   void data
   void level
+}
+
+function emitGroupPatchToOtherWindows(groupId: string, patch: Partial<Group>) {
+  if (!groupId || !isTauri()) return
+  // Tauri 多窗口的 Pinia 实例互相隔离；成员刷新修正人数后要显式广播给其它聊天窗口。
+  import('@tauri-apps/api/event')
+    .then(({ emit }) => emit(GROUP_PATCH_EVENT, { id: groupId, ...patch }))
+    .catch((error) => {
+      console.warn('[GroupStore] emit group patch failed:', error)
+    })
 }
 
 function isCommonResultOk(resp: any): boolean {
@@ -125,7 +143,7 @@ export const useGroupStore = defineStore('group', () => {
   function setGroupMembers(
     groupId: string,
     members: GroupMember[],
-    options?: { updateMemberCount?: boolean },
+    options?: { updateMemberCount?: boolean; memberCountSource?: MemberCountSource },
   ) {
     const previousMembers = memberMap.value.get(groupId) ?? []
     const previousGroup = getGroup(groupId)
@@ -147,10 +165,19 @@ export const useGroupStore = defineStore('group', () => {
       && group
       && members.length !== group.memberCount
     ) {
-      upsertGroup({
-        ...group,
-        memberCount: members.length,
-      })
+      const nextMemberCount = members.length
+      const canUseLoadedCount = options?.memberCountSource === 'remote-full'
+        || group.memberCount <= 0
+      if (canUseLoadedCount) {
+        // 只有远端完整列表或没有服务端人数时，才用列表长度兜底，避免本地旧缓存把大群人数改小。
+        upsertGroup({
+          ...group,
+          memberCount: nextMemberCount,
+        })
+        if (options?.memberCountSource === 'remote-full') {
+          emitGroupPatchToOtherWindows(groupId, { memberCount: nextMemberCount })
+        }
+      }
     }
 
     groupMemberRefreshDebug('setGroupMembers after', {
@@ -213,6 +240,29 @@ export const useGroupStore = defineStore('group', () => {
     }
   }
 
+  function upsertRemoteGroup(item: Partial<Group> & Record<string, any>, options: { broadcast?: boolean } = {}) {
+    const groupId = String(item.id ?? item.groupId ?? item.group_id ?? '').trim()
+    if (!groupId) return
+    const previousMemberCount = getGroup(groupId)?.memberCount ?? 0
+    upsertGroup(item)
+
+    const remoteMemberCount = Number(item.memberCount ?? item.member_count ?? 0)
+    if (
+      options.broadcast !== false
+      && Number.isFinite(remoteMemberCount)
+      && remoteMemberCount > 0
+      && remoteMemberCount !== previousMemberCount
+    ) {
+      // 群详情/成员接口拿到的是服务端人数，统一从 store 广播，避免某个组件回写后漏同步其它窗口。
+      emitGroupPatchToOtherWindows(groupId, {
+        name: item.name ?? item.groupName,
+        avatar: item.avatar ?? item.pic ?? item.groupAvatar,
+        ownerId: item.ownerId ?? (item.hostId ? String(item.hostId) : undefined),
+        memberCount: remoteMemberCount,
+      })
+    }
+  }
+
   async function loadGroups(uid: string, options?: { fallbackToApi?: boolean; forceApi?: boolean }) {
     const fallbackToApi = options?.fallbackToApi ?? true
     loading.value = true
@@ -245,8 +295,10 @@ export const useGroupStore = defineStore('group', () => {
   }
 
   function isMemberListFullyLoaded(groupId: string, cached: GroupMember[]): boolean {
-    if (memberLoadDepthMap.value.get(groupId) === 'full') return cached.length > 0
     const expected = getGroup(groupId)?.memberCount ?? 0
+    if (memberLoadDepthMap.value.get(groupId) === 'full') {
+      return expected > 0 ? cached.length >= expected : cached.length > 0
+    }
     return expected > 0 && cached.length >= expected
   }
 
@@ -278,6 +330,8 @@ export const useGroupStore = defineStore('group', () => {
 
     const request = (async () => {
       let members: GroupMember[] | null = null
+      let membersSource: LoadedMembersSource | null = null
+      let remoteMembersComplete = false
 
       if (isTauri() && !options.forceRemote) {
         try {
@@ -291,6 +345,15 @@ export const useGroupStore = defineStore('group', () => {
             members = sortMembersForDisplay(members)
             if (previewOnly) {
               members = members.slice(0, MEMBER_PREVIEW_COUNT)
+            } else {
+              const expected = getGroup(groupId)?.memberCount ?? 0
+              if (expected > 0 && members.length < expected) {
+                // 本地库可能只保存了旧缓存；已知群人数更多时继续拉远端，不能把本地缓存当全量。
+                members = null
+              }
+            }
+            if (members) {
+              membersSource = 'local'
             }
           }
         } catch (e) {
@@ -308,10 +371,13 @@ export const useGroupStore = defineStore('group', () => {
           reason: options.forceRemote ? 'forceRemote' : 'noLocalMembers',
           previewOnly,
         })
-        members = await loadMembersViaApi(groupId, {
+        const remoteResult = await loadMembersViaApi(groupId, {
           pageSize: previewOnly ? MEMBER_PREVIEW_COUNT : 200,
           maxPages: previewOnly ? 1 : undefined,
         })
+        members = remoteResult.members
+        membersSource = 'remote'
+        remoteMembersComplete = remoteResult.complete
       }
 
       groupMemberRefreshDebug('members loaded before online merge', {
@@ -321,7 +387,7 @@ export const useGroupStore = defineStore('group', () => {
       })
       members = mergeMembersWithExistingStatuses(groupId, members)
 
-      const nextDepth = previewOnly ? 'preview' : 'full'
+      const nextDepth = previewOnly || membersSource !== 'remote' || !remoteMembersComplete ? 'preview' : 'full'
       const nextDepthMap = new Map(memberLoadDepthMap.value)
       nextDepthMap.set(groupId, nextDepth)
       memberLoadDepthMap.value = nextDepthMap
@@ -329,6 +395,7 @@ export const useGroupStore = defineStore('group', () => {
       // 对齐旧 im：成员资料先进入缓存并渲染，在线状态慢时不阻塞右侧群成员首屏。
       setGroupMembers(groupId, members, {
         updateMemberCount: !previewOnly,
+        memberCountSource: membersSource === 'remote' && remoteMembersComplete && !previewOnly ? 'remote-full' : 'fallback',
       })
 
       if (!previewOnly) {
@@ -360,12 +427,14 @@ export const useGroupStore = defineStore('group', () => {
   async function loadMembersViaApi(
     groupId: string,
     options: { pageSize?: number; maxPages?: number } = {},
-  ): Promise<GroupMember[]> {
+  ): Promise<LoadMembersViaApiResult> {
     const allMembers: GroupMember[] = []
     const pageSize = options.pageSize ?? 200
     const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY
     let pageNum = 1
     let hasMore = true
+    let complete = false
+    let expectedMemberCount = 0
 
     while (hasMore && pageNum <= maxPages) {
       try {
@@ -384,12 +453,14 @@ export const useGroupStore = defineStore('group', () => {
         const resp = await getGroupMemberList(requestPayload)
         let list = resp.members || []
         let source: 'v1' | 'v2' = 'v1'
+        let groupBase = (resp as any)?.groupBase
 
         // 与旧 im 行为对齐：部分群在 V1 下会返回空列表/业务失败，需自动回退到 V2 才能拿到成员。
         const shouldFallbackToV2 = !isCommonResultOk(resp) || (pageNum === 1 && list.length === 0)
         if (shouldFallbackToV2) {
           const respV2 = await getGroupMemberListV2(requestPayload)
           list = respV2.members || []
+          groupBase = (respV2 as any)?.groupBase || groupBase
           source = 'v2'
           groupMemberRefreshDebug('remote page fallback to v2', {
             groupId,
@@ -402,6 +473,28 @@ export const useGroupStore = defineStore('group', () => {
             v2ErrMsg: (respV2 as any)?.commonResult?.errMsg ?? '',
             v2Count: list.length,
           })
+        }
+
+        if (groupBase) {
+          const remoteMemberCount = Number(groupBase.memberCount ?? groupBase.member_count ?? 0)
+          if (Number.isFinite(remoteMemberCount) && remoteMemberCount > 0) {
+            expectedMemberCount = remoteMemberCount
+          }
+          const existingGroup = getGroup(groupId)
+          if (
+            Number.isFinite(remoteMemberCount)
+            && remoteMemberCount > 0
+            && (!existingGroup || existingGroup.memberCount !== remoteMemberCount)
+          ) {
+            // 成员列表接口会带群基础资料；先用服务端声明的人数修正标题，避免等完整成员页拉完才更新。
+            upsertRemoteGroup({
+              id: groupId,
+              name: groupBase.name ?? groupBase.groupName ?? existingGroup?.name,
+              avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar ?? existingGroup?.avatar,
+              ownerId: groupBase.hostId ? String(groupBase.hostId) : existingGroup?.ownerId,
+              memberCount: remoteMemberCount,
+            })
+          }
         }
 
         groupMemberRefreshDebug('remote page response', {
@@ -418,6 +511,8 @@ export const useGroupStore = defineStore('group', () => {
         }
 
         hasMore = list.length >= pageSize
+        // 服务端声明总人数时，必须按总人数判断完整；异常短页不能被误认为完整列表。
+        complete = expectedMemberCount > 0 ? allMembers.length >= expectedMemberCount : !hasMore
         pageNum++
       } catch (e) {
         groupMemberRefreshDebug('remote page failed', {
@@ -426,6 +521,7 @@ export const useGroupStore = defineStore('group', () => {
           error: formatDebugError(e),
         }, 'error')
         console.error('[GroupStore] API loadMembers page failed:', e)
+        complete = false
         hasMore = false
       }
     }
@@ -434,8 +530,12 @@ export const useGroupStore = defineStore('group', () => {
       groupId,
       total: allMembers.length,
       memberIds: allMembers.map((member) => member.userId).slice(0, 10),
+      complete,
     })
-    return sortMembersForDisplay(allMembers)
+    return {
+      members: sortMembersForDisplay(allMembers),
+      complete,
+    }
   }
 
   function normalizeMember(item: any, groupId: string): GroupMember {
@@ -647,6 +747,7 @@ export const useGroupStore = defineStore('group', () => {
     loadGroups,
     loadMembers,
     upsertGroup,
+    upsertRemoteGroup,
     setGroupMembers,
     getGroup,
     getMembers,

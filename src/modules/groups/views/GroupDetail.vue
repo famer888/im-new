@@ -178,7 +178,7 @@ async function refreshGroupDetail(groupId: string, options: { forceRemote?: bool
       }
       const groupPatch = buildGroupPatch(normalizedId, groupBase)
       // 详情接口比本地缓存更新；打开群资料时回填名称和人数，避免缺失时显示数字 ID 或 0 人。
-      groupStore.upsertGroup(groupPatch)
+      groupStore.upsertRemoteGroup(groupPatch)
       groupDetailCache.set(cacheKey, { valid: true, checkedAt: Date.now(), groupPatch })
       groupDiag('detail applied', {
         groupId: normalizedId,

@@ -657,7 +657,7 @@ async function ensureJoinedGroupReady(item: GroupReqItem): Promise<boolean> {
         || Object.prototype.hasOwnProperty.call(groupBase, 'groupReadCancel')
       const hasReadBurnTime = Object.prototype.hasOwnProperty.call(groupBase, 'groupMsgCancelTime')
       // 对齐旧 im：已同意入群后先补齐群资料，再切到群会话，避免打开只有 id 的空会话。
-      groupStore.upsertGroup({
+      groupStore.upsertRemoteGroup({
         id: groupId,
         name: groupBase.name || groupBase.groupName || item.groupName || groupId,
         avatar: groupBase.pic || groupBase.avatar || groupBase.groupAvatar || item.pic || null,
