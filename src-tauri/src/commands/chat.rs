@@ -920,6 +920,10 @@ pub async fn send_message(
     let group_notice_id = json_i64(&extra_value, &["noticeId", "notice_id"]).unwrap_or_default();
     let group_notice_show_notify =
         json_bool(&extra_value, &["showNotify", "show_notify", "bfAll"]).unwrap_or(false);
+    // 假发送只对单聊/群聊文本生效；其它消息类型继续沿用旧发送行为，避免误隐藏媒体和频道消息。
+    let is_hidden_text_send = request.msg_type == 0
+        && (conv_type == 0 || conv_type == 1)
+        && json_bool(&extra_value, &["isHide", "is_hide"]).unwrap_or(false);
     // 频道多图共用一个附件密钥；旧 im 通过 fileInfos 透传，这里从 extra 传入发送协议层。
     let medias_caption_file_key = if request.msg_type == 17 {
         json_string_field(&extra_value, &["fileKey", "file_key"])
@@ -1006,6 +1010,7 @@ pub async fn send_message(
                 now,
                 client_flag,
                 at_uids.clone(),
+                is_hidden_text_send,
             ) {
                 error!(
                     "send_group_text failed conversation={} err={}",
@@ -1034,6 +1039,7 @@ pub async fn send_message(
                 now,
                 client_flag,
                 snapchat_time,
+                is_hidden_text_send,
             ) {
                 error!(
                     "send_private_text failed conversation={} err={}",
@@ -1109,6 +1115,7 @@ pub async fn send_message(
                 now,
                 client_flag,
                 at_uids.clone(),
+                false,
             ) {
                 error!(
                     "send_group_message failed conversation={} msg_type={} err={}",
@@ -1137,6 +1144,7 @@ pub async fn send_message(
                 now,
                 client_flag,
                 snapchat_time,
+                false,
             ) {
                 error!(
                     "send_private_message failed conversation={} msg_type={} err={}",

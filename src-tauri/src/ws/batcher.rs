@@ -979,6 +979,15 @@ impl MessageBatcher {
                 }
                 return;
             }
+            cmds::SENSITIVE_WORDS_PUSH => {
+                // 对齐旧 im：30001 只作为刷新信号，前端收到后重新拉 getChatSensitive 全量列表。
+                let _ = self.app_handle.emit(
+                    "chat-sensitive:updated",
+                    serde_json::json!({ "cmd": cmds::SENSITIVE_WORDS_PUSH }),
+                );
+                info!("SENSITIVE_WORDS_PUSH emitted refresh signal");
+                return;
+            }
             cmds::FRIEND_RECORD_PUSH => {
                 match self.decode_friend_record_push(&decoded_payload) {
                     Ok(mut msgs) => {

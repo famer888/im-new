@@ -614,6 +614,7 @@ pub fn build_send_group_message_req(
     flag: i64,
     at_uids: Vec<i64>,
     attachment_file_key: Option<&str>,
+    is_hide: bool,
 ) -> Result<Vec<u8>, CryptoError> {
     let is_functional = is_functional_message(msg_type);
     let message_content = if is_functional {
@@ -650,6 +651,7 @@ pub fn build_send_group_message_req(
         edit: 0,
         links: Vec::new(),
         sent_over_time: 0,
+        is_hide,
     };
 
     let req = imweb::SendGroupMessageReq {
@@ -719,6 +721,7 @@ pub fn build_send_private_message_req(
     flag: i64,
     snapchat_time: i32,
     attachment_file_key: Option<&str>,
+    is_hide: bool,
 ) -> Result<Vec<u8>, CryptoError> {
     let mut hasher = Md5::new();
     hasher.update(content_plain);
@@ -754,6 +757,7 @@ pub fn build_send_private_message_req(
             links: Vec::new(),
             sent_over_time: 0,
             channel: 0,
+            is_hide,
         };
 
         let req = imweb::OneToOneMessageReq {
@@ -815,6 +819,7 @@ pub fn build_send_private_message_req(
         links: Vec::new(),
         sent_over_time: 0,
         channel: 0,
+        is_hide,
     };
 
     let req = imweb::OneToOneMessageReq {
@@ -855,6 +860,7 @@ mod tests {
             42,
             vec![],
             None,
+            false,
         )
         .unwrap();
 
@@ -897,6 +903,7 @@ mod tests {
             42,
             vec![],
             attachment_file_key.as_deref(),
+            false,
         )
         .unwrap();
 
@@ -924,6 +931,7 @@ mod tests {
             42,
             vec![],
             None,
+            false,
         )
         .unwrap();
 
@@ -949,6 +957,7 @@ mod tests {
             42,
             vec![],
             None,
+            false,
         )
         .unwrap();
 
@@ -962,6 +971,46 @@ mod tests {
         assert_eq!(notice.content, "新的群简介");
         assert_eq!(notice.notice_id, 12345);
         assert!(notice.show_notify);
+    }
+
+    #[test]
+    fn hidden_flag_is_encoded_for_private_and_group_text() {
+        let rel_key = "0123456789abcdef";
+        let plain = encode_text_obj("hidden text");
+        let group_req_bytes = build_send_group_message_req(
+            10086,
+            88,
+            0,
+            &plain,
+            rel_key,
+            1_700_000_000_000,
+            42,
+            vec![],
+            None,
+            true,
+        )
+        .unwrap();
+        let group_req = imweb::SendGroupMessageReq::decode(group_req_bytes.as_slice()).unwrap();
+        assert!(group_req.group_msg.unwrap().is_hide);
+
+        let private_req_bytes = build_send_private_message_req(
+            10086,
+            88,
+            0,
+            &plain,
+            Some((3, rel_key.to_string())),
+            Some((4, rel_key.to_string())),
+            Some((5, rel_key.to_string())),
+            Some((6, rel_key.to_string())),
+            1_700_000_000_000,
+            42,
+            0,
+            None,
+            true,
+        )
+        .unwrap();
+        let private_req = imweb::OneToOneMessageReq::decode(private_req_bytes.as_slice()).unwrap();
+        assert!(private_req.one_to_one_message.unwrap().is_hide);
     }
 
     #[test]
@@ -983,6 +1032,7 @@ mod tests {
             42,
             0,
             None,
+            false,
         )
         .unwrap();
 
@@ -1019,6 +1069,7 @@ mod tests {
             42,
             0,
             None,
+            false,
         )
         .unwrap();
 

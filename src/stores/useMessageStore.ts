@@ -40,6 +40,7 @@ import {
   isGroupMemberLeaveNoticeHiddenForCurrentUser,
   isGroupRemoveNoticeHiddenForCurrentUser,
 } from '@/utils/chatUnreadVisibility'
+import { filterSensitiveWords, shouldFakeSendMessage } from '@/utils/sensitiveWords'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -2334,13 +2335,23 @@ export const useMessageStore = defineStore('message', () => {
     extra?: Record<string, unknown>,
   ) {
     const clientMsgId = typeof extra?.__clientMsgId === 'string' ? extra.__clientMsgId : ''
-    const sendExtra = sanitizeSendExtra(extra)
-    const quoteMsg = (sendExtra?.quoteMessage as QuoteMessageInfo) ?? null
-    const extraJson = sendExtra && Object.keys(sendExtra).length > 0 ? JSON.stringify(sendExtra) : null
-    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(sendExtra)
     const [typeRaw, targetId = ''] = conversationId.split('_')
     const convType = Number(typeRaw || 0)
     const isFileHelperSend = convType === 0 && isFileHelperTargetId(targetId)
+    let sendExtra = sanitizeSendExtra(extra)
+
+    if (msgType === 0) {
+      const originalContent = content
+      content = filterSensitiveWords(content)
+      if ((convType === 0 || convType === 1) && shouldFakeSendMessage(originalContent)) {
+        // 对齐旧 im：假发送词本机仍显示发送气泡，但发送协议要带 isHide 让服务端按隐藏消息处理。
+        sendExtra = { ...(sendExtra ?? {}), isHide: true }
+      }
+    }
+
+    const quoteMsg = (sendExtra?.quoteMessage as QuoteMessageInfo) ?? null
+    const extraJson = sendExtra && Object.keys(sendExtra).length > 0 ? JSON.stringify(sendExtra) : null
+    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(sendExtra)
 
     if ((msgType === 12 || msgType === 18) && !(convType === 0 || convType === 1)) {
       throw new Error('功能表情暂仅支持单聊和群聊')

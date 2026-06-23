@@ -214,6 +214,77 @@ export interface GroupDetailFromQrCodeResp {
   errorDesc?: string
 }
 
+export interface GetChatSensitiveResp {
+  commonResult?: {
+    errCode?: number
+    errMsg?: string
+  } | null
+  addSensitives: string[]
+  delSensitives: string[]
+  version: number | string
+  fakeSendSensitives: string[]
+}
+
+const GetChatSensitiveReq = {
+  create(properties?: any) {
+    return properties || {}
+  },
+  encode(message: any, writer = $protobuf.Writer.create()) {
+    if (message.clientInfo) {
+      proto.ClientInfo.encode(message.clientInfo, writer.uint32(10).fork()).ldelim()
+    }
+    if (message.version != null) {
+      writer.uint32(16).int64(message.version)
+    }
+    return writer
+  },
+  decode(reader: Uint8Array) {
+    return reader as any
+  },
+}
+
+const GetChatSensitiveRespProto = {
+  create(properties?: any) {
+    return properties || {}
+  },
+  encode(_message: any, writer = $protobuf.Writer.create()) {
+    return writer
+  },
+  decode(reader: Uint8Array): GetChatSensitiveResp {
+    const r = $protobuf.Reader.create(reader)
+    const message: GetChatSensitiveResp = {
+      addSensitives: [],
+      delSensitives: [],
+      version: 0,
+      fakeSendSensitives: [],
+    }
+    while (r.pos < r.len) {
+      const tag = r.uint32()
+      switch (tag >>> 3) {
+        case 1:
+          message.commonResult = proto.CommonResult.decode(r, r.uint32()) as any
+          break
+        case 2:
+          message.addSensitives.push(r.string())
+          break
+        case 3:
+          message.delSensitives.push(r.string())
+          break
+        case 4:
+          message.version = r.int64() as any
+          break
+        case 5:
+          message.fakeSendSensitives.push(r.string())
+          break
+        default:
+          r.skipType(tag & 7)
+          break
+      }
+    }
+    return message
+  },
+}
+
 const GroupQrUrlFromShortLinkReq = {
   create(properties?: any) {
     return properties || {}
@@ -532,6 +603,21 @@ export async function checkVersion(baseUrl?: string): Promise<proto.CheckVersion
     url: `${base}/sys/checkVersion`,
     reqType: proto.CheckVersionReq,
     respType: proto.CheckVersionResp,
+  })
+}
+
+/**
+ * 获取聊天敏感词和假发送词。
+ * POST /user/getChatSensitive
+ */
+export async function getChatSensitive(baseUrl?: string): Promise<GetChatSensitiveResp> {
+  const base = baseUrl || getBaseUrl()
+  return requestProto({
+    url: `${base}/user/getChatSensitive`,
+    reqType: GetChatSensitiveReq,
+    respType: GetChatSensitiveRespProto,
+    // 对齐旧 im：启动和 30001 推送后都按 version=0 拉全量，避免增量状态丢失导致 PC 过滤不一致。
+    data: { version: 0 },
   })
 }
 

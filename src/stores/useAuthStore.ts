@@ -5,6 +5,7 @@ import { API_CONFIG, setBaseUrl } from '@/api/config'
 import { clearActiveSessionContext, setActiveSessionContext } from '@/api/sessionContext'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { isProdSafeDomain } from '@/utils/domainSafety'
+import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -133,8 +134,11 @@ export const useAuthStore = defineStore('auth', () => {
         uid: next.uid,
         sessionId: next.sessionId,
       })
+      // 登录态建立后再拉敏感词，确保请求头里的 sessionId 已经就绪。
+      refreshChatSensitiveWords('session-ready').catch(() => {})
     } else if (!next) {
       clearActiveSessionContext()
+      clearSensitiveWords()
     }
   }
 

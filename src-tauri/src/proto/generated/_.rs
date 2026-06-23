@@ -2506,6 +2506,9 @@ pub struct OneToOneMessage {
     /// 消息所属渠道 1-68，2-4E，3-97
     #[prost(int32, tag = "23")]
     pub channel: i32,
+    /// 是否是 隐藏消息
+    #[prost(bool, tag = "24")]
+    pub is_hide: bool,
 }
 /// 群消息
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2567,6 +2570,9 @@ pub struct GroupMessage {
     /// 转发对应的原发送完成时间 只有转发时才传值
     #[prost(int64, tag = "20")]
     pub sent_over_time: i64,
+    /// 是否是 隐藏消息
+    #[prost(bool, tag = "21")]
+    pub is_hide: bool,
 }
 /// 频道消息
 #[derive(Clone, PartialEq, ::prost::Message)]

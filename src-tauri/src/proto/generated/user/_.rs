@@ -3276,6 +3276,9 @@ pub struct GetChatSensitiveResp {
     /// 当前查询版本 当前查询的时间戳
     #[prost(int64, tag = "4")]
     pub version: i64,
+    /// 假发送集合-每次全推送
+    #[prost(string, repeated, tag = "5")]
+    pub fake_send_sensitives: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// 用户公告分页列表查询请求实体 【bizUrl/user/userNoticeList】
 #[derive(Clone, PartialEq, ::prost::Message)]

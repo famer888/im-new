@@ -20,6 +20,7 @@ import { eventBus } from '@/utils/eventBus'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
+import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -919,6 +920,7 @@ function resetClientStateAfterLogout() {
   uiStore.setRightPanel('none')
   uiStore.setSidebarTab('chats')
   uiStore.closeSettings()
+  clearSensitiveWords()
 }
 
 export async function setupTauriListeners() {
@@ -1087,6 +1089,11 @@ export async function setupTauriListeners() {
     const uid = String(authStore.uid || '').trim()
     if (!uid) return
     updateFriendKeyCacheFromPush(uid, event.payload || {})
+  })
+
+  listen('chat-sensitive:updated', () => {
+    // 对齐旧 im 的 30001：收到敏感词更新推送后重新拉接口，假发送集合也随接口一起刷新。
+    refreshChatSensitiveWords('ws-30001').catch(() => {})
   })
 
   listen<{ conversationId?: string }>('notification:click', async (event) => {

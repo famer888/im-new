@@ -880,6 +880,7 @@ message GetChatSensitiveResp {
     repeated string addSensitives       = 2; // 需要更新的敏感词
     repeated string delSensitives       = 3; // 需要删除数据
     int64           version             = 4; // 当前查询版本 当前查询的时间戳
+    repeated string fakeSendSensitives  = 5; // 假发送集合-每次全推送
 }
 // 用户公告分页列表查询请求实体 【bizUrl/user/userNoticeList】
 message UserNoticeListReq{
@@ -959,4 +960,3 @@ message AwsConfigResp {
     CommonResult    commonResult    = 1; // 结果信息
     AwsConfig       awsConfig       = 2; // aws配置数据对象
 }
-

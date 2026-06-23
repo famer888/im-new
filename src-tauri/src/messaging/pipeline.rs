@@ -63,6 +63,7 @@ pub fn send_group_message(
     send_time: i64,
     flag: i64,
     at_uids: Vec<i64>,
+    is_hide: bool,
 ) -> Result<(), SendError> {
     let group_id: i64 = group_id_str
         .parse()
@@ -92,6 +93,7 @@ pub fn send_group_message(
         flag,
         at_uids,
         attachment_file_key.as_deref(),
+        is_hide,
     )?;
 
     ws.send_packet(SEND_GROUP_MSG, flag, &payload)?;
@@ -114,6 +116,7 @@ pub fn send_group_text(
     send_time: i64,
     flag: i64,
     at_uids: Vec<i64>,
+    is_hide: bool,
 ) -> Result<(), SendError> {
     send_group_message(
         ws,
@@ -125,6 +128,7 @@ pub fn send_group_text(
         send_time,
         flag,
         at_uids,
+        is_hide,
     )
 }
 
@@ -161,6 +165,7 @@ pub fn send_group_notice_message(
         flag,
         Vec::new(),
         None,
+        false,
     )?;
 
     ws.send_packet(SEND_GROUP_MSG, flag, &payload)?;
@@ -264,6 +269,7 @@ pub fn send_private_message(
     send_time: i64,
     flag: i64,
     snapchat_time: i32,
+    is_hide: bool,
 ) -> Result<(), SendError> {
     const OFFICIAL_ACCOUNT_TARGET_ID: &str = "9900";
     let friend_uid: i64 = friend_uid_str.parse().map_err(|_| {
@@ -315,6 +321,7 @@ pub fn send_private_message(
         flag,
         snapchat_time,
         attachment_file_key.as_deref(),
+        is_hide,
     )?;
 
     ws.send_packet(SEND_PRIVATE_MSG, flag, &payload)?;
@@ -337,6 +344,7 @@ pub fn send_private_text(
     send_time: i64,
     flag: i64,
     snapchat_time: i32,
+    is_hide: bool,
 ) -> Result<(), SendError> {
     send_private_message(
         ws,
@@ -348,5 +356,6 @@ pub fn send_private_text(
         send_time,
         flag,
         snapchat_time,
+        is_hide,
     )
 }

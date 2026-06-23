@@ -75,6 +75,7 @@ message OneToOneMessage {
     repeated LinkObj links = 21; // links 文本消息中带的链接数组
     int64 sentOverTime = 22; // 转发对应的原发送完成时间 只有转发时才传值
     int32           channel = 23; // 消息所属渠道 1-68，2-4E，3-97
+    bool       isHide = 24; // 是否是 隐藏消息
 }
 
 // 群消息
@@ -98,6 +99,7 @@ message GroupMessage {
     int32 edit    = 18; // 消息是否编辑 0未编辑，1已编辑
     repeated LinkObj links = 19; // links 文本消息中带的链接数组
     int64 sentOverTime = 20; // 转发对应的原发送完成时间 只有转发时才传值
+    bool    isHide     = 21; // 是否是 隐藏消息
 }
 
 // 频道消息
