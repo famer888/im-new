@@ -381,6 +381,11 @@ async function loadPanelData(groupId: string) {
     }
 
     // 把已拿到的群资料回写到 store，下一次打开右侧面板可直接首屏命中缓存。
+    const hasReadBurn = groupBase && (
+      Object.prototype.hasOwnProperty.call(groupBase, 'bfGroupReadCancel')
+      || Object.prototype.hasOwnProperty.call(groupBase, 'groupReadCancel')
+    )
+    const hasReadBurnTime = groupBase && Object.prototype.hasOwnProperty.call(groupBase, 'groupMsgCancelTime')
     groupStore.upsertGroup({
       id: groupId,
       name: groupBase?.name ?? groupBase?.groupName,
@@ -389,6 +394,9 @@ async function loadPanelData(groupId: string) {
       memberCount: Number(groupBase?.memberCount ?? 0),
       groupAliasName: groupAliasName.value || null,
       notice: notice.value || null,
+      // 群详情是局部资料回填；没有明确返回阅后即焚字段时保留现有状态。
+      ...(hasReadBurn ? { bfGroupReadCancel: Boolean(groupBase?.bfGroupReadCancel ?? groupBase?.groupReadCancel) } : {}),
+      ...(hasReadBurnTime ? { groupMsgCancelTime: Number(groupBase?.groupMsgCancelTime ?? 0) } : {}),
     })
   }).catch((e) => {
     if (token !== panelLoadToken || conv.value?.targetId !== groupId) return

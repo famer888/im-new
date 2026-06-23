@@ -10,6 +10,7 @@ import {
 import { useAuthStore } from './useAuthStore'
 import { useContactStore } from './useContactStore'
 import { useGroupStore } from './useGroupStore'
+import { useScheduleDeletionStore } from './useScheduleDeletionStore'
 import {
   ensureChannelRelKey,
   ensureFriendRelKey,
@@ -28,7 +29,7 @@ import {
   getChannelLastMsgInfo,
   type ChannelHistoryMessage,
 } from '@/api/imChannel'
-import { isHiddenMessageType } from '@/types'
+import { MessageType, isHiddenMessageType } from '@/types'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import {
   formatGroupNoticeDisplayText,
@@ -911,6 +912,46 @@ function extractReadBurnMeta(raw: any, extraObj?: Record<string, unknown> | null
   }
 }
 
+function fillGroupReadBurnMeta(
+  conversationId: string,
+  msgType: number,
+  snapchatTime?: number,
+  deleteSeconds?: number,
+) {
+  if (snapchatTime || deleteSeconds) return { snapchatTime, deleteSeconds }
+  if (!conversationId.startsWith('1_')) return { snapchatTime, deleteSeconds }
+  if (msgType === MessageType.System || msgType === MessageType.Notice || isHiddenMessageType(msgType)) {
+    return { snapchatTime, deleteSeconds }
+  }
+
+  const groupId = conversationId.slice(2)
+  const group = useGroupStore().getGroup(groupId)
+  const seconds = group?.bfGroupReadCancel ? Number(group.groupMsgCancelTime || 0) : 0
+  if (!Number.isFinite(seconds) || seconds <= 0) return { snapchatTime, deleteSeconds }
+
+  // 对齐旧 im：群阅后即焚开启后，新到达的普通群消息即使协议没带 snapchatTime，也按群配置补销毁时间。
+  return {
+    snapchatTime: seconds,
+    deleteSeconds: seconds * 1000,
+  }
+}
+
+function scheduleSelfGroupReadBurnDeletion(message: Message, baseTime = Date.now()) {
+  if (!message.conversationId.startsWith('1_')) return
+  const uid = String(useAuthStore().uid || '')
+  if (!uid || String(message.senderId || '') !== uid) return
+  const deleteDelay = Number(message.deleteSeconds || 0)
+  if (!Number.isFinite(deleteDelay) || deleteDelay <= 0) return
+
+  const expireAt = baseTime + deleteDelay
+  const scheduleDeletionStore = useScheduleDeletionStore()
+  const ids = [message.id, message.customMsgId].map((id) => String(id || '')).filter(Boolean)
+  // 对齐旧 im：自己发出的群阅后即焚消息新增后立即开始计时；同时注册远端 id 和本地 custom id，防止发送回写换 id 后漏删。
+  for (const id of ids) {
+    scheduleDeletionStore.addMessageTimer(message.conversationId, id, expireAt)
+  }
+}
+
 function filterMessagesHiddenByLogoutClear(uid: string, messages: Message[]) {
   const logoutClearedHistoryAt = getLogoutClearedHistoryAt(uid)
   if (logoutClearedHistoryAt <= 0) {
@@ -1292,17 +1333,25 @@ export const useMessageStore = defineStore('message', () => {
       && Number(msgType) === CHANNEL_SYSTEM_MESSAGE_TYPE
   }
 
-  function normalizeMessage(raw: any): Message {
+  function normalizeMessage(raw: any, options: { fillGroupReadBurnFromCurrentGroup?: boolean } = {}): Message {
     const extraObj = parseExtraObject(raw.extra)
     const extraStr = stringifyExtra(raw.extra)
     let quoteMessage: QuoteMessageInfo | null = raw.quoteMessage ?? null
     if (!quoteMessage && extraObj?.quoteMessage) {
       quoteMessage = extraObj.quoteMessage as QuoteMessageInfo
     }
-    const { snapchatTime, deleteSeconds } = extractReadBurnMeta(raw, extraObj)
     const id = String(raw.id ?? raw.msgId ?? raw.msg_id ?? '')
     const conversationId = String(raw.conversationId ?? raw.conversation_id ?? '')
     const msgType = Number(raw.msgType ?? raw.msg_type ?? 0)
+    const extractedReadBurnMeta = extractReadBurnMeta(raw, extraObj)
+    const readBurnMeta = options.fillGroupReadBurnFromCurrentGroup
+      ? fillGroupReadBurnMeta(
+          conversationId,
+          msgType,
+          extractedReadBurnMeta.snapchatTime,
+          extractedReadBurnMeta.deleteSeconds,
+        )
+      : extractedReadBurnMeta
     const isChannelDeleteControl = isChannelDeleteControlMessage(conversationId, id, msgType)
     return {
       id,
@@ -1317,8 +1366,8 @@ export const useMessageStore = defineStore('message', () => {
       version: Number(raw.version ?? 0),
       isDeleted: Boolean(raw.isDeleted ?? raw.is_deleted ?? false) || isChannelDeleteControl,
       extra: extraStr,
-      snapchatTime,
-      deleteSeconds,
+      snapchatTime: readBurnMeta.snapchatTime,
+      deleteSeconds: readBurnMeta.deleteSeconds,
       quoteMessage,
     }
   }
@@ -2180,7 +2229,7 @@ export const useMessageStore = defineStore('message', () => {
         conversationId,
         limit: PAGE_SIZE,
       })
-      const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
+      const normalizedBase = Array.isArray(result) ? result.map((item) => normalizeMessage(item)) : []
       const applyLoadedSnapshot = (snapshot: Message[]) => {
         const filteredResult = filterMessagesHiddenByLogoutClear(uid, snapshot)
         const latestExisting = getMessages(conversationId)
@@ -2281,7 +2330,7 @@ export const useMessageStore = defineStore('message', () => {
         beforeTime,
         limit: PAGE_SIZE,
       })
-      const normalizedBase = Array.isArray(result) ? result.map(normalizeMessage) : []
+      const normalizedBase = Array.isArray(result) ? result.map((item) => normalizeMessage(item)) : []
       const applyOlderSnapshot = (snapshot: Message[]) => {
         const filteredResult = filterMessagesHiddenByLogoutClear(uid, snapshot)
         if (filteredResult.messages.length > 0) {
@@ -2378,6 +2427,7 @@ export const useMessageStore = defineStore('message', () => {
         quoteMessage: quoteMsg,
       }
       appendMessage(conversationId, localMsg)
+      scheduleSelfGroupReadBurnDeletion(localMsg, now)
       syncConversationSummary(conversationId, localMsg)
       return localMsg
     }
@@ -2444,9 +2494,18 @@ export const useMessageStore = defineStore('message', () => {
       quoteMessage: quoteMsg,
     }
     if (shouldKeepSingleImagePreview) {
+      const placeholder = existingClientPlaceholder as Message
+      // 复用本地图片/文件占位时不会 append optimistic；这里仍要按旧 im 立即启动阅后即焚倒计时。
+      scheduleSelfGroupReadBurnDeletion({
+        ...optimistic,
+        id: placeholder.id || optimistic.id,
+        customMsgId: placeholder.customMsgId || optimistic.customMsgId,
+        sendTime: placeholder.sendTime || optimisticSendTime,
+      }, optimisticSendTime)
       syncConversationSummary(conversationId, existingClientPlaceholder as Message)
     } else {
       appendMessage(conversationId, optimistic)
+      scheduleSelfGroupReadBurnDeletion(optimistic, optimisticSendTime)
       syncConversationSummary(conversationId, optimistic)
     }
     logSendStep('optimistic message visible', {
@@ -2957,11 +3016,14 @@ export const useMessageStore = defineStore('message', () => {
 
   function batchAppendMessages(
     messages: Message[],
-    options: { preserveConversationOrder?: boolean } = {},
+    options: { preserveConversationOrder?: boolean; fillGroupReadBurnFromCurrentGroup?: boolean } = {},
   ) {
     const grouped = new Map<string, Message[]>()
     for (const raw of messages as any[]) {
-      const msg = normalizeMessage(raw)
+      const msg = normalizeMessage(raw, {
+        // 只允许实时消息按当前群配置补阅后即焚；历史加载不传该选项，避免旧消息误显示火焰。
+        fillGroupReadBurnFromCurrentGroup: options.fillGroupReadBurnFromCurrentGroup === true,
+      })
       if (isPendingGroupReqChatMessage(msg)) continue
       const convId = String(msg.conversationId || '')
       if (convId.startsWith('1_') && msg.msgType === 8) {
@@ -3379,6 +3441,7 @@ export const useMessageStore = defineStore('message', () => {
     const nextIdx = idx - removedBeforeIdx
     next[nextIdx] = msg
     messageMap.value.set(params.conversationId, next)
+    scheduleSelfGroupReadBurnDeletion(msg, current.sendTime || msg.sendTime || Date.now())
     if (msg.msgType === 12) {
       diceLog('applySendReceipt merge done', {
         conversationId: params.conversationId,

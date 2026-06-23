@@ -1761,6 +1761,8 @@ export async function setupTauriListeners() {
         const eventMemberCount = Number(extra?.memberCount || 0)
         const nextMemberCount = Math.max(cachedMemberCount, cachedMemberMapCount, eventMemberCount)
         const eventGroupAvatar = getGroupEventAvatar(extra)
+        const eventGroupReadBurn = extra?.bfGroupReadCancel ?? extra?.groupReadCancel
+        const eventGroupReadBurnTime = extra?.groupMsgCancelTime ?? extra?.msgCancelTime
         groupInviteDebug('upsert group before append message', {
           conversationId: convId,
           groupId,
@@ -1780,6 +1782,9 @@ export async function setupTauriListeners() {
           memberCount: nextMemberCount,
           // 群事件不一定带全员禁言字段；缺省时不能覆盖本地输入权限状态。
           ...(eventGroupMuted !== undefined ? { isMuted: Boolean(eventGroupMuted) } : {}),
+          // 对齐旧 im：群阅后即焚变更需要立即同步到当前会话背景，而不是等下次打开群详情。
+          ...(eventGroupReadBurn !== undefined ? { bfGroupReadCancel: Boolean(eventGroupReadBurn) } : {}),
+          ...(eventGroupReadBurnTime !== undefined ? { groupMsgCancelTime: Number(eventGroupReadBurnTime || DEFAULT_READ_BURN_SECONDS) } : {}),
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         })
         if (!eventGroupAvatar && !existingGroup?.avatar) {
@@ -1889,7 +1894,9 @@ export async function setupTauriListeners() {
         currentUid,
       )
       const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
-      messageStore.batchAppendMessages(appendableNormalized as Message[])
+      messageStore.batchAppendMessages(appendableNormalized as Message[], {
+        fillGroupReadBurnFromCurrentGroup: true,
+      })
       const privateConversationIds = Array.from(new Set(
         appendableNormalized
           .map((m: any) => String(m?.conversationId ?? m?.conversation_id ?? ''))
@@ -1989,7 +1996,9 @@ export async function setupTauriListeners() {
     const conversationId = String(payload?.conversationId ?? payload?.conversation_id ?? '')
     if (!conversationId.includes('_')) return
     if (currentUid && senderId && senderId !== currentUid) return
-    messageStore.batchAppendMessages([payload] as Message[])
+    messageStore.batchAppendMessages([payload] as Message[], {
+      fillGroupReadBurnFromCurrentGroup: true,
+    })
   })
 
   /**

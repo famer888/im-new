@@ -76,6 +76,20 @@ function hasGroupMuteField(item: Record<string, any>): boolean {
     || Object.prototype.hasOwnProperty.call(item, 'bfShutup')
 }
 
+function hasGroupReadBurnField(item: Record<string, any>): boolean {
+  return Object.prototype.hasOwnProperty.call(item, 'bfGroupReadCancel')
+    || Object.prototype.hasOwnProperty.call(item, 'bf_group_read_cancel')
+    || Object.prototype.hasOwnProperty.call(item, 'groupReadCancel')
+    || Object.prototype.hasOwnProperty.call(item, 'group_read_cancel')
+    || Object.prototype.hasOwnProperty.call(item, 'bfReadCancel')
+}
+
+function hasGroupReadBurnTimeField(item: Record<string, any>): boolean {
+  return Object.prototype.hasOwnProperty.call(item, 'groupMsgCancelTime')
+    || Object.prototype.hasOwnProperty.call(item, 'group_msg_cancel_time')
+    || Object.prototype.hasOwnProperty.call(item, 'msgCancelTime')
+}
+
 export interface Group {
   id: string
   name: string | null
@@ -86,6 +100,8 @@ export interface Group {
   isMuted: boolean
   updatedAt: number
   groupAliasName?: string | null
+  bfGroupReadCancel?: boolean
+  groupMsgCancelTime?: number
 }
 
 export interface GroupMember {
@@ -157,6 +173,20 @@ export const useGroupStore = defineStore('group', () => {
       isMuted: Boolean(item.isMuted ?? item.is_muted ?? item.bfShutup ?? false),
       updatedAt: Number(item.updatedAt ?? item.updated_at ?? item.createTime ?? 0),
       groupAliasName: item.groupAliasName ?? item.group_alias_name ?? null,
+      bfGroupReadCancel: Boolean(
+        item.bfGroupReadCancel
+        ?? item.bf_group_read_cancel
+        ?? item.groupReadCancel
+        ?? item.group_read_cancel
+        ?? item.bfReadCancel
+        ?? false,
+      ),
+      groupMsgCancelTime: Number(
+        item.groupMsgCancelTime
+        ?? item.group_msg_cancel_time
+        ?? item.msgCancelTime
+        ?? 0,
+      ),
     }
   }
 
@@ -174,6 +204,9 @@ export const useGroupStore = defineStore('group', () => {
         memberCount: next.memberCount > 0 ? next.memberCount : groups.value[idx].memberCount,
         // 群资料经常是部分更新；没有明确全员禁言字段时保留本地状态，避免缺省 false 冲掉输入权限判断。
         isMuted: hasGroupMuteField(item) ? next.isMuted : groups.value[idx].isMuted,
+        // 对齐旧 im：群阅后即焚是当前会话状态；部分群事件不带该字段时不能把已开启状态误清掉。
+        bfGroupReadCancel: hasGroupReadBurnField(item) ? next.bfGroupReadCancel : groups.value[idx].bfGroupReadCancel,
+        groupMsgCancelTime: hasGroupReadBurnTimeField(item) ? next.groupMsgCancelTime : groups.value[idx].groupMsgCancelTime,
       }
     } else {
       groups.value = [next, ...groups.value]

@@ -107,6 +107,9 @@ function getCachedGroupDetail(cacheKey: string) {
 }
 
 function buildGroupPatch(groupId: string, groupBase: Record<string, any>) {
+  const hasReadBurn = Object.prototype.hasOwnProperty.call(groupBase, 'bfGroupReadCancel')
+    || Object.prototype.hasOwnProperty.call(groupBase, 'groupReadCancel')
+  const hasReadBurnTime = Object.prototype.hasOwnProperty.call(groupBase, 'groupMsgCancelTime')
   return {
     id: groupId,
     name: groupBase.name ?? groupBase.groupName,
@@ -114,6 +117,9 @@ function buildGroupPatch(groupId: string, groupBase: Record<string, any>) {
     ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
     memberCount: Number(groupBase.memberCount ?? 0),
     groupAliasName: groupBase.groupAliasName ?? null,
+    // 群详情字段是局部回填；只有服务端明确返回阅后即焚字段时才覆盖本地会话状态。
+    ...(hasReadBurn ? { bfGroupReadCancel: Boolean(groupBase.bfGroupReadCancel ?? groupBase.groupReadCancel) } : {}),
+    ...(hasReadBurnTime ? { groupMsgCancelTime: Number(groupBase.groupMsgCancelTime ?? 0) } : {}),
   }
 }
 

@@ -31,6 +31,9 @@ export const useScheduleDeletionStore = defineStore('scheduleDeletion', () => {
   function addMessageTimer(conversationId: string, messageId: string, expireAt: number) {
     if (!conversationId || !messageId || !Number.isFinite(expireAt)) return
     const key = getTimerKey(conversationId, messageId)
+    const existing = timers.value.get(key)
+    // 同一条阅后即焚消息可能经历本地占位和服务端回写；保留更早的过期时间，避免重复注册把销毁时间顺延。
+    if (existing && existing.expireAt <= expireAt) return
     timers.value.set(key, {
       conversationId,
       messageId,

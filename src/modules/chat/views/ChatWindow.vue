@@ -55,11 +55,16 @@ const friendConversationTargetId = computed(() => currentFriendContact.value?.id
 
 const messages = computed(() => messageStore.getMessages(conversationId.value))
 const isLoading = computed(() => messageStore.isLoading(conversationId.value))
-const showReadBurnBackground = computed(() => currentFriendContact.value?.bfReadCancel === true)
 const currentGroupId = computed(() => {
   const conv = conversation.value
   if (conv?.type === ConversationType.Group) return conv.targetId
   return conversationId.value.startsWith('1_') ? conversationId.value.slice(2) : ''
+})
+const currentGroup = computed(() => currentGroupId.value ? groupStore.getGroup(currentGroupId.value) ?? null : null)
+const showReadBurnBackground = computed(() => {
+  // 对齐旧 im：聊天背景跟随当前会话的阅后即焚状态，好友看 bfReadCancel，群看 bfGroupReadCancel。
+  if (currentFriendContact.value?.bfReadCancel === true) return true
+  return currentGroup.value?.bfGroupReadCancel === true
 })
 const isGroupConversation = computed(() => Boolean(currentGroupId.value))
 const currentGroupMemberRole = computed(() => {

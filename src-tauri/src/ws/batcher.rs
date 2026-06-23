@@ -1566,6 +1566,9 @@ impl MessageBatcher {
                     "groupName": group.group_name,
                     "groupAvatar": group.pic,
                     "groupMuted": group.group_shutup,
+                    // 对齐旧 im：群事件携带阅后即焚状态，前端据此立即切换聊天背景。
+                    "groupReadCancel": group.group_read_cancel,
+                    "groupMsgCancelTime": group.group_msg_cancel_time,
                     "memberCount": item.group_member.len(),
                     "members": item.group_member.iter().map(group_member_to_json).collect::<Vec<_>>(),
                     "groupReqType": item.group_req_type,
@@ -1608,6 +1611,9 @@ impl MessageBatcher {
                     "groupName": group.group_name,
                     "groupAvatar": group.pic,
                     "groupMuted": group.group_shutup,
+                    // 对齐旧 im：群配置更新后当前会话要立即显示/隐藏阅后即焚背景。
+                    "groupReadCancel": group.group_read_cancel,
+                    "groupMsgCancelTime": group.group_msg_cancel_time,
                     "memberCount": item.group_member.len(),
                     "members": item.group_member.iter().map(group_member_to_json).collect::<Vec<_>>(),
                     "eventType": common.even_type,

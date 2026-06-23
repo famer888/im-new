@@ -201,6 +201,11 @@ const currentContact = computed(() => {
   if (!conv || conv.type !== ConversationType.Friend || isFileHelperTargetId(conv.targetId)) return null
   return contactStore.getContact(conv.targetId) ?? null
 })
+const currentGroup = computed(() => {
+  const conv = chatStore.currentConversation
+  if (!conv || conv.type !== ConversationType.Group) return null
+  return groupStore.getGroup(conv.targetId) ?? null
+})
 const showReadBurnTip = computed(() =>
   Boolean(currentContact.value?.bfReadCancel),
 )
@@ -663,8 +668,12 @@ async function ensureBlobBackedFile(file: File, trace?: ImageSendTrace): Promise
 
 function withReadBurnExtra(extra?: Record<string, unknown>) {
   const nextExtra = extra ? { ...extra } : {}
-  if (currentContact.value?.bfReadCancel) {
-    const snapchatTime = Number(currentContact.value.msgCancelTime || DEFAULT_READ_BURN_SECONDS)
+  const readBurnSeconds = currentContact.value?.bfReadCancel
+    ? Number(currentContact.value.msgCancelTime || DEFAULT_READ_BURN_SECONDS)
+    : (currentGroup.value?.bfGroupReadCancel ? Number(currentGroup.value.groupMsgCancelTime || DEFAULT_READ_BURN_SECONDS) : 0)
+  if (readBurnSeconds > 0) {
+    // 对齐旧 im：好友和群开启阅后即焚时，发送的普通消息都要携带销毁时间，消息旁边才会显示火焰。
+    const snapchatTime = readBurnSeconds
     if (snapchatTime > 0) {
       nextExtra.snapchatTime = snapchatTime
       nextExtra.deleteSeconds = snapchatTime * 1000

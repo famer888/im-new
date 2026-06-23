@@ -653,6 +653,9 @@ async function ensureJoinedGroupReady(item: GroupReqItem): Promise<boolean> {
       const groupBase = (detail as any)?.group
       if ((code !== 0 && code !== 200) || !groupBase) return false
 
+      const hasReadBurn = Object.prototype.hasOwnProperty.call(groupBase, 'bfGroupReadCancel')
+        || Object.prototype.hasOwnProperty.call(groupBase, 'groupReadCancel')
+      const hasReadBurnTime = Object.prototype.hasOwnProperty.call(groupBase, 'groupMsgCancelTime')
       // 对齐旧 im：已同意入群后先补齐群资料，再切到群会话，避免打开只有 id 的空会话。
       groupStore.upsertGroup({
         id: groupId,
@@ -661,6 +664,9 @@ async function ensureJoinedGroupReady(item: GroupReqItem): Promise<boolean> {
         ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
         memberCount: Number(groupBase.memberCount ?? 0),
         groupAliasName: groupBase.groupAliasName ?? null,
+        // 群详情未带阅后即焚字段时不覆盖本地状态，避免误隐藏聊天背景。
+        ...(hasReadBurn ? { bfGroupReadCancel: Boolean(groupBase.bfGroupReadCancel ?? groupBase.groupReadCancel) } : {}),
+        ...(hasReadBurnTime ? { groupMsgCancelTime: Number(groupBase.groupMsgCancelTime ?? 0) } : {}),
         updatedAt: Date.now(),
       })
     } catch {

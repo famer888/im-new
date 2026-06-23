@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<{
   currentGroupMemberRole?: number | null
   /** 对齐旧 im：少量消息从顶部开始排列，不做吸底留白 */
   alignTop?: boolean
-  /** 仅在好友开启阅后即焚时显示中间背景图 */
+  /** 对齐旧 im：当前好友或群开启阅后即焚时显示中间背景图 */
   showReadBurnBackground?: boolean
 }>(), {
   showReadBurnBackground: false,
