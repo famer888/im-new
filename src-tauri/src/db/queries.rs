@@ -391,7 +391,7 @@ pub fn refresh_conversation_summary(
     conn: &Connection,
     conversation_id: &str,
 ) -> Result<(), DbError> {
-    // 会话摘要始终跟随“最后一条可见未删除消息”；清空到无消息时保留 updated_at，避免会话被重排到列表底部。
+    // 会话摘要始终跟随“最后一条可见未删除消息”；清空到无消息时保留原时间，避免左侧会话被当作空占位隐藏。
     conn.execute(
         "UPDATE conversations
          SET last_msg_id = (
@@ -421,7 +421,7 @@ pub fn refresh_conversation_summary(
                    )
                  ORDER BY m.send_time DESC
                  LIMIT 1
-             ), 0),
+             ), last_msg_time),
              last_msg_digest = (
                  SELECT CASE m.msg_type
                      WHEN 1 THEN '[图片]'
@@ -672,9 +672,9 @@ mod tests {
         let conv = get_conversation_by_id(&conn, "0_42")
             .expect("query conversation")
             .expect("conversation remains");
-        // 清空聊天记录只清消息摘要，不重置排序时间；否则左侧会话会掉到底部，看起来像被删除。
+        // 清空聊天记录只清消息摘要，不重置会话时间；否则左侧单聊会被前端当作空占位隐藏。
         assert_eq!(conv.last_msg_id, None);
-        assert_eq!(conv.last_msg_time, 0);
+        assert_eq!(conv.last_msg_time, 123456);
         assert_eq!(conv.last_msg_digest, None);
         assert_eq!(conv.updated_at, 123456);
     }

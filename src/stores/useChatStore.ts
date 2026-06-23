@@ -355,6 +355,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function isClearedSummaryUpdate(previous: Conversation, next: Conversation): boolean {
+    // 清空聊天记录只清摘要；保留旧会话时间，避免运行中的左侧列表把既有单聊当作空占位过滤掉。
+    return Number(previous.lastMsgTime || 0) > 0
+      && Number(next.lastMsgTime || 0) <= 0
+      && !next.lastMsgId
+      && !String(next.lastMsgDigest || '').trim()
+  }
+
   function addOrUpdateConversation(conv: Conversation, options?: { preserveListOrder?: boolean }) {
     const normalized = normalizeConversation(conv as any)
     if (normalized.type === 1 && isPendingGroupInviteConversation(normalized.targetId)) return
@@ -362,7 +370,11 @@ export const useChatStore = defineStore('chat', () => {
     if (index >= 0) {
       const previous = conversations.value[index]
       conversations.value[index] = options?.preserveListOrder
-        ? { ...normalized, updatedAt: previous.updatedAt }
+        ? {
+            ...normalized,
+            lastMsgTime: isClearedSummaryUpdate(previous, normalized) ? previous.lastMsgTime : normalized.lastMsgTime,
+            updatedAt: previous.updatedAt,
+          }
         : normalized
     } else {
       conversations.value.unshift(normalized)
