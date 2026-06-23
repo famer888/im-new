@@ -437,6 +437,20 @@ impl WindowManager {
         Ok(())
     }
 
+    pub fn close_notifications(&self, app: &AppHandle) {
+        // Dock 点击要回到主窗口；先关闭右下角提醒，避免 always-on-top 通知窗继续占住前台。
+        let labels = {
+            let mut labels = self.notification_labels.write();
+            labels.drain(..).collect::<Vec<_>>()
+        };
+        for label in labels {
+            self.notification_pinned.remove(&label);
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.close();
+            }
+        }
+    }
+
     pub fn has_chat_window(&self, conversation_id: &str) -> bool {
         self.chat_windows.contains_key(conversation_id)
     }

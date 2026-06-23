@@ -10,7 +10,7 @@ mod proto;
 mod window;
 mod ws;
 
-use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Listener, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -249,6 +249,15 @@ pub fn run() {
             commands::platform::allow_sleep,
             commands::sentry::report_error,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Reopen { .. } = event {
+                // macOS 点击 Dock 图标时先关闭右下角提醒，再显式把主窗口恢复到前台。
+                if let Some(win_manager) = app.try_state::<window::WindowManager>() {
+                    win_manager.close_notifications(app);
+                }
+                window::tray::show_first_available_window(app);
+            }
+        });
 }

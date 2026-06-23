@@ -71,7 +71,7 @@ fn show_window(window: tauri::WebviewWindow) {
     let _ = window.set_focus();
 }
 
-fn show_first_available_window(app: &tauri::AppHandle) {
+pub fn show_first_available_window(app: &tauri::AppHandle) {
     for label in ["main", "login"] {
         if let Some(window) = app.get_webview_window(label) {
             if window.is_visible().unwrap_or(false) {
