@@ -305,40 +305,6 @@ function collectInviteTargets(
   return sortedPeople.slice(0, maxMembers)
 }
 
-function appendContextTargets(
-  extra: ExtraObject,
-  currentUid: string,
-  targets: NoticePerson[],
-  contextMembers: unknown[],
-  maxMembers: number,
-): NoticePerson[] {
-  const actorId = getExtraUserId(extra, 'fromUid', 'sendUid')
-    || getUserId(extra.fromUser)
-  const currentUserIsTarget = Boolean(currentUid)
-    && targets.some((target) => target.id === currentUid || target.name === '你')
-
-  if (!currentUserIsTarget || actorId === currentUid || targets.length !== 1 || !contextMembers.length) {
-    return targets
-  }
-
-  const seen = new Set(targets.map((target) => target.id || target.name))
-  const appended = [...targets]
-
-  for (const member of contextMembers) {
-    const id = getUserId(member)
-    if (!id || id === currentUid || id === actorId || seen.has(id)) continue
-
-    const name = getUserDisplayName(member, id)
-    if (!name) continue
-
-    seen.add(id)
-    appended.push({ id, name })
-    if (appended.length >= maxMembers) break
-  }
-
-  return appended
-}
-
 function rawHasAllTargets(raw: string, targets: NoticePerson[]): boolean {
   const comparableRaw = normalizeComparable(raw)
   return targets.every((target) => {
@@ -375,13 +341,9 @@ export function formatGroupNoticeDisplayText(
     currentUid,
     maxMembers,
   )
-  const targets = appendContextTargets(
-    extra,
-    currentUid,
-    explicitTargets,
-    options.contextMembers || [],
-    maxMembers,
-  )
+  // 入群验证通过后的群内提示只展示本次事件携带的邀请对象；
+  // 不再用当前群成员列表补全，避免把既有成员误拼成“被邀请加入”的名单。
+  const targets = explicitTargets
   if (!targets.length) return fin(raw)
 
   const resolvedTargets = targets.map((target) => {
