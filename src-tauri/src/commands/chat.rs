@@ -1104,8 +1104,8 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 9) | (1, 12) | (1, 18) => {
-            if let Err(e) = pipeline::send_group_message(
+        (1, 1) | (1, 2) | (1, 3) | (1, 7) | (1, 9) | (1, 12) | (1, 17) | (1, 18) => {
+            if let Err(e) = pipeline::send_group_message_with_attachment_key(
                 &ws_mgr,
                 &crypto,
                 &target_id,
@@ -1116,6 +1116,11 @@ pub async fn send_message(
                 client_flag,
                 at_uids.clone(),
                 false,
+                if request.msg_type == 17 {
+                    medias_caption_file_key.as_deref()
+                } else {
+                    None
+                },
             ) {
                 error!(
                     "send_group_message failed conversation={} msg_type={} err={}",
@@ -1133,8 +1138,8 @@ pub async fn send_message(
                 return Err(e.to_string());
             }
         }
-        (0, 1) | (0, 2) | (0, 3) | (0, 5) | (0, 7) | (0, 9) | (0, 12) | (0, 18) => {
-            if let Err(e) = pipeline::send_private_message(
+        (0, 1) | (0, 2) | (0, 3) | (0, 5) | (0, 7) | (0, 9) | (0, 12) | (0, 17) | (0, 18) => {
+            if let Err(e) = pipeline::send_private_message_with_attachment_key(
                 &ws_mgr,
                 &crypto,
                 &target_id,
@@ -1145,6 +1150,11 @@ pub async fn send_message(
                 client_flag,
                 snapchat_time,
                 false,
+                if request.msg_type == 17 {
+                    medias_caption_file_key.as_deref()
+                } else {
+                    None
+                },
             ) {
                 error!(
                     "send_private_message failed conversation={} msg_type={} err={}",

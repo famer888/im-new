@@ -919,6 +919,38 @@ mod tests {
     }
 
     #[test]
+    fn group_media_caption_includes_encrypted_attachment_key() {
+        let rel_key = "0123456789abcdef";
+        let file_key = "1234567890123456";
+        let content = "image:https://oss.example.test/a.png||https://oss.example.test/a.png||1024||0|||image:https://oss.example.test/b.png||https://oss.example.test/b.png||2048||0";
+        let plain = encode_media_text_list_obj(content);
+        let req_bytes = build_send_group_message_req(
+            10086,
+            88,
+            17,
+            &plain,
+            rel_key,
+            1_700_000_000_000,
+            42,
+            vec![],
+            Some(file_key),
+            false,
+        )
+        .unwrap();
+
+        let decoded = imweb::SendGroupMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let gm = decoded.group_msg.unwrap();
+        assert_eq!(gm.msg_type, 17);
+        assert_eq!(gm.version, 1);
+        let decrypted_content = crypto::aes::decrypt_message(&gm.content, rel_key).unwrap();
+        assert_eq!(decrypted_content, plain);
+
+        let attachment_cipher = hex::decode(gm.attachment_key).unwrap();
+        let decrypted_file_key = crypto::aes::decrypt_message(&attachment_cipher, rel_key).unwrap();
+        assert_eq!(String::from_utf8(decrypted_file_key).unwrap(), file_key);
+    }
+
+    #[test]
     fn group_dice_is_sent_as_raw_set_image_obj() {
         let plain = encode_set_image_obj("");
         let req_bytes = build_send_group_message_req(
@@ -1051,6 +1083,43 @@ mod tests {
         assert_eq!(card.uid, 12345);
         assert_eq!(card.nick_name, "Alice");
         assert_eq!(card.icon, "https://example.test/a.png");
+    }
+
+    #[test]
+    fn private_media_caption_includes_encrypted_attachment_key() {
+        let rel_key = "0123456789abcdef";
+        let file_key = "1234567890123456";
+        let content = "image:https://oss.example.test/a.png||https://oss.example.test/a.png||1024||0|||image:https://oss.example.test/b.png||https://oss.example.test/b.png||2048||0";
+        let plain = encode_media_text_list_obj(content);
+        let req_bytes = build_send_private_message_req(
+            10086,
+            88,
+            17,
+            &plain,
+            Some((3, rel_key.to_string())),
+            Some((4, rel_key.to_string())),
+            Some((5, rel_key.to_string())),
+            Some((6, rel_key.to_string())),
+            1_700_000_000_000,
+            42,
+            0,
+            Some(file_key),
+            false,
+        )
+        .unwrap();
+
+        let decoded = imweb::OneToOneMessageReq::decode(req_bytes.as_slice()).unwrap();
+        let msg = decoded.one_to_one_message.unwrap();
+        assert_eq!(msg.msg_type, 17);
+        assert_eq!(msg.content, plain);
+
+        let web_content = msg.web_content.unwrap();
+        let decrypted_content =
+            crypto::aes::decrypt_message(&web_content.content, rel_key).unwrap();
+        assert_eq!(decrypted_content, plain);
+        let attachment_cipher = hex::decode(web_content.attachment_key).unwrap();
+        let decrypted_file_key = crypto::aes::decrypt_message(&attachment_cipher, rel_key).unwrap();
+        assert_eq!(String::from_utf8(decrypted_file_key).unwrap(), file_key);
     }
 
     #[test]

@@ -53,7 +53,7 @@ import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { writeClipboardText } from '@/utils/clipboard'
-import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair } from '@/utils/e2ee'
+import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeResolvedFileKey } from '@/utils/e2ee'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 
@@ -3067,6 +3067,101 @@ function normalizeForwardImageContent(content: string, extra?: Record<string, un
   }
 }
 
+function parseForwardExtra(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw) return undefined
+  if (typeof raw === 'object') return raw as Record<string, unknown>
+  try {
+    const parsed = JSON.parse(String(raw))
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function resolveForwardChannelFileKey(extra?: Record<string, unknown>): Promise<string> {
+  const directFileKey = normalizeResolvedFileKey(
+    extra?.fileKey || extra?.file_key || extra?.mediasCaptionFileKey || '',
+  )
+  if (directFileKey) return directFileKey
+
+  const channelId = String(extra?.channelId || extra?.channel_id || '').trim()
+  const attachmentKey = String(extra?.attachmentKey || extra?.attachment_key || '').trim()
+  if (!channelId || !attachmentKey || !(window as any).__TAURI_INTERNALS__) return ''
+
+  try {
+    // 频道多图转发到单聊/群聊前，先把频道 attachmentKey 还原成真实 fileKey；
+    // 发送到目标会话时协议层会再按目标 relKey 生成新的 attachmentKey。
+    if (authStore.uid) await ensureChannelRelKey(authStore.uid, channelId)
+    const { invoke } = await import('@tauri-apps/api/core')
+    const resolved = await invoke<string>('decrypt_channel_incoming', {
+      channelId,
+      ciphertextHex: attachmentKey,
+      msgType: 0,
+    })
+    return normalizeResolvedFileKey(resolved)
+  } catch (error) {
+    console.warn('[forward] resolve channel fileKey failed:', {
+      channelId,
+      attachmentKeyLen: attachmentKey.length,
+      error: String(error),
+    })
+    return ''
+  }
+}
+
+async function normalizeForwardExtraForTarget(
+  item: ForwardDraftItem,
+  targetType: number,
+  targetId: string,
+): Promise<ForwardDraftItem | null> {
+  const extra = item.extra ? { ...item.extra } : undefined
+  if (item.msgType !== MessageType.MediasCaption) return item
+  // msgType 17 的附件解密必须依赖 extra 里的 fileKey/attachmentKey；缺失时直接拦截，避免发出破图消息。
+  if (!extra) return null
+
+  const fileKey = await resolveForwardChannelFileKey(extra)
+
+  // 频道多图不能沿用来源频道的加密字段；保留明文 fileKey，让目标会话发送时重新加密附件 key。
+  for (const key of [
+    'attachmentKey',
+    'attachment_key',
+    'cipherHex',
+    'cipherCandidates',
+    'decryptPending',
+    'contentMd5',
+    'content_md5',
+    'readTotal',
+    'read_total',
+  ]) {
+    delete extra[key]
+  }
+
+  if (fileKey) extra.fileKey = fileKey
+  else delete extra.fileKey
+  delete extra.file_key
+
+  if (targetType === ConversationType.Channel) {
+    extra.channelId = targetId
+  } else {
+    delete extra.channelId
+    delete extra.channel_id
+  }
+
+  if (targetType === ConversationType.Group) {
+    extra.groupId = targetId
+  } else {
+    delete extra.groupId
+    delete extra.group_id
+  }
+
+  if (!fileKey) return null
+
+  return {
+    ...item,
+    extra: Object.keys(extra).length > 0 ? extra : undefined,
+  }
+}
+
 function buildForwardDraftItems(): ForwardDraftItem[] {
   if (uiStore.forwardMessagePayload) {
     return [{
@@ -3090,15 +3185,7 @@ function buildForwardDraftItems(): ForwardDraftItem[] {
     : messages.filter(m => m.id === msgId)
 
   return msgsToForward.map((msg) => {
-    const extra = (() => {
-      if (!msg.extra) return undefined
-      try {
-        return JSON.parse(msg.extra)
-      } catch {
-        return undefined
-      }
-    })()
-
+    const extra = parseForwardExtra(msg.extra)
     return {
       msgType: msg.msgType,
       content: msg.msgType === MessageType.Image
@@ -3132,11 +3219,18 @@ function normalizeForwardTargetConvId(targetConvId: string): string {
 }
 
 async function handleForward(targetConvId: string) {
-  const drafts = buildForwardDraftItems()
-  if (drafts.length === 0) return
   const normalizedTargetConvId = normalizeForwardTargetConvId(targetConvId)
   const [convTypeRaw, convTargetId = ''] = normalizedTargetConvId.split('_')
   const convType = Number(convTypeRaw)
+  const sourceDrafts = buildForwardDraftItems()
+  if (sourceDrafts.length === 0) return
+  const drafts = (await Promise.all(
+    sourceDrafts.map(item => normalizeForwardExtraForTarget(item, convType, convTargetId)),
+  )).filter((item): item is ForwardDraftItem => Boolean(item))
+  if (drafts.length === 0) {
+    showToast(t('转发失败'), 'error')
+    return
+  }
   if (!Number.isNaN(convType) && convTargetId) {
     if (convType === ConversationType.Channel) {
       // 转发落到频道时后台补齐权限，不阻塞切换到目标会话。

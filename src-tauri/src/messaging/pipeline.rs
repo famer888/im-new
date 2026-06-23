@@ -65,6 +65,35 @@ pub fn send_group_message(
     at_uids: Vec<i64>,
     is_hide: bool,
 ) -> Result<(), SendError> {
+    send_group_message_with_attachment_key(
+        ws,
+        crypto,
+        group_id_str,
+        sender_uid_str,
+        msg_type,
+        content,
+        send_time,
+        flag,
+        at_uids,
+        is_hide,
+        None,
+    )
+}
+
+/// 发送一条群消息，并允许调用方显式传入附件 fileKey。
+pub fn send_group_message_with_attachment_key(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    group_id_str: &str,
+    sender_uid_str: &str,
+    msg_type: i32,
+    content: &str,
+    send_time: i64,
+    flag: i64,
+    at_uids: Vec<i64>,
+    is_hide: bool,
+    attachment_file_key_override: Option<&str>,
+) -> Result<(), SendError> {
     let group_id: i64 = group_id_str
         .parse()
         .map_err(|_| SendError::InvalidId(format!("group_id '{}' not numeric", group_id_str)))?;
@@ -82,7 +111,12 @@ pub fn send_group_message(
     };
 
     let content_plain = super::encode_content_obj(msg_type, content);
-    let attachment_file_key = super::extract_attachment_file_key(content);
+    // msgType 17 的共享文件 key 来自前端 extra；普通附件仍从内容 JSON 里读取。
+    let attachment_file_key = attachment_file_key_override
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .or_else(|| super::extract_attachment_file_key(content));
     let payload = super::build_send_group_message_req(
         group_id,
         sender_uid,
@@ -271,6 +305,35 @@ pub fn send_private_message(
     snapchat_time: i32,
     is_hide: bool,
 ) -> Result<(), SendError> {
+    send_private_message_with_attachment_key(
+        ws,
+        crypto,
+        friend_uid_str,
+        sender_uid_str,
+        msg_type,
+        content,
+        send_time,
+        flag,
+        snapchat_time,
+        is_hide,
+        None,
+    )
+}
+
+/// 发送一条单聊消息，并允许调用方显式传入附件 fileKey。
+pub fn send_private_message_with_attachment_key(
+    ws: &WsManager,
+    crypto: &CryptoEngine,
+    friend_uid_str: &str,
+    sender_uid_str: &str,
+    msg_type: i32,
+    content: &str,
+    send_time: i64,
+    flag: i64,
+    snapchat_time: i32,
+    is_hide: bool,
+    attachment_file_key_override: Option<&str>,
+) -> Result<(), SendError> {
     const OFFICIAL_ACCOUNT_TARGET_ID: &str = "9900";
     let friend_uid: i64 = friend_uid_str.parse().map_err(|_| {
         SendError::InvalidId(format!("friend_uid '{}' not numeric", friend_uid_str))
@@ -307,7 +370,12 @@ pub fn send_private_message(
     }
 
     let content_plain = super::encode_content_obj(msg_type, content);
-    let attachment_file_key = super::extract_attachment_file_key(content);
+    // msgType 17 的共享文件 key 来自前端 extra；普通附件仍从内容 JSON 里读取。
+    let attachment_file_key = attachment_file_key_override
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .or_else(|| super::extract_attachment_file_key(content));
     let payload = super::build_send_private_message_req(
         friend_uid,
         sender_uid,
