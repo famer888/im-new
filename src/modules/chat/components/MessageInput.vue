@@ -109,13 +109,23 @@ const groupId = computed(() => chatStore.currentConversation?.targetId ?? '')
 const isFileHelperChat = computed(
   () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
 )
+const currentGroupMemberRole = computed(() => {
+  const uid = String(authStore.uid || '')
+  if (!groupId.value || !uid) return null
+  const ownerId = groupStore.getGroup(groupId.value)?.ownerId
+  if (ownerId && String(ownerId) === uid) return 0
+  const memberRole = groupStore.getMembers(groupId.value).find((member) => member.userId === uid)?.role
+  if (Number.isFinite(Number(memberRole))) return Number(memberRole)
+  return null
+})
 const showShutupTip = computed(() => {
   const conv = chatStore.currentConversation
   if (!conv) return false
   // 与 im send/index.vue 对齐：消息免打扰不影响输入区，仅群全员禁言才显示提示
   if (conv.type !== ConversationType.Group) return false
   const group = groupStore.getGroup(conv.targetId)
-  return Boolean(group?.isMuted)
+  // 与旧 im 的 bfShutup && memberType > 1 对齐：群主/管理员不受全员禁言限制；角色未知时不先误挡输入。
+  return Boolean(group?.isMuted) && Number(currentGroupMemberRole.value) > 1
 })
 // 频道底部交互只信“详情态”，避免使用列表/缓存快照导致首屏误判为“加入频道”。
 const currentChannelDetailStatus = computed(() => {

@@ -395,12 +395,15 @@ function applyGroupEventMemberPatch(groupStore: ReturnType<typeof useGroupStore>
   } else {
     for (const patch of patches) {
       const previous = existingMap.get(patch.userId)
+      const patchRole = Number(patch.role)
+      const previousRole = Number(previous?.role)
       existingMap.set(patch.userId, {
         ...previous,
         ...patch,
         nickname: patch.nickname || previous?.nickname || patch.userId,
         avatar: patch.avatar || previous?.avatar || null,
-        role: patch.role || previous?.role || 2,
+        // 群主角色是 0，不能用 || 兜底，否则会被误写成普通成员并触发全员禁言。
+        role: Number.isFinite(patchRole) ? patchRole : (Number.isFinite(previousRole) ? previousRole : 2),
       })
     }
   }
@@ -418,6 +421,40 @@ function applyGroupEventMemberPatch(groupStore: ReturnType<typeof useGroupStore>
     removeMode: shouldRemoveGroupEventMembers(extra),
   })
   groupStore.setGroupMembers(groupId, mergedMembers)
+}
+
+function patchCurrentShutupOperatorRole(
+  groupStore: ReturnType<typeof useGroupStore>,
+  groupId: string,
+  extra: any,
+  currentUid: string,
+) {
+  if (String(extra?.source || '') !== 'group-update-event') return
+  if (Number(extra?.handleType ?? 0) !== 5) return
+  if (!currentUid || getGroupEventActorId(extra) !== currentUid) return
+
+  const members = groupStore.getMembers(groupId)
+  const previous = members.find((member) => member.userId === currentUid)
+  const previousRole = Number(previous?.role)
+  const ownerId = groupStore.getGroup(groupId)?.ownerId
+  const nextRole = ownerId && String(ownerId) === currentUid
+    ? 0
+    : (Number.isFinite(previousRole) && previousRole < 2 ? previousRole : 1)
+  const nextMember = {
+    groupId,
+    userId: currentUid,
+    nickname: previous?.nickname || currentUid,
+    avatar: previous?.avatar || null,
+    online: previous?.online,
+    createTime: previous?.createTime,
+    // 当前账号能操作全员禁言，说明至少是管理员；先修正本地身份，避免输入框短暂误判为普通成员。
+    role: nextRole,
+  }
+
+  const nextMembers = previous
+    ? members.map((member) => (member.userId === currentUid ? { ...member, ...nextMember } : member))
+    : [...members, nextMember]
+  groupStore.setGroupMembers(groupId, nextMembers, { updateMemberCount: false })
 }
 
 interface ReadProcessingResult {
@@ -1749,6 +1786,11 @@ export async function setupTauriListeners() {
 
         enrichGroupEventNoticeExtra(groupStore, groupId, extra)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
+        patchCurrentShutupOperatorRole(groupStore, groupId, extra, currentUid)
+        if (String(extra?.source || '') === 'group-update-event' && Number(extra?.handleType ?? 0) === 5) {
+          // 全员禁言事件可能只带操作者 ID，不带完整成员身份；后台刷新一次，避免本地旧角色长期影响权限判断。
+          void groupStore.loadMembers(currentUid, groupId, { forceRemote: true }).catch(() => {})
+        }
         await sendGroupEventReceipt(extra, 3)
       }
       for (const m of normalized) {
