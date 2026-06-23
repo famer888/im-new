@@ -1661,11 +1661,15 @@ impl MessageBatcher {
 
             let do_type = item.do_type;
             let content = if do_type == imweb::FriendDoType::ReadCancel as i32 {
-                friend_read_cancel_tip(
-                    detail.msg_cancel_time,
-                    friend_display_name(user),
-                    detail.bf_read_cancel,
-                )
+                let current_uid = self.uid.trim();
+                // 对齐旧 im：当前账号自己修改阅后即焚时，推送文案显示“你”，不要显示好友备注名。
+                let actor_name =
+                    if !current_uid.is_empty() && item.send_uid.to_string() == current_uid {
+                        "你".to_string()
+                    } else {
+                        friend_display_name(user)
+                    };
+                friend_read_cancel_tip(detail.msg_cancel_time, actor_name, detail.bf_read_cancel)
             } else if do_type == imweb::FriendDoType::AgreeJoinFriend as i32 {
                 "我们已成为好友，打声招呼吧".to_string()
             } else {

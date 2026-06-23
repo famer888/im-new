@@ -72,23 +72,6 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
-function formatReadBurnNotice(seconds: number, enabled: boolean) {
-  const name = t('你')
-  if (!enabled) return `${name}${t('关闭了阅后即焚')}`
-  let timeText = ''
-  if (seconds < 60) timeText = `${seconds}${t('秒')}`
-  else if (seconds < 3600) timeText = `${seconds / 60}${t('分钟')}`
-  else if (seconds < 86400) timeText = `${seconds / 3600}${t('小时')}`
-  else timeText = `${seconds / 86400}${t('天')}`
-  return `${name} ${t('设置了消息已读XX后销毁').replace('XX', timeText)}`
-}
-
-function appendReadBurnNotice(seconds: number, enabled: boolean, conversationId?: string) {
-  const currentConversationId = conversationId || conv.value?.id
-  if (!currentConversationId) return
-  messageStore.appendLocalSystemNotice(currentConversationId, formatReadBurnNotice(seconds, enabled))
-}
-
 watch(
   () => contact.value?.id,
   (contactId) => {
@@ -134,11 +117,10 @@ async function toggleReadBurn() {
   if (!contact.value || working.value) return
   working.value = true
   const targetContactId = contact.value.id
-  const targetConversationId = conv.value?.id
   const next = !readBurn.value
   const previous = readBurn.value
   const previousSeconds = msgCancelTime.value
-  const nextSeconds = next ? DEFAULT_READ_BURN_SECONDS : previousSeconds
+  const nextSeconds = previousSeconds
   readBurn.value = next
   msgCancelTime.value = nextSeconds
   if (!next) showTimeMenu.value = false
@@ -159,7 +141,6 @@ async function toggleReadBurn() {
     if (errCode !== 200) {
       throw new Error((res as any)?.commonResult?.errMsg || (res as any)?.errorDesc || t('操作失败'))
     }
-    appendReadBurnNotice(nextSeconds, next, targetConversationId)
   } catch (error) {
     readBurn.value = previous
     msgCancelTime.value = previousSeconds
@@ -186,7 +167,6 @@ async function updateReadBurnTime(seconds: number) {
     })
     msgCancelTime.value = seconds
     contactStore.patchContact(contact.value.id, { msgCancelTime: seconds })
-    appendReadBurnNotice(seconds, true)
   } finally {
     working.value = false
     showTimeMenu.value = false

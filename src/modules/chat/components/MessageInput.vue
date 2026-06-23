@@ -651,23 +651,6 @@ async function ensureBlobBackedFile(file: File, trace?: ImageSendTrace): Promise
   return attachLocalPathToFile(materialized, localPath)
 }
 
-function formatReadBurnNotice(seconds: number, enabled: boolean) {
-  const name = t('你')
-  if (!enabled) return `${name}${t('关闭了阅后即焚')}`
-  let timeText = ''
-  if (seconds < 60) timeText = `${seconds}${t('秒')}`
-  else if (seconds < 3600) timeText = `${seconds / 60}${t('分钟')}`
-  else if (seconds < 86400) timeText = `${seconds / 3600}${t('小时')}`
-  else timeText = `${seconds / 86400}${t('天')}`
-  return `${name} ${t('设置了消息已读XX后销毁').replace('XX', timeText)}`
-}
-
-function appendReadBurnNotice(seconds: number, enabled: boolean) {
-  const convId = chatStore.currentConversationId
-  if (!convId) return
-  messageStore.appendLocalSystemNotice(convId, formatReadBurnNotice(seconds, enabled))
-}
-
 function withReadBurnExtra(extra?: Record<string, unknown>) {
   const nextExtra = extra ? { ...extra } : {}
   if (currentContact.value?.bfReadCancel) {
@@ -3592,7 +3575,6 @@ async function handleScheduleDeletionConfirm(seconds: number) {
       })
       const errCode = Number((res as any)?.commonResult?.errCode || 200)
       if (errCode !== 200) throw new Error('READ_CANCEL failed')
-      appendReadBurnNotice(0, false)
     } catch {
       scheduleDeletionTime.value = previousSeconds
       contactStore.patchContact(contact.id, {
@@ -3617,7 +3599,6 @@ async function handleScheduleDeletionConfirm(seconds: number) {
     })
     const errCode = Number((res as any)?.commonResult?.errCode || 200)
     if (errCode !== 200) throw new Error('READ_CANCEL_TIME failed')
-    appendReadBurnNotice(seconds, true)
   } catch {
     scheduleDeletionTime.value = previousSeconds
     contactStore.patchContact(contact.id, {
