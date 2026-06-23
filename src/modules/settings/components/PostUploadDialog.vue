@@ -34,7 +34,11 @@ watch(
   () => props.visible,
   (visible) => {
     if (!visible) return
+    // 每次从设置入口重新打开上传日志，都回到空状态，避免残留上一次上传地址误导用户。
     errorMsg.value = ''
+    percent.value = 0
+    filepath.value = ''
+    toastVisible.value = false
   },
 )
 

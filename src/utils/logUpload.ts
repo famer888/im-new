@@ -5,7 +5,10 @@ interface PrepareLogUploadResult {
   msg?: string
   filename?: string
   fileSize?: number
-  bodyBase64?: string
+  filePath?: string
+  file_size?: number
+  file_path?: string
+  password?: string
 }
 
 export interface UploadPackagedLogResult {
@@ -82,19 +85,31 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
+function readPreparedFilePath(prepared?: PrepareLogUploadResult) {
+  return String(prepared?.filePath || prepared?.file_path || '').trim()
+}
+
+function readPreparedFileSize(prepared?: PrepareLogUploadResult) {
+  return Number(prepared?.fileSize ?? prepared?.file_size ?? 0)
+}
+
 function createLogUploadProgressEvent(loginId: string) {
   const random = Math.random().toString(36).slice(2)
   return `post-log-upload:progress:${loginId}:${Date.now()}:${random}`
 }
 
-async function listenLogUploadProgress(eventName: string, onProgress?: (percent: number) => void) {
+async function listenLogUploadProgress(
+  eventName: string,
+  onProgress: undefined | ((percent: number) => void),
+  range: { start: number; span: number; max: number },
+) {
   if (!onProgress || !(window as any).__TAURI_INTERNALS__) return null
   const { listen } = await import('@tauri-apps/api/event')
   return listen<{ progress?: number }>(eventName, (event) => {
     const progress = Number(event.payload?.progress || 0)
     if (!Number.isFinite(progress)) return
-    // OSS 上传只占 65% 之后的阶段，完成响应回来前最高停在 95%，避免误显示已完成。
-    onProgress(Math.min(95, Math.max(65, Math.round(65 + progress * 30))))
+    // 分阶段映射后端进度：打包和上传都必须留出响应确认空间，避免提前显示 100%。
+    onProgress(Math.min(range.max, Math.max(range.start, Math.round(range.start + progress * range.span))))
   })
 }
 
@@ -102,7 +117,9 @@ export async function uploadPackagedLog(options: {
   loginId: string
   onProgress?: (percent: number) => void
 }): Promise<UploadPackagedLogResult> {
-  let unlistenProgress: null | (() => void) = null
+  let unlistenPackageProgress: null | (() => void) = null
+  let unlistenUploadProgress: null | (() => void) = null
+  let preparedFilePath = ''
   try {
     const suffix = 'zip'
     options.onProgress?.(5)
@@ -118,26 +135,35 @@ export async function uploadPackagedLog(options: {
     }
 
     options.onProgress?.(20)
+    const packageProgressEvent = createLogUploadProgressEvent(options.loginId)
+    unlistenPackageProgress = await listenLogUploadProgress(packageProgressEvent, options.onProgress, {
+      start: 20,
+      span: 40,
+      max: 60,
+    })
     const prepared = await tauriInvoke<PrepareLogUploadResult>('prepare_log_upload_package', {
       request: {
         loginId: options.loginId,
         passwordDateKey: extractDateKeyFromUploadKey(bootstrapFileId),
+        progressEvent: packageProgressEvent,
       },
     })
-    if (!prepared?.success || !prepared.bodyBase64 || !prepared.fileSize) {
+    preparedFilePath = readPreparedFilePath(prepared)
+    const preparedFileSize = readPreparedFileSize(prepared)
+    if (!prepared?.success || !preparedFilePath || !preparedFileSize) {
       return {
         success: false,
-        msg: prepared?.msg || 'prepare failed',
+        msg: prepared?.success ? 'prepare result missing file path' : prepared?.msg || 'prepare failed',
         filepath: '',
       }
     }
 
-    options.onProgress?.(40)
+    options.onProgress?.(60)
     const [uploadUrlInfo, token] = await Promise.all([
       getUploadUrl({
         attachType: 4,
         attachWorkspaceType: 0,
-        fileSize: prepared.fileSize,
+        fileSize: preparedFileSize,
         suffix,
       }),
       getUploadToken(),
@@ -156,15 +182,19 @@ export async function uploadPackagedLog(options: {
 
     options.onProgress?.(65)
     const progressEvent = createLogUploadProgressEvent(options.loginId)
-    unlistenProgress = await listenLogUploadProgress(progressEvent, options.onProgress)
+    unlistenUploadProgress = await listenLogUploadProgress(progressEvent, options.onProgress, {
+      start: 65,
+      span: 30,
+      max: 95,
+    })
     // 对齐旧 im 的日志上传：不先扫动态 OSS 域名，直接用 token endpoint 上传，避免本地环境卡在域名探活阶段。
     const candidates = buildPostLogUploadCandidates(responseUrl, bucket, endpoint, objectKey)
     let uploadUrl = ''
     let lastError: unknown = null
     for (const candidate of candidates) {
       try {
-        // 对齐旧 im：日志包直接上传到 token endpoint，responseUrl 只作为兼容兜底。
-        await tauriInvoke('upload_oss_object', {
+        // 对齐旧 im：日志包本地 zip 直接上传到 token endpoint，避免大日志经 IPC 转 base64 卡在 20%。
+        await tauriInvoke('upload_oss_plain_local_file', {
           request: {
             url: candidate,
             bucket,
@@ -173,7 +203,7 @@ export async function uploadPackagedLog(options: {
             accessKeySecret,
             securityToken,
             contentType: 'application/zip',
-            bodyBase64: prepared.bodyBase64,
+            filePath: preparedFilePath,
             progressEvent,
           },
         })
@@ -199,6 +229,18 @@ export async function uploadPackagedLog(options: {
       filepath: '',
     }
   } finally {
-    unlistenProgress?.()
+    unlistenPackageProgress?.()
+    unlistenUploadProgress?.()
+    if (preparedFilePath) {
+      try {
+        await tauriInvoke('cleanup_log_upload_package', {
+          request: {
+            filePath: preparedFilePath,
+          },
+        })
+      } catch {
+        // 清理失败不覆盖上传结果，后端会限制只能删除本次日志上传临时目录。
+      }
+    }
   }
 }
