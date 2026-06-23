@@ -1,20 +1,24 @@
-use base64::{engine::general_purpose, Engine as _};
 use md5::{Digest, Md5};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use uuid::Uuid;
+use zip::write::SimpleFileOptions;
+use zip::{AesMode, CompressionMethod, ZipWriter};
 
 const SCAN_LOG_DIR: &str = "logs";
 const SCAN_KEY_DIRS: [&str; 2] = ["storage", "Code Cache"];
+const LOG_UPLOAD_TEMP_PREFIX: &str = "post-log-upload-";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareLogUploadRequest {
     pub login_id: String,
     pub password_date_key: Option<String>,
+    pub progress_event: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -23,15 +27,43 @@ pub struct PrepareLogUploadResult {
     pub success: bool,
     pub msg: String,
     pub filename: String,
-    pub file_size: usize,
-    pub body_base64: String,
+    pub file_size: u64,
+    pub file_path: String,
     pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupLogUploadRequest {
+    pub file_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupLogUploadResult {
+    pub success: bool,
+    pub msg: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogUploadProgress {
+    progress: f64,
+    total_bytes: u64,
+    processed_bytes: u64,
+    status: String,
+}
+
+struct ProgressTarget {
+    app: tauri::AppHandle,
+    event_name: String,
 }
 
 #[derive(Clone)]
 struct ZipEntry {
     name: String,
-    data: Vec<u8>,
+    path: PathBuf,
+    size: u64,
 }
 
 fn is_data_instance_name(name: &str) -> bool {
@@ -221,215 +253,132 @@ fn date_md5_password(date_key: &str) -> String {
     hex.chars().take(10).collect()
 }
 
-fn crc32_update(crc: u32, byte: u8) -> u32 {
-    let mut value = crc ^ u32::from(byte);
-    for _ in 0..8 {
-        if value & 1 == 1 {
-            value = (value >> 1) ^ 0xedb88320;
-        } else {
-            value >>= 1;
-        }
-    }
-    value
-}
-
-fn crc32_bytes(data: &[u8]) -> u32 {
-    let crc = data
-        .iter()
-        .fold(0xffffffff, |crc, byte| crc32_update(crc, *byte));
-    !crc
-}
-
-struct ZipCrypto {
-    key0: u32,
-    key1: u32,
-    key2: u32,
-}
-
-impl ZipCrypto {
-    fn new(password: &[u8]) -> Self {
-        let mut crypto = Self {
-            key0: 0x12345678,
-            key1: 0x23456789,
-            key2: 0x34567890,
-        };
-        for byte in password {
-            crypto.update_keys(*byte);
-        }
-        crypto
-    }
-
-    fn update_keys(&mut self, byte: u8) {
-        self.key0 = crc32_update(self.key0, byte);
-        self.key1 = self
-            .key1
-            .wrapping_add(self.key0 & 0xff)
-            .wrapping_mul(134775813)
-            .wrapping_add(1);
-        self.key2 = crc32_update(self.key2, (self.key1 >> 24) as u8);
-    }
-
-    fn encrypt_byte(&mut self, plain: u8) -> u8 {
-        let temp = self.key2 | 2;
-        let mask = ((temp.wrapping_mul(temp ^ 1)) >> 8) as u8;
-        let encrypted = plain ^ mask;
-        self.update_keys(plain);
-        encrypted
-    }
-
-    fn encrypt(&mut self, data: &[u8]) -> Vec<u8> {
-        data.iter().map(|byte| self.encrypt_byte(*byte)).collect()
-    }
-}
-
-#[derive(Clone)]
-struct WrittenZipEntry {
-    name: String,
-    crc32: u32,
-    compressed_size: u32,
-    uncompressed_size: u32,
-    local_header_offset: u32,
-}
-
-fn push_u16_le(out: &mut Vec<u8>, value: u16) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_u32_le(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn checked_u32(value: usize, label: &str) -> Result<u32, String> {
-    u32::try_from(value).map_err(|_| format!("{} too large for zip32", label))
-}
-
-fn checked_u16(value: usize, label: &str) -> Result<u16, String> {
-    u16::try_from(value).map_err(|_| format!("{} too long for zip", label))
-}
-
-fn encrypted_zip_payload(entry: &ZipEntry, password: &str, crc32: u32) -> Vec<u8> {
-    let mut header = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut header[..11]);
-    // 保持旧 im `zip -P` 的 ZipCrypto 兼容格式：第 12 字节用 CRC 高位校验密码。
-    header[11] = (crc32 >> 24) as u8;
-
-    let mut crypto = ZipCrypto::new(password.as_bytes());
-    let mut payload = crypto.encrypt(&header);
-    payload.extend(crypto.encrypt(&entry.data));
-    payload
-}
-
-fn create_password_zip(entries: &[ZipEntry], password: &str) -> Result<Vec<u8>, String> {
-    if password.trim().is_empty() {
-        return Err("password is empty".to_string());
-    }
-
-    let mut out = Vec::new();
-    let mut written_entries = Vec::new();
-    let mod_time = 0u16;
-    let mod_date = 33u16; // 1980-01-01, the DOS date lower bound used by ZIP.
-    let flags = 0x0801u16; // encrypted + UTF-8 filename
-
-    for entry in entries {
-        let name_bytes = entry.name.as_bytes();
-        let name_len = checked_u16(name_bytes.len(), "zip entry name")?;
-        let crc32 = crc32_bytes(&entry.data);
-        let encrypted_payload = encrypted_zip_payload(entry, password, crc32);
-        let compressed_size = checked_u32(encrypted_payload.len(), "zip entry payload")?;
-        let uncompressed_size = checked_u32(entry.data.len(), "zip entry data")?;
-        let local_header_offset = checked_u32(out.len(), "zip local header offset")?;
-
-        push_u32_le(&mut out, 0x04034b50);
-        push_u16_le(&mut out, 20);
-        push_u16_le(&mut out, flags);
-        push_u16_le(&mut out, 0);
-        push_u16_le(&mut out, mod_time);
-        push_u16_le(&mut out, mod_date);
-        push_u32_le(&mut out, crc32);
-        push_u32_le(&mut out, compressed_size);
-        push_u32_le(&mut out, uncompressed_size);
-        push_u16_le(&mut out, name_len);
-        push_u16_le(&mut out, 0);
-        out.extend_from_slice(name_bytes);
-        out.extend_from_slice(&encrypted_payload);
-
-        written_entries.push(WrittenZipEntry {
-            name: entry.name.clone(),
-            crc32,
-            compressed_size,
-            uncompressed_size,
-            local_header_offset,
-        });
-    }
-
-    let central_directory_offset = checked_u32(out.len(), "zip central directory offset")?;
-    for entry in &written_entries {
-        let name_bytes = entry.name.as_bytes();
-        let name_len = checked_u16(name_bytes.len(), "zip central entry name")?;
-        push_u32_le(&mut out, 0x02014b50);
-        push_u16_le(&mut out, 20);
-        push_u16_le(&mut out, 20);
-        push_u16_le(&mut out, flags);
-        push_u16_le(&mut out, 0);
-        push_u16_le(&mut out, mod_time);
-        push_u16_le(&mut out, mod_date);
-        push_u32_le(&mut out, entry.crc32);
-        push_u32_le(&mut out, entry.compressed_size);
-        push_u32_le(&mut out, entry.uncompressed_size);
-        push_u16_le(&mut out, name_len);
-        push_u16_le(&mut out, 0);
-        push_u16_le(&mut out, 0);
-        push_u16_le(&mut out, 0);
-        push_u16_le(&mut out, 0);
-        push_u32_le(&mut out, 0);
-        push_u32_le(&mut out, entry.local_header_offset);
-        out.extend_from_slice(name_bytes);
-    }
-
-    let central_directory_size = checked_u32(
-        out.len().saturating_sub(central_directory_offset as usize),
-        "zip central directory size",
-    )?;
-    let entry_count = checked_u16(written_entries.len(), "zip entry count")?;
-    push_u32_le(&mut out, 0x06054b50);
-    push_u16_le(&mut out, 0);
-    push_u16_le(&mut out, 0);
-    push_u16_le(&mut out, entry_count);
-    push_u16_le(&mut out, entry_count);
-    push_u32_le(&mut out, central_directory_size);
-    push_u32_le(&mut out, central_directory_offset);
-    push_u16_le(&mut out, 0);
-
-    Ok(out)
-}
-
 fn build_zip_entries(app_data_dir: &Path) -> Result<Vec<ZipEntry>, String> {
     let mut used = HashSet::new();
     let mut entries = Vec::new();
     for (entry_name, source_path) in collect_log_upload_files(app_data_dir) {
-        let data = fs::read(&source_path)
-            .map_err(|e| format!("read log file failed {}: {}", source_path.display(), e))?;
+        let metadata = fs::metadata(&source_path)
+            .map_err(|e| format!("stat log file failed {}: {}", source_path.display(), e))?;
+        if !metadata.is_file() {
+            continue;
+        }
         let name = unique_zip_name(&mut used, entry_name);
-        entries.push(ZipEntry { name, data });
+        entries.push(ZipEntry {
+            name,
+            path: source_path,
+            size: metadata.len(),
+        });
     }
     Ok(entries)
 }
 
-#[tauri::command]
-pub fn prepare_log_upload_package(
+fn emit_progress(
+    target: Option<&ProgressTarget>,
+    progress: f64,
+    processed_bytes: u64,
+    total_bytes: u64,
+    status: &str,
+) {
+    if let Some(target) = target {
+        let _ = target.app.emit(
+            &target.event_name,
+            LogUploadProgress {
+                progress: progress.clamp(0.0, 1.0),
+                processed_bytes,
+                total_bytes,
+                status: status.to_string(),
+            },
+        );
+    }
+}
+
+fn create_password_zip_file(
+    entries: &[ZipEntry],
+    password: &str,
+    zip_path: &Path,
+    progress_target: Option<&ProgressTarget>,
+) -> Result<u64, String> {
+    if password.trim().is_empty() {
+        return Err("password is empty".to_string());
+    }
+
+    let file = fs::File::create(zip_path)
+        .map_err(|e| format!("create log zip failed {}: {}", zip_path.display(), e))?;
+    let mut zip = ZipWriter::new(BufWriter::new(file));
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .compression_level(Some(9))
+        .large_file(true)
+        .with_aes_encryption(AesMode::Aes256, password);
+    let total_bytes = entries.iter().map(|entry| entry.size).sum::<u64>();
+    let mut processed_bytes = 0u64;
+
+    // 对齐旧 im：日志包仍采集全部 logs/key 文件，但在 Rust 侧边读边压缩写入临时 zip，避免把大日志整体堆进内存。
+    for entry in entries {
+        zip.start_file(&entry.name, options.clone())
+            .map_err(|e| format!("start zip entry failed {}: {}", entry.name, e))?;
+
+        let mut source = BufReader::new(
+            fs::File::open(&entry.path)
+                .map_err(|e| format!("open log file failed {}: {}", entry.path.display(), e))?,
+        );
+        let mut buffer = vec![0u8; 256 * 1024];
+        loop {
+            let read = source
+                .read(&mut buffer)
+                .map_err(|e| format!("read log file failed {}: {}", entry.path.display(), e))?;
+            if read == 0 {
+                break;
+            }
+            zip.write_all(&buffer[..read])
+                .map_err(|e| format!("write log zip failed {}: {}", entry.name, e))?;
+            processed_bytes = processed_bytes.saturating_add(read as u64);
+            let progress = if total_bytes > 0 {
+                processed_bytes as f64 / total_bytes as f64
+            } else {
+                1.0
+            };
+            emit_progress(
+                progress_target,
+                progress,
+                processed_bytes,
+                total_bytes,
+                "packaging",
+            );
+        }
+    }
+
+    let mut writer = zip
+        .finish()
+        .map_err(|e| format!("finish log zip failed: {}", e))?;
+    writer
+        .flush()
+        .map_err(|e| format!("flush log zip failed: {}", e))?;
+    emit_progress(progress_target, 1.0, total_bytes, total_bytes, "packaged");
+
+    fs::metadata(zip_path)
+        .map(|metadata| metadata.len())
+        .map_err(|e| format!("stat log zip failed {}: {}", zip_path.display(), e))
+}
+
+fn make_empty_result(msg: &str) -> PrepareLogUploadResult {
+    PrepareLogUploadResult {
+        success: false,
+        msg: msg.to_string(),
+        filename: String::new(),
+        file_size: 0,
+        file_path: String::new(),
+        password: String::new(),
+    }
+}
+
+fn prepare_log_upload_package_inner(
     app: tauri::AppHandle,
     request: PrepareLogUploadRequest,
 ) -> Result<PrepareLogUploadResult, String> {
     let login_id = request.login_id.trim();
     if login_id.is_empty() {
-        return Ok(PrepareLogUploadResult {
-            success: false,
-            msg: "loginId is required".to_string(),
-            filename: String::new(),
-            file_size: 0,
-            body_base64: String::new(),
-            password: String::new(),
-        });
+        return Ok(make_empty_result("loginId is required"));
     }
 
     let app_data_dir = app
@@ -438,29 +387,45 @@ pub fn prepare_log_upload_package(
         .map_err(|e| format!("resolve app data dir failed: {}", e))?;
     let entries = build_zip_entries(&app_data_dir)?;
     if entries.is_empty() {
-        return Ok(PrepareLogUploadResult {
-            success: false,
-            msg: "logs/* and key files are not found".to_string(),
-            filename: String::new(),
-            file_size: 0,
-            body_base64: String::new(),
-            password: String::new(),
-        });
+        return Ok(make_empty_result("logs/* and key files are not found"));
     }
 
     let filename = format!("{}-{}.zip", login_id, format_now());
     let password = date_md5_password(request.password_date_key.as_deref().unwrap_or(""));
-    let zip = create_password_zip(&entries, &password)?;
-    if zip.is_empty() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("{}{}", LOG_UPLOAD_TEMP_PREFIX, Uuid::new_v4()));
+    let zip_path = temp_dir.join(&filename);
+    let progress_target = request
+        .progress_event
+        .filter(|event| !event.trim().is_empty())
+        .map(|event_name| ProgressTarget {
+            app: app.clone(),
+            event_name,
+        });
+
+    let file_size = match (|| {
+        fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("create log upload temp dir failed: {}", e))?;
+        create_password_zip_file(&entries, &password, &zip_path, progress_target.as_ref())
+    })() {
+        Ok(file_size) => file_size,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(error);
+        }
+    };
+    if file_size == 0 {
+        let _ = fs::remove_dir_all(&temp_dir);
         return Err("create log zip failed".to_string());
     }
-    let file_size = zip.len();
+
     tracing::info!(
         target: "post-log-upload",
-        "prepared log package entries={} bytes={} filename={}",
+        "prepared log package entries={} bytes={} filename={} path={}",
         entries.len(),
         file_size,
-        filename
+        filename,
+        zip_path.display()
     );
 
     Ok(PrepareLogUploadResult {
@@ -468,16 +433,73 @@ pub fn prepare_log_upload_package(
         msg: "package prepared".to_string(),
         filename,
         file_size,
-        body_base64: general_purpose::STANDARD.encode(zip),
+        file_path: zip_path.to_string_lossy().to_string(),
         password,
+    })
+}
+
+#[tauri::command]
+pub async fn prepare_log_upload_package(
+    app: tauri::AppHandle,
+    request: PrepareLogUploadRequest,
+) -> Result<PrepareLogUploadResult, String> {
+    tokio::task::spawn_blocking(move || prepare_log_upload_package_inner(app, request))
+        .await
+        .map_err(|e| format!("prepare log package task failed: {}", e))?
+}
+
+fn cleanup_log_upload_package_path(file_path: &Path) -> Result<(), String> {
+    let temp_dir = file_path
+        .parent()
+        .ok_or_else(|| "invalid log package path".to_string())?;
+    let temp_root = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|e| format!("resolve temp dir failed: {}", e))?;
+    let resolved_temp_dir = temp_dir
+        .canonicalize()
+        .map_err(|e| format!("resolve log package dir failed: {}", e))?;
+    let dir_name = resolved_temp_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+
+    // 只允许清理本次日志上传创建的系统临时子目录，避免前端传入任意路径造成误删。
+    if resolved_temp_dir == temp_root
+        || !resolved_temp_dir.starts_with(&temp_root)
+        || !dir_name.starts_with(LOG_UPLOAD_TEMP_PREFIX)
+    {
+        return Err("invalid log package temp path".to_string());
+    }
+
+    fs::remove_dir_all(&resolved_temp_dir).map_err(|e| format!("cleanup log package failed: {}", e))
+}
+
+#[tauri::command]
+pub fn cleanup_log_upload_package(
+    request: CleanupLogUploadRequest,
+) -> Result<CleanupLogUploadResult, String> {
+    if request.file_path.trim().is_empty() {
+        return Ok(CleanupLogUploadResult {
+            success: false,
+            msg: "filePath is required".to_string(),
+        });
+    }
+
+    cleanup_log_upload_package_path(Path::new(&request.file_path)).map(|_| CleanupLogUploadResult {
+        success: true,
+        msg: "cleanup success".to_string(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_log_upload_files, create_password_zip, date_md5_password, ZipEntry};
+    use super::{
+        cleanup_log_upload_package_path, collect_log_upload_files, create_password_zip_file,
+        date_md5_password, ZipEntry, LOG_UPLOAD_TEMP_PREFIX,
+    };
     use std::fs;
     use std::io::{Cursor, Read};
+    use zip::ZipArchive;
 
     fn temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("log-upload-test-{}", uuid::Uuid::new_v4()));
@@ -531,13 +553,22 @@ mod tests {
     }
 
     #[test]
-    fn creates_password_zip_without_system_zip_command() {
+    fn creates_aes_deflated_log_zip_file() {
+        let root = temp_dir();
+        let source_path = root.join("app.log");
+        let zip_path = root.join("log.zip");
+        fs::write(&source_path, b"hello log").unwrap();
         let entries = vec![ZipEntry {
             name: "DATA_0-app.log".to_string(),
-            data: b"hello log".to_vec(),
+            path: source_path,
+            size: 9,
         }];
-        let zip_bytes = create_password_zip(&entries, "8093361e57").unwrap();
-        let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes)).unwrap();
+
+        let file_size = create_password_zip_file(&entries, "8093361e57", &zip_path, None).unwrap();
+        assert!(file_size > 0);
+
+        let zip_bytes = fs::read(&zip_path).unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(zip_bytes)).unwrap();
         let mut file = archive
             .by_name_decrypt("DATA_0-app.log", b"8093361e57")
             .unwrap();
@@ -545,5 +576,26 @@ mod tests {
         file.read_to_string(&mut text).unwrap();
 
         assert_eq!(text, "hello log");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cleanup_only_removes_owned_temp_package_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "{}{}",
+            LOG_UPLOAD_TEMP_PREFIX,
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let zip_path = root.join("log.zip");
+        fs::write(&zip_path, b"zip").unwrap();
+
+        cleanup_log_upload_package_path(&zip_path).unwrap();
+        assert!(!root.exists());
+
+        let unrelated = temp_dir().join("log.zip");
+        fs::write(&unrelated, b"zip").unwrap();
+        assert!(cleanup_log_upload_package_path(&unrelated).is_err());
+        fs::remove_dir_all(unrelated.parent().unwrap()).unwrap();
     }
 }

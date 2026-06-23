@@ -138,6 +138,20 @@ pub struct OssPutLocalFileRequest {
     pub file_key: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OssPutPlainLocalFileRequest {
+    pub url: String,
+    pub bucket: String,
+    pub object_key: String,
+    pub access_key_id: String,
+    pub access_key_secret: String,
+    pub security_token: String,
+    pub content_type: String,
+    pub file_path: String,
+    pub progress_event: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OssPutObjectResult {
@@ -2046,6 +2060,36 @@ pub async fn upload_oss_local_file(
     .await
 }
 
+#[tauri::command]
+pub async fn upload_oss_plain_local_file(
+    app: tauri::AppHandle,
+    request: OssPutPlainLocalFileRequest,
+) -> Result<OssPutObjectResult, String> {
+    let path = PathBuf::from(&request.file_path);
+    if !path.is_file() {
+        return Err(format!("upload file not found: {}", request.file_path));
+    }
+    let progress_target = request
+        .progress_event
+        .as_ref()
+        .filter(|event| !event.trim().is_empty())
+        .map(|event| (app, event.clone()));
+
+    // 日志 zip 已在打包阶段按旧 im 加密压缩，这里只做明文文件流式 PUT，避免再次套聊天文件加密协议。
+    put_oss_plain_local_file_stream(
+        request.url,
+        request.bucket,
+        request.object_key,
+        request.access_key_id,
+        request.access_key_secret,
+        request.security_token,
+        request.content_type,
+        path,
+        progress_target,
+    )
+    .await
+}
+
 fn encrypted_upload_size(plain_size: u64) -> u64 {
     if plain_size == 0 {
         return 0;
@@ -2185,6 +2229,159 @@ async fn put_oss_local_file_stream(
     tracing::info!(
         target: "image-send",
         "rust oss local stream put response status={} ok={} body_head={}",
+        status.as_u16(),
+        status.is_success(),
+        body_preview,
+    );
+
+    if !status.is_success() {
+        return Err(format!(
+            "oss put failed: HTTP {} {}",
+            status.as_u16(),
+            body_preview
+        ));
+    }
+
+    Ok(OssPutObjectResult {
+        status: status.as_u16(),
+        ok: true,
+        body: body_preview,
+    })
+}
+
+fn plain_local_file_stream(
+    file: tokio::fs::File,
+    body_len: u64,
+    progress_target: Option<(tauri::AppHandle, String)>,
+) -> impl futures_util::Stream<Item = Result<Vec<u8>, std::io::Error>> {
+    struct State {
+        file: tokio::fs::File,
+        buffer: Vec<u8>,
+        uploaded_bytes: u64,
+        body_len: u64,
+        progress_target: Option<(tauri::AppHandle, String)>,
+    }
+
+    stream::try_unfold(
+        State {
+            file,
+            buffer: vec![0u8; 512 * 1024],
+            uploaded_bytes: 0,
+            body_len,
+            progress_target,
+        },
+        |mut state| async move {
+            let read = state.file.read(&mut state.buffer).await?;
+            if read == 0 {
+                return Ok(None);
+            }
+
+            state.uploaded_bytes = state.uploaded_bytes.saturating_add(read as u64);
+            if let Some((app, progress_event)) = &state.progress_target {
+                let progress = if state.body_len > 0 {
+                    (state.uploaded_bytes as f64 / state.body_len as f64).min(1.0)
+                } else {
+                    1.0
+                };
+                let _ = app.emit(
+                    progress_event,
+                    OssUploadProgress {
+                        progress,
+                        total_bytes: state.body_len,
+                        uploaded_bytes: state.uploaded_bytes,
+                        status: "uploading".to_string(),
+                    },
+                );
+            }
+
+            Ok(Some((state.buffer[..read].to_vec(), state)))
+        },
+    )
+}
+
+async fn put_oss_plain_local_file_stream(
+    request_url: String,
+    bucket: String,
+    object_key: String,
+    access_key_id: String,
+    access_key_secret: String,
+    security_token: String,
+    content_type: String,
+    path: PathBuf,
+    progress_target: Option<(tauri::AppHandle, String)>,
+) -> Result<OssPutObjectResult, String> {
+    let body_len = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("stat upload file failed: {}", e))?
+        .len();
+    let oss_date = oss_rfc1123_date();
+    let content_type = if content_type.trim().is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        content_type.trim().to_string()
+    };
+    let url =
+        url::Url::parse(&request_url).map_err(|e| format!("invalid oss upload url: {}", e))?;
+    let object_path = url.path().trim_start_matches('/');
+    let object_key = if object_path.is_empty() {
+        object_key.trim_start_matches('/')
+    } else {
+        object_path
+    };
+    let canonical_resource = format!("/{}/{}", bucket.trim(), object_key);
+    let canonical_headers = format!(
+        "x-oss-date:{}\nx-oss-security-token:{}\n",
+        oss_date, security_token
+    );
+    let string_to_sign = format!(
+        "PUT\n\n{}\n{}\n{}{}",
+        content_type, oss_date, canonical_headers, canonical_resource
+    );
+    let signature = hmac_sha1_base64(&access_key_secret, &string_to_sign);
+    let authorization = format!("OSS {}:{}", &access_key_id, signature);
+
+    tracing::info!(
+        target: "post-log-upload",
+        "rust oss plain local put start url_host={} body_bytes={} bucket={} object_key_head={} object_key_len={} content_type={}",
+        url.host_str().unwrap_or_default(),
+        body_len,
+        bucket,
+        object_key.chars().take(24).collect::<String>(),
+        object_key.len(),
+        content_type,
+    );
+
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| format!("open upload file failed: {}", e))?;
+    let request_timeout = upload_request_timeout(body_len);
+    let client = reqwest::Client::builder()
+        .timeout(request_timeout)
+        .build()
+        .map_err(|e| format!("create oss client failed: {}", e))?;
+    let stream = plain_local_file_stream(file, body_len, progress_target);
+    let response = client
+        .put(url)
+        .header("Authorization", authorization)
+        .header("x-oss-date", oss_date)
+        .header("Content-Type", content_type)
+        .header("x-oss-security-token", security_token)
+        .header(reqwest::header::CONTENT_LENGTH, body_len)
+        .body(reqwest::Body::wrap_stream(stream))
+        .send()
+        .await
+        .map_err(|e| format!("oss put request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .unwrap_or_else(|e| format!("read oss response failed: {}", e));
+    let body_preview: String = text.chars().take(4000).collect();
+
+    tracing::info!(
+        target: "post-log-upload",
+        "rust oss plain local put response status={} ok={} body_head={}",
         status.as_u16(),
         status.is_success(),
         body_preview,
