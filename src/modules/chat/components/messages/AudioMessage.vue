@@ -690,9 +690,13 @@ onBeforeUnmount(() => {
 .error-message {
   color: #d32f2f;
   font-size: 12px;
-  text-align: center;
+  text-align: left;
   padding-top: 6px;
   animation: shake 0.3s ease;
+}
+
+:global(.message-item.is-self) .error-message {
+  text-align: right;
 }
 
 @keyframes shake {
