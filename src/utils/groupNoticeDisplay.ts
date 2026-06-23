@@ -313,6 +313,23 @@ function rawHasAllTargets(raw: string, targets: NoticePerson[]): boolean {
   })
 }
 
+function formatLegacyInviteTargetText(targets: NoticePerson[], currentUid: string): string {
+  const names = targets.map((target) => target.name).filter(Boolean)
+  if (!names.length) return ''
+
+  // 对齐旧 im：当前用户被邀请时固定显示“你”，后续被邀请人直接接在逗号后。
+  const currentIndex = currentUid
+    ? targets.findIndex((target) => target.id && target.id === currentUid)
+    : -1
+  if (currentIndex >= 0) {
+    const currentName = names[currentIndex] || '你'
+    const otherNames = names.filter((_, index) => index !== currentIndex)
+    return otherNames.length ? `${currentName},${otherNames.join('，')}` : currentName
+  }
+
+  return names.join('，')
+}
+
 export function formatGroupNoticeDisplayText(
   content: string | null | undefined,
   rawExtra: unknown,
@@ -368,9 +385,9 @@ export function formatGroupNoticeDisplayText(
     return fin(raw)
   }
 
-  const targetText = resolvedTargets.map((target) => target.name).join('，')
+  const targetText = formatLegacyInviteTargetText(resolvedTargets, currentUid)
   const actorText = actorDisplayName
-    ? `${actorDisplayName}邀请`
+    ? `${actorDisplayName} 邀请`
     : '邀请'
   return fin(`${actorText}${targetText}加入群聊`)
 }
