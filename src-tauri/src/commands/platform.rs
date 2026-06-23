@@ -341,6 +341,117 @@ pub fn write_clipboard_image_from_path(path: String) -> Result<(), String> {
     }
 }
 
+fn clipboard_image_temp_extension(
+    content_type: Option<&str>,
+    url: &str,
+    bytes: &[u8],
+) -> &'static str {
+    let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    if content_type.contains("png") || bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return "png";
+    }
+    if content_type.contains("jpeg")
+        || content_type.contains("jpg")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+    {
+        return "jpg";
+    }
+    if content_type.contains("gif") || bytes.starts_with(b"GIF8") {
+        return "gif";
+    }
+    if content_type.contains("webp")
+        || (bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP")
+    {
+        return "webp";
+    }
+    if content_type.contains("bmp") || bytes.starts_with(b"BM") {
+        return "bmp";
+    }
+    if content_type.contains("tiff") || bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        return "tiff";
+    }
+
+    let path = url
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "jpg"
+    } else if path.ends_with(".gif") {
+        "gif"
+    } else if path.ends_with(".webp") {
+        "webp"
+    } else if path.ends_with(".bmp") {
+        "bmp"
+    } else if path.ends_with(".tif") || path.ends_with(".tiff") {
+        "tiff"
+    } else {
+        "png"
+    }
+}
+
+#[tauri::command]
+pub async fn write_clipboard_image_from_url(url: String) -> Result<(), String> {
+    const MAX_CLIPBOARD_IMAGE_BYTES: usize = 30 * 1024 * 1024;
+
+    let url = url.trim();
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid image url: {}", e))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("clipboard image url must be http or https".to_string());
+    }
+
+    // 桌面端远端图片由主进程下载，避开 WebView 对 97/55 图片域名的 CORS 限制。
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("create image request client failed: {}", e))?
+        .get(parsed)
+        .send()
+        .await
+        .map_err(|e| format!("download clipboard image failed: {}", e))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("download clipboard image failed: HTTP {}", status));
+    }
+
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_CLIPBOARD_IMAGE_BYTES as u64)
+    {
+        return Err("clipboard image is too large".to_string());
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("read clipboard image body failed: {}", e))?;
+    if bytes.is_empty() {
+        return Err("clipboard image body is empty".to_string());
+    }
+    if bytes.len() > MAX_CLIPBOARD_IMAGE_BYTES {
+        return Err("clipboard image is too large".to_string());
+    }
+
+    let ext = clipboard_image_temp_extension(content_type.as_deref(), url, bytes.as_ref());
+    let temp_path = std::env::temp_dir().join(format!(
+        "ocs_clipboard_url_{}.{}",
+        uuid::Uuid::new_v4(),
+        ext
+    ));
+    tokio::fs::write(&temp_path, bytes.as_ref())
+        .await
+        .map_err(|e| format!("write clipboard image temp file failed: {}", e))?;
+
+    let result = write_clipboard_image_from_path(temp_path.to_string_lossy().to_string());
+    let _ = tokio::fs::remove_file(&temp_path).await;
+    result
+}
+
 fn run_command_output(program: &str, args: &[&str]) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     let mut command = hidden_windows_command(program);

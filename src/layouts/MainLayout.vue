@@ -2349,7 +2349,29 @@ async function writeLocalImageWithNativeClipboard(path: string) {
   )
 }
 
+async function writeRemoteImageWithNativeClipboard(url: string) {
+  if (!(window as any).__TAURI_INTERNALS__) {
+    throw new Error('native clipboard image url write unsupported')
+  }
+  const { invoke } = await import('@tauri-apps/api/core')
+  // 桌面端远端图片复制交给主进程下载，避开 WebView fetch 被图片域名 CORS 拦截。
+  await withClipboardTimeout(
+    invoke('write_clipboard_image_from_url', { url }),
+    'native clipboard image url write',
+    12000,
+  )
+}
+
 async function copyImageToClipboard(src: string) {
+  if ((window as any).__TAURI_INTERNALS__ && /^https?:\/\//i.test(src)) {
+    try {
+      await writeRemoteImageWithNativeClipboard(src)
+      return
+    } catch (error) {
+      console.warn('[clipboard] native image url write failed, fallback to web:', error)
+    }
+  }
+
   const response = await fetch(src)
   if (!response.ok) {
     throw new Error(`image fetch failed: ${response.status}`)
