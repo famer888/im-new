@@ -1001,7 +1001,8 @@ function resolveMentionLocalFriend(cleanLabel: string): { userId: string; nickna
   const contact = contactStore.contacts.find((item) =>
     String(item.id || '').trim() === text
     || String(item.nickname || '').trim() === text
-    || String(item.remark || '').trim() === text,
+    || String(item.remark || '').trim() === text
+    || String(item.identify || '').trim() === text,
   )
   if (!contact?.id) return null
 
@@ -1011,6 +1012,49 @@ function resolveMentionLocalFriend(cleanLabel: string): { userId: string; nickna
     avatar: contact.avatar || '',
     remark: contact.remark || null,
     depict: (contact as any).depict || null,
+    isFriend: true,
+  }
+}
+
+function resolveFriendConversationMention(
+  cleanLabel: string,
+  possibleUid: string,
+): { userId: string; nickname: string; avatar: string; remark: string | null; depict: string | null; isFriend: boolean } | null {
+  const conv = messageConversation.value
+  if (conv.type !== ConversationType.Friend) return null
+
+  // 对齐旧 im：好友会话点击 @ 只查好友资料，不走群/频道别名，避免同名别名把好友跳成群。
+  if (possibleUid) {
+    const byUid = contactStore.getContact(possibleUid)
+    if (byUid) return contactToMentionProfile(byUid)
+  }
+
+  const currentContact = contactStore.getContact(conv.targetId)
+  if (currentContact && contactMatchesMentionLabel(currentContact, cleanLabel)) {
+    return contactToMentionProfile(currentContact)
+  }
+
+  return resolveMentionLocalFriend(cleanLabel)
+}
+
+function contactMatchesMentionLabel(contact: { id?: unknown; nickname?: unknown; remark?: unknown; identify?: unknown }, cleanLabel: string): boolean {
+  const text = cleanLabel.trim()
+  if (!text) return false
+  return [
+    contact.id,
+    contact.nickname,
+    contact.remark,
+    contact.identify,
+  ].some((value) => String(value || '').trim() === text)
+}
+
+function contactToMentionProfile(contact: { id: string; nickname?: string | null; avatar?: string | null; remark?: string | null; depict?: string | null }) {
+  return {
+    userId: contact.id,
+    nickname: contact.nickname || contact.id,
+    avatar: contact.avatar || '',
+    remark: contact.remark || null,
+    depict: contact.depict || null,
     isFriend: true,
   }
 }
@@ -1030,10 +1074,20 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
       ? members.find((item) => item.userId === segment.memberId)
       : findMentionMember(segment.text, members)
     const possibleUid = String(segment.possibleUid || '').trim()
+    const friendMention = resolveFriendConversationMention(cleanLabel, possibleUid)
 
     if (segment.memberId && member) {
       // 对齐旧 im：群聊 @ 即使带 uid，也要先在当前群成员里命中后再打开资料卡。
       uiStore.openMemberInfo(segment.memberId, groupId, [cleanLabel])
+      return
+    }
+
+    if (!groupId && messageConversation.value.type === ConversationType.Friend) {
+      if (friendMention) {
+        uiStore.openMemberInfo(friendMention.userId, '', [cleanLabel], friendMention)
+      } else {
+        eventBus.emit('show-toast', { message: t('抱歉，该用户/群/频道不存在'), type: 'error' })
+      }
       return
     }
 
