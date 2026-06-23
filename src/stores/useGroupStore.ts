@@ -70,6 +70,12 @@ function pickGroupAvatar(item: Record<string, any>): string | null {
   return null
 }
 
+function hasGroupMuteField(item: Record<string, any>): boolean {
+  return Object.prototype.hasOwnProperty.call(item, 'isMuted')
+    || Object.prototype.hasOwnProperty.call(item, 'is_muted')
+    || Object.prototype.hasOwnProperty.call(item, 'bfShutup')
+}
+
 export interface Group {
   id: string
   name: string | null
@@ -166,6 +172,8 @@ export const useGroupStore = defineStore('group', () => {
         name: next.name || groups.value[idx].name,
         avatar: next.avatar || groups.value[idx].avatar,
         memberCount: next.memberCount > 0 ? next.memberCount : groups.value[idx].memberCount,
+        // 群资料经常是部分更新；没有明确全员禁言字段时保留本地状态，避免缺省 false 冲掉输入权限判断。
+        isMuted: hasGroupMuteField(item) ? next.isMuted : groups.value[idx].isMuted,
       }
     } else {
       groups.value = [next, ...groups.value]

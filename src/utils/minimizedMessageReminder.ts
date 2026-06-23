@@ -243,15 +243,11 @@ function getConversationAvatar(conversationId: string, message?: any): string | 
 
 function isConversationMuted(conversationId: string): boolean {
   const chatStore = useChatStore()
-  const groupStore = useGroupStore()
   const channelStore = useChannelStore()
   const conversation = chatStore.conversations.find((item) => item.id === conversationId)
   if (conversation?.isMuted || conversation?.isArchived) return true
 
   const targetId = conversation?.targetId || conversationId.split('_')[1] || ''
-  if (conversationId.startsWith('1_')) {
-    return Boolean(groupStore.getGroup(targetId)?.isMuted)
-  }
   if (conversationId.startsWith('2_')) {
     const channel = channelStore.channels.find((item) => item.id === targetId || item.channelId === targetId)
     return Boolean(channel?.isDisturb)
@@ -430,7 +426,10 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     const { invoke } = await import('@tauri-apps/api/core')
     const conversationId = String(message?.conversationId ?? message?.conversation_id ?? '')
     const uid = String(useAuthStore().uid || '')
+    // 提醒可能已经排队；真正弹窗前再读一次当前免打扰状态，避免用户刚开启免打扰后仍弹旧队列。
+    if (isConversationMuted(conversationId)) return
     await ensureDirectoryLoadedForReminder(uid, conversationId)
+    if (isConversationMuted(conversationId)) return
     const conversationType = getConversationType(conversationId)
     const extra = parseExtra(message?.extra)
     const rawAvatar = getConversationAvatar(conversationId, message)
@@ -461,6 +460,8 @@ async function showNotificationWindow(message: any, unreadCount: number) {
       unreadCount,
     })
 
+    // 头像预热等异步步骤期间仍可能切换免打扰；Tauri 调用前做最后一次拦截。
+    if (isConversationMuted(conversationId)) return
     await invoke('show_notification_window', {
       data: {
         conversationId,

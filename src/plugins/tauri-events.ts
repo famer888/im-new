@@ -1771,13 +1771,15 @@ export async function setupTauriListeners() {
           cachedMemberMapCount,
           nextMemberCount,
         })
+        const eventGroupMuted = extra?.groupMuted ?? extra?.group_muted
         groupStore.upsertGroup({
           id: groupId,
           groupId,
           name: String(extra?.groupName || existingGroup?.name || groupId),
           avatar: eventGroupAvatar,
           memberCount: nextMemberCount,
-          isMuted: Boolean(extra?.groupMuted || false),
+          // 群事件不一定带全员禁言字段；缺省时不能覆盖本地输入权限状态。
+          ...(eventGroupMuted !== undefined ? { isMuted: Boolean(eventGroupMuted) } : {}),
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         })
         if (!eventGroupAvatar && !existingGroup?.avatar) {
