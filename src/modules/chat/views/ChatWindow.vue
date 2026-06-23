@@ -363,8 +363,12 @@ watch(
 
 watch(
   [() => authStore.uid, currentGroupId],
-  () => {
+  ([uid, groupId]) => {
     loadDismissedGroupNoticeKey()
+    if (uid && groupId && groupId !== GROUP_NOTIFICATION_TARGET_ID) {
+      // 独立聊天窗口首屏也要校准群详情人数，不能等右侧成员面板打开后才更新标题。
+      void groupStore.refreshGroupDetail(groupId)
+    }
   },
   { immediate: true },
 )

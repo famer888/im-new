@@ -938,11 +938,21 @@ function startActiveGroupMemberSyncTimer() {
 }
 
 function handleWindowFocusRefreshGroupMembers() {
+  const groupId = activeGroupMemberSyncGroupId.value
+  if (groupId) {
+    // 窗口恢复时先校准群详情人数；另一个窗口没打开成员面板也能收到正确 memberCount。
+    void groupStore.refreshGroupDetail(groupId)
+  }
   void refreshActiveGroupMembers('window-focus', true)
 }
 
 function handleVisibilityRefreshGroupMembers() {
   if (!document.hidden) {
+    const groupId = activeGroupMemberSyncGroupId.value
+    if (groupId) {
+      // 页面从后台回到前台时补拉轻量群详情，避免只依赖本地成员缓存判断人数。
+      void groupStore.refreshGroupDetail(groupId)
+    }
     void refreshActiveGroupMembers('visibility-visible', true)
   }
 }
@@ -956,7 +966,8 @@ watch(
       lastActiveGroupMemberSyncAt = 0
     }
     startActiveGroupMemberSyncTimer()
-    // 切群时先用本地成员缓存出首屏；窗口重新聚焦和邀请/移除后再强制远端刷新。
+    // 切群时先拉群详情修正标题人数；成员列表仍走缓存优先，避免打开聊天就全量拉大群成员。
+    void groupStore.refreshGroupDetail(groupId)
     void refreshActiveGroupMembers('active-group-change')
   },
   { immediate: true },

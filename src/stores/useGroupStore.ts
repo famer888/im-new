@@ -1,13 +1,16 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getGroupContactList, getGroupMemberList, getGroupMemberListV2, groupMemberOnLineStatusList } from '@/api/imBase'
+import { getGroupContactList, getGroupDetail, getGroupMemberList, getGroupMemberListV2, groupMemberOnLineStatusList } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const MEMBER_PREVIEW_COUNT = 8
+const GROUP_DETAIL_REFRESH_TTL_MS = 30 * 1000
 const memberLoadRequestMap = new Map<string, Promise<GroupMember[]>>()
+const groupDetailRequestMap = new Map<string, Promise<Group | null>>()
+const groupDetailRefreshAtMap = new Map<string, number>()
 const GROUP_PATCH_EVENT = 'group:patch'
 
 interface LoadMembersOptions {
@@ -261,6 +264,55 @@ export const useGroupStore = defineStore('group', () => {
         memberCount: remoteMemberCount,
       })
     }
+  }
+
+  async function refreshGroupDetail(groupId: string, options: { forceRemote?: boolean } = {}): Promise<Group | null> {
+    const normalizedId = String(groupId || '').trim()
+    if (!normalizedId) return null
+
+    const cachedGroup = getGroup(normalizedId) ?? null
+    const lastRefreshAt = groupDetailRefreshAtMap.get(normalizedId) ?? 0
+    if (!options.forceRemote && cachedGroup && Date.now() - lastRefreshAt < GROUP_DETAIL_REFRESH_TTL_MS) {
+      return cachedGroup
+    }
+
+    const existingRequest = groupDetailRequestMap.get(normalizedId)
+    if (existingRequest) return existingRequest
+
+    const request = (async () => {
+      try {
+        const detail = await getGroupDetail({ groupId: normalizedId })
+        const code = Number((detail as any)?.commonResult?.errCode ?? 200)
+        const groupBase = (detail as any)?.group
+        if ((code !== 0 && code !== 200) || !groupBase) return getGroup(normalizedId) ?? null
+
+        const hasReadBurn = Object.prototype.hasOwnProperty.call(groupBase, 'bfGroupReadCancel')
+          || Object.prototype.hasOwnProperty.call(groupBase, 'groupReadCancel')
+        const hasReadBurnTime = Object.prototype.hasOwnProperty.call(groupBase, 'groupMsgCancelTime')
+
+        // 群详情是标题人数的权威来源；进入群聊时先同步它，避免等打开成员面板后才修正人数。
+        upsertRemoteGroup({
+          id: normalizedId,
+          name: groupBase.name ?? groupBase.groupName,
+          avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar,
+          ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
+          memberCount: Number(groupBase.memberCount ?? 0),
+          groupAliasName: groupBase.groupAliasName ?? null,
+          ...(hasReadBurn ? { bfGroupReadCancel: Boolean(groupBase.bfGroupReadCancel ?? groupBase.groupReadCancel) } : {}),
+          ...(hasReadBurnTime ? { groupMsgCancelTime: Number(groupBase.groupMsgCancelTime ?? 0) } : {}),
+        })
+        groupDetailRefreshAtMap.set(normalizedId, Date.now())
+        return getGroup(normalizedId) ?? null
+      } catch (e) {
+        console.error('[GroupStore] refreshGroupDetail failed:', e)
+        return getGroup(normalizedId) ?? null
+      }
+    })().finally(() => {
+      groupDetailRequestMap.delete(normalizedId)
+    })
+
+    groupDetailRequestMap.set(normalizedId, request)
+    return request
   }
 
   async function loadGroups(uid: string, options?: { fallbackToApi?: boolean; forceApi?: boolean }) {
@@ -748,6 +800,7 @@ export const useGroupStore = defineStore('group', () => {
     loadMembers,
     upsertGroup,
     upsertRemoteGroup,
+    refreshGroupDetail,
     setGroupMembers,
     getGroup,
     getMembers,
