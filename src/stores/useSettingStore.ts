@@ -129,10 +129,28 @@ function assertCommonResultOk(resp: unknown, fallback: string) {
 export const useSettingStore = defineStore('setting', () => {
   const settings = ref<AppSettings>({ ...defaultSettings })
   const loaded = ref(false)
+  // 用户主动改设置时递增；loadSettings 结束前若已变化，则放弃覆盖内存，避免后台刷新冲掉刚关闭的提示音等项。
+  let settingsWriteGeneration = 0
 
   async function saveLocalSettings(nextSettings: AppSettings) {
     if (!isTauri()) return
     await tauriInvoke('update_settings', { settings: toRustPayload(nextSettings) })
+  }
+
+  async function readLocalSettings(): Promise<AppSettings> {
+    if (!isTauri()) return { ...defaultSettings }
+    const result = await tauriInvoke<Record<string, unknown>>('get_settings')
+    return fromRustRaw(result)
+  }
+
+  function applyLoadedSettings(nextSettings: AppSettings) {
+    settings.value = nextSettings
+    applyTheme(nextSettings.theme)
+    applyFontSize(nextSettings.fontSize)
+  }
+
+  function hasSettingsWriteSince(generation: number): boolean {
+    return settingsWriteGeneration !== generation
   }
 
   async function syncFriendVerifyRequired(nextSettings: AppSettings): Promise<AppSettings> {
@@ -152,7 +170,9 @@ export const useSettingStore = defineStore('setting', () => {
         return nextSettings
       }
 
-      const syncedSettings = { ...nextSettings, friendVerifyRequired }
+      // 远端同步可能较慢，落盘前重新读取本地最新设置，避免覆盖用户刚改过的提示音等项。
+      const latestSettings = isTauri() ? await readLocalSettings() : settings.value
+      const syncedSettings = { ...latestSettings, friendVerifyRequired }
       await saveLocalSettings(syncedSettings)
       return syncedSettings
     } catch (error) {
@@ -163,24 +183,27 @@ export const useSettingStore = defineStore('setting', () => {
 
   async function loadSettings(options?: { syncRemote?: boolean }) {
     const syncRemote = options?.syncRemote ?? true
+    const loadGeneration = settingsWriteGeneration
     try {
-      let nextSettings = { ...defaultSettings }
-
-      if (isTauri()) {
-        const result = await tauriInvoke<Record<string, unknown>>('get_settings')
-        nextSettings = fromRustRaw(result)
-      }
+      let nextSettings = await readLocalSettings()
 
       if (syncRemote) {
         nextSettings = await syncFriendVerifyRequired(nextSettings)
       }
-      settings.value = nextSettings
-      applyTheme(nextSettings.theme)
-      applyFontSize(nextSettings.fontSize)
+
+      if (hasSettingsWriteSince(loadGeneration)) return
+
+      // syncFriendVerifyRequired 可能耗时较长，应用前再读一次本地配置。
+      if (isTauri()) {
+        nextSettings = await readLocalSettings()
+      }
+
+      if (hasSettingsWriteSince(loadGeneration)) return
+
+      applyLoadedSettings(nextSettings)
     } catch {
-      settings.value = { ...defaultSettings }
-      applyTheme(settings.value.theme)
-      applyFontSize(settings.value.fontSize)
+      if (hasSettingsWriteSince(loadGeneration)) return
+      applyLoadedSettings({ ...defaultSettings })
     } finally {
       loaded.value = true
     }
@@ -202,16 +225,14 @@ export const useSettingStore = defineStore('setting', () => {
       }
     }
 
-    if (!isTauri()) {
-      settings.value = updated
-      if (partial.theme !== undefined) applyTheme(updated.theme)
-      if (partial.fontSize !== undefined) applyFontSize(updated.fontSize)
-      return
-    }
-    await saveLocalSettings(updated)
     settings.value = updated
+    settingsWriteGeneration += 1
     if (partial.theme !== undefined) applyTheme(updated.theme)
     if (partial.fontSize !== undefined) applyFontSize(updated.fontSize)
+
+    if (!isTauri()) return
+
+    await saveLocalSettings(updated)
   }
 
   function applyTheme(theme: string) {
