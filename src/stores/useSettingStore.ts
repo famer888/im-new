@@ -118,6 +118,20 @@ function isFriendVerifyRequiredFromPrivacy(privacy: unknown, fallback: boolean):
   return (value & FRIEND_VERIFY_PRIVACY_MASK) === FRIEND_VERIFY_PRIVACY_MASK
 }
 
+function buildFriendVerifyPrivacyValue(currentPrivacy: number, enabled: boolean): number {
+  const privacy = Number.isFinite(currentPrivacy) ? currentPrivacy : 0
+  return enabled
+    ? (privacy | FRIEND_VERIFY_PRIVACY_MASK)
+    : (privacy & ~FRIEND_VERIFY_PRIVACY_MASK)
+}
+
+async function fetchCurrentPrivacy(uid: number): Promise<number> {
+  const resp = await getUserInfo({ uid })
+  assertCommonResultOk(resp, 'load privacy failed')
+  const privacy = Number((resp as any)?.privacy ?? 0)
+  return Number.isFinite(privacy) ? privacy : 0
+}
+
 function assertCommonResultOk(resp: unknown, fallback: string) {
   const commonResult = (resp as any)?.commonResult
   const errCode = Number(commonResult?.errCode ?? 200)
@@ -170,6 +184,11 @@ export const useSettingStore = defineStore('setting', () => {
         return nextSettings
       }
 
+      // 用户已在本次 load 期间改过开关时，保留本地为准，避免远端延迟快照把“需要验证”写回关闭。
+      if (friendVerifyRequired !== settings.value.friendVerifyRequired) {
+        return settings.value
+      }
+
       // 远端同步可能较慢，落盘前重新读取本地最新设置，避免覆盖用户刚改过的提示音等项。
       const latestSettings = isTauri() ? await readLocalSettings() : settings.value
       const syncedSettings = { ...latestSettings, friendVerifyRequired }
@@ -215,9 +234,10 @@ export const useSettingStore = defineStore('setting', () => {
     if (partial.friendVerifyRequired !== undefined) {
       const uid = getCurrentUid()
       if (uid) {
+        const currentPrivacy = await fetchCurrentPrivacy(uid)
         const resp = await updateUserInfo({
           userParam: {
-            privacy: partial.friendVerifyRequired ? FRIEND_VERIFY_PRIVACY_MASK : 0,
+            privacy: buildFriendVerifyPrivacyValue(currentPrivacy, partial.friendVerifyRequired),
           },
           ops: [proto.UserOperator.PRIVACY],
         })
