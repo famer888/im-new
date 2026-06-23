@@ -303,7 +303,9 @@ function buildQrCodeImage(): string | null {
 
     ctx.fillStyle = '#000000'
     ctx.font = '22px sans-serif'
-    ctx.fillText(props.groupName || '', baseWidth / 2, 318)
+    // Canvas 默认按文字基线绘制；这里按中线绘制，让保存/转发图里的群名在灰色条内居中。
+    ctx.textBaseline = 'middle'
+    ctx.fillText(props.groupName || '', baseWidth / 2, 320)
 
     const dataUrl = canvas.toDataURL('image/png')
     return dataUrl
