@@ -16,8 +16,6 @@ const GROUP_INTRO_NOTICE_META_KEYS = [
   'show_notify',
   'bfAll',
   'bf_all',
-  'isHide',
-  'is_hide',
 ]
 
 function normalizeString(value: unknown): string {
@@ -35,6 +33,8 @@ function isGroupEventSource(source: unknown): boolean {
 
 export function isGroupIntroNoticeMessage(message: Message | null | undefined): boolean {
   if (!message || message.msgType !== 8) return false
+  // 对齐旧 im：群简介只来自群消息通道；单聊里的 8 号通知也可能带 isHide，不能按群简介卡片展示。
+  if (!normalizeString(message.conversationId).startsWith('1_')) return false
   const extra = parseGroupNoticeExtraObject(message.extra)
   if (!extra) return false
   if (isGroupEventSource(extra.source)) return false
