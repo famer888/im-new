@@ -48,6 +48,16 @@ interface ForwardItem {
   color?: string
 }
 
+function canForwardToChannel(channel: ReturnType<typeof channelStore.getChannel>): boolean {
+  if (!channel) return false
+  // 对齐旧 im 的转发列表：频道必须具备发布权限（adminPrivacy & 2）才可作为转发目标；
+  // 频道主/管理员在部分接口缺少 adminPrivacy 时仍保留发送兜底，避免误过滤可发言身份。
+  const memberType = Number(channel.memberType ?? -1)
+  if (memberType === 1 || memberType === 2) return true
+  const adminPrivacy = Number(channel.adminPrivacy ?? 0)
+  return adminPrivacy > 0 && (adminPrivacy & 2) !== 0
+}
+
 const list = computed((): ForwardItem[] => {
   const searchLower = searchText.value.toLowerCase()
   const hasSearch = searchText.value !== ''
@@ -91,6 +101,7 @@ const list = computed((): ForwardItem[] => {
       })
     } else if (conv.type === ConversationType.Channel) {
       const channel = channelStore.getChannel(conv.targetId)
+      if (!canForwardToChannel(channel)) continue
       addItem({
         id: conv.id,
         channelId: channel?.channelId ?? channel?.id ?? conv.targetId,
@@ -135,6 +146,7 @@ const list = computed((): ForwardItem[] => {
   // Channels not in conversations
   for (const channel of channelStore.channels) {
     if (!channel.id) continue
+    if (!canForwardToChannel(channel)) continue
     const conv = chatStore.conversations.find(
       c => c.type === ConversationType.Channel && c.targetId === channel.id
     )
