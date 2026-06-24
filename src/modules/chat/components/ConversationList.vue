@@ -132,11 +132,15 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
     case ConversationType.Friend:
       // 对齐旧 im：官方号不依赖通讯录存在，也要保留在会话列表。
       if (isOfficialAccountTargetId(conv.targetId)) return true
-      // 关系列表远端刷新期间先保留本地会话，避免大账号启动时左侧列表长期空白。
-      return contactIdSet.value.has(conv.targetId) || contactStore.loading
+      // 关系列表远端刷新期间，已有历史/草稿/未读的本地会话也先保留，避免关系短暂缺失导致左侧列表空白。
+      return contactIdSet.value.has(conv.targetId)
+        || contactStore.loading
+        || canRetainMissingRelationConversation(conv)
     case ConversationType.Group:
       if (chatStore.isPendingGroupInviteConversation(conv.targetId)) return false
-      return groupByIdMap.value.has(conv.targetId) || groupStore.loading
+      return groupByIdMap.value.has(conv.targetId)
+        || groupStore.loading
+        || canRetainMissingRelationConversation(conv)
     case ConversationType.Channel:
       // 对齐旧 im：频道会话来自 MessageChannelList，不能因为频道列表/详情短暂没命中就从左侧消失；
       // 真正退出、解散或被移除频道时，ChannelStore 会显式 deleteConversation。
@@ -207,6 +211,19 @@ function isHiddenOnlyGroupEventConversation(conv: Conversation): boolean {
 function hasMeaningfulDigestText(raw: string | null | undefined): boolean {
   // 兼容历史脏数据：零宽字符不应算作“有摘要”。
   return raw ? raw.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0 : false
+}
+
+function hasConversationListActivity(conv: Conversation): boolean {
+  if (String(conv.draft || '').trim()) return true
+  if (String(conv.lastMsgId || '').trim()) return true
+  if (Number(conv.lastMsgTime || 0) > 0) return true
+  if (Number(conv.unreadCount || 0) > 0) return true
+  return hasMeaningfulDigestText(conv.lastMsgDigest || '')
+}
+
+function canRetainMissingRelationConversation(conv: Conversation): boolean {
+  // 普通好友/群会话的 targetId 应为数字；伪会话已在上层单独放行，避免脏 ID 借历史摘要长期留存。
+  return /^\d+$/.test(String(conv.targetId || '').trim()) && hasConversationListActivity(conv)
 }
 
 function hasMeaningfulLoadedHistory(conv: Conversation): boolean {

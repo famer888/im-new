@@ -92,6 +92,7 @@ const ACTIVE_GROUP_MEMBER_SYNC_INTERVAL_MS = 5000
 const ACTIVE_GROUP_MEMBER_SYNC_MIN_GAP_MS = 2500
 const CHAT_LIST_NAME_READY_TIMEOUT_MS = 1800
 const INIT_OPTIONAL_STEP_TIMEOUT_MS = 8000
+const LEGACY_CHANNEL_NOTIFICATION_TARGET_ID = '9902'
 const imageOverwriteVisible = ref(false)
 const imageOverwriteFileName = ref('')
 const imageOverwriteDirectoryName = ref('')
@@ -532,19 +533,51 @@ async function releaseChatListNameGate(refreshPromise: Promise<unknown> | null) 
   }
 }
 
+function isChannelNotificationConversation(conv: Conversation): boolean {
+  if (conv.type !== ConversationType.Friend) return false
+  const targetId = String(conv.targetId || '')
+  const conversationId = String(conv.id || '')
+  // 兼容旧 im 的频道通知伪会话：新 ID 是 channelNotice，历史数据里可能仍是 9902。
+  return targetId === CHANNEL_NOTIFICATION_TARGET_ID
+    || targetId === LEGACY_CHANNEL_NOTIFICATION_TARGET_ID
+    || conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`
+    || conversationId === `0_${LEGACY_CHANNEL_NOTIFICATION_TARGET_ID}`
+}
+
+function hasConversationListActivity(conv: Conversation): boolean {
+  if (String(conv.draft || '').trim()) return true
+  if (String(conv.lastMsgId || '').trim()) return true
+  if (Number(conv.lastMsgTime || 0) > 0) return true
+  if (Number(conv.unreadCount || 0) > 0) return true
+  // 过滤零宽字符，避免只有脏占位摘要的空会话被当成真实历史。
+  return String(conv.lastMsgDigest || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0
+}
+
+function canRetainMissingRelationConversation(conv: Conversation): boolean {
+  // 普通好友/群会话的 targetId 应为数字；伪会话已在上层单独放行，避免脏 ID 借历史摘要长期留存。
+  return /^\d+$/.test(String(conv.targetId || '').trim()) && hasConversationListActivity(conv)
+}
+
 function isConversationInCurrentRelations(conv: Conversation): boolean {
   if (isFileHelperTargetId(conv.targetId)) return true
   if (conv.type === ConversationType.Friend) {
+    if (isChannelNotificationConversation(conv)) return true
     // 对齐旧 im：官方号 9900 不是普通通讯录联系人，也不能被初始化清理掉。
     if (isOfficialAccountTargetId(conv.targetId)) return true
     // 桌面端启动时先显示本地会话；远端通讯录仍在刷新时不能把会话当作未知项提前删掉。
-    return Boolean(contactStore.getContact(conv.targetId)) || contactStore.loading
+    return Boolean(contactStore.getContact(conv.targetId))
+      || contactStore.loading
+      || canRetainMissingRelationConversation(conv)
   }
   if (conv.type === ConversationType.Group) {
-    return Boolean(groupStore.getGroup(conv.targetId)) || groupStore.loading
+    if (conv.targetId === GROUP_NOTIFICATION_TARGET_ID) return true
+    return Boolean(groupStore.getGroup(conv.targetId))
+      || groupStore.loading
+      || canRetainMissingRelationConversation(conv)
   }
   if (conv.type === ConversationType.Channel) {
-    return Boolean(channelStore.getChannel(conv.targetId)) || channelStore.loading
+    // 频道会话来源是本地消息/会话表；退出、解散或被移除会走显式删除，不能因频道列表短暂未命中而清掉左侧列表。
+    return true
   }
   return false
 }
