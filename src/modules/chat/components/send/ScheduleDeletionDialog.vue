@@ -1,36 +1,39 @@
 <template>
-  <div v-if="visible" class="rcheduleDeletionConfigDialog" @click.stop>
-    <div>
-      <picture @click.stop="$emit('close')">
-        <img :src="closeIcon" alt="" />
-      </picture>
-      <h2>{{ $t('设置消息已读后销毁时间') }}</h2>
-      <div class="picker-wrap">
-        <div class="picker-overlay-top" />
-        <div class="picker-overlay-bottom" />
-        <div class="picker-center-line" />
-        <div ref="pickerRef" class="picker-list" @scroll="handleScroll">
-          <div
-            v-for="item in options"
-            :key="item.value"
-            :class="['picker-item', { active: selectedTime === item.value }]"
-            @click="handleItemClick(item.value)"
-          >
-            {{ item.label }}
+  <!-- 提升到 body，避免输入区的层叠上下文限制 fixed 弹窗覆盖右侧资料栏。 -->
+  <Teleport to="body">
+    <div v-if="visible" class="rcheduleDeletionConfigDialog" @click.stop>
+      <div>
+        <picture @click.stop="$emit('close')">
+          <img :src="closeIcon" alt="" />
+        </picture>
+        <h2>{{ $t('设置消息已读后销毁时间') }}</h2>
+        <div class="picker-wrap">
+          <div class="picker-overlay-top" />
+          <div class="picker-overlay-bottom" />
+          <div class="picker-center-line" />
+          <div ref="pickerRef" class="picker-list" @scroll="handleScroll">
+            <div
+              v-for="item in options"
+              :key="item.value"
+              :class="['picker-item', { active: selectedTime === item.value }]"
+              @click="handleItemClick(item.value)"
+            >
+              {{ item.label }}
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <div class="button-cancel left" @click="handleCloseReadBurn">
+            {{ $t('关闭') }}
+          </div>
+          <div class="right">
+            <div class="button-cancel" @click="$emit('close')">{{ $t('取消') }}</div>
+            <div class="button-submit" @click="handleSave">{{ $t('保存') }}</div>
           </div>
         </div>
       </div>
-      <div class="footer">
-        <div class="button-cancel left" @click="handleCloseReadBurn">
-          {{ $t('关闭') }}
-        </div>
-        <div class="right">
-          <div class="button-cancel" @click="$emit('close')">{{ $t('取消') }}</div>
-          <div class="button-submit" @click="handleSave">{{ $t('保存') }}</div>
-        </div>
-      </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
