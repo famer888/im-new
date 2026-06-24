@@ -57,6 +57,7 @@ const actionButtonLabel = computed(() => (
   notificationModuleTarget.value ? t('查看') : t('回复')
 ))
 let notificationWindowRevealStarted = false
+const NOTIFICATION_REPLY_DEBUG_PREFIX = '[notification-reply-debug]'
 
 function shouldLogNotificationAvatar(): boolean {
   if (API_CONFIG.env === 'test' || API_CONFIG.env === 'uat') return true
@@ -70,6 +71,10 @@ function shouldLogNotificationAvatar(): boolean {
 function notificationAvatarDebug(message: string, detail?: Record<string, unknown>, level: 'info' | 'warn' = 'info') {
   if (!shouldLogNotificationAvatar()) return
   console[level](`[notification] ${message}`, detail || {})
+}
+
+function notificationReplyDebug(message: string, detail?: Record<string, unknown>, level: 'log' | 'warn' = 'log') {
+  console[level](NOTIFICATION_REPLY_DEBUG_PREFIX, message, detail || {})
 }
 
 // 通知 payload 来自跨窗口 query/event，文本虽由 Vue 转义，仍先收窄长度和控制字符。
@@ -228,6 +233,11 @@ function handleAvatarLoad() {
 }
 
 async function handleReply() {
+  notificationReplyDebug('reply button clicked, expanding input', {
+    conversationId: data.value?.conversationId || '',
+    conversationType: data.value?.conversationType || '',
+    title: data.value?.title || '',
+  })
   isReplying.value = true
   await resizeWindow(104, true)
   await nextTick()
@@ -245,10 +255,25 @@ async function handleActionButton() {
 
 async function handleSend() {
   const content = replyText.value.trim()
-  if (!data.value || !content || sending.value) return
+  if (!data.value || !content || sending.value) {
+    notificationReplyDebug('send blocked before emit', {
+      hasData: Boolean(data.value),
+      hasContent: Boolean(content),
+      sending: sending.value,
+      conversationId: data.value?.conversationId || '',
+      contentLength: content.length,
+    }, 'warn')
+    return
+  }
 
   sending.value = true
   const requestId = `${getCurrentWindow().label}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  notificationReplyDebug('send clicked in notification window', {
+    requestId,
+    conversationId: data.value.conversationId,
+    content,
+    contentLength: content.length,
+  })
   try {
     // 对齐旧 im：通知窗只把回复派发给主窗口，点击发送后立即关闭，不等待真实发送回执。
     await emitTo('main', 'notification:reply:v3', {
@@ -256,8 +281,19 @@ async function handleSend() {
       conversationId: data.value.conversationId,
       content,
     })
+    notificationReplyDebug('reply event emitted to main window', {
+      requestId,
+      conversationId: data.value.conversationId,
+      contentLength: content.length,
+    })
     await handleClose()
   } catch (error) {
+    notificationReplyDebug('reply event emit failed in notification window', {
+      requestId,
+      conversationId: data.value.conversationId,
+      contentLength: content.length,
+      error: String(error),
+    }, 'warn')
     console.warn('[notification] reply send failed:', error)
     await handleClose()
   } finally {
@@ -265,17 +301,18 @@ async function handleSend() {
   }
 }
 
-function handleReplyKeydown(event: KeyboardEvent) {
-  if (event.isComposing || event.key !== 'Enter') return
-
-  const shouldSend = sendByEnter.value
-    ? !event.shiftKey && !event.ctrlKey && !event.metaKey
-    : event.ctrlKey || event.metaKey
-
-  if (!shouldSend) return
-  event.preventDefault()
-  void handleSend()
-}
+// 暂时禁用右下角通知回复的回车发送，避免输入时误触发重复发送；保留按钮发送。
+// function handleReplyKeydown(event: KeyboardEvent) {
+//   if (event.isComposing || event.key !== 'Enter') return
+//
+//   const shouldSend = sendByEnter.value
+//     ? !event.shiftKey && !event.ctrlKey && !event.metaKey
+//     : event.ctrlKey || event.metaKey
+//
+//   if (!shouldSend) return
+//   event.preventDefault()
+//   void handleSend()
+// }
 </script>
 
 <template>
@@ -319,6 +356,7 @@ function handleReplyKeydown(event: KeyboardEvent) {
       </button>
     </div>
     <form v-if="isReplying && !notificationModuleTarget" class="reply-form" @submit.prevent.stop>
+      <!-- 暂时不绑定 keydown，右下角回复只允许点击按钮发送。 -->
       <input
         ref="replyInput"
         v-model="replyText"
@@ -326,7 +364,6 @@ function handleReplyKeydown(event: KeyboardEvent) {
         type="text"
         :placeholder="replyPlaceholder"
         @click.stop
-        @keydown="handleReplyKeydown"
       />
       <button
         class="reply-submit"

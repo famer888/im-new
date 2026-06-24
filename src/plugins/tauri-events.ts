@@ -839,6 +839,11 @@ type NotificationReplyPayload = {
 }
 const NOTIFICATION_REPLY_DEDUP_MS = 30_000
 const NOTIFICATION_REPLY_FINGERPRINT_DEDUP_MS = 3_000
+const NOTIFICATION_REPLY_DEBUG_PREFIX = '[notification-reply-debug]'
+
+function notificationReplyDebug(message: string, detail?: Record<string, unknown>, level: 'log' | 'warn' = 'log') {
+  console[level](NOTIFICATION_REPLY_DEBUG_PREFIX, message, detail || {})
+}
 
 function cleanupNotificationReplyMap(map: Map<string, number>, now: number, ttl: number) {
   for (const [id, createdAt] of map) {
@@ -858,11 +863,23 @@ function consumeNotificationReplyRequest(requestId: string, conversationId: stri
   cleanupNotificationReplyMap(seenIds, now, NOTIFICATION_REPLY_DEDUP_MS)
   cleanupNotificationReplyMap(seenFingerprints, now, NOTIFICATION_REPLY_FINGERPRINT_DEDUP_MS)
   if (requestId && seenIds.has(requestId)) {
+    notificationReplyDebug('duplicate requestId ignored in main window', {
+      requestId,
+      conversationId,
+      content,
+      contentLength: content.length,
+    }, 'warn')
     return false
   }
 
   const fingerprint = `${conversationId}\u0000${content}`
   if (seenFingerprints.has(fingerprint)) {
+    notificationReplyDebug('duplicate conversation/content ignored in main window', {
+      requestId,
+      conversationId,
+      content,
+      contentLength: content.length,
+    }, 'warn')
     return false
   }
 
@@ -1230,6 +1247,12 @@ export async function setupTauriListeners() {
       const requestId = String(payload.requestId || '')
       const conversationId = String(payload.conversationId || '')
       const content = String(payload.content || '').trim()
+      notificationReplyDebug('reply event received in main window', {
+        requestId,
+        conversationId,
+        content,
+        contentLength: content.length,
+      })
       if (!conversationId || !content) throw new Error('invalid notification reply')
       if (!consumeNotificationReplyRequest(requestId, conversationId, content)) return
 
@@ -1243,8 +1266,27 @@ export async function setupTauriListeners() {
         // 对齐旧 im：通知回复也回到主窗口既有发送链路，先保证会话壳存在再发送。
         useChatStore().ensureConversation(convType, convTargetId)
       }
+      // 诊断右下角通知回复是否进入真实发送链路，便于区分窗口派发和消息发送问题。
+      notificationReplyDebug('calling messageStore.sendMessage from notification reply', {
+        requestId,
+        uid,
+        conversationId,
+        convType,
+        convTargetId,
+        content,
+        contentLength: content.length,
+      })
       await useMessageStore().sendMessage(uid, conversationId, 0, content)
+      notificationReplyDebug('messageStore.sendMessage resolved for notification reply', {
+        requestId,
+        conversationId,
+        contentLength: content.length,
+      })
     } catch (error) {
+      notificationReplyDebug('reply send failed in main window', {
+        error: String(error),
+        payload,
+      }, 'warn')
       console.warn('[notification] reply send failed in main:', error)
     }
   })
