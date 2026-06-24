@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { isOfficialAccountTargetId } from '@/stores/useChatStore'
 import { ensureChannelRelKey, ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { mediaViewerState } from '@/utils/mediaViewerState'
@@ -26,7 +27,9 @@ const dynamicImageHeadKeyFallbackStarted = ref(false)
 const invalidLocalCacheRedownloadStarted = ref(false)
 let downloadToken = 0
 let materializeToken = 0
+let plainRemoteCacheToken = 0
 let stopDownloadEvents: Array<() => void> = []
+let stopPlainRemoteCacheEvents: Array<() => void> = []
 let nativeDragStartPoint: { x: number; y: number } | null = null
 let nativeDragStarted = false
 let suppressNextClick = false
@@ -277,6 +280,13 @@ const isOwnSingleImageUploadPlaceholder = computed(() => {
     && String(props.message.senderId || '') === String(authStore.uid || '')
     && Number(props.message.status) === 0
 })
+// 官方号 9900 会下发无 fileKey 的公开图片，只在这个会话启用明文远端图缓存。
+const officialAccountTargetId = computed(() => {
+  const conversationId = String(props.message.conversationId || '')
+  if (!conversationId.startsWith('0_')) return ''
+  return conversationId.slice(2)
+})
+const isOfficialAccountImage = computed(() => isOfficialAccountTargetId(officialAccountTargetId.value))
 const showImageLoading = computed(() => {
   if (isOwnSingleImageUploadPlaceholder.value && activeSrc.value) {
     // 发送图片时本地预览已可用就按普通图片展示，避免 status=0 回执等待期间继续盖 loading 蒙层。
@@ -473,6 +483,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
     activeSrcHead: shortLogValue(activeSrc.value),
     hasRemoteOriginal: isRemoteImageSrc(imageData.value.url),
   })
+  void cacheOfficialRemoteImageForCopy()
   materializeDataImageForDrag()
   markLoadedIfImageAlreadyComplete()
 }, { immediate: true })
@@ -679,6 +690,11 @@ async function openWithDefaultApp() {
 function cleanupDownloadEvents() {
   stopDownloadEvents.forEach(stop => stop())
   stopDownloadEvents = []
+}
+
+function cleanupPlainRemoteCacheEvents() {
+  stopPlainRemoteCacheEvents.forEach(stop => stop())
+  stopPlainRemoteCacheEvents = []
 }
 
 function retryDynamicImageWithHeadKey(reason: string): boolean {
@@ -1064,6 +1080,85 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
   }
 }
 
+async function cacheOfficialRemoteImageForCopy() {
+  if (
+    !(window as any).__TAURI_INTERNALS__
+    || !isOfficialAccountImage.value
+    || !downloadUrl.value
+    || fileKey.value
+    || attachmentKey.value
+    || localSourcePath.value
+    || localFilePath.value
+  ) {
+    return
+  }
+
+  const token = ++plainRemoteCacheToken
+  cleanupPlainRemoteCacheEvents()
+
+  try {
+    const [{ invoke }, { appDataDir, join }, { listen }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/path'),
+      import('@tauri-apps/api/event'),
+    ])
+    const baseDir = await appDataDir()
+    const id = safeName(props.message.id || props.message.customMsgId || `${Date.now()}`)
+    const savePath = await getImageSavePath(join, baseDir, id, getImageFileName(downloadUrl.value, imageData.value.name))
+    const hasCachedFile = await invoke<boolean>('file_exists', { path: savePath }).catch(() => false)
+    if (token !== plainRemoteCacheToken || localFilePath.value) return
+    if (hasCachedFile) {
+      localFilePath.value = savePath
+      setCachedImage(imageCacheKey.value, {
+        src: activeSrc.value || toDisplayImageSrc(savePath),
+        localFilePath: savePath,
+      })
+      return
+    }
+
+    const doneEvent = `file:done:${id}`
+    const errorEvent = `file:error:${id}`
+    const unlistenDone = await listen<{ filePath?: string; file_path?: string }>(doneEvent, (event) => {
+      if (token !== plainRemoteCacheToken || localFilePath.value) return
+      cleanupPlainRemoteCacheEvents()
+      const finalPath = String(event.payload.filePath || event.payload.file_path || savePath).trim()
+      if (!finalPath) return
+      localFilePath.value = finalPath
+      setCachedImage(imageCacheKey.value, {
+        src: activeSrc.value || toDisplayImageSrc(finalPath),
+        localFilePath: finalPath,
+      })
+    })
+    const unlistenError = await listen(errorEvent, () => {
+      if (token !== plainRemoteCacheToken) return
+      cleanupPlainRemoteCacheEvents()
+    })
+    stopPlainRemoteCacheEvents = [unlistenDone, unlistenError]
+
+    // 官方号图片没有加密 fileKey；显示后后台落盘，复制时就能走本地剪贴板快路径。
+    await invoke('download_file', {
+      url: downloadUrl.value,
+      fileKey: '',
+      savePath,
+      msgId: id,
+      emitDataUrl: false,
+      urlCandidates: getOssDownloadCandidates({
+        url: downloadUrl.value,
+        channelType: extraData.value.channelType ?? extraData.value.channel_type,
+      }),
+      msgType: props.message.msgType,
+      sendTime: props.message.sendTime,
+      logTag: 'image-render',
+    })
+  } catch (error) {
+    cleanupPlainRemoteCacheEvents()
+    channelImageLog('official remote image cache failed', {
+      urlHead: shortLogValue(downloadUrl.value),
+      err: String(error),
+    }, 'warn')
+  }
+}
+
 async function materializeDataImageForDrag() {
   if (isOwnSingleImageUploadPlaceholder.value) return
   const src = String(activeSrc.value || '').trim()
@@ -1369,10 +1464,12 @@ function handleImageDragEnd(event: DragEvent) {
 onBeforeUnmount(() => {
   downloadToken += 1
   materializeToken += 1
+  plainRemoteCacheToken += 1
   nativeDragStartPoint = null
   nativeDragStarted = false
   cleanupNativeImageDragListeners()
   cleanupDownloadEvents()
+  cleanupPlainRemoteCacheEvents()
 })
 </script>
 

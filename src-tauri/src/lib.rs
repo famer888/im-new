@@ -10,7 +10,9 @@ mod proto;
 mod window;
 mod ws;
 
-use tauri::{Emitter, Listener, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
+use tauri::{Emitter, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -252,12 +254,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let RunEvent::Reopen { .. } = event {
-                // macOS 点击 Dock 图标时先关闭右下角提醒，再显式把主窗口恢复到前台。
-                if let Some(win_manager) = app.try_state::<window::WindowManager>() {
-                    win_manager.close_notifications(app);
+            // `RunEvent::Reopen` 是 macOS 专用事件，Windows 目标没有这个变体，必须按平台隔离。
+            #[cfg(target_os = "macos")]
+            {
+                if let RunEvent::Reopen { .. } = event {
+                    // macOS 点击 Dock 图标时先关闭右下角提醒，再显式把主窗口恢复到前台。
+                    if let Some(win_manager) = app.try_state::<window::WindowManager>() {
+                        win_manager.close_notifications(app);
+                    }
+                    window::tray::show_first_available_window(app);
                 }
-                window::tray::show_first_available_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (app, event);
             }
         });
 }

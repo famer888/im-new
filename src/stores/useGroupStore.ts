@@ -129,6 +129,8 @@ export interface GroupMember {
   groupId: string
   userId: string
   nickname: string | null
+  /** 用户真实昵称；nickname 可能被好友备注覆盖，只能用于展示 */
+  profileNickname?: string | null
   /** 头像 URL，与 proto UserBase.icon 一致 */
   avatar?: string | null
   role: number
@@ -597,6 +599,8 @@ export const useGroupStore = defineStore('group', () => {
     const contact = useContactStore().getContact(userId)
     const authStore = useAuthStore()
     const isSelf = userId && String(authStore.uid || '') === userId
+    const remoteNickname = String(user.nickName ?? user.nickname ?? '').trim()
+    const cachedMemberNickname = String(item.nickname ?? item.nickName ?? '').trim()
     const relationRemark = String(
       user.friendRelation?.remarkName
         ?? user.friend_relation?.remark_name
@@ -608,8 +612,9 @@ export const useGroupStore = defineStore('group', () => {
     return {
       groupId: String(item.groupId ?? item.group_id ?? groupId),
       userId,
-      // 对齐旧 im：群成员优先显示好友备注；无备注时用通讯录昵称压过本地成员缓存里的旧展示名。
-      nickname: relationRemark || (contact?.nickname ?? item.nickname ?? user.nickName ?? (isSelf ? authStore.nickname : null) ?? null),
+      // 远端成员资料的 nickName 是当前真实昵称；只有本地缓存缺少远端用户对象时才用通讯录昵称兜底。
+      nickname: relationRemark || remoteNickname || contact?.nickname || cachedMemberNickname || (isSelf ? authStore.nickname : null) || null,
+      profileNickname: remoteNickname || contact?.nickname || cachedMemberNickname || (isSelf ? authStore.nickname : null) || null,
       avatar: item.avatar ?? item.icon ?? user.icon ?? contact?.avatar ?? (isSelf ? authStore.avatar : null) ?? null,
       role: Number(item.role ?? item.type ?? 0),
       online:

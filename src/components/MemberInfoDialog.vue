@@ -101,6 +101,16 @@ watch(addVerifyMessage, (value) => {
   addVerifyMessage.value = truncateVerifyMessage(value)
 })
 
+watch(
+  () => [visible.value, userId.value] as const,
+  ([isVisible, nextUserId]) => {
+    if (!isVisible || !nextUserId) return
+
+    // 点击 @ 打开资料卡时按 uid 校准好友资料，避免群聊停留期间继续展示旧昵称。
+    void contactStore.ensureContactDetailLoaded(nextUserId, { force: true })
+  },
+)
+
 function close() {
   uiStore.closeMemberInfo()
 }

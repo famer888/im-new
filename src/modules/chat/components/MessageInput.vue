@@ -90,6 +90,7 @@ const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const updatingChannelDisturb = ref(false)
 const joiningChannel = ref(false)
+const selectedAtMentions = new Map<string, { uid: string; matchName: string }>()
 
 const isGroup = computed(() => chatStore.currentConversation?.type === ConversationType.Group)
 const isFriend = computed(() => chatStore.currentConversation?.type === ConversationType.Friend)
@@ -216,6 +217,10 @@ const currentForwardDraftItems = computed(() => (
 ))
 const hasForwardDraft = computed(() => currentForwardDraftItems.value.length > 0)
 
+watch(convId, () => {
+  selectedAtMentions.clear()
+})
+
 function handleChannelPermissionRetry() {
   const conv = chatStore.currentConversation
   if (!conv || conv.type !== ConversationType.Channel) return
@@ -275,6 +280,7 @@ interface AtSendCandidate {
   nickName: string
   remarkName: string
   atUid: number
+  sendName?: string
 }
 
 interface AtSendUser {
@@ -1126,8 +1132,15 @@ async function handleSend() {
   }
 
   if (text) {
+    let staleAtMentions: Array<{ uid: string; matchName: string }> = []
+    if (isGroup.value && !isFileHelperChat.value && text.includes('@')) {
+      staleAtMentions = buildAtSendCandidates()
+        .filter((candidate) => candidate.atUid > 0)
+        .map((candidate) => ({ uid: candidate.uid, matchName: candidate.matchName }))
+      await refreshCurrentGroupMembersForAtSend()
+    }
     const atPayload = isGroup.value && !isFileHelperChat.value
-      ? buildTextAtPayload(text)
+      ? buildTextAtPayload(text, staleAtMentions)
       : { content: text, atUids: [], atUsers: [] }
     const textExtra = atPayload.atUids.length > 0
       ? { ...extra, atUids: atPayload.atUids, atUsers: atPayload.atUsers }
@@ -1143,6 +1156,7 @@ async function handleSend() {
   content.value = ''
   if (editorRef.value) editorRef.value.textContent = ''
   if (convId.value) chatStore.setDraft(convId.value, null)
+  selectedAtMentions.clear()
   resetEditorHistory()
   sendDiag('handleSend done', {
     elapsedMs: Math.round(performance.now() - startedAt),
@@ -1406,7 +1420,32 @@ function pushUniqueAtCandidate(list: AtSendCandidate[], seen: Set<string>, candi
   list.push(candidate)
 }
 
-function buildAtSendCandidates(): AtSendCandidate[] {
+function createMemberAtCandidate(userId: string, matchName: string, options?: { sendLatestName?: boolean }): AtSendCandidate | null {
+  const uid = String(userId || '').trim()
+  const cleanMatchName = String(matchName || '').trim().replace(/^@+/, '')
+  if (!uid || !cleanMatchName) return null
+
+  const atUid = Number(uid)
+  if (!Number.isFinite(atUid)) return null
+
+  const member = groupStore.getMembers(groupId.value).find((item) => item.userId === uid)
+  if (!member) return null
+  const contact = contactStore.getContact(uid)
+  const nickName = String(member?.profileNickname || contact?.nickname || member?.nickname || uid).trim()
+  const remarkName = String(contact?.remark || '').trim()
+
+  return {
+    uid,
+    matchName: cleanMatchName,
+    nickName: nickName || uid,
+    remarkName,
+    atUid,
+    // 从 @ 列表选中的旧展示名只作为识别依据，发送正文必须写刷新后的真实昵称。
+    sendName: options?.sendLatestName ? (nickName || uid) : undefined,
+  }
+}
+
+function buildAtSendCandidates(extraSelectedMentions: Array<{ uid: string; matchName: string }> = []): AtSendCandidate[] {
   const candidates: AtSendCandidate[] = []
   const seen = new Set<string>()
 
@@ -1422,10 +1461,20 @@ function buildAtSendCandidates(): AtSendCandidate[] {
     })
   }
 
+  for (const selected of selectedAtMentions.values()) {
+    const candidate = createMemberAtCandidate(selected.uid, selected.matchName, { sendLatestName: true })
+    if (candidate) pushUniqueAtCandidate(candidates, seen, candidate)
+  }
+
+  for (const selected of extraSelectedMentions) {
+    const candidate = createMemberAtCandidate(selected.uid, selected.matchName, { sendLatestName: true })
+    if (candidate) pushUniqueAtCandidate(candidates, seen, candidate)
+  }
+
   for (const member of groupStore.getMembers(groupId.value)) {
     if (member.userId === authStore.uid) continue
     const contact = contactStore.getContact(member.userId)
-    const nickName = String(member.nickname || contact?.nickname || member.userId || '').trim()
+    const nickName = String(member.profileNickname || contact?.nickname || member.nickname || member.userId || '').trim()
     const remarkName = String(contact?.remark || '').trim()
     // 发送时允许用户输入备注名、群昵称或 uid；备注命中后会在正文里转回真实群昵称。
     const names = [remarkName, nickName, member.userId]
@@ -1448,9 +1497,25 @@ function buildAtSendCandidates(): AtSendCandidate[] {
     .sort((a, b) => b.matchName.length - a.matchName.length)
 }
 
-function buildTextAtPayload(text: string): { content: string; atUids: number[]; atUsers: AtSendUser[] } {
+async function refreshCurrentGroupMembersForAtSend() {
+  const targetGroupId = groupId.value
+  const uid = authStore.uid
+  if (!targetGroupId || !uid) return
+
+  try {
+    // 发送群 @ 前强制校准成员资料，避免用户停留在群里时把旧昵称写进正文和 atUsers。
+    await groupStore.loadMembers(uid, targetGroupId, { forceRemote: true })
+  } catch (error) {
+    console.warn('[MessageInput] refresh group members before @ send failed:', error)
+  }
+}
+
+function buildTextAtPayload(
+  text: string,
+  staleAtMentions: Array<{ uid: string; matchName: string }> = [],
+): { content: string; atUids: number[]; atUsers: AtSendUser[] } {
   // 逐字符扫描而不是按空格切词，保证“备注 名 - b”这类带空格备注也能完整匹配。
-  const candidates = buildAtSendCandidates()
+  const candidates = buildAtSendCandidates(staleAtMentions)
   const selected = new Map<string, AtSendCandidate>()
   let content = ''
   let index = 0
@@ -1474,9 +1539,9 @@ function buildTextAtPayload(text: string): { content: string; atUids: number[]; 
     }
 
     // 对齐旧 im：发出的正文使用真实昵称，备注名只放在 atUsers 里供本地展示替换。
-    const sendName = candidate.remarkName && candidate.matchName === candidate.remarkName
+    const sendName = candidate.sendName || (candidate.remarkName && candidate.matchName === candidate.remarkName
       ? candidate.nickName
-      : candidate.matchName
+      : candidate.matchName)
     content += `@${sendName}`
     selected.set(candidate.uid, candidate)
     index += 1 + candidate.matchName.length
@@ -2005,6 +2070,8 @@ function handleAtSelect(member: { uid: string; name: string }) {
     setEditorTextAndCaret(nextText, atRange.start + insertText.length)
   }
 
+  // 记录列表选择的 uid，发送前成员昵称刷新后仍能把旧展示名映射到最新真实昵称。
+  selectedAtMentions.set(`${member.uid}:${name}`, { uid: member.uid, matchName: name })
   showAtList.value = false
   atKeyword.value = ''
 }
