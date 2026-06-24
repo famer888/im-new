@@ -25,6 +25,7 @@ export interface Contact {
   depict?: string | null
   identify?: string | null
   bfReadCancel?: boolean
+  bfDisturb?: boolean
   bfMyBlack?: boolean
   msgCancelTime?: number
   status: number
@@ -191,6 +192,7 @@ export const useContactStore = defineStore('contact', () => {
             remark: u.friendRelation?.remarkName || null,
             depict: u.depict || null,
             identify: u.identify || null,
+            bfDisturb: Boolean((item as any).bfDisturb),
             status: Number(u.uid) > 0 ? 1 : 0,
             updatedAt: Number((item as any).updateTime || 0),
             ...onlinePatch,
@@ -360,6 +362,8 @@ export const useContactStore = defineStore('contact', () => {
         const userInfo = (detail as { userInfo?: Record<string, any> }).userInfo || {}
         const detailPatch: Partial<Contact> = {
           bfReadCancel: Boolean(detail.bfReadCancel),
+          // 免打扰由服务端详情下发，用于 App/PC 之间校准本地会话静音状态。
+          bfDisturb: Boolean(detail.bfDisturb),
           bfMyBlack: Boolean(detail.bfMyBlack),
           msgCancelTime: Number(detail.msgCancelTime || DEFAULT_READ_BURN_SECONDS),
         }

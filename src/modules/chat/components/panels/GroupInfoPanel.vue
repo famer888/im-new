@@ -394,6 +394,7 @@ async function loadPanelData(groupId: string) {
       memberCount: Number(groupBase?.memberCount ?? 0),
       groupAliasName: groupAliasName.value || null,
       notice: notice.value || null,
+      bfDisturb: Boolean((detail as any).bfDisturb),
       // 群详情是局部资料回填；没有明确返回阅后即焚字段时保留现有状态。
       ...(hasReadBurn ? { bfGroupReadCancel: Boolean(groupBase?.bfGroupReadCancel ?? groupBase?.groupReadCancel) } : {}),
       ...(hasReadBurnTime ? { groupMsgCancelTime: Number(groupBase?.groupMsgCancelTime ?? 0) } : {}),

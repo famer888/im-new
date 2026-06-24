@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { API_CONFIG } from '@/api/config'
+import { groupUpdate, updateContacts } from '@/api/imBase'
+import { proto } from '@/api/request'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -70,6 +72,14 @@ export interface Conversation {
   updatedAt: number
 }
 
+export interface RemoteConversationMuteState {
+  type: number
+  targetId: string
+  muted: boolean
+}
+
+type ConversationMuteTarget = Omit<RemoteConversationMuteState, 'muted'>
+
 interface ReadProcessingResult {
   readMessageIds: string[]
   localReadMessageIds?: string[]
@@ -88,6 +98,67 @@ interface ReadProcessingResult {
     conversationId: string
     unreadCount: number
   }>
+}
+
+function isSuccessResponse(resp: any): boolean {
+  const errCode = Number(resp?.commonResult?.errCode ?? resp?.code ?? 200)
+  return errCode === 200 || errCode === 0
+}
+
+function successResponseError(resp: any, fallback: string): Error {
+  const errMsg = String(resp?.commonResult?.errMsg || resp?.msg || resp?.errorDesc || '').trim()
+  return new Error(errMsg || fallback)
+}
+
+function parseConversationMuteTarget(conversationId: string): ConversationMuteTarget | null {
+  const [typeRaw, ...targetParts] = String(conversationId || '').split('_')
+  const type = Number(typeRaw)
+  const targetId = targetParts.join('_').trim()
+  if (!Number.isFinite(type) || !targetId || !/^\d+$/.test(targetId)) return null
+  if (type !== 0 && type !== 1) return null
+  return { type, targetId }
+}
+
+async function syncConversationMuteToRemote(conversationId: string, muted: boolean) {
+  const target = parseConversationMuteTarget(conversationId)
+  if (!target) return null
+
+  if (target.type === 0) {
+    const resp = await updateContacts({
+      op: proto.ContactsOperator.CONTACTS_DISTURB,
+      param: {
+        contactsId: Number(target.targetId),
+        bfDisturb: muted,
+      },
+    })
+    if (!isSuccessResponse(resp)) throw successResponseError(resp, 'update contact disturb failed')
+    return target
+  }
+
+  // 对齐旧 im：群免打扰是当前用户的远端会话配置，不能只写本地 conversations.is_muted。
+  const resp = await groupUpdate({
+    op: 4,
+    groupParam: {
+      groupId: target.targetId,
+      disturb: muted,
+    },
+  })
+  if (!isSuccessResponse(resp)) throw successResponseError(resp, 'update group disturb failed')
+  return target
+}
+
+async function syncLocalRelationMuteState(target: ConversationMuteTarget | null, muted: boolean) {
+  if (!target) return
+
+  if (target.type === 0) {
+    const { useContactStore } = await import('@/stores/useContactStore')
+    useContactStore().patchContact(target.targetId, { bfDisturb: muted })
+    return
+  }
+
+  const { useGroupStore } = await import('@/stores/useGroupStore')
+  // 旧 im 设置成功后会同步本地好友/群缓存；这里同步 store，避免后续 watcher 用旧 bfDisturb 回刷会话。
+  useGroupStore().patchGroupDisturb(target.targetId, muted)
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -479,9 +550,40 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function muteConversation(uid: string, conversationId: string, muted: boolean) {
-    if (!isTauri()) return
-    await tauriInvoke('mute_conversation', { uid, conversationId, muted })
+    const remoteTarget = await syncConversationMuteToRemote(conversationId, muted)
+    await syncLocalRelationMuteState(remoteTarget, muted)
+    if (isTauri()) {
+      await tauriInvoke('mute_conversation', { uid, conversationId, muted })
+    }
     updateConversation({ id: conversationId, isMuted: muted })
+  }
+
+  async function applyRemoteMuteStates(uid: string, states: RemoteConversationMuteState[]) {
+    const normalizedStates = states
+      .map((state) => ({
+        type: Number(state.type),
+        targetId: String(state.targetId || '').trim(),
+        muted: Boolean(state.muted),
+      }))
+      .filter((state) => Number.isFinite(state.type) && state.targetId)
+
+    for (const state of normalizedStates) {
+      const conversationId = `${state.type}_${state.targetId}`
+      const conv = conversations.value.find((item) => item.id === conversationId)
+      if (!conv || conv.isMuted === state.muted) continue
+
+      updateConversation({ id: conversationId, isMuted: state.muted })
+      if (isTauri() && uid) {
+        // 远端列表/详情是跨端同步来源；落库后重启也能保持与 App/PC 另一端一致。
+        tauriInvoke('mute_conversation', {
+          uid,
+          conversationId,
+          muted: state.muted,
+        }).catch((error) => {
+          console.warn('[ChatStore] persist remote mute state failed:', conversationId, error)
+        })
+      }
+    }
   }
 
   async function markAsRead(uid: string, conversationId: string) {
@@ -607,6 +709,7 @@ export const useChatStore = defineStore('chat', () => {
     clearPendingGroupInviteConversation,
     pinConversation,
     muteConversation,
+    applyRemoteMuteStates,
     markAsRead,
     archiveConversation,
     setDraft,

@@ -97,6 +97,11 @@ function hasGroupMuteField(item: Record<string, any>): boolean {
     || Object.prototype.hasOwnProperty.call(item, 'bfShutup')
 }
 
+function hasGroupDisturbField(item: Record<string, any>): boolean {
+  return Object.prototype.hasOwnProperty.call(item, 'bfDisturb')
+    || Object.prototype.hasOwnProperty.call(item, 'bf_disturb')
+}
+
 function hasGroupReadBurnField(item: Record<string, any>): boolean {
   return Object.prototype.hasOwnProperty.call(item, 'bfGroupReadCancel')
     || Object.prototype.hasOwnProperty.call(item, 'bf_group_read_cancel')
@@ -119,6 +124,7 @@ export interface Group {
   memberCount: number
   notice: string | null
   isMuted: boolean
+  bfDisturb?: boolean
   updatedAt: number
   groupAliasName?: string | null
   bfGroupReadCancel?: boolean
@@ -194,7 +200,7 @@ export const useGroupStore = defineStore('group', () => {
   }
 
   function normalizeGroup(item: any): Group {
-    return {
+    const group: Group = {
       id: String(item.id ?? item.groupId ?? item.group_id ?? ''),
       // 兼容旧 im 与不同接口返回：有些群资料用 groupName/icon/headerImage，不兼容会退回显示数字 ID/默认头像。
       name: item.name ?? item.groupName ?? item.group_name ?? null,
@@ -220,6 +226,10 @@ export const useGroupStore = defineStore('group', () => {
         ?? 0,
       ),
     }
+    if (hasGroupDisturbField(item)) {
+      group.bfDisturb = Boolean(item.bfDisturb ?? item.bf_disturb)
+    }
+    return group
   }
 
   function upsertGroup(item: Partial<Group> & Record<string, any>) {
@@ -236,6 +246,8 @@ export const useGroupStore = defineStore('group', () => {
         memberCount: next.memberCount > 0 ? next.memberCount : groups.value[idx].memberCount,
         // 群资料经常是部分更新；没有明确全员禁言字段时保留本地状态，避免缺省 false 冲掉输入权限判断。
         isMuted: hasGroupMuteField(item) ? next.isMuted : groups.value[idx].isMuted,
+        // bfDisturb 是当前用户免打扰；部分群资料不带该字段时不能用默认 false 覆盖跨端同步状态。
+        bfDisturb: hasGroupDisturbField(item) ? next.bfDisturb : groups.value[idx].bfDisturb,
         // 对齐旧 im：群阅后即焚是当前会话状态；部分群事件不带该字段时不能把已开启状态误清掉。
         bfGroupReadCancel: hasGroupReadBurnField(item) ? next.bfGroupReadCancel : groups.value[idx].bfGroupReadCancel,
         groupMsgCancelTime: hasGroupReadBurnTimeField(item) ? next.groupMsgCancelTime : groups.value[idx].groupMsgCancelTime,
@@ -266,6 +278,15 @@ export const useGroupStore = defineStore('group', () => {
         memberCount: remoteMemberCount,
       })
     }
+  }
+
+  function patchGroupDisturb(groupId: string, bfDisturb: boolean) {
+    const normalizedId = String(groupId || '').trim()
+    if (!normalizedId) return
+    const group = getGroup(normalizedId)
+    if (!group) return
+    // 只更新当前用户免打扰字段，避免局部 patch 经过 normalize 后覆盖群名、公告等资料。
+    group.bfDisturb = bfDisturb
   }
 
   async function refreshGroupDetail(groupId: string, options: { forceRemote?: boolean } = {}): Promise<Group | null> {
@@ -300,6 +321,7 @@ export const useGroupStore = defineStore('group', () => {
           ownerId: groupBase.hostId ? String(groupBase.hostId) : undefined,
           memberCount: Number(groupBase.memberCount ?? 0),
           groupAliasName: groupBase.groupAliasName ?? null,
+          bfDisturb: Boolean((detail as any).bfDisturb),
           ...(hasReadBurn ? { bfGroupReadCancel: Boolean(groupBase.bfGroupReadCancel ?? groupBase.groupReadCancel) } : {}),
           ...(hasReadBurnTime ? { groupMsgCancelTime: Number(groupBase.groupMsgCancelTime ?? 0) } : {}),
         })
@@ -805,6 +827,7 @@ export const useGroupStore = defineStore('group', () => {
     loadMembers,
     upsertGroup,
     upsertRemoteGroup,
+    patchGroupDisturb,
     refreshGroupDetail,
     setGroupMembers,
     getGroup,

@@ -454,6 +454,32 @@ function setFirstInitProgress(friend: number, chat: number) {
   })
 }
 
+function syncRemoteConversationMuteStatesFromRelations() {
+  const uid = String(authStore.uid || '').trim()
+  if (!uid) return
+
+  const states = [
+    ...contactStore.contacts
+      .filter((contact) => contact.bfDisturb !== undefined)
+      .map((contact) => ({
+        type: ConversationType.Friend,
+        targetId: contact.id,
+        muted: Boolean(contact.bfDisturb),
+      })),
+    ...groupStore.groups
+      .filter((group) => group.bfDisturb !== undefined)
+      .map((group) => ({
+        type: ConversationType.Group,
+        targetId: group.id,
+        muted: Boolean(group.bfDisturb),
+      })),
+  ]
+
+  if (states.length === 0) return
+  // 远端好友/群免打扰是跨端权威状态；应用到会话后，App 和 PC 的开关才能互相校准。
+  void chatStore.applyRemoteMuteStates(uid, states)
+}
+
 function refreshInitializedAccountData(uid: string) {
   if (!uid) return Promise.resolve([])
   return Promise.allSettled([
@@ -461,8 +487,20 @@ function refreshInitializedAccountData(uid: string) {
     traceInitStep('background refresh groups', () => groupStore.loadGroups(uid, { forceApi: true })),
     traceInitStep('background refresh channels', () => channelStore.loadChannels(uid)),
     traceInitStep('background refresh settings', () => settingStore.loadSettings()),
-  ])
+  ]).then((results) => {
+    syncRemoteConversationMuteStatesFromRelations()
+    return results
+  })
 }
+
+watch(
+  () => [
+    String(authStore.uid || ''),
+    contactStore.contacts.map((contact) => `${contact.id}:${contact.bfDisturb}`).join('|'),
+    groupStore.groups.map((group) => `${group.id}:${group.bfDisturb}`).join('|'),
+  ],
+  () => syncRemoteConversationMuteStatesFromRelations(),
+)
 
 async function releaseChatListNameGate(refreshPromise: Promise<unknown> | null) {
   if (!refreshPromise) {
@@ -702,6 +740,7 @@ onMounted(async () => {
         channelCount: channelStore.channels.length,
         conversationCount: chatStore.conversations.length,
       })
+      syncRemoteConversationMuteStatesFromRelations()
       setInitText(t('数据已载入'))
       appLocale.value = settingStore.settings.language
       void preloadConversationSummariesNeedingNames(authStore.uid)
