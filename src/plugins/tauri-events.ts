@@ -525,6 +525,15 @@ function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): bo
   })
 }
 
+async function isMessageReminderWhenMinimizedEnabled(): Promise<boolean> {
+  const settingStore = useSettingStore()
+  if (!settingStore.loaded) {
+    // 托盘/Dock 闪动也属于最小化提醒范围；先读本地设置，避免启动早期按默认 true 请求系统注意。
+    await settingStore.loadSettings({ syncRemote: false })
+  }
+  return settingStore.settings.messageReminderWhenMinimized
+}
+
 function getMessageIdentity(message: any): { conversationId: string; id: string; customMsgId: string; senderId: string } {
   return {
     conversationId: String(message?.conversationId ?? message?.conversation_id ?? ''),
@@ -922,6 +931,8 @@ async function flashTrayForIncomingMessage(incomingCount = 1) {
   if (!isTauri()) return
 
   try {
+    if (!(await isMessageReminderWhenMinimizedEnabled())) return
+
     const now = Date.now()
     if (now - lastTrayFlashAt < 1200) {
       return

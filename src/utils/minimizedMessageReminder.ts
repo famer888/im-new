@@ -421,11 +421,22 @@ async function shouldShowMinimizedReminder(): Promise<boolean> {
   }
 }
 
+async function isMinimizedReminderEnabled(): Promise<boolean> {
+  const settingStore = useSettingStore()
+  if (!settingStore.loaded) {
+    // 监听器可能早于主页数据初始化收到消息；先读本地设置，避免用默认 true 误弹右下角提醒。
+    await settingStore.loadSettings({ syncRemote: false })
+  }
+  return settingStore.settings.messageReminderWhenMinimized
+}
+
 async function showNotificationWindow(message: any, unreadCount: number) {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const conversationId = String(message?.conversationId ?? message?.conversation_id ?? '')
     const uid = String(useAuthStore().uid || '')
+    // 队列等待期间用户可能关闭“最小化时消息提醒”；真正弹窗前再按当前设置拦截。
+    if (!(await isMinimizedReminderEnabled())) return
     // 提醒可能已经排队；真正弹窗前再读一次当前免打扰状态，避免用户刚开启免打扰后仍弹旧队列。
     if (isConversationMuted(conversationId)) return
     await ensureDirectoryLoadedForReminder(uid, conversationId)
@@ -460,8 +471,8 @@ async function showNotificationWindow(message: any, unreadCount: number) {
       unreadCount,
     })
 
-    // 头像预热等异步步骤期间仍可能切换免打扰；Tauri 调用前做最后一次拦截。
-    if (isConversationMuted(conversationId)) return
+    // 头像预热等异步步骤期间仍可能切换免打扰或关闭总开关；Tauri 调用前做最后一次拦截。
+    if (isConversationMuted(conversationId) || !(await isMinimizedReminderEnabled())) return
     await invoke('show_notification_window', {
       data: {
         conversationId,
@@ -484,6 +495,11 @@ async function processReminderQueue() {
 
   try {
     while (reminderQueue.length > 0) {
+      if (!(await isMinimizedReminderEnabled())) {
+        reminderQueue.length = 0
+        break
+      }
+
       if (!(await shouldShowMinimizedReminder())) {
         reminderQueue.length = 0
         break
@@ -493,6 +509,11 @@ async function processReminderQueue() {
       const waitMs = Math.max(0, REMINDER_COOLDOWN_MS - (now - lastReminderAt))
       if (waitMs > 0) {
         await sleep(waitMs)
+        if (!(await isMinimizedReminderEnabled())) {
+          reminderQueue.length = 0
+          break
+        }
+
         if (!(await shouldShowMinimizedReminder())) {
           reminderQueue.length = 0
           break
@@ -512,9 +533,11 @@ async function processReminderQueue() {
 export async function showMinimizedMessageReminder(rawMessages: Message[] | any[], currentUid?: string) {
   if (!isTauri()) return
 
-  const settingStore = useSettingStore()
   // 与旧 im 对齐：右下角弹窗只受“最小化时消息提醒”控制，不跟“新消息提示音”或通用通知开关绑定。
-  if (!settingStore.settings.messageReminderWhenMinimized) return
+  if (!(await isMinimizedReminderEnabled())) {
+    reminderQueue.length = 0
+    return
+  }
 
   const uid = String(currentUid || useAuthStore().uid || '')
   if (!uid) return
