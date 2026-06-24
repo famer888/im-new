@@ -1,8 +1,16 @@
 import { getChatSensitive } from '@/api/imBase'
+import { ref } from 'vue'
 
 let sensitiveWords: string[] = []
 let fakeSendSensitiveWords: string[] = []
 let refreshPromise: Promise<void> | null = null
+const sensitiveWordsVersion = ref(0)
+const HTTP_SENSITIVE_REPLACEMENT = '********'
+const HTTP_URL_RE = /https?:\/\/[^\s"'<>]+/gi
+
+function markSensitiveWordsChanged() {
+  sensitiveWordsVersion.value += 1
+}
 
 function normalizeWords(words: unknown): string[] {
   if (!Array.isArray(words)) return []
@@ -19,6 +27,7 @@ function normalizeWords(words: unknown): string[] {
 
 export function setSensitiveWords(words: string[]) {
   sensitiveWords = normalizeWords(words)
+  markSensitiveWordsChanged()
 }
 
 export function setFakeSendSensitiveWords(words: string[]) {
@@ -28,16 +37,32 @@ export function setFakeSendSensitiveWords(words: string[]) {
 export function clearSensitiveWords() {
   sensitiveWords = []
   fakeSendSensitiveWords = []
+  markSensitiveWordsChanged()
+}
+
+function getReplacement(word: string): string {
+  // 产品要求：敏感词本身是 http/https 内容时，统一显示 8 个星号，避免暴露链接长度。
+  if (/https?:\/\//i.test(word)) return HTTP_SENSITIVE_REPLACEMENT
+  return '*'.repeat(word.length)
+}
+
+function replaceSensitiveWord(text: string, word: string): string {
+  // 如果敏感词命中链接内部，整段链接固定显示 8 星，避免残留域名、路径或参数。
+  const maskedHttpText = text.replace(HTTP_URL_RE, (url) =>
+    url.includes(word) ? HTTP_SENSITIVE_REPLACEMENT : url,
+  )
+  return maskedHttpText.replaceAll(word, getReplacement(word))
 }
 
 export function filterSensitiveWords(text: string): string {
+  // 让 Vue computed 在敏感词推送更新后重新计算展示文本。
+  void sensitiveWordsVersion.value
   if (text === '我们已成为好友，打声招呼吧') return text
   if (sensitiveWords.length === 0) return text
   let result = text
   for (const word of sensitiveWords) {
     if (!word || ['<', '>', '='].includes(word)) continue
-    const replacement = '*'.repeat(word.length)
-    result = result.replaceAll(word, replacement)
+    result = replaceSensitiveWord(result, word)
   }
   return result
 }

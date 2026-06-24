@@ -9,6 +9,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSearchStore } from '@/stores/useSearchStore'
 import { ConversationType, MessageType, isHiddenMessageType } from '@/types'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
@@ -70,13 +71,14 @@ const currentGroupMember = computed(() => {
     .find((member) => member.userId === props.message.senderId) ?? null
 })
 
-const senderName = computed(() => {
+const rawSenderName = computed(() => {
   if (isSelf.value) return '我'
   const contactName = contactStore.getDisplayName(props.message.senderId)
   if (contactName && contactName !== props.message.senderId) return contactName
   // 群聊非好友不会在好友表里；按旧 im 逻辑回退到群成员昵称，避免直接显示 uid。
   return currentGroupMember.value?.nickname || contactName || props.message.senderId
 })
+const senderName = computed(() => filterSensitiveWords(rawSenderName.value))
 
 const senderAvatar = computed(() => {
   if (isSelf.value) return authStore.avatar || null
@@ -90,7 +92,7 @@ function openSenderMemberInfo() {
   uiStore.openMemberInfo(
     props.message.senderId,
     currentGroupId.value,
-    [senderName.value, currentGroupMember.value?.nickname || ''].filter(Boolean),
+    [rawSenderName.value, currentGroupMember.value?.nickname || ''].filter(Boolean),
     {
       userId: props.message.senderId,
       nickname: senderName.value,

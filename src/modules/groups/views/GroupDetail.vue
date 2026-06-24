@@ -8,6 +8,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { getGroupDetail } from '@/api/imBase'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { eventBus } from '@/utils/eventBus'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 // 群详情接口只做短期内存缓存，既减少重复 groupDetail 请求，也避免长期展示过期群资料。
 const GROUP_DETAIL_CACHE_TTL_MS = 30 * 1000
@@ -35,6 +36,10 @@ function groupDiag(message: string, data: Record<string, unknown> = {}, level: '
 const previewMembers = computed(() => groupStore.getMembers(props.groupId).slice(0, 8))
 const displayedMemberCount = computed(() => group.value?.memberCount || previewMembers.value.length)
 const showMemberLoading = computed(() => loadingMembers.value && previewMembers.value.length === 0)
+
+function sensitiveName(value: string | null | undefined, fallback = '') {
+  return filterSensitiveWords(value || fallback)
+}
 
 // immediate watcher 首次执行会同步调用成员加载，序号必须先初始化，避免首次进群详情时加载流程中断。
 let memberLoadSeq = 0
@@ -264,14 +269,14 @@ function handleMemberClick(member: GroupMember) {
       <div class="user-info">
         <TextAvatar
           class="avatar"
-          :name="group.name || group.id"
+          :name="sensitiveName(group.name, group.id)"
           :src="group.avatar"
           avatar-type="group"
           :size="60"
           rounded
         />
         <div>
-          <div class="name">{{ group.name || group.id }}</div>
+          <div class="name">{{ sensitiveName(group.name, group.id) }}</div>
           <div class="count">
             {{ t('群成员共{value}人', { value: displayedMemberCount }) }}
           </div>
@@ -292,14 +297,14 @@ function handleMemberClick(member: GroupMember) {
               @click="handleMemberClick(m)"
             >
               <TextAvatar
-                :name="m.nickname || m.userId"
+                :name="sensitiveName(m.nickname, m.userId)"
                 :src="m.avatar"
                 avatar-type="friend"
                 :size="35"
                 rounded
               />
-              <div class="nick-name" :title="m.nickname || m.userId">
-                {{ m.nickname || m.userId }}
+              <div class="nick-name" :title="sensitiveName(m.nickname, m.userId)">
+                {{ sensitiveName(m.nickname, m.userId) }}
               </div>
               <div
                 v-if="m.role === 0"

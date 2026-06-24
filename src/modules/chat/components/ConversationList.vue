@@ -36,6 +36,7 @@ import {
   isSelfLeaveGroupSystemMessage,
 } from '@/utils/chatUnreadVisibility'
 import { emojiObj } from '@/utils/emoji'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
@@ -359,13 +360,15 @@ function getName(conv: Conversation): string {
   switch (conv.type) {
     case ConversationType.Friend:
       if (isOfficialAccountTargetId(conv.targetId)) return OFFICIAL_ACCOUNT_NAME
-      return contactStore.getDisplayName(conv.targetId)
+      return filterSensitiveWords(contactStore.getDisplayName(conv.targetId))
     case ConversationType.Group:
-      return groupByIdMap.value.get(conv.targetId)?.name ?? conv.targetId
-    case ConversationType.Channel:
-      return channelByIdMap.value.get(conv.targetId)?.channelName
+      return filterSensitiveWords(groupByIdMap.value.get(conv.targetId)?.name ?? conv.targetId)
+    case ConversationType.Channel: {
+      const name = channelByIdMap.value.get(conv.targetId)?.channelName
         ?? channelByIdMap.value.get(conv.targetId)?.name
         ?? conv.targetId
+      return filterSensitiveWords(name)
+    }
     default:
       return conv.targetId
   }
@@ -382,13 +385,13 @@ function explicitConversationName(conv: Conversation): string {
     case ConversationType.Friend: {
       if (isOfficialAccountTargetId(conv.targetId)) return OFFICIAL_ACCOUNT_NAME
       const contact = contactStore.getContact(conv.targetId)
-      return String(contact?.remark || contact?.nickname || '').trim()
+      return filterSensitiveWords(String(contact?.remark || contact?.nickname || '').trim())
     }
     case ConversationType.Group:
-      return String(groupByIdMap.value.get(conv.targetId)?.name || '').trim()
+      return filterSensitiveWords(String(groupByIdMap.value.get(conv.targetId)?.name || '').trim())
     case ConversationType.Channel: {
       const channel = channelByIdMap.value.get(conv.targetId)
-      return String(channel?.channelName || channel?.name || '').trim()
+      return filterSensitiveWords(String(channel?.channelName || channel?.name || '').trim())
     }
     default:
       return ''
@@ -576,7 +579,7 @@ function formatDigestText(digest: string): string {
     // 非 JSON 文本按原内容显示
   }
 
-  return raw
+  return filterSensitiveWords(raw)
 }
 
 function parseMessageExtra(rawExtra: unknown): Record<string, unknown> | null {
@@ -985,7 +988,7 @@ function getLoadedLatestDigest(conv: Conversation): string {
 }
 
 function getDigest(conv: Conversation): string {
-  if (shouldShowDraft(conv)) return conv.draft || ''
+  if (shouldShowDraft(conv)) return filterSensitiveWords(conv.draft || '')
   const loadedDigest = getLoadedLatestDigest(conv)
   if (loadedDigest) return loadedDigest
   if (conv.lastMsgDigest && conv.lastMsgDigest.trim()) {
@@ -1297,7 +1300,7 @@ function getDigestSegments(conv: Conversation): DigestSegment[] {
     segments.push({ type: 'group-intro-unread', text: `[${t('有新群简介')}]` })
   }
   if (conv.senderName && !shouldShowDraft(conv)) {
-    segments.push({ type: 'sender', text: `${conv.senderName}:` })
+    segments.push({ type: 'sender', text: `${filterSensitiveWords(conv.senderName)}:` })
   }
   return segments.concat(splitDigestSegments(getDigest(conv)))
 }

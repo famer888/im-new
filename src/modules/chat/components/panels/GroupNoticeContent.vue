@@ -19,6 +19,7 @@ import {
   searchAliasContent,
   type ChannelLinkResp,
 } from '@/api/imChannel'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 const props = withDefaults(defineProps<{
   content: string
@@ -154,10 +155,15 @@ function pushTextSegment(segments: NoticeSegment[], text: string) {
   }
 }
 
+function displaySegmentText(text: string): string {
+  return filterSensitiveWords(text)
+}
+
 const segments = computed<NoticeSegment[]>(() => {
   if (isEmpty.value) return []
 
   const result: NoticeSegment[] = []
+  // 群简介和频道简介先按原文解析 @/链接，避免脱敏后的星号破坏点击目标。
   const content = String(props.content || '')
   let index = 0
 
@@ -768,7 +774,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<NoticeSegment
           @keydown.enter.prevent="handleMentionClick(segment)"
           @keydown.space.prevent="handleMentionClick(segment)"
         >
-          {{ segment.text }}
+          {{ displaySegmentText(segment.text) }}
         </span>
         <a
           v-else-if="segment.type === 'link'"
@@ -776,9 +782,9 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<NoticeSegment
           href="#"
           @click="handleLinkClick($event, segment)"
         >
-          {{ segment.text }}
+          {{ displaySegmentText(segment.text) }}
         </a>
-        <span v-else>{{ segment.text }}</span>
+        <span v-else>{{ displaySegmentText(segment.text) }}</span>
       </template>
     </template>
     <span v-else class="notice-empty">{{ t('无简介') }}</span>

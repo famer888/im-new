@@ -19,6 +19,7 @@ import { proto } from '@/api/request'
 import { API_CONFIG } from '@/api/config'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { ConversationType } from '@/types'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
@@ -168,15 +169,15 @@ const title = computed(() => {
   switch (conversation.value.type) {
     case ConversationType.Friend:
       if (isOfficialAccountChat.value) return OFFICIAL_ACCOUNT_NAME
-      return contactStore.getDisplayName(conversation.value.targetId)
+      return filterSensitiveWords(contactStore.getDisplayName(conversation.value.targetId))
     case ConversationType.Group: {
       const group = groupStore.getGroup(conversation.value.targetId)
-      const name = group?.name ?? ''
+      const name = filterSensitiveWords(group?.name ?? '')
       const count = group?.memberCount || groupStore.getMembers(conversation.value.targetId).length
       return count > 0 ? `${name} (${count}人)` : name
     }
     case ConversationType.Channel:
-      return channelInfo.value?.channelName || channelInfo.value?.name || conversation.value.targetId
+      return filterSensitiveWords(channelInfo.value?.channelName || channelInfo.value?.name || conversation.value.targetId)
     default:
       return ''
   }

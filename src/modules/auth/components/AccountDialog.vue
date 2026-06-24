@@ -26,7 +26,7 @@
         @keydown.enter.prevent="handleNicknameSave"
         @keydown.esc.prevent="handleNicknameCancel"
       />
-      <i v-else class="ellipsis nickname-text" :title="authStore.nickname || '-'">{{ authStore.nickname || '-' }}</i>
+      <i v-else class="ellipsis nickname-text" :title="displayNickname">{{ displayNickname }}</i>
       <button
         v-if="!isNicknameEditing"
         class="edit-btn"
@@ -82,6 +82,7 @@ import { updateUserInfo } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { exportAccountHistoryFile } from '@/utils/accountTransfer'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 const { t: $t } = useI18n()
 const authStore = useAuthStore()
@@ -101,7 +102,8 @@ const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const editIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwBAMAAAClLOS0AAAAJFBMVEUAAAAyMjIzMzMyMjIzMzMzMzMyMjIzMzMxMTE0NDQ1NTUzMzM8TXAkAAAAC3RSTlMAf5xb79mZc0M7Ikz8ah8AAAC7SURBVDjL1ZQxCsJAEAAXD4vYWduktwlYprexsbW38wOCD7CwsbH3CxpRYT8nWYOzYQVBEMw0R26Yg5DbyK+ZNOt2+KKon3tqixwUqnpj/BSZemHB2YK+Tt1RFuQmdpejAIFsrgIukNEpBogYIAgQQIAgQAABgiAViFZQVggCdhBNEEWy4K3Ig+CTBmF0RSTuT1uU3LgPIh71Ty8YBWMAqxuD4xnM7oyaZ6lzE5kG9sI4exbCD8Czlq94AETJjYyDbpR3AAAAAElFTkSuQmCC'
 
-const displayName = computed(() => authStore.nickname || authStore.uid || 'User')
+const displayName = computed(() => filterSensitiveWords(authStore.nickname || authStore.uid || 'User'))
+const displayNickname = computed(() => filterSensitiveWords(authStore.nickname || '-'))
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message

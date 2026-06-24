@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import jtIcon from '@/assets/images/headNav/jt-icon.png'
 
 const { t } = useI18n()
@@ -24,6 +25,10 @@ function handleSelect(group: typeof groupStore.groups[0]) {
   chatStore.setCurrentConversation(conv.id)
   uiStore.setDetailView('group-detail')
 }
+
+function getGroupDisplayName(group: typeof groupStore.groups[0]) {
+  return filterSensitiveWords(group.name || group.id).replaceAll('🪵', '?')
+}
 </script>
 
 <template>
@@ -39,8 +44,8 @@ function handleSelect(group: typeof groupStore.groups[0]) {
       :class="['group-item', { active: uiStore.detailView === 'group-detail' && chatStore.currentConversation?.type === 1 && chatStore.currentConversation?.targetId === group.id }]"
       @click="handleSelect(group)"
     >
-      <TextAvatar class="group-avatar" :name="group.name || group.id" :src="group.avatar" avatar-type="group" :size="35" />
-      <h3 class="group-name">{{ (group.name || group.id).replaceAll('🪵', '?') }}</h3>
+      <TextAvatar class="group-avatar" :name="getGroupDisplayName(group)" :src="group.avatar" avatar-type="group" :size="35" />
+      <h3 class="group-name">{{ getGroupDisplayName(group) }}</h3>
     </div>
   </div>
 </template>

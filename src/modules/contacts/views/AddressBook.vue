@@ -8,6 +8,7 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useChatStore } from '@/stores/useChatStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import addNewIcon from '@/assets/images/headNav/add-new-icon.png'
 import jtIcon from '@/assets/images/headNav/jt-icon.png'
 
@@ -273,8 +274,16 @@ function getContactDisplayName(contact: ContactItem) {
   return contact.remark || contact.nickname || contact.id
 }
 
+function getContactDisplayText(contact: ContactItem) {
+  return filterSensitiveWords(getContactDisplayName(contact))
+}
+
 function getChannelDisplayName(channel: ChannelItem) {
   return channel.channelName || channel.name || channel.id || ''
+}
+
+function getChannelDisplayText(channel: ChannelItem) {
+  return filterSensitiveWords(getChannelDisplayName(channel))
 }
 
 function isJoinedChannelForAddressBook(channel: ChannelItem): boolean {
@@ -453,7 +462,7 @@ onBeforeUnmount(() => {
             </div>
             <h3 class="channel-name">
               <span class="channel-name-text">
-                {{ sanitizeName(getChannelDisplayName(row.channel)) }}
+                {{ sanitizeName(getChannelDisplayText(row.channel)) }}
               </span>
             </h3>
           </div>
@@ -470,13 +479,13 @@ onBeforeUnmount(() => {
             <div class="friend-avatar-wrap">
               <TextAvatar
                 class="avatar"
-                :name="row.contact.nickname || row.contact.id"
+                :name="getContactDisplayText(row.contact)"
                 :src="row.contact.avatar"
                 rounded
                 :size="35"
               />
             </div>
-            <h3>{{ getContactDisplayName(row.contact) }}</h3>
+            <h3>{{ getContactDisplayText(row.contact) }}</h3>
             <p v-if="row.contact.bfShowOnline !== false && row.contact.online" class="online-label">
               {{ t('在线') }}
             </p>

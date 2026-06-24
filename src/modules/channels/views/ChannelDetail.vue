@@ -6,6 +6,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
 import { getChannelDetail, getChannelUsers } from '@/api/imChannel'
 import { useI18n } from 'vue-i18n'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 const props = defineProps<{ channelId: string }>()
 const { t } = useI18n()
@@ -26,6 +27,10 @@ const detail = ref<{
   memberCount: 0,
 })
 const memberList = ref<Array<{ id: string; name: string; icon: string; type: number }>>([])
+
+function sensitiveName(value: string | null | undefined, fallback = '') {
+  return filterSensitiveWords(value || fallback)
+}
 
 watch(
   () => props.channelId,
@@ -82,7 +87,7 @@ function startChat() {
         <TextAvatar
           class="avatar"
           :id="channel?.channelId || channel?.id || props.channelId"
-          :name="detail.channelName || channel?.name || channel?.id || props.channelId"
+          :name="sensitiveName(detail.channelName || channel?.name, channel?.id || props.channelId)"
           :src="detail.icon || channel?.avatar || null"
           avatar-type="channel"
           :color="detail.logoColor || channel?.logoColor || undefined"
@@ -90,7 +95,7 @@ function startChat() {
           rounded
         />
         <div>
-          <div class="name">{{ detail.channelName || channel?.name || channel?.id || props.channelId }}</div>
+          <div class="name">{{ sensitiveName(detail.channelName || channel?.name, channel?.id || props.channelId) }}</div>
           <div class="count">
             {{ t('群成员共{value}人', { value: detail.memberCount }) }}
           </div>
@@ -105,14 +110,14 @@ function startChat() {
             class="member-item"
           >
             <TextAvatar
-              :name="item.name || item.id"
+              :name="sensitiveName(item.name, item.id)"
               :src="item.icon || null"
               avatar-type="friend"
               :size="35"
               rounded
             />
-            <div class="nick-name" :title="item.name || item.id">
-              {{ item.name || item.id }}
+            <div class="nick-name" :title="sensitiveName(item.name, item.id)">
+              {{ sensitiveName(item.name, item.id) }}
             </div>
             <div class="member-identity member-master" v-if="item.type === 0">
               {{ t('群主') }}

@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 const props = withDefaults(
   defineProps<{
@@ -109,6 +110,10 @@ function handleSelect(contact: typeof contactStore.contacts[0]) {
 function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
   return contact.remark || contact.nickname || contact.id
 }
+
+function getDisplayText(contact: (typeof contactStore.contacts)[0]) {
+  return filterSensitiveWords(getDisplayName(contact))
+}
 </script>
 
 <template>
@@ -130,13 +135,13 @@ function getDisplayName(contact: (typeof contactStore.contacts)[0]) {
           <div class="friend-avatar-wrap">
             <TextAvatar
               class="avatar"
-              :name="contact.nickname || contact.id"
+              :name="getDisplayText(contact)"
               :src="contact.avatar"
               rounded
               :size="35"
             />
           </div>
-          <h3>{{ getDisplayName(contact) }}</h3>
+          <h3>{{ getDisplayText(contact) }}</h3>
           <!-- 与 im address-book/friends.vue：<p v-if="item.online">{{ $t("在线") }}</p> -->
           <p v-if="contact.bfShowOnline !== false && contact.online" class="online-label">
             {{ t('在线') }}

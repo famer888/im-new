@@ -10,6 +10,7 @@ import Toast from '@/components/Toast.vue'
 import { updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { writeClipboardText } from '@/utils/clipboard'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import editIcon from '@/assets/images/message/edit-icon.png'
 
 const props = defineProps<{ contactId: string }>()
@@ -22,6 +23,9 @@ const groupStore = useGroupStore()
 const contact = computed(() => contactStore.getContact(props.contactId))
 // 对齐旧 im：资料面板里的 ID 只展示好友号 identify，不回退内部 uid。
 const displayId = computed(() => String(contact.value?.identify || '').trim())
+const displayName = computed(() => filterSensitiveWords(contact.value?.remark || contact.value?.nickname || contact.value?.id || ''))
+const displayNickname = computed(() => filterSensitiveWords(contact.value?.nickname || contact.value?.id || ''))
+const displayRemark = computed(() => filterSensitiveWords(contact.value?.remark || contact.value?.nickname || t('未设置')))
 const remarkDraft = ref('')
 const depictDraft = ref('')
 const editingRemark = ref(false)
@@ -170,13 +174,13 @@ async function saveDepict() {
     <div class="communication-page-box">
       <div class="user-info">
         <TextAvatar
-          :name="contact.nickname || contact.id"
+          :name="displayName"
           :src="contact.avatar"
           :size="60"
           class="avatar"
         />
         <div>
-          <span class="name">{{ contact.remark || contact.nickname || contact.id }}</span>
+          <span class="name">{{ displayName }}</span>
           <p class="id-row">
             <span class="id-line">{{ t('ID：') }}{{ displayId }}</span>
             <button type="button" class="copy-btn" @click="handleCopyId">{{ t('复制') }}</button>
@@ -187,7 +191,7 @@ async function saveDepict() {
       <div class="user-des">
         <div class="item">
           <div class="key">{{ t('昵称：') }}</div>
-          <div class="val user-select">{{ contact.nickname || contact.id }}</div>
+          <div class="val user-select">{{ displayNickname }}</div>
         </div>
 
         <div class="item">
@@ -202,7 +206,7 @@ async function saveDepict() {
               @keyup.enter="saveRemark"
             />
             <span v-else class="user-select">
-              {{ contact.remark || contact.nickname || t('未设置') }}
+              {{ displayRemark }}
             </span>
             <img v-if="!editingRemark" class="edit-icon" :src="editIcon" alt="" @click="editingRemark = true" />
           </div>

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 import noticeIcon from '@/assets/images/notice.svg'
 import arrowIcon from '@/assets/images/arrow.svg'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 const props = defineProps<{
   message: Message
@@ -14,7 +15,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const noticeText = computed(() => String(props.message.content || '').trim())
+const noticeText = computed(() => filterSensitiveWords(String(props.message.content || '').trim()))
 </script>
 
 <template>

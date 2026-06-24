@@ -20,6 +20,7 @@ import { exportBase64ImgToLocal, userSelectPngSavePathWithOverwrite } from '@/ut
 import { writeClipboardText } from '@/utils/clipboard'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { shouldShowChannelShareInfo } from './channelShareVisibility'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import searchIcon from '@/assets/images/headNav/search-icon.png'
 import codeIcon from '@/assets/images/chat/code.png'
 import arrowRightIcon from '@/assets/images/chat/arrow-rgiht.png'
@@ -114,7 +115,7 @@ const channel = computed(() => {
 })
 const channelId = computed(() => conv.value?.targetId || '')
 const channelName = computed(() =>
-  String(detail.value.channelName || channel.value?.channelName || channel.value?.name || channelId.value),
+  filterSensitiveWords(String(detail.value.channelName || channel.value?.channelName || channel.value?.name || channelId.value)),
 )
 
 /** 对齐老 im：频道二维码和“复制链接”都直接使用后端返回的频道直链，不再额外拼接 id 参数。 */
@@ -128,8 +129,11 @@ const aliasDisplayText = computed(() => {
   return aliasValue ? `@${aliasValue}` : t('加载中')
 })
 const hasChannelAlias = computed(() => Boolean(alias.value.trim()))
-const description = computed(() =>
+const rawDescription = computed(() =>
   String(detail.value.remark ?? detail.value.channelDesc ?? channel.value?.remark ?? channel.value?.description ?? ''),
+)
+const description = computed(() =>
+  filterSensitiveWords(rawDescription.value),
 )
 const adminPrivacy = computed(() => Number(detail.value.adminPrivacy ?? channel.value?.adminPrivacy ?? 0))
 const channelMemberType = computed(() => {
@@ -686,7 +690,7 @@ function openMemberProfile(member: ChannelMember) {
 
 // 频道简介入口始终可打开，编辑能力在弹窗内按 canEditChannelDescription 单独限制。
 function openDescriptionDialog() {
-  editDescDraft.value = description.value || ''
+  editDescDraft.value = rawDescription.value || ''
   editDescDraftCopy.value = editDescDraft.value
   editDescVisible.value = true
   isEditDesc.value = false

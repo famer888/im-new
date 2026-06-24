@@ -10,6 +10,7 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import type { Message } from '@/stores/useMessageStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import emptyIcon from '@/assets/images/common/empty-icon.png'
 
 const props = defineProps<{
@@ -40,9 +41,21 @@ function parseConversationRef(conversationId: string): { type: number; targetId:
 
 function convLabelForMessage(m: Message): string {
   const { type, targetId } = parseConversationRef(m.conversationId)
-  if (type === 1) return groupStore.getGroup(targetId)?.name ?? targetId
-  if (type === 2) return channelStore.getChannel(targetId)?.name ?? targetId
-  return contactStore.getDisplayName(targetId)
+  if (type === 1) return filterSensitiveWords(groupStore.getGroup(targetId)?.name ?? targetId)
+  if (type === 2) return filterSensitiveWords(channelStore.getChannel(targetId)?.name ?? targetId)
+  return filterSensitiveWords(contactStore.getDisplayName(targetId))
+}
+
+function contactResultName(contact: typeof searchStore.results.contacts[number]) {
+  return filterSensitiveWords(contact.remark || contact.nickname || contact.id)
+}
+
+function groupResultName(group: typeof searchStore.results.groups[number]) {
+  return filterSensitiveWords(group.name || group.id)
+}
+
+function channelResultName(channel: typeof searchStore.results.channels[number]) {
+  return filterSensitiveWords(channel.channelName || channel.name || channel.id)
 }
 
 function avatarPropsForMessage(m: Message): {
@@ -161,8 +174,8 @@ function selectMessage(m: Message) {
           class="result-item"
           @click="selectContact(c.id)"
         >
-          <TextAvatar :name="c.nickname || c.id" :src="c.avatar" :size="32" />
-          <span class="result-name">{{ c.remark || c.nickname || c.id }}</span>
+          <TextAvatar :name="contactResultName(c)" :src="c.avatar" :size="32" />
+          <span class="result-name">{{ contactResultName(c) }}</span>
         </div>
       </div>
       <div v-if="searchStore.results.groups.length > 0" class="result-section">
@@ -173,8 +186,8 @@ function selectMessage(m: Message) {
           class="result-item"
           @click="selectGroup(g.id)"
         >
-          <TextAvatar :name="g.name || g.id" :src="g.avatar" avatar-type="group" :size="32" />
-          <span class="result-name">{{ g.name || g.id }}</span>
+          <TextAvatar :name="groupResultName(g)" :src="g.avatar" avatar-type="group" :size="32" />
+          <span class="result-name">{{ groupResultName(g) }}</span>
         </div>
       </div>
       <div v-if="searchStore.results.channels.length > 0" class="result-section">
@@ -187,13 +200,13 @@ function selectMessage(m: Message) {
         >
           <TextAvatar
             :id="ch.channelId || ch.id"
-            :name="ch.channelName || ch.name || ch.id"
+            :name="channelResultName(ch)"
             :src="ch.avatar"
             avatar-type="channel"
             :color="ch.logoColor || undefined"
             :size="32"
           />
-          <span class="result-name">{{ ch.channelName || ch.name || ch.id }}</span>
+          <span class="result-name">{{ channelResultName(ch) }}</span>
         </div>
       </div>
       <div v-if="searchStore.results.messages.length > 0" class="result-section">

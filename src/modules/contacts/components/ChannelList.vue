@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import TextAvatar from '@/components/TextAvatar.vue'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import jtIcon from '@/assets/images/headNav/jt-icon.png'
 
 const { t } = useI18n()
@@ -27,6 +28,10 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
 }
+
+function getChannelDisplayName(channel: typeof channelStore.channels[0]) {
+  return filterSensitiveWords(channel.channelName || channel.name || channel.id || '').replaceAll('🪵', '?')
+}
 </script>
 
 <template>
@@ -46,7 +51,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
         <TextAvatar
           v-if="!ch.avatar"
           :id="ch.channelId || ch.id"
-          :name="ch.channelName || ch.name || ch.id"
+          :name="getChannelDisplayName(ch)"
           avatar-type="text"
           :color="ch.logoColor || undefined"
           :size="35"
@@ -55,7 +60,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
         <TextAvatar
           v-else
           :id="ch.channelId || ch.id"
-          :name="ch.channelName || ch.name || ch.id"
+          :name="getChannelDisplayName(ch)"
           :src="ch.avatar"
           avatar-type="channel"
           :color="ch.logoColor || undefined"
@@ -65,7 +70,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
       </div>
       <h3 class="channel-name">
         <span class="channel-name-text">
-          {{ (ch.channelName || ch.name || ch.id || '').replaceAll('🪵', '?') }}
+          {{ getChannelDisplayName(ch) }}
         </span>
       </h3>
     </div>

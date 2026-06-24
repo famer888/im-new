@@ -25,6 +25,7 @@ import {
   type ChannelLinkResp,
   type HistoryDomainItem,
 } from '@/api/imChannel'
+import { filterSensitiveWords } from '@/utils/sensitiveWords'
 
 const props = defineProps<{
   message: Message
@@ -248,6 +249,10 @@ function pushLinkSegment(segments: ContentSegment[], link: { text: string; href:
   } else {
     pushTextSegment(segments, prefix)
   }
+}
+
+function displaySegmentText(text: string): string {
+  return filterSensitiveWords(text)
 }
 
 function parseMessageExtraObject(rawExtra: unknown): Record<string, unknown> | null {
@@ -1293,7 +1298,7 @@ async function handleLinkClick(event: MouseEvent, segment: LinkLikeSegment) {
           :class="['at-mention', { resolving: isAtResolving(segment) }]"
           @click.stop="handleAtClick(segment)"
         >
-          {{ segment.text }}
+          {{ displaySegmentText(segment.text) }}
         </span>
         <img
           v-else-if="segment.type === 'emoji'"
@@ -1302,19 +1307,19 @@ async function handleLinkClick(event: MouseEvent, segment: LinkLikeSegment) {
           :alt="segment.name"
         />
         <span v-else-if="segment.type === 'stream-link'" class="stream-link-group">
-          <span>{{ segment.prefix }}</span><span
+          <span>{{ displaySegmentText(segment.prefix) }}</span><span
             :class="['text-link', 'stream-link', { resolving: isLinkResolving(segment) }]"
             @click.stop="handleLinkClick($event, segment)"
-          >{{ segment.text }}</span>
+          >{{ displaySegmentText(segment.text) }}</span>
         </span>
         <span
           v-else-if="segment.type === 'link'"
           :class="['text-link', { resolving: isLinkResolving(segment), 'stream-link': isStreamLinkSegment(segment) }]"
           @click.stop="handleLinkClick($event, segment)"
         >
-          {{ segment.text }}
+          {{ displaySegmentText(segment.text) }}
         </span>
-        <span v-else>{{ segment.text }}</span>
+        <span v-else>{{ displaySegmentText(segment.text) }}</span>
       </template>
     </div>
     <MessageTimeStatusLabel :message="message" :is-self="displayAsSelf" />
