@@ -16,11 +16,8 @@ const localFilePath = ref('')
 const decryptedContent = ref('')
 const loading = ref(false)
 const loadError = ref(false)
-const isPlaying = ref(false)
-const currentSecond = ref(0)
 let downloadToken = 0
 let contentDecryptToken = 0
-let playTimer: number | null = null
 let stopDownloadEvents: Array<() => void> = []
 
 function audioTerminalLog(
@@ -110,10 +107,6 @@ const cacheKey = computed(() => [
   cipherHex.value || '',
 ].join('|'))
 const duration = computed(() => Math.max(0, Math.round(Number(audioData.value.duration || 0))))
-const totalSecond = computed(() => Math.max(1, duration.value || 1))
-const progressPercent = computed(() => Math.min(100, Math.max(0, (currentSecond.value / totalSecond.value) * 100)))
-const currentTimeText = computed(() => formatTime(currentSecond.value))
-const durationText = computed(() => formatTime(duration.value))
 
 watch([audioUrl, fileKey, attachmentKey, cacheKey], () => {
   activeSrc.value = ''
@@ -164,20 +157,6 @@ watch([audioUrl, fileKey, attachmentKey, cacheKey], () => {
 function cleanupDownloadEvents() {
   stopDownloadEvents.forEach(stop => stop())
   stopDownloadEvents = []
-}
-
-function clearPlayTimer() {
-  if (playTimer !== null) {
-    window.clearInterval(playTimer)
-    playTimer = null
-  }
-}
-
-function formatTime(seconds: number): string {
-  const value = Math.max(0, Math.round(seconds))
-  const minutes = Math.floor(value / 60)
-  const rest = value % 60
-  return `${minutes}:${rest.toString().padStart(2, '0')}`
 }
 
 function safeName(name: string): string {
@@ -408,282 +387,72 @@ async function downloadAndDecryptAudio() {
   }
 }
 
-async function stopPlayback() {
-  clearPlayTimer()
-  isPlaying.value = false
-  currentSecond.value = 0
-  if (!(window as any).__TAURI_INTERNALS__) return
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('stop_audio_file', { msgId: props.message.id || props.message.customMsgId || null })
-  } catch (error) {
-    audioTerminalLog('stop audio failed', {
-      messageId: props.message.id,
-      message: (error as Error)?.message || String(error),
-    }, 'warn')
-  }
-}
-
-async function togglePlayback() {
-  if (loading.value) return
-  if (isPlaying.value) {
-    await stopPlayback()
-    return
-  }
-  if (!localFilePath.value) {
-    loadError.value = true
-    audioTerminalLog('play skipped: missing local file path', {
-      messageId: props.message.id,
-      activeSrc: activeSrc.value,
-    }, 'error')
-    return
-  }
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('play_audio_file', {
-      msgId: props.message.id || props.message.customMsgId || `${Date.now()}`,
-      filePath: localFilePath.value,
-    })
-    isPlaying.value = true
-    currentSecond.value = 0
-    audioTerminalLog('play audio requested', {
-      messageId: props.message.id,
-      localFilePath: localFilePath.value,
-      duration: duration.value,
-    })
-    clearPlayTimer()
-    const startedAt = Date.now()
-    playTimer = window.setInterval(() => {
-      currentSecond.value = Math.min(totalSecond.value, Math.floor((Date.now() - startedAt) / 1000))
-      if (currentSecond.value >= totalSecond.value) {
-        isPlaying.value = false
-        clearPlayTimer()
-      }
-    }, 250)
-  } catch (error) {
-    loadError.value = true
-    isPlaying.value = false
-    audioTerminalLog('play audio failed', {
-      messageId: props.message.id,
-      localFilePath: localFilePath.value,
-      message: (error as Error)?.message || String(error),
-    }, 'error')
-  }
-}
-
 onBeforeUnmount(() => {
   downloadToken += 1
-  void stopPlayback()
   cleanupDownloadEvents()
 })
 </script>
 
 <template>
-  <div class="audio-player" :class="{ playing: isPlaying, error: loadError }">
-    <div class="player-container">
-      <!-- Play Button with Ripple -->
-      <button
-        class="play-button"
-        type="button"
-        :disabled="loading || loadError"
-        @click="togglePlayback"
-        aria-label="Toggle audio playback"
-      >
-        <div class="ripple-container">
-          <span v-if="isPlaying" class="ripple"></span>
-          <svg v-if="!isPlaying" viewBox="0 0 24 24" fill="white" class="play-icon">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" fill="white" class="pause-icon">
-            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-          </svg>
-        </div>
-      </button>
-
-      <!-- Progress Bar -->
-      <div class="progress-bar-wrapper">
-        <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: `${progressPercent}%` }"></div>
-        </div>
+  <div class="com-msg-audio" :class="{ error: loadError }" :data-duration="duration">
+    <div class="content">
+      <!-- 对齐旧 im：语音消息使用系统原生 audio 控件；新项目只负责把解密/下载后的地址塞给控件。 -->
+      <audio
+        :src="activeSrc || undefined"
+        controls
+        preload="metadata"
+        @error="loadError = Boolean(activeSrc)"
+      ></audio>
+      <div v-if="loading" class="loading-overlay">
+        <div><ComLoading /></div>
       </div>
-
-      <!-- Time Display -->
-      <span class="time-display">
-        <span class="current-time">{{ currentTimeText }}</span>
-        <span class="divider">/</span>
-        <span class="total-time">{{ durationText }}</span>
-      </span>
-    </div>
-
-    <!-- Loading & Error States -->
-    <div v-if="loading" class="loading-overlay">
-      <ComLoading />
     </div>
     <div v-if="loadError" class="error-message">语音加载失败</div>
   </div>
 </template>
 
 <style scoped lang="scss">
-.audio-player {
-  width: 100%;
-  max-width: 360px;
-
-  &.error .player-container {
-    opacity: 0.6;
-  }
-}
-
-.player-container {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: rgba(170, 222, 254);
-  border-radius: 16px 0 16px 16px;
-  position: relative;
-  overflow: hidden;
-  transition: all 0.2s ease;
-}
-
-.play-button {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.com-msg-audio {
+  padding: 5px 0 25px;
   position: relative;
 
-  &:disabled {
-    cursor: default;
+  &.error .content {
     opacity: 0.5;
   }
-
-  &:not(:disabled):active .ripple-container {
-    transform: scale(0.95);
-  }
 }
 
-.ripple-container {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  box-shadow: 0 2px 6px rgba(30, 136, 229, 0.25);
-  transition: all 0.2s ease;
+.content {
+  height: 54px;
   position: relative;
-  overflow: hidden;
 
-  svg {
-    width: 10px;
-    height: 10px;
-    position: relative;
-    z-index: 2;
-  }
-
-  &:hover {
-    transform: scale(1.15);
-    box-shadow: 0 3px 10px rgba(30, 136, 229, 0.35);
-  }
-}
-
-.ripple {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.4);
-  animation: ripple-animation 1.2s infinite;
-
-  @keyframes ripple-animation {
-    0% {
-      transform: scale(0.8);
-      opacity: 1;
-    }
-    100% {
-      transform: scale(2.2);
-      opacity: 0;
-    }
-  }
-}
-
-.progress-bar-wrapper {
-  flex: 1;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.progress-bar {
-  width: 100%;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.3);
-  position: relative;
-  overflow: hidden;
-  cursor: pointer;
-  transition: all 0.2s;
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.5);
-  }
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #42a5f5, #1e88e5);
-  transition: width 0.1s linear;
-  border-radius: 6px;
-}
-
-.time-display {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #0d47a1;
-  white-space: nowrap;
-
-  .current-time {
-    font-weight: 600;
-  }
-
-  .divider {
-    color: rgba(13, 71, 161, 0.3);
-    margin: 0 2px;
-  }
-
-  .total-time {
-    color: rgba(13, 71, 161, 0.6);
+  audio {
+    width: 300px;
+    max-width: calc(100vw - 120px);
+    height: 54px;
+    display: block;
   }
 }
 
 .loading-overlay {
   position: absolute;
-  inset: 0;
-  background: rgba(255, 255, 255, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 16px;
-  z-index: 10;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(255, 255, 255, 0.4);
+  z-index: 1;
 
-  :deep(.comLoading),
-  :deep(.com-loading) {
-    width: 20px;
-    height: 20px;
+  > div {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+
+    :deep(.comLoading),
+    :deep(.com-loading) {
+      width: 20px;
+      height: 20px;
+    }
   }
 }
 
@@ -692,16 +461,9 @@ onBeforeUnmount(() => {
   font-size: 12px;
   text-align: left;
   padding-top: 6px;
-  animation: shake 0.3s ease;
 }
 
 :global(.message-item.is-self) .error-message {
   text-align: right;
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-3px); }
-  75% { transform: translateX(3px); }
 }
 </style>
