@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:prod": "vite --mode production",
     "dev:uat": "vite --mode uat",
     "build": "vue-tsc --noEmit && vite build",
     "build:test": "vue-tsc --noEmit && vite build --mode test",
@@ -17,7 +18,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:dev:domains": "node ./scripts/run-tauri-dev.mjs --domains",
+    "tauri:dev:domains:prod": "node ./scripts/run-tauri-dev.mjs --domains -- --mode production",
     "tauri:dev:domains:uat": "node ./scripts/run-tauri-dev.mjs --domains -- --mode uat",
+    "tauri:dev:prod": "tauri dev -- --mode production",
     "tauri:dev:uat": "tauri dev -- --mode uat",
     "tauri:dev:mac-app": "tauri build --debug --bundles app && open 'src-tauri/target/debug/bundle/macos/OCS Chat.app'",
     "tauri:build": "tauri build",
