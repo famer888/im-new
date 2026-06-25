@@ -436,7 +436,7 @@ async function confirmRestartApp() {
       v-model:visible="restartConfirmVisible"
       variant="im"
       show-icon
-      content="重启应用会关闭当前窗口并重新打开，是否继续？"
+      :content="$t('重启应用会关闭当前窗口并重新打开，是否继续？')"
       @confirm="confirmRestartApp"
     />
 
