@@ -861,6 +861,7 @@ function handleOnlineTime(member: any) {
     <GroupNoticeDialog
       :visible="noticeVisible"
       :group-id="conv.targetId"
+      :initial-notice="notice"
       @close="noticeVisible = false"
       @published="handleNoticePublished"
     />

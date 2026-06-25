@@ -342,6 +342,22 @@ function isMessageAtCurrentUser(conversationId: string, msg: Message, uid: strin
     || hasUidInAtList(extra?.atUsers ?? extra?.at_users, uid)
 }
 
+function isIncomingUnreadMessage(
+  conversationId: string,
+  msg: Message,
+  currentUid: string,
+  currentConversationId: string,
+): boolean {
+  return Boolean(
+    currentUid
+    && msg.senderId
+    && String(msg.senderId) !== currentUid
+    && currentConversationId !== conversationId
+    && Number(msg.readStatus || 0) === 0
+    && shouldUseMessageForConversationSummary(conversationId, msg),
+  )
+}
+
 function stringifyExtra(rawExtra: unknown): string | null {
   if (!rawExtra) return null
   if (typeof rawExtra === 'string') return rawExtra
@@ -1140,7 +1156,11 @@ export const useMessageStore = defineStore('message', () => {
     return `${name}${raw}`.slice(0, 200)
   }
 
-  function syncConversationSummary(conversationId: string, msg: Message) {
+  function syncConversationSummary(
+    conversationId: string,
+    msg: Message,
+    options?: { incomingUnreadDelta?: number },
+  ) {
     if (!shouldUseMessageForConversationSummary(conversationId, msg)) return
     if (!conversationId || !conversationId.includes('_')) {
       console.warn('[msg] skip syncConversationSummary: invalid conversationId', { conversationId, msgId: msg.id })
@@ -1233,15 +1253,20 @@ export const useMessageStore = defineStore('message', () => {
     if (existing) {
       const currentUid = getCurrentUidForUnread()
       const currentConversationId = String(chatStore.currentConversationId || '')
-      const isIncomingUnread = Boolean(
-        currentUid
-        && msg.senderId
-        && String(msg.senderId) !== currentUid
-        && currentConversationId !== conversationId
-        && Number(msg.readStatus || 0) === 0
+      const isIncomingUnread = isIncomingUnreadMessage(
+        conversationId,
+        msg,
+        currentUid,
+        currentConversationId,
       )
-      const nextUnreadCount = isIncomingUnread
-        ? Math.max(0, Number(existing.unreadCount || 0)) + 1
+      // 桌面端未读以 Rust 落库后的 conv:update 为准，避免与 upsert_incoming_messages 竞态把归档等会话红点盖回 1。
+      const shouldUpdateUnreadInMemory = !isTauri()
+      const incomingUnreadDelta = Math.max(0, Number(options?.incomingUnreadDelta ?? 0))
+      const unreadIncrement = incomingUnreadDelta > 0
+        ? incomingUnreadDelta
+        : (isIncomingUnread ? 1 : 0)
+      const nextUnreadCount = shouldUpdateUnreadInMemory && unreadIncrement > 0
+        ? Math.max(0, Number(existing.unreadCount || 0)) + unreadIncrement
         : existing.unreadCount
       const nextAtMe = existing.atMe || (isIncomingUnread && isMessageAtCurrentUser(conversationId, msg, currentUid))
       groupIntroMessageTrace('syncConversationSummary', conversationId, msg, {
@@ -1270,14 +1295,20 @@ export const useMessageStore = defineStore('message', () => {
     const conv = chatStore.ensureConversation(Number(typeRaw || 0), targetId)
     const currentUid = getCurrentUidForUnread()
     const currentConversationId = String(chatStore.currentConversationId || '')
-    const isIncomingUnread = Boolean(
-      currentUid
-      && msg.senderId
-      && String(msg.senderId) !== currentUid
-      && currentConversationId !== conversationId
-      && Number(msg.readStatus || 0) === 0
+    const isIncomingUnread = isIncomingUnreadMessage(
+      conversationId,
+      msg,
+      currentUid,
+      currentConversationId,
     )
-    const nextUnreadCount = isIncomingUnread ? Math.max(1, Number(conv.unreadCount || 0) + 1) : conv.unreadCount
+    const shouldUpdateUnreadInMemory = !isTauri()
+    const incomingUnreadDelta = Math.max(0, Number(options?.incomingUnreadDelta ?? 0))
+    const unreadIncrement = incomingUnreadDelta > 0
+      ? incomingUnreadDelta
+      : (isIncomingUnread ? 1 : 0)
+    const nextUnreadCount = shouldUpdateUnreadInMemory && unreadIncrement > 0
+      ? Math.max(0, Number(conv.unreadCount || 0)) + unreadIncrement
+      : conv.unreadCount
     const nextAtMe = conv.atMe || (isIncomingUnread && isMessageAtCurrentUser(conversationId, msg, currentUid))
     groupIntroMessageTrace('syncConversationSummary:newConversation', conversationId, msg, {
       digest,
@@ -2915,6 +2946,43 @@ export const useMessageStore = defineStore('message', () => {
     )
   }
 
+  function findOutgoingSendingPlaceholderIndex(
+    conversationId: string,
+    message: Message,
+    list: Message[],
+    currentUid: string,
+  ): number {
+    if (!currentUid || String(message.senderId || '') !== currentUid) return -1
+    if (!/^(0|1|2)_/.test(String(conversationId || ''))) return -1
+
+    const incomingId = String(message.id || '').trim()
+    const incomingContent = String(message.content ?? '').trim()
+    const incomingStatus = Number(message.status ?? 0)
+    if (!incomingId) return -1
+    // 仍是本地 flag 占位时不在这里处理，避免把发送中气泡误判成服务端副本。
+    if (incomingStatus === 0 && incomingId === String(message.customMsgId || message.id || '')) return -1
+
+    return list.findIndex((item) => {
+      if (Number(item.status) !== 0) return false
+      if (String(item.senderId || '') !== currentUid) return false
+      if (Number(item.msgType) !== Number(message.msgType)) return false
+
+      const placeholderId = String(item.id || item.customMsgId || '').trim()
+      if (!placeholderId || placeholderId === incomingId) return false
+
+      const placeholderContent = String(item.content ?? '').trim()
+      if (incomingContent && placeholderContent && incomingContent === placeholderContent) return true
+
+      // 频道多图本地预览与服务端正文格式不同，但同批发送中的占位通常只有一条。
+      if (Number(message.msgType) === 17) {
+        const localCaption = placeholderContent.split('##caption##')[1] || ''
+        const remoteCaption = incomingContent.split('##caption##')[1] || ''
+        if (localCaption && remoteCaption && localCaption === remoteCaption) return true
+      }
+      return false
+    })
+  }
+
   function appendMessage(conversationId: string, message: Message) {
     if (!conversationId || !conversationId.includes('_')) {
       console.warn('[msg] skip appendMessage: invalid conversationId', { conversationId, messageId: message.id })
@@ -3006,7 +3074,35 @@ export const useMessageStore = defineStore('message', () => {
         deleteSeconds: message.deleteSeconds ?? previous.deleteSeconds,
       }
     } else {
-      next.push(message)
+      const placeholderIdx = findOutgoingSendingPlaceholderIndex(
+        conversationId,
+        message,
+        next,
+        getCurrentUidForUnread(),
+      )
+      if (placeholderIdx >= 0) {
+        const placeholder = next[placeholderIdx]
+        const mergedSingleImageContent = isReusableLocalImagePlaceholder(conversationId, message.msgType)
+          ? mergeImageLocalPreviewContent(message.content, placeholder.content)
+          : null
+        const incomingContent = String(message.content ?? '').trim()
+        next[placeholderIdx] = {
+          ...placeholder,
+          ...message,
+          id: String(message.id || placeholder.id),
+          customMsgId: placeholder.customMsgId || placeholder.id,
+          content: mergedSingleImageContent
+            || (incomingContent ? message.content : placeholder.content),
+          extra: message.extra ?? placeholder.extra,
+          quoteMessage: message.quoteMessage ?? placeholder.quoteMessage,
+          snapchatTime: message.snapchatTime ?? placeholder.snapchatTime,
+          deleteSeconds: message.deleteSeconds ?? placeholder.deleteSeconds,
+          status: Math.max(Number(placeholder.status || 0), Number(message.status || 0), 1),
+          readStatus: Math.max(Number(placeholder.readStatus || 0), Number(message.readStatus || 0)),
+        }
+      } else {
+        next.push(message)
+      }
     }
     if (next.length > MAX_CACHED_MESSAGES) {
       next.splice(0, next.length - MAX_CACHED_MESSAGES)
@@ -3077,9 +3173,19 @@ export const useMessageStore = defineStore('message', () => {
       grouped.set(convId, list)
     }
 
+    const currentUid = getCurrentUidForUnread()
+    const currentConversationId = String(chatStore.currentConversationId || '')
     for (const [convId, msgs] of grouped) {
+      let incomingUnreadDelta = 0
       for (const msg of msgs) {
+        const listBefore = messageMap.value.get(convId) ?? []
+        const existedBefore = listBefore.some((item) =>
+          item.id === msg.id || (item.customMsgId && item.customMsgId === msg.customMsgId),
+        )
         appendMessage(convId, msg)
+        if (!existedBefore && isIncomingUnreadMessage(convId, msg, currentUid, currentConversationId)) {
+          incomingUnreadDelta += 1
+        }
       }
       if (options.preserveConversationOrder) {
         // 频道进入会话时补最近历史只修正摘要，不改变 updatedAt，避免点击后左侧列表重排跳动。
@@ -3088,7 +3194,7 @@ export const useMessageStore = defineStore('message', () => {
       }
       const latest = [...msgs].reverse().find((item) => shouldUseMessageForConversationSummary(convId, item))
       if (latest) {
-        syncConversationSummary(convId, latest)
+        syncConversationSummary(convId, latest, { incomingUnreadDelta })
       } else {
         refreshConversationSummary(convId)
       }

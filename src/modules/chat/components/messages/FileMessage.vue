@@ -4,7 +4,7 @@ import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { isFileHelperTargetId, useChatStore } from '@/stores/useChatStore'
 import { useMessageStore } from '@/stores/useMessageStore'
-import { ensureGroupRelKey } from '@/utils/e2ee'
+import { ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
@@ -172,7 +172,7 @@ const remoteOpenTarget = computed(() => {
   return pickRemoteOpenTarget()?.target ?? ''
 })
 const fileKey = computed(() =>
-  String(
+  normalizeResolvedFileKey(
     fileData.value.fileKey ||
     fileData.value.file_key ||
     extraData.value.fileKey ||
@@ -180,9 +180,27 @@ const fileKey = computed(() =>
     '',
   ).trim(),
 )
-const attachmentKey = computed(() =>
-  String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
-)
+const attachmentKey = computed(() => readMessageAttachmentKey(extraData.value))
+const privateAttachmentCandidates = computed(() => {
+  const extra = extraData.value
+  const candidates = Array.isArray(extra.cipherCandidates)
+    ? extra.cipherCandidates
+        .map((candidate: any) => ({
+          version: Number(candidate?.version || extra.version || 1),
+          source: String(candidate?.source || extra.source || ''),
+          attachmentKey: String(candidate?.attachmentKey || candidate?.attachment_key || ''),
+        }))
+        .filter((candidate: { attachmentKey: string }) => !!candidate.attachmentKey)
+    : []
+  if (attachmentKey.value && candidates.length === 0) {
+    candidates.push({
+      version: Number(extra.version || 1),
+      source: String(extra.source || ''),
+      attachmentKey: attachmentKey.value,
+    })
+  }
+  return candidates
+})
 const groupId = computed(() => {
   const extraGroupId = String(extraData.value.groupId || '').trim()
   if (extraGroupId) return extraGroupId
@@ -294,6 +312,22 @@ async function resolveFileKey(): Promise<string> {
   if (fileKey.value) return fileKey.value
   const plainAttachmentKey = fallbackPlainFileKey(attachmentKey.value)
   if (plainAttachmentKey) return plainAttachmentKey
+
+  const conversationId = String(props.message.conversationId || '')
+  if (conversationId.startsWith('0_')) {
+    const senderId = String(props.message.senderId || '').trim()
+    for (const candidate of privateAttachmentCandidates.value) {
+      const resolved = await resolvePrivateAttachmentFileKey({
+        uid: authStore.uid,
+        senderId,
+        version: candidate.version,
+        source: candidate.source,
+        attachmentKey: candidate.attachmentKey,
+      })
+      if (resolved) return resolved
+    }
+  }
+
   if (!attachmentKey.value || !groupId.value) return ''
 
   try {
@@ -301,11 +335,11 @@ async function resolveFileKey(): Promise<string> {
       await ensureGroupRelKey(String(authStore.uid), groupId.value)
     }
     const { invoke } = await import('@tauri-apps/api/core')
-    return await invoke<string>('decrypt_group_incoming', {
+    return normalizeResolvedFileKey(await invoke<string>('decrypt_group_incoming', {
       groupId: groupId.value,
       ciphertextHex: attachmentKey.value,
       msgType: 0,
-    })
+    }))
   } catch {
     return ''
   }

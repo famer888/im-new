@@ -2261,7 +2261,12 @@ impl MessageBatcher {
                 "cipherHex": primary_cipher_hex,
                 "cipherCandidates": cipher_candidates,
                 "contentMd5": om.content_md5,
-                "attachmentKey": om.attachment_key,
+                // 与正文解密成功的候选 attachmentKey 对齐；iOS/PC 顶层 attachment_key 可能与 webContent 不一致。
+                "attachmentKey": if selected_attachment_key.is_empty() {
+                    om.attachment_key.clone()
+                } else {
+                    selected_attachment_key.clone()
+                },
                 "fileKey": selected_file_key.unwrap_or_default(),
                 "messageContentAttachmentKey": selected_attachment_key,
             }),

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
+import { ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { eventBus } from '@/utils/eventBus'
@@ -177,9 +177,7 @@ const fileKey = computed(() =>
     '',
   ).trim(),
 )
-const attachmentKey = computed(() =>
-  String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
-)
+const attachmentKey = computed(() => readMessageAttachmentKey(extraData.value))
 const extraLocalVideoPath = computed(() =>
   String(
     extraData.value.local ||

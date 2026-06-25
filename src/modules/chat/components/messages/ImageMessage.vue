@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { isOfficialAccountTargetId } from '@/stores/useChatStore'
-import { ensureChannelRelKey, ensureGroupRelKey, normalizeResolvedFileKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
+import { ensureChannelRelKey, ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
@@ -328,9 +328,7 @@ const fileKey = computed(() =>
       '',
   ).trim(),
 )
-const attachmentKey = computed(() =>
-  String(extraData.value.attachmentKey || extraData.value.attachment_key || '').trim(),
-)
+const attachmentKey = computed(() => readMessageAttachmentKey(extraData.value))
 const groupId = computed(() => {
   const extraGroupId = String(extraData.value.groupId || '').trim()
   if (extraGroupId) return extraGroupId
@@ -366,6 +364,7 @@ const privateAttachmentCandidates = computed(() => {
 const imageCacheKey = computed(() => [
   props.message.id || '',
   props.message.customMsgId || '',
+  String(props.message.sendTime || ''),
   imageData.value.name || '',
   localSourcePath.value || '',
   imageData.value.localPreviewUrl || '',

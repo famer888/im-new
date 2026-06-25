@@ -21,6 +21,7 @@ const messageStore = useMessageStore()
 const props = defineProps<{
   visible: boolean
   groupId: string
+  initialNotice?: string
   historyNotice?: { notice: string; editorId?: string | number; groupId?: string } | null
 }>()
 
@@ -37,7 +38,6 @@ const loadedLatestNotice = ref('')
 const isEdit = ref(false)
 const bfAll = ref(false)
 const submitting = ref(false)
-const detailLoading = ref(false)
 const loginIsHost = ref(false)
 const editUser = ref<any>(null)
 const memberType = ref(-1)
@@ -125,7 +125,43 @@ const displayUserLabel = computed(() => {
 // 对齐旧 im：普通群成员查看群简介时，也要显示发布人的管理身份，而不是只看当前查看者权限。
 const showBadge = computed(() => displayUserType.value === 0 || displayUserType.value === 1)
 const isHistoryView = computed(() => Boolean(props.historyNotice))
-const showNoticeLoading = computed(() => detailLoading.value && !isEdit.value && !isHistoryView.value)
+
+function resolveLocalMemberType(members = groupStore.getMembers(props.groupId)) {
+  const current = members.find((member) => member.userId === authStore.uid)
+  return typeof current?.role === 'number' ? current.role : null
+}
+
+function applyCachedNoticeState() {
+  if (!props.groupId) return
+
+  const members = groupStore.getMembers(props.groupId)
+  const cachedNotice = String(
+    props.historyNotice?.notice
+    ?? props.initialNotice
+    ?? group.value?.notice
+    ?? groupStore.getGroup(props.groupId)?.notice
+    ?? '',
+  ).trim()
+
+  noticeText.value = cachedNotice
+  loadedLatestNotice.value = cachedNotice
+
+  const localMemberType = resolveLocalMemberType(members)
+  if (localMemberType !== null) {
+    memberType.value = localMemberType
+    loginIsHost.value = localMemberType === 0 || localMemberType === 1
+  }
+
+  if (props.historyNotice) {
+    applyHistoryNoticeEditor()
+    return
+  }
+
+  const owner = members.find((member) => member.role === 0)
+  if (owner) {
+    editUser.value = owner
+  }
+}
 
 function findMemberById(userId: string) {
   if (!userId) return null
@@ -151,61 +187,44 @@ function resetToViewState() {
   resetConfirm()
 }
 
-async function loadNoticeDetail() {
-  if (!props.groupId || !props.visible) return
+async function refreshNoticeDetail() {
+  if (!props.groupId || !props.visible || props.historyNotice) return
   const seq = ++loadSeq
-  detailLoading.value = true
   try {
     const detail = await getGroupDetail({ groupId: props.groupId })
     if (seq !== loadSeq || !props.visible) return
-    memberType.value = detail.memberType ?? 2
-    loadedLatestNotice.value = detail.groupNotice?.notice ?? ''
-    noticeText.value = props.historyNotice?.notice ?? loadedLatestNotice.value
-    
-    // 判断是否有编辑权限 (群主或管理员)
+    memberType.value = detail.memberType ?? memberType.value ?? 2
+    loadedLatestNotice.value = detail.groupNotice?.notice ?? loadedLatestNotice.value
+    if (!isEdit.value) {
+      noticeText.value = loadedLatestNotice.value
+    }
+
     loginIsHost.value = memberType.value === 0 || memberType.value === 1
-    
-    // 获取编辑者信息
+
     if (detail.groupNotice?.editUser?.user) {
       editUser.value = {
         ...detail.groupNotice.editUser.user,
-        role: detail.groupNotice.editUser.type
-      }
-    } else {
-      // 默认显示群主或当前用户
-      const members = groupStore.getMembers(props.groupId)
-      const owner = members.find(m => m.role === 0)
-      if (owner) {
-        editUser.value = owner
+        role: detail.groupNotice.editUser.type,
       }
     }
-    if (props.historyNotice) {
-      applyHistoryNoticeEditor()
-    }
-    resetToViewState()
   } catch (e) {
     console.error('get group detail failed:', e)
-  } finally {
-    if (seq === loadSeq) {
-      detailLoading.value = false
-    }
   }
 }
 
 watch(
-  () => [props.visible, props.groupId, props.historyNotice?.notice, props.historyNotice?.editorId],
+  () => [props.visible, props.groupId, props.initialNotice, props.historyNotice?.notice, props.historyNotice?.editorId],
   ([visible]) => {
     resetToast()
     if (!visible) {
       loadSeq += 1
       resetToViewState()
-      detailLoading.value = false
       return
     }
     resetToViewState()
-    // 先用当前已知简介进入查看态，远端详情回来后再刷新内容，避免短暂显示上次编辑态。
-    noticeText.value = props.historyNotice?.notice ?? group.value?.notice ?? ''
-    void loadNoticeDetail()
+    // 对齐旧 im：打开弹窗先直接展示本地已有群简介，远端详情仅后台补齐。
+    applyCachedNoticeState()
+    void refreshNoticeDetail()
     void nextTick(updatePublisherNameOverflow)
   },
   { immediate: true },
@@ -216,7 +235,6 @@ watch(displayUserName, () => {
 })
 
 function handleActivateEdit() {
-  if (detailLoading.value) return
   isEdit.value = true
   noticeText.value = ''
   
@@ -236,7 +254,6 @@ function handleCancel() {
 
 function handleClose() {
   loadSeq += 1
-  detailLoading.value = false
   resetToViewState()
   emit('close')
 }
@@ -347,16 +364,11 @@ async function handleSendNotice(notifyAll: boolean) {
           maxlength="800"
           :placeholder="$t('请输入内容')"
         />
-        <div v-else-if="showNoticeLoading" class="notice-view notice-loading">
-          <i aria-hidden="true"></i>
-          <span>{{ $t('加载中...') }}</span>
-        </div>
         <GroupNoticeContent
           v-else
           class="notice-view"
           :content="noticeText"
           :group-id="props.groupId"
-          height="203px"
           @navigated="handleClose"
         />
         <span v-if="loginIsHost && !isHistoryView && isEdit">{{ 800 - noticeText.length }}</span>
@@ -364,13 +376,7 @@ async function handleSendNotice(notifyAll: boolean) {
       
       <template v-if="loginIsHost && !isHistoryView">
         <div v-if="!isEdit" class="bottom">
-          <span
-            :class="{ loading: detailLoading }"
-            @click.stop="handleActivateEdit"
-          >
-            <i v-if="detailLoading" aria-hidden="true"></i>
-            {{ detailLoading ? $t('加载中...') : $t('发布新简介') }}
-          </span>
+          <span @click.stop="handleActivateEdit">{{ $t('发布新简介') }}</span>
         </div>
         <div v-if="isEdit" class="bfAll">
           {{ $t('通知所有成员') }}
@@ -556,24 +562,7 @@ async function handleSendNotice(notifyAll: boolean) {
         background-color: rgb(245, 245, 245);
         border-radius: 8px;
         overflow-y: auto;
-      }
-
-      .notice-loading {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        color: #999;
-        font-size: 13px;
-
-        > i {
-          width: 14px;
-          height: 14px;
-          border: 2px solid rgba(51, 105, 254, 0.2);
-          border-top-color: #3369fe;
-          border-radius: 50%;
-          animation: group-notice-loading-spin 0.8s linear infinite;
-        }
+        overflow-x: hidden;
       }
 
       > span {
@@ -607,24 +596,6 @@ async function handleSendNotice(notifyAll: boolean) {
           opacity: 0.8;
         }
 
-        &.loading {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          opacity: 0.75;
-          cursor: not-allowed;
-
-          > i {
-            width: 12px;
-            height: 12px;
-            border: 2px solid rgba(255, 255, 255, 0.4);
-            border-top-color: #fff;
-            border-radius: 50%;
-            animation: group-notice-loading-spin 0.8s linear infinite;
-          }
-        }
-
         &:nth-child(2) {
           background-color: #fff;
           border: 1px solid #eeeeee;
@@ -655,12 +626,6 @@ async function handleSendNotice(notifyAll: boolean) {
         top: 27px;
       }
     }
-  }
-}
-
-@keyframes group-notice-loading-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 </style>

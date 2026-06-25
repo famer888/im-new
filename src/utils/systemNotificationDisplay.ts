@@ -196,7 +196,11 @@ export function formatSystemNotificationDisplayParts(
     contextMembers,
     resolveUidPlaceholder: resolveUidDisplay,
   })
-  if (content.includes('邀请') && content.includes('加入群聊')) {
+  if (
+    (content.includes('邀请') && content.includes('加入群聊'))
+    || content.includes('移出群聊')
+    || content.includes('退出群聊')
+  ) {
     content = content.replace(PURE_UID_RE, (uid) => resolveUidDisplay(uid))
   }
   if (!content) return { prefix: '', text: '', highlightPrefix: false }

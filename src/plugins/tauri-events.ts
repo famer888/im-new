@@ -226,6 +226,52 @@ function enrichGroupEventNoticeExtra(
   }
 }
 
+function enrichGroupEventRemovedMemberNames(
+  groupStore: ReturnType<typeof useGroupStore>,
+  contactStore: ReturnType<typeof useContactStore>,
+  groupId: string,
+  extra: any,
+) {
+  if (!extra || typeof extra !== 'object') return
+  if (Number(extra?.groupReqType ?? 0) !== 6) return
+
+  const existingMembers = groupStore.getMembers(groupId)
+  const memberNameById = new Map(
+    existingMembers
+      .filter((member) => member.userId)
+      .map((member) => [member.userId, String(member.nickname || '').trim()]),
+  )
+
+  const enrichMember = (raw: any) => {
+    if (!raw || typeof raw !== 'object') return raw
+    const userId = getGroupEventUserId(raw)
+    if (!userId) return raw
+
+    const contactName = contactStore.getDisplayName(userId)
+    const cachedName = memberNameById.get(userId) || ''
+    const nickname = String(raw.nickname || raw.nickName || raw.nick_name || '').trim()
+    const displayName = (contactName !== userId ? contactName : '')
+      || cachedName
+      || nickname
+    if (!displayName || displayName === userId) return raw
+
+    return {
+      ...raw,
+      nickname: displayName,
+      nickName: displayName,
+      nick_name: displayName,
+      name: displayName,
+    }
+  }
+
+  if (Array.isArray(extra.members)) {
+    extra.members = extra.members.map(enrichMember)
+  }
+  if (extra.targetUser && typeof extra.targetUser === 'object') {
+    extra.targetUser = enrichMember(extra.targetUser)
+  }
+}
+
 function collectGroupEventMemberPatches(
   groupStore: ReturnType<typeof useGroupStore>,
   groupId: string,
@@ -1346,7 +1392,11 @@ export async function setupTauriListeners() {
     }
   })
 
-  listen<Message[]>('msg:batch', async (event) => {
+  let msgBatchQueue = Promise.resolve()
+
+  listen<Message[]>('msg:batch', (event) => {
+    msgBatchQueue = msgBatchQueue
+      .then(async () => {
     const messageStore = useMessageStore()
     const authStore = useAuthStore()
     const currentUid = String(authStore.uid || '')
@@ -1714,6 +1764,7 @@ export async function setupTauriListeners() {
 
       const chatStore = useChatStore()
       const groupStore = useGroupStore()
+      const contactStore = useContactStore()
   const channelStore = useChannelStore()
   const locallyConsumedGroupRemovalMessageKeys = new Set<string>()
   const removedChannelIdsInBatch = collectRemovedChannelIdsFromBatch(normalized)
@@ -1879,6 +1930,7 @@ export async function setupTauriListeners() {
         }
 
         enrichGroupEventNoticeExtra(groupStore, groupId, extra)
+        enrichGroupEventRemovedMemberNames(groupStore, contactStore, groupId, extra)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
         patchCurrentShutupOperatorRole(groupStore, groupId, extra, currentUid)
         if (String(extra?.source || '') === 'group-update-event' && Number(extra?.handleType ?? 0) === 5) {
@@ -1938,7 +1990,6 @@ export async function setupTauriListeners() {
           updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
         }, { allowRemoved: true, uid: currentUid })
       }
-      const contactStore = useContactStore()
       for (const m of normalized) {
         const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
         const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
@@ -2072,6 +2123,10 @@ export async function setupTauriListeners() {
         })
       }
     }
+      })
+      .catch((error) => {
+        console.warn('[msg:batch] handler failed:', error)
+      })
   })
 
   listen<Message>('msg:local-sent', (event) => {
@@ -2083,6 +2138,14 @@ export async function setupTauriListeners() {
     const conversationId = String(payload?.conversationId ?? payload?.conversation_id ?? '')
     if (!conversationId.includes('_')) return
     if (currentUid && senderId && senderId !== currentUid) return
+    const messageId = String(payload?.id ?? payload?.msgId ?? payload?.msg_id ?? '')
+    const customMsgId = String(payload?.customMsgId ?? payload?.custom_msg_id ?? '')
+    const alreadyVisible = messageStore.getMessages(conversationId).some((item) => (
+      (messageId && String(item.id || '') === messageId)
+      || (customMsgId && String(item.customMsgId || '') === customMsgId)
+      || (messageId && String(item.customMsgId || '') === messageId)
+    ))
+    if (alreadyVisible) return
     messageStore.batchAppendMessages([payload] as Message[], {
       fillGroupReadBurnFromCurrentGroup: true,
     })
@@ -2119,15 +2182,26 @@ export async function setupTauriListeners() {
         request: {
           conversationId: payload.conversationId,
           customMsgId: String(payload.flag),
-          serverMsgId: Number(payload.msgId),
+          serverMsgId: String(payload.msgId ?? ''),
           sentOverTime: Number(payload.sentOverTime) || null,
         },
       })
-      if (!receiptApplied && String(payload.conversationId || '').startsWith('1_')) {
-        await messageStore.loadMessages(authStore.uid, payload.conversationId, true)
+      if (!receiptApplied) {
+        const convId = String(payload.conversationId || '')
+        if (convId.startsWith('1_') || convId.startsWith('2_')) {
+          await messageStore.loadMessages(authStore.uid, convId, true)
+        }
       }
     } catch (err) {
       console.warn('[msg:sent] mark_message_sent failed:', err)
+      const convId = String(payload.conversationId || '')
+      if (authStore.uid && (convId.startsWith('1_') || convId.startsWith('2_'))) {
+        try {
+          await messageStore.loadMessages(authStore.uid, convId, true)
+        } catch (reloadErr) {
+          console.warn('[msg:sent] reload after mark_message_sent failed:', reloadErr)
+        }
+      }
     }
   })
 

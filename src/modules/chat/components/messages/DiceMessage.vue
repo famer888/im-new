@@ -2,12 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import touziGif from '@/assets/images/message/touzi.gif'
-import touz1 from '@/assets/images/message/touz_1.jpg'
-import touz2 from '@/assets/images/message/touz_2.jpg'
-import touz3 from '@/assets/images/message/touz_3.jpg'
-import touz4 from '@/assets/images/message/touz_4.jpg'
-import touz5 from '@/assets/images/message/touz_5.jpg'
-import touz6 from '@/assets/images/message/touz_6.jpg'
+import touz1 from '@/assets/images/message/touz_1.png'
+import touz2 from '@/assets/images/message/touz_2.png'
+import touz3 from '@/assets/images/message/touz_3.png'
+import touz4 from '@/assets/images/message/touz_4.png'
+import touz5 from '@/assets/images/message/touz_5.png'
+import touz6 from '@/assets/images/message/touz_6.png'
 
 const props = defineProps<{ message: Message }>()
 
@@ -194,12 +194,17 @@ onBeforeUnmount(() => {
 })
 
 const diceImage = computed(() => diceImages[visibleResult.value] || touziGif)
+const isDiceSpinning = computed(() => visibleResult.value === 0)
 </script>
 
 <template>
   <div class="dice-message">
     <div class="content">
-      <img :src="diceImage" alt="" />
+      <img
+        :src="diceImage"
+        alt=""
+        :class="{ 'dice-spinning': isDiceSpinning }"
+      />
     </div>
   </div>
 </template>
@@ -210,14 +215,22 @@ const diceImage = computed(() => diceImages[visibleResult.value] || touziGif)
   padding: 10px 75px 15px 10px;
   border-radius: 10px;
   border-top-left-radius: 0;
+  background: transparent;
 
   .content {
     height: 40px;
+    background: transparent;
   }
 
   img {
     display: block;
     height: 40px;
+    width: auto;
+  }
+
+  // touzi.gif 资源带黑底，screen 让黑底融入聊天区浅灰背景
+  img.dice-spinning {
+    mix-blend-mode: screen;
   }
 }
 </style>

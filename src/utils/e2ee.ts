@@ -1430,6 +1430,18 @@ export function normalizeResolvedFileKey(value: unknown): string {
   return fallbackPlainFileKey(String(value || ''))
 }
 
+/** 私聊入站消息优先用与正文解密匹配的 attachmentKey，避免顶层字段与 webContent 不一致。 */
+export function readMessageAttachmentKey(extra: Record<string, unknown> | null | undefined): string {
+  if (!extra || typeof extra !== 'object') return ''
+  return String(
+    extra.messageContentAttachmentKey
+    || extra.message_content_attachment_key
+    || extra.attachmentKey
+    || extra.attachment_key
+    || '',
+  ).trim()
+}
+
 function friendDecryptSources(source: unknown): string[] {
   const normalized = String(source || '').toLowerCase()
   if (normalized === 'app') return ['app', 'web']

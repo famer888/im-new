@@ -410,7 +410,16 @@ pub async fn upsert_incoming_messages(
             }
 
             delete_existing_group_notification_duplicates(conn, &rows)?;
-            queries::batch_insert_messages(conn, &rows)?;
+            let mut insert_rows = Vec::with_capacity(rows.len());
+            for msg in &rows {
+                if try_merge_incoming_self_outgoing_message(conn, &uid_trim, msg)? {
+                    continue;
+                }
+                insert_rows.push(msg.clone());
+            }
+            if !insert_rows.is_empty() {
+                queries::batch_insert_messages(conn, &insert_rows)?;
+            }
 
             for msg in &rows {
                 if queries::is_hidden_conversation_summary_message(
@@ -586,7 +595,9 @@ fn normalize_external_timestamp(ts: i64, fallback: i64) -> i64 {
 fn should_count_as_unread(msg: &models::Message, uid: &str) -> bool {
     // 对齐旧 im：阅后即焚配置变更等通知消息是 chatType=51，不进入
     // “未读正文”计数；新项目用 msgType=6/8 承载这类系统提示。
+    // 同账号其它端（如 iOS）已读同步过来的消息会带 read_status>0，不应再计入未读。
     msg.sender_id != uid
+        && msg.read_status == 0
         && !matches!(msg.msg_type, 6 | 8)
         && !queries::is_hidden_message_type(msg.msg_type)
 }
@@ -2241,6 +2252,140 @@ pub fn generate_curve25519_keypair() -> GeneratedCurveKeyPair {
     }
 }
 
+fn find_local_outgoing_placeholder_row(
+    conn: &rusqlite::Connection,
+    conversation_id: &str,
+    custom_msg_id: &str,
+) -> Result<Option<(i64, i32, Option<String>)>, crate::db::DbError> {
+    conn.query_row(
+        "SELECT rowid, msg_type, content
+         FROM messages
+         WHERE conversation_id = ?1
+           AND (COALESCE(custom_msg_id, '') = ?2 OR id = ?2)
+         ORDER BY CASE WHEN status = 0 THEN 0 ELSE 1 END, send_time DESC
+         LIMIT 1",
+        rusqlite::params![conversation_id, custom_msg_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .optional()
+    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))
+}
+
+/// 自己发出的消息若推送先到，合并进本地 sending 占位，避免 flag 行与服务端 id 行并存。
+fn try_merge_incoming_self_outgoing_message(
+    conn: &rusqlite::Connection,
+    uid: &str,
+    msg: &models::Message,
+) -> Result<bool, crate::db::DbError> {
+    if msg.sender_id != uid {
+        return Ok(false);
+    }
+    let conv = msg.conversation_id.as_str();
+    if !conv.starts_with("0_") && !conv.starts_with("1_") && !conv.starts_with("2_") {
+        return Ok(false);
+    }
+
+    let content = msg.content.as_deref().unwrap_or("").trim();
+    let placeholder_rowid: Option<i64> = if msg.msg_type == 0 && !content.is_empty() {
+        conn.query_row(
+            "SELECT rowid
+             FROM messages
+             WHERE conversation_id = ?1 AND sender_id = ?2 AND status = 0 AND msg_type = ?3
+               AND TRIM(COALESCE(content, '')) = ?4
+             ORDER BY send_time DESC
+             LIMIT 1",
+            rusqlite::params![conv, uid, msg.msg_type, content],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+    } else {
+        conn.query_row(
+            "SELECT rowid
+             FROM messages
+             WHERE conversation_id = ?1 AND sender_id = ?2 AND status = 0 AND msg_type = ?3
+             ORDER BY send_time DESC
+             LIMIT 1",
+            rusqlite::params![conv, uid, msg.msg_type],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+    };
+
+    if let Some(rowid) = placeholder_rowid {
+        conn.execute(
+            "DELETE FROM messages
+             WHERE conversation_id = ?1 AND id = ?2 AND rowid <> ?3",
+            rusqlite::params![conv, &msg.id, rowid],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        conn.execute(
+            "UPDATE messages
+             SET id = ?1,
+                 status = MAX(status, ?2),
+                 read_status = MAX(read_status, ?3),
+                 send_time = CASE WHEN ?4 > 0 THEN ?4 ELSE send_time END,
+                 content = COALESCE(?5, content),
+                 extra = COALESCE(?6, extra)
+             WHERE rowid = ?7",
+            rusqlite::params![
+                &msg.id,
+                msg.status,
+                msg.read_status,
+                msg.send_time,
+                msg.content.as_deref(),
+                msg.extra.as_deref(),
+                rowid,
+            ],
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+        return Ok(true);
+    }
+
+    let server_exists = conn
+        .query_row(
+            "SELECT 1 FROM messages WHERE conversation_id = ?1 AND id = ?2 LIMIT 1",
+            rusqlite::params![conv, &msg.id],
+            |row| row.get::<_, i32>(0),
+        )
+        .optional()
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+        .is_some();
+    if !server_exists {
+        return Ok(false);
+    }
+
+    conn.execute(
+        "DELETE FROM messages
+         WHERE conversation_id = ?1 AND sender_id = ?2 AND status = 0 AND msg_type = ?3
+           AND id <> ?4
+           AND (TRIM(COALESCE(content, '')) = ?5 OR ?5 = '')",
+        rusqlite::params![conv, uid, msg.msg_type, &msg.id, content],
+    )
+    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    conn.execute(
+        "UPDATE messages
+         SET status = MAX(status, ?1),
+             read_status = MAX(read_status, ?2),
+             send_time = CASE WHEN ?3 > send_time THEN ?3 ELSE send_time END,
+             content = COALESCE(?4, content),
+             extra = COALESCE(?5, extra)
+         WHERE conversation_id = ?6 AND id = ?7",
+        rusqlite::params![
+            msg.status,
+            msg.read_status,
+            msg.send_time,
+            msg.content.as_deref(),
+            msg.extra.as_deref(),
+            conv,
+            &msg.id,
+        ],
+    )
+    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    Ok(true)
+}
+
 /// 20201 回执持久化：收到服务端回执后，前端会拿着 `{flag, msgId, sentOverTime}`
 /// 调这条命令；这里把本地 `Message` 行从 `status=0 (sending)` 升级为
 /// `status=1 (sent)` 并用服务端 msgId 覆盖本地 id（与老 im 行为一致）。
@@ -2251,7 +2396,7 @@ pub struct MarkMessageSentRequest {
     /// 本地 `custom_msg_id` / `id`，与 WS `flag` 一一对应。
     pub custom_msg_id: String,
     /// 服务端真实 msg id（`SendGroupMessageResp.msg_id`）。
-    pub server_msg_id: i64,
+    pub server_msg_id: String,
     /// 服务端发送完成时间（毫秒）。
     pub sent_over_time: Option<i64>,
 }
@@ -2280,7 +2425,10 @@ pub async fn mark_message_sent(
     uid: String,
     request: MarkMessageSentRequest,
 ) -> Result<(), String> {
-    let server_id = request.server_msg_id.to_string();
+    let server_id = request.server_msg_id.trim().to_string();
+    if server_id.is_empty() {
+        return Err("server_msg_id is empty".to_string());
+    }
     let sent_time = request.sent_over_time.unwrap_or(0);
     warn!(
         target: "receipt",
@@ -2288,34 +2436,66 @@ pub async fn mark_message_sent(
         uid,
         request.conversation_id,
         request.custom_msg_id,
-        request.server_msg_id,
+        server_id,
         sent_time
     );
 
     db.with_connection(&uid, |conn| {
-        let local_row = conn
-            .query_row(
-                "SELECT rowid, msg_type, content FROM messages WHERE custom_msg_id = ?1 AND conversation_id = ?2",
-                rusqlite::params![request.custom_msg_id, request.conversation_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i32>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )
-            .optional()
+        let tx = conn
+            .unchecked_transaction()
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+        let local_row = find_local_outgoing_placeholder_row(
+            &tx,
+            &request.conversation_id,
+            &request.custom_msg_id,
+        )?;
         let local_exists = local_row.is_some();
         let (local_rowid, local_msg_type, local_content) = local_row.unwrap_or((0, 0, None));
 
+        if !local_exists {
+            let server_exists = tx
+                .query_row(
+                    "SELECT 1 FROM messages WHERE conversation_id = ?1 AND id = ?2 LIMIT 1",
+                    rusqlite::params![request.conversation_id, server_id],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?
+                .is_some();
+            if server_exists {
+                tx.execute(
+                    "DELETE FROM messages
+                     WHERE conversation_id = ?1
+                       AND (id = ?2 OR COALESCE(custom_msg_id, '') = ?2)
+                       AND id <> ?3",
+                    rusqlite::params![
+                        request.conversation_id,
+                        request.custom_msg_id,
+                        server_id,
+                    ],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                tx.execute(
+                    "UPDATE messages
+                     SET status = 1,
+                         read_status = MAX(read_status, 1)
+                     WHERE conversation_id = ?1 AND id = ?2",
+                    rusqlite::params![request.conversation_id, server_id],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                tx.commit()
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                return Ok(());
+            }
+        }
+
         let duplicate = if local_exists {
-            conn.query_row(
+            tx.query_row(
                 "SELECT content, extra, read_status, send_time
                  FROM messages
-                 WHERE id = ?1 AND conversation_id = ?2 AND COALESCE(custom_msg_id, '') <> ?3",
-                rusqlite::params![server_id, request.conversation_id, request.custom_msg_id],
+                 WHERE conversation_id = ?1 AND id = ?2 AND rowid <> ?3",
+                rusqlite::params![request.conversation_id, server_id, local_rowid],
                 |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
@@ -2394,82 +2574,78 @@ pub async fn mark_message_sent(
         }
 
         if local_exists {
-            // 回执和历史/推送可能先后写入同一条服务端消息；升级本地 flag 前先清掉同会话里的服务端 id 重复行。
-            conn.execute(
+            tx.execute(
                 "DELETE FROM messages
-                 WHERE id = ?1 AND conversation_id = ?2 AND rowid <> ?3",
-                rusqlite::params![server_id, request.conversation_id, local_rowid],
+                 WHERE conversation_id = ?1 AND id = ?2 AND rowid <> ?3",
+                rusqlite::params![request.conversation_id, server_id, local_rowid],
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         }
 
-        // 两步：① 用服务端 msg_id 替换本地 id（与老 im `updateMsgProperty` 逻辑一致）；
-        //     ② 同一行状态置为 1（sent），read_status 置为 1（发送成功）。
-        if next_sent_time > 0 {
-            let changed = conn.execute(
-                "UPDATE messages
-                 SET id = ?1,
-                     status = 1,
-                     read_status = MAX(read_status, ?2, 1),
-                     send_time = ?3,
-                     content = COALESCE(NULLIF(?4, ''), content),
-                     extra = COALESCE(?5, extra)
-                 WHERE custom_msg_id = ?6 AND conversation_id = ?7",
-                rusqlite::params![
+        if local_exists {
+            if next_sent_time > 0 {
+                let changed = tx.execute(
+                    "UPDATE messages
+                     SET id = ?1,
+                         status = 1,
+                         read_status = MAX(read_status, ?2, 1),
+                         send_time = ?3,
+                         content = COALESCE(NULLIF(?4, ''), content),
+                         extra = COALESCE(?5, extra)
+                     WHERE rowid = ?6",
+                    rusqlite::params![
+                        server_id,
+                        duplicate_read_status,
+                        next_sent_time,
+                        merged_content.as_deref(),
+                        duplicate_extra.as_deref(),
+                        local_rowid,
+                    ],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                warn!(
+                    target: "receipt",
+                    "[receipt] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={} next_sent_time={}",
+                    changed,
                     server_id,
-                    duplicate_read_status,
-                    next_sent_time,
-                    merged_content.as_deref(),
-                    duplicate_extra.as_deref(),
                     request.custom_msg_id,
-                    request.conversation_id,
-                ],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-            warn!(
-                target: "receipt",
-                "[receipt] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={} next_sent_time={}",
-                changed,
-                server_id,
-                request.custom_msg_id,
-                duplicate_content_len,
-                merged_content_len,
-                next_sent_time
-            );
-        } else {
-            let changed = conn.execute(
-                "UPDATE messages
-                 SET id = ?1,
-                     status = 1,
-                     read_status = MAX(read_status, ?2, 1),
-                     content = COALESCE(NULLIF(?3, ''), content),
-                     extra = COALESCE(?4, extra)
-                 WHERE custom_msg_id = ?5 AND conversation_id = ?6",
-                rusqlite::params![
+                    duplicate_content_len,
+                    merged_content_len,
+                    next_sent_time
+                );
+            } else {
+                let changed = tx.execute(
+                    "UPDATE messages
+                     SET id = ?1,
+                         status = 1,
+                         read_status = MAX(read_status, ?2, 1),
+                         content = COALESCE(NULLIF(?3, ''), content),
+                         extra = COALESCE(?4, extra)
+                     WHERE rowid = ?5",
+                    rusqlite::params![
+                        server_id,
+                        duplicate_read_status,
+                        merged_content.as_deref(),
+                        duplicate_extra.as_deref(),
+                        local_rowid,
+                    ],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                warn!(
+                    target: "receipt",
+                    "[receipt] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={}",
+                    changed,
                     server_id,
-                    duplicate_read_status,
-                    merged_content.as_deref(),
-                    duplicate_extra.as_deref(),
                     request.custom_msg_id,
-                    request.conversation_id,
-                ],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-            warn!(
-                target: "receipt",
-                "[receipt] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={}",
-                changed,
-                server_id,
-                request.custom_msg_id,
-                duplicate_content_len,
-                merged_content_len
-            );
+                    duplicate_content_len,
+                    merged_content_len
+                );
+            }
         }
 
         if !queries::is_hidden_message_type(local_msg_type) {
-            // 同步会话摘要 → 服务端 id / 服务端时间，避免左侧列表继续显示发送前旧摘要。
             let digest = message_digest(local_msg_type, merged_content.as_deref());
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations
                  SET last_msg_id = ?1,
                      last_msg_time = CASE WHEN ?2 > 0 THEN ?2 ELSE last_msg_time END,
@@ -2493,6 +2669,9 @@ pub async fn mark_message_sent(
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         }
+
+        tx.commit()
+            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
         Ok(())
     })
     .map_err(|e| e.to_string())
@@ -3773,5 +3952,115 @@ mod tests {
 
         assert!(!should_increment_notification_unread(&msg));
         assert_eq!(notification_unread_count(&msg), Some(7));
+    }
+
+    #[test]
+    fn already_read_incoming_message_should_not_count_as_unread() {
+        let msg = models::Message {
+            id: "msg-1".to_string(),
+            custom_msg_id: None,
+            conversation_id: "0_2002".to_string(),
+            sender_id: "1001".to_string(),
+            msg_type: 0,
+            content: Some("hi".to_string()),
+            send_time: 1,
+            status: 1,
+            read_status: 1,
+            version: 0,
+            is_deleted: false,
+            extra: None,
+        };
+
+        assert!(!should_count_as_unread(&msg, "2002"));
+    }
+
+    #[test]
+    fn fresh_incoming_message_should_count_as_unread() {
+        let msg = models::Message {
+            id: "msg-1".to_string(),
+            custom_msg_id: None,
+            conversation_id: "0_2002".to_string(),
+            sender_id: "1001".to_string(),
+            msg_type: 0,
+            content: Some("hi".to_string()),
+            send_time: 1,
+            status: 1,
+            read_status: 0,
+            version: 0,
+            is_deleted: false,
+            extra: None,
+        };
+
+        assert!(should_count_as_unread(&msg, "2002"));
+    }
+
+    #[test]
+    fn incoming_self_channel_text_should_merge_sending_placeholder() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                custom_msg_id TEXT UNIQUE,
+                conversation_id TEXT NOT NULL,
+                sender_id TEXT NOT NULL,
+                msg_type INTEGER NOT NULL DEFAULT 0,
+                content TEXT,
+                send_time INTEGER NOT NULL DEFAULT 0,
+                status INTEGER NOT NULL DEFAULT 0,
+                read_status INTEGER NOT NULL DEFAULT 0,
+                version INTEGER NOT NULL DEFAULT 0,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                extra TEXT
+            );",
+        )
+        .unwrap();
+        queries::insert_message(
+            &conn,
+            &models::Message {
+                id: "1700000000000".to_string(),
+                custom_msg_id: Some("1700000000000".to_string()),
+                conversation_id: "2_3001".to_string(),
+                sender_id: "1001".to_string(),
+                msg_type: 0,
+                content: Some("hello channel".to_string()),
+                send_time: 1700000000000,
+                status: 0,
+                read_status: 0,
+                version: 0,
+                is_deleted: false,
+                extra: None,
+            },
+        )
+        .unwrap();
+
+        let incoming = models::Message {
+            id: "90001".to_string(),
+            custom_msg_id: None,
+            conversation_id: "2_3001".to_string(),
+            sender_id: "1001".to_string(),
+            msg_type: 0,
+            content: Some("hello channel".to_string()),
+            send_time: 1700000001000,
+            status: 1,
+            read_status: 0,
+            version: 0,
+            is_deleted: false,
+            extra: None,
+        };
+        assert!(try_merge_incoming_self_outgoing_message(&conn, "1001", &incoming).unwrap());
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let (id, status): (String, i32) = conn
+            .query_row(
+                "SELECT id, status FROM messages WHERE conversation_id = '2_3001'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "90001");
+        assert_eq!(status, 1);
     }
 }

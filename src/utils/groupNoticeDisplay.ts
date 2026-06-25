@@ -313,6 +313,80 @@ function rawHasAllTargets(raw: string, targets: NoticePerson[]): boolean {
   })
 }
 
+function getRemovedMemberId(extra: ExtraObject): string {
+  for (const candidate of memberCandidates(extra)) {
+    const id = getUserId(candidate)
+    if (id) return id
+  }
+  return getUserId(extra.targetUser)
+}
+
+function resolveNoticePersonName(
+  id: string,
+  extra: ExtraObject,
+  options: FormatOptions,
+): string {
+  if (!id) return ''
+  const currentUid = stringValue(options.currentUid)
+  if (id === currentUid) return '你'
+
+  for (const candidate of memberCandidates(extra)) {
+    if (getUserId(candidate) !== id) continue
+    const name = getUserDisplayName(candidate, id)
+    if (name && name !== id) return name
+  }
+
+  const resolved = resolveDisplayNameById(id, options)
+  if (resolved) return resolved
+
+  if (Array.isArray(options.contextMembers)) {
+    for (const candidate of options.contextMembers) {
+      if (getUserId(candidate) !== id) continue
+      const name = getUserDisplayName(candidate, id)
+      if (name && name !== id) return name
+    }
+  }
+
+  return id
+}
+
+function replaceBareUidTokens(text: string, resolveName: (id: string) => string): string {
+  return text.replace(/\b\d{5,}\b/g, (uid) => {
+    const name = resolveName(uid)
+    return name && name !== uid ? name : uid
+  })
+}
+
+function formatGroupRemoveNotice(
+  raw: string,
+  extra: ExtraObject,
+  options: FormatOptions,
+): string {
+  const removedId = getRemovedMemberId(extra)
+  const removedName = resolveNoticePersonName(removedId, extra, options)
+  const actorId = getExtraUserId(extra, 'fromUid', 'sendUid') || getUserId(extra.fromUser)
+  const currentUid = stringValue(options.currentUid)
+
+  let text = options.resolveUidPlaceholder
+    ? replaceGroupNoticeUidPlaceholders(raw, (id) => resolveNoticePersonName(id, extra, options))
+    : raw
+
+  if (removedId && removedName && removedName !== removedId) {
+    text = replaceBareUidTokens(text, (id) => resolveNoticePersonName(id, extra, options))
+  }
+
+  // 对齐旧 im group.js case 6：操作者是当前用户时，展示“你将{备注/昵称}移出群聊”。
+  if (actorId && actorId === currentUid && removedName && removedName !== removedId) {
+    return `你将${removedName}移出群聊`
+  }
+
+  if (text.includes('被移出群聊') && removedName && removedName !== removedId) {
+    return text.replace(removedId, removedName)
+  }
+
+  return text
+}
+
 function formatLegacyInviteTargetText(targets: NoticePerson[], currentUid: string): string {
   const names = targets.map((target) => target.name).filter(Boolean)
   if (!names.length) return ''
@@ -345,6 +419,9 @@ export function formatGroupNoticeDisplayText(
   const reqStatus = Number(extra.groupReqStatus ?? 0)
   if (reqStatus === 2) {
     return formatRejectedGroupNotice(raw, extra, options)
+  }
+  if (reqType === 6) {
+    return fin(formatGroupRemoveNotice(raw, extra, options))
   }
   if (!INVITE_REQ_TYPES.has(reqType) || !ACTIVE_INVITE_STATUSES.has(reqStatus)) {
     return fin(raw)

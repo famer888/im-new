@@ -25,10 +25,12 @@ const props = withDefaults(defineProps<{
   content: string
   groupId: string
   height?: string
+  maxHeight?: string
   compact?: boolean
   clickable?: boolean
 }>(), {
   height: '',
+  maxHeight: '',
   compact: false,
   clickable: true,
 })
@@ -100,9 +102,13 @@ const mentionCandidates = computed<MentionCandidate[]>(() => {
 })
 
 const contentStyle = computed(() => {
-  if (!props.height) return undefined
-  return { height: props.height }
+  const style: Record<string, string> = {}
+  if (props.height) style.height = props.height
+  if (props.maxHeight) style.maxHeight = props.maxHeight
+  return Object.keys(style).length > 0 ? style : undefined
 })
+
+const isScrollable = computed(() => Boolean(props.height || props.maxHeight))
 
 function isMentionBoundary(char: string): boolean {
   return !char || /\s/.test(char) || /[,.!?;:，。！？；：、)）\]】>》]/.test(char)
@@ -760,7 +766,7 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<NoticeSegment
 
 <template>
   <div
-    :class="['group-notice-content', { compact, disabled: !clickable }]"
+    :class="['group-notice-content', { compact, scrollable: isScrollable, disabled: !clickable }]"
     :style="contentStyle"
   >
     <template v-if="segments.length">
@@ -800,6 +806,13 @@ async function handleLinkClick(event: MouseEvent, segment: Extract<NoticeSegment
   word-break: break-word;
   white-space: pre-wrap;
   user-select: text;
+
+  &.scrollable {
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+  }
 
   &.compact {
     overflow: hidden;

@@ -4,7 +4,7 @@ import { emojiObj } from '@/utils/emoji'
 import emojIcon from '@/assets/images/chat/emoj-icon.png'
 import ownIcon from '@/assets/images/chat/own-icon.png'
 import arrowIcon from '@/assets/images/chat/jiantou-icon.png'
-import touzi from '@/assets/images/message/touz_6.jpg'
+import touzi from '@/assets/images/message/touz_6.png'
 import poker from '@/assets/images/message/poker.png'
 
 const props = withDefaults(defineProps<{

@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 import type { Message } from '@/stores/useMessageStore'
 import noticeIcon from '@/assets/images/notice.svg'
 import arrowIcon from '@/assets/images/arrow.svg'
-import { filterSensitiveWords } from '@/utils/sensitiveWords'
+import GroupNoticeContent from '../panels/GroupNoticeContent.vue'
+import { getGroupIntroNoticePayload } from '@/utils/groupIntroNotice'
 
 const props = defineProps<{
   message: Message
@@ -15,7 +16,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const noticeText = computed(() => filterSensitiveWords(String(props.message.content || '').trim()))
+const noticePayload = computed(() => getGroupIntroNoticePayload(props.message))
+const noticeContent = computed(() => noticePayload.value.notice)
+const groupId = computed(() => noticePayload.value.groupId)
 </script>
 
 <template>
@@ -34,7 +37,11 @@ const noticeText = computed(() => filterSensitiveWords(String(props.message.cont
     <picture>
       <img :src="arrowIcon" alt="" />
     </picture>
-    <p class="content">{{ noticeText }}</p>
+    <GroupNoticeContent
+      class="intro-content"
+      :content="noticeContent"
+      :group-id="groupId"
+    />
   </div>
 </template>
 
@@ -92,13 +99,17 @@ const noticeText = computed(() => filterSensitiveWords(String(props.message.cont
     }
   }
 
-  > .content {
+  .intro-content {
     margin: 0;
     line-height: 22px;
     font-size: 14px;
     color: rgba(53, 53, 52);
-    white-space: pre-wrap;
-    word-break: break-word;
+
+    :deep(.notice-mention),
+    :deep(.notice-link) {
+      color: #3369fe;
+      cursor: pointer;
+    }
   }
 }
 </style>

@@ -922,6 +922,12 @@ onBeforeUnmount(() => {
     max-height: 190px;
     color: #333;
     font-size: 14px;
+
+    :deep(.notice-mention),
+    :deep(.notice-link) {
+      color: #3369fe;
+      cursor: pointer;
+    }
   }
 
   > button {
