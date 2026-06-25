@@ -43,8 +43,14 @@ const floatDateRef = ref<HTMLElement | null>(null)
 
 function ensureMessagesAscending(messages: Message[]): Message[] {
   for (let i = 1; i < messages.length; i++) {
-    if (messages[i - 1].sendTime > messages[i].sendTime) {
-      return messages.slice().sort((a, b) => a.sendTime - b.sendTime)
+    const prev = messages[i - 1]
+    const curr = messages[i]
+    if (prev.sendTime > curr.sendTime) {
+      return messages.slice().sort((a, b) => {
+        const timeDiff = a.sendTime - b.sendTime
+        if (timeDiff !== 0) return timeDiff
+        return String(a.id || a.customMsgId || '').localeCompare(String(b.id || b.customMsgId || ''))
+      })
     }
   }
   return messages
@@ -269,6 +275,8 @@ let isProgrammaticScroll = false
 let resizePinRaf: number | null = null
 let topAutoLoadArmed = true
 let programmaticScrollSeq = 0
+let conversationEnterToken = 0
+const suppressAutoScrollUntil = ref(0)
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)
@@ -454,34 +462,57 @@ function handleScroll() {
   setTimeDayMsgThrottled()
 }
 
+async function settleInitialLayout() {
+  const token = conversationEnterToken
+  if (props.loading || sortedMessages.value.length === 0) return
+
+  await nextTick()
+  if (token !== conversationEnterToken) return
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  if (token !== conversationEnterToken) return
+
+  const list = sortedMessages.value
+  const latest = list[list.length - 1]
+  lastMessageId.value = getMessageRenderKey(latest)
+  lastLatestMessageStatus.value = latest ? Number(latest.status || 0) : null
+
+  if (await tryInitialUnreadAutoScroll()) {
+    suppressAutoScrollUntil.value = Date.now() + 500
+    return
+  }
+  if (shouldHoldForInitialUnreadScroll()) return
+  await flushScrollToBottom()
+  suppressAutoScrollUntil.value = Date.now() + 500
+}
+
 watch(
   () => props.conversationId,
-  async () => {
-    await nextTick()
-    lastMessageId.value = ''
+  () => {
+    conversationEnterToken += 1
+    suppressAutoScrollUntil.value = Date.now() + 900
+    unreadBannerDismissed.value = false
+    initialUnreadAutoScrollDone.value = false
+    dismissedAtMentionIdSet.value = new Set()
     stickToBottom.value = true
     topAutoLoadArmed = true
     clearNewMessageTip()
-    const list = sortedMessages.value
-    const latest = list[list.length - 1]
-    lastMessageId.value = getMessageRenderKey(latest)
-    lastLatestMessageStatus.value = latest ? Number(latest.status || 0) : null
-    if (await tryInitialUnreadAutoScroll()) return
-    if (shouldHoldForInitialUnreadScroll()) return
-    await flushScrollToBottom()
+    lastMessageId.value = ''
+    lastLatestMessageStatus.value = null
+    void settleInitialLayout()
   },
-  { immediate: true },
 )
 
 watch(
   () => props.loading,
-  async (loading) => {
-    if (loading) return
-    if (props.messages.length === 0) return
-    if (await tryInitialUnreadAutoScroll()) return
-    if (shouldHoldForInitialUnreadScroll()) return
-    if (!stickToBottom.value) return
-    await flushScrollToBottom()
+  (loading) => {
+    if (!loading) void settleInitialLayout()
+  },
+)
+
+watch(
+  () => props.messages.length,
+  (len, prev) => {
+    if (len > 0 && (prev ?? 0) === 0) void settleInitialLayout()
   },
 )
 
@@ -523,6 +554,8 @@ watch(
     lastMessageId.value = latestId
     lastLatestMessageStatus.value = latestMessage ? Number(latestMessage.status || 0) : null
 
+    if (Date.now() < suppressAutoScrollUntil.value) return
+
     if (await tryInitialUnreadAutoScroll()) return
     if (shouldHoldForInitialUnreadScroll()) return
 
@@ -553,17 +586,8 @@ watch(
   },
 )
 
-onMounted(async () => {
-  const list = sortedMessages.value
-  const latest = list[list.length - 1]
-  lastMessageId.value = getMessageRenderKey(latest)
-  lastLatestMessageStatus.value = latest ? Number(latest.status || 0) : null
-  stickToBottom.value = true
-  if (list.length > 0) {
-    if (await tryInitialUnreadAutoScroll()) return
-    if (shouldHoldForInitialUnreadScroll()) return
-    await flushScrollToBottom()
-  }
+onMounted(() => {
+  void settleInitialLayout()
 })
 
 function onClickScrollToLatest() {

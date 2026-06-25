@@ -402,7 +402,23 @@ watch(loadError, (failed) => {
   }, 'error')
 })
 
+function applyCachedImageIfAvailable(): boolean {
+  const cached = getCachedImage(imageCacheKey.value)
+  if (!cached?.src) return false
+  channelImageLog('use memory cache', {
+    cachedSrcHead: shortLogValue(cached.src),
+    cachedLocalPathHead: shortLogValue(cached.localFilePath),
+  })
+  activeSrc.value = cached.src
+  localFilePath.value = cached.localFilePath
+  loadError.value = false
+  isLoaded.value = true
+  return true
+}
+
 watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
+  if (applyCachedImageIfAvailable()) return
+
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
@@ -454,18 +470,6 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   if (!thumbnailUrl.value && !imageData.value.url && !fileKey.value && !attachmentKey.value) {
     channelImageLog('load error: missing url and keys', {}, 'warn')
     loadError.value = true
-    isLoaded.value = true
-    return
-  }
-  const cached = getCachedImage(imageCacheKey.value)
-  if (cached) {
-    channelImageLog('use memory cache', {
-      cachedSrcHead: shortLogValue(cached.src),
-      cachedLocalPathHead: shortLogValue(cached.localFilePath),
-    })
-    activeSrc.value = cached.src
-    localFilePath.value = cached.localFilePath
-    loadError.value = false
     isLoaded.value = true
     return
   }

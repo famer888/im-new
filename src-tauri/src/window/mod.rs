@@ -341,7 +341,7 @@ impl WindowManager {
         let builder = {
             // Windows WebView2 can expose its default white surface before Vue paints;
             // keep the reminder hidden until the page has rendered its first frame.
-            builder.skip_taskbar(true).visible(false)
+            builder.skip_taskbar(true).visible(false).shadow(false)
         };
 
         let window = builder
@@ -353,14 +353,14 @@ impl WindowManager {
 
         #[cfg(target_os = "windows")]
         {
-            let app_for_reveal = app.clone();
-            let label_for_reveal = label.clone();
+            let app_for_cleanup = app.clone();
+            let label_for_cleanup = label.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-                // Windows 通知窗由前端首帧后主动 show；这里兜底，避免隐藏窗口因 JS 时序异常一直不可见。
-                if let Some(w) = app_for_reveal.get_webview_window(&label_for_reveal) {
-                    if !w.is_visible().ok().unwrap_or(false) {
-                        let _ = w.show();
+                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                // 前端未在时限内 reveal 时关闭空窗，避免隐藏通知窗长期占用或误显示空白 WebView。
+                if let Some(w) = app_for_cleanup.get_webview_window(&label_for_cleanup) {
+                    if !w.is_visible().ok().unwrap_or(true) {
+                        let _ = w.close();
                     }
                 }
             });

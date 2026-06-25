@@ -54,7 +54,10 @@ const currentFriendContact = computed(() => {
 const friendConversationTargetId = computed(() => currentFriendContact.value?.id ?? '')
 
 const messages = computed(() => messageStore.getMessages(conversationId.value))
-const isLoading = computed(() => messageStore.isLoading(conversationId.value))
+const isLoading = computed(() => {
+  if (!conversationId.value) return false
+  return messageStore.isLoading(conversationId.value) && messages.value.length === 0
+})
 const currentGroupId = computed(() => {
   const conv = conversation.value
   if (conv?.type === ConversationType.Group) return conv.targetId
@@ -719,11 +722,23 @@ function cleanupGroupLiveGiftListener() {
   unlistenGroupLiveGift = null
 }
 
+function handleWindowVisibilityRestore() {
+  if (document.hidden) return
+  const id = conversationId.value
+  const uid = authStore.uid
+  if (!id || !uid) return
+  if (messageStore.getMessages(id).length === 0 && !messageStore.isLoading(id)) {
+    void messageStore.loadMessages(uid, id, true)
+  }
+}
+
 onMounted(() => {
   groupLiveGiftListenerDisposed = false
   setupDomDragDrop()
   void setupTauriDragDrop()
   void setupGroupLiveGiftListener()
+  document.addEventListener('visibilitychange', handleWindowVisibilityRestore)
+  window.addEventListener('focus', handleWindowVisibilityRestore)
 })
 
 onBeforeUnmount(() => {
@@ -731,6 +746,8 @@ onBeforeUnmount(() => {
   cleanupGroupLiveGiftListener()
   unlistenTauriDragDrop?.()
   unlistenTauriDragDrop = null
+  document.removeEventListener('visibilitychange', handleWindowVisibilityRestore)
+  window.removeEventListener('focus', handleWindowVisibilityRestore)
 })
 </script>
 
@@ -764,6 +781,7 @@ onBeforeUnmount(() => {
       <button type="button" @click.stop="handleCloseTopGroupNotice">{{ t('知道了') }}</button>
     </div>
     <MessageList
+      :key="conversationId"
       :conversation-id="conversationId"
       :messages="messages"
       :loading="isLoading"

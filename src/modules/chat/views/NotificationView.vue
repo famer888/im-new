@@ -13,7 +13,6 @@ import groupChatIcon from '@/assets/images/notification-popup/group-chat-icon.pn
 import { useSettingStore } from '@/stores/useSettingStore'
 import { getNotificationModuleTargetFromConversationId } from '@/utils/notificationNavigation'
 import { buildNotificationEmojiSegments } from '@/utils/notificationEmojiSegments'
-import { getRuntimePlatform } from '@/utils/runtimePlatform'
 import { API_CONFIG } from '@/api/config'
 
 interface NotificationData {
@@ -120,11 +119,20 @@ function sanitizeNotificationData(value: unknown): NotificationData | null {
   return sanitized
 }
 
+function decodeNotificationQueryValue(text: string): string {
+  if (!/%[0-9A-Fa-f]{2}/.test(text)) return text
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
+  }
+}
+
 function readNotificationData(raw: unknown): NotificationData | null {
   const text = Array.isArray(raw) ? raw[0] : raw
   if (typeof text !== 'string' || !text) return null
   try {
-    const parsed = JSON.parse(decodeURIComponent(text))
+    const parsed = JSON.parse(decodeNotificationQueryValue(text))
     return sanitizeNotificationData(parsed)
   } catch (error) {
     console.warn('[notification] parse notification data failed:', error)
@@ -132,24 +140,48 @@ function readNotificationData(raw: unknown): NotificationData | null {
   }
 }
 
+function isWindowsNotificationWindow(): boolean {
+  if (!(window as any).__TAURI_INTERNALS__) return false
+  const ua = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
+  return ua.includes('win')
+}
+
+function waitForNextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve())
+    })
+  })
+}
+
 function waitForWindowsRevealDelay(): Promise<void> {
   return new Promise((resolve) => {
-    window.setTimeout(resolve, 50)
+    window.setTimeout(resolve, 16)
   })
 }
 
 async function revealWindowsNotificationAfterPaint() {
-  if (notificationWindowRevealStarted || !data.value) return
+  if (notificationWindowRevealStarted) return
+  if (!data.value) {
+    if (isWindowsNotificationWindow()) {
+      try {
+        await getCurrentWindow().close()
+      } catch {
+        // ignore close failure
+      }
+    }
+    return
+  }
   notificationWindowRevealStarted = true
 
   // Windows 端通知窗先隐藏创建，等 Vue 首帧完成后再显示，避免 WebView2 默认白底闪一下。
-  if (await getRuntimePlatform() !== 'windows') return
+  if (!isWindowsNotificationWindow()) return
 
   try {
     await nextTick()
-    // 隐藏 WebView 在 Windows 上可能不触发 requestAnimationFrame；短定时器更适合做显示前缓冲。
+    await waitForNextPaint()
     await waitForWindowsRevealDelay()
-    await getCurrentWindow().show()
+    await invoke('reveal_notification_window')
   } catch (error) {
     console.warn('[notification] reveal window failed:', error)
   }

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/useAuthStore'
+import { useAuthStore, PROCESS_LOCAL_INIT_SESSION_OPTIONS } from '@/stores/useAuthStore'
 import {
   useChatStore,
   CHANNEL_NOTIFICATION_TARGET_ID,
@@ -683,7 +683,11 @@ onMounted(async () => {
 
   try {
     setInitText(t('加载中'))
-    await traceInitStep('auth initSession', () => authStore.initSession(), { rethrow: true })
+    await traceInitStep(
+      'auth initSession',
+      () => authStore.initSession(PROCESS_LOCAL_INIT_SESSION_OPTIONS),
+      { rethrow: true },
+    )
     if (!authStore.uid) {
       initDiag('no uid after initSession, show login')
       uiStore.setChatListNamesReady(true)

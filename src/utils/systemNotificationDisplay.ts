@@ -70,10 +70,7 @@ function getExtraUserNameById(extra: Record<string, unknown> | null): Map<string
 }
 
 function translateNoticeText(text: string, t: (key: string) => string): string {
-  const translatedGroupNotice = translateGroupNoticeText(text, t)
-  if (translatedGroupNotice !== text) return translatedGroupNotice
-  const translated = t(text)
-  return translated === text ? text : translated
+  return translateGroupNoticeText(text, t)
 }
 
 function normalizeComparableName(value: string): string {

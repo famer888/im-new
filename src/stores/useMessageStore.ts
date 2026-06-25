@@ -808,6 +808,21 @@ function collectMessageIdentityKeys(message: Message): string[] {
   return keys
 }
 
+function compareMessagesChronologically(a: Message, b: Message): number {
+  const timeDiff = Number(a.sendTime || 0) - Number(b.sendTime || 0)
+  if (timeDiff !== 0) return timeDiff
+  return String(a.id || a.customMsgId || '').localeCompare(String(b.id || b.customMsgId || ''))
+}
+
+function sortMessagesChronologically(messages: Message[]): Message[] {
+  for (let i = 1; i < messages.length; i++) {
+    if (compareMessagesChronologically(messages[i - 1], messages[i]) > 0) {
+      return messages.slice().sort(compareMessagesChronologically)
+    }
+  }
+  return messages
+}
+
 function mergeUniqueMessagesInOrder(messages: Message[]): Message[] {
   const seen = new Set<string>()
   const merged: Message[] = []
@@ -840,9 +855,9 @@ function mergeLoadedMessagesWithLocal(conversationId: string, loaded: Message[],
     && !collectMessageIdentityKeys(message).some((key) => loadedIdentityKeys.has(key))
   ))
   if (preservedLocalMessages.length === 0) {
-    return { messages: loaded, preserved: [] as Message[] }
+    return { messages: sortMessagesChronologically(loaded), preserved: [] as Message[] }
   }
-  const merged = [...loaded, ...preservedLocalMessages].sort((a, b) => a.sendTime - b.sendTime)
+  const merged = sortMessagesChronologically([...loaded, ...preservedLocalMessages])
   if (merged.length > MAX_CACHED_MESSAGES) {
     merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
   }
@@ -1405,6 +1420,40 @@ export const useMessageStore = defineStore('message', () => {
 
   function getMessages(conversationId: string): Message[] {
     return messageMap.value.get(conversationId) ?? []
+  }
+
+  function patchDecryptedMessagesInPlace(conversationId: string, resolved: Message[]) {
+    const existing = getMessages(conversationId)
+    if (!existing.length || !resolved.length) return
+
+    const patchMap = new Map<string, { content: string | null; extra: string | null }>()
+    for (const message of resolved) {
+      const patch = {
+        content: message.content ?? null,
+        extra: message.extra ?? null,
+      }
+      const id = String(message.id || '').trim()
+      const custom = String(message.customMsgId || '').trim()
+      if (id) patchMap.set(id, patch)
+      if (custom) patchMap.set(custom, patch)
+    }
+
+    let changed = false
+    const next = existing.map((message) => {
+      const patch = patchMap.get(String(message.id || ''))
+        || (message.customMsgId ? patchMap.get(String(message.customMsgId)) : undefined)
+      if (!patch) return message
+      if (message.content === patch.content && message.extra === patch.extra) return message
+      changed = true
+      return {
+        ...message,
+        content: patch.content,
+        extra: patch.extra,
+      }
+    })
+    if (changed) {
+      messageMap.value.set(conversationId, next)
+    }
   }
 
   function isLoading(conversationId: string): boolean {
@@ -2234,8 +2283,21 @@ export const useMessageStore = defineStore('message', () => {
       return
     }
 
-    const loadStartedAt = Date.now()
     const existingBeforeLoad = getMessages(conversationId)
+    if (!force && existingBeforeLoad.length > 0) {
+      if (channelIdForHistory) {
+        channelHistoryLog('loadMessages skipped: use memory cache', {
+          uid,
+          conversationId,
+          channelId: channelIdForHistory,
+          cachedCount: existingBeforeLoad.length,
+        })
+        void syncChannelRecentHistory(uid, conversationId, existingBeforeLoad)
+      }
+      return
+    }
+
+    const loadStartedAt = Date.now()
     const existingGroupImages = existingBeforeLoad.filter((message) => isGroupImageMessage(conversationId, message.msgType))
     if (existingGroupImages.length > 0) {
       groupImageLog('loadMessages start', {
@@ -2270,7 +2332,7 @@ export const useMessageStore = defineStore('message', () => {
           latestExisting,
           loadStartedAt,
         )
-        messageMap.value.set(conversationId, mergedResult.messages)
+        messageMap.value.set(conversationId, sortMessagesChronologically(mergedResult.messages))
         refreshConversationSummary(conversationId, mergedResult.messages, { preserveListOrder: true })
         const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
         if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
@@ -2315,7 +2377,7 @@ export const useMessageStore = defineStore('message', () => {
           : retryDecryptPendingPrivateMessages(uid, normalizedBase)
         void retryPendingMessages
           .then((resolved) => {
-            applyLoadedSnapshot(resolved)
+            patchDecryptedMessagesInPlace(conversationId, resolved)
           })
           .catch((error) => {
             console.warn('[msg] async decrypt on loadMessages failed', {
@@ -2367,7 +2429,9 @@ export const useMessageStore = defineStore('message', () => {
         if (filteredResult.messages.length > 0) {
           const latestExisting = getMessages(conversationId)
           // 旧消息分页可能触发“原始列表 + 解密回填”两次合并，这里线性去重避免重复气泡和 O(n²) 开销。
-          const merged = mergeUniqueMessagesInOrder([...filteredResult.messages, ...latestExisting])
+          const merged = sortMessagesChronologically(
+            mergeUniqueMessagesInOrder([...filteredResult.messages, ...latestExisting]),
+          )
           if (merged.length > MAX_CACHED_MESSAGES) {
             merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
           }
@@ -2391,7 +2455,7 @@ export const useMessageStore = defineStore('message', () => {
           : retryDecryptPendingPrivateMessages(uid, normalizedBase)
         void retryPendingMessages
           .then((resolved) => {
-            applyOlderSnapshot(resolved)
+            patchDecryptedMessagesInPlace(conversationId, resolved)
           })
           .catch((error) => {
             console.warn('[msg] async decrypt on loadOlderMessages failed', {

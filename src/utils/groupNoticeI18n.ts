@@ -6,17 +6,26 @@ export function normalizeGroupNoticeText(raw: string): string {
 
 export function translateGroupNoticeText(raw: string, t: TranslateFn): string {
   const normalized = normalizeGroupNoticeText(raw)
-  // 频道系统消息会把“操作者+动作”拼成一句，这里先拆出操作者，再用参数化 i18n 组装多语言文案。
-  const actorActionMap: Array<[RegExp, string]> = [
-    [/^(.+?)\s*(添加您至此频道|添加你至此频道)$/, '频道通知添加你至此频道'],
-    [/^(.+?)\s*(邀请您加入频道|邀请你加入频道)$/, '频道通知邀请你加入频道'],
-    [/^(.+?)\s*(将您设置为管理员|将你设置为管理员)$/, '由{name}设置为管理员'],
+  // 频道/群系统消息会把“操作者+动作”拼成一句，先拆出变量，再用参数化 i18n 组装多语言文案。
+  const actorActionMap: Array<[RegExp, string, (match: RegExpMatchArray) => Record<string, unknown>]> = [
+    [/^(.+?)\s*(添加您至此频道|添加你至此频道)$/, '频道通知添加你至此频道', (match) => ({ name: String(match[1] || '').trim() })],
+    [/^(.+?)\s*(邀请您加入频道|邀请你加入频道)$/, '频道通知邀请你加入频道', (match) => ({ name: String(match[1] || '').trim() })],
+    [/^(.+?)\s*(将您设置为管理员|将你设置为管理员)$/, '由{name}设置为管理员', (match) => ({ name: String(match[1] || '').trim() })],
+    [/^你将(.+?)移出群聊$/, '群通知你将移出群聊', (match) => ({ name: String(match[1] || '').trim() })],
+    [/^(.+?)被移出群聊$/, '群通知被移出群聊', (match) => ({ name: String(match[1] || '').trim() })],
+    [/^(.+?)退出群聊$/, '群通知成员退出群聊', (match) => ({ name: String(match[1] || '').trim() })],
+    [/^(.+?)邀请(.+?)加入群聊$/, '群通知邀请加入群聊', (match) => ({
+      inviter: String(match[1] || '').trim(),
+      invitee: String(match[2] || '').trim(),
+    })],
   ]
-  for (const [pattern, key] of actorActionMap) {
+  for (const [pattern, key, buildArgs] of actorActionMap) {
     const match = normalized.match(pattern)
     if (!match) continue
-    const actor = String(match[1] || '').trim()
-    if (actor) return t(key, { name: actor })
+    const args = buildArgs(match)
+    const primaryValue = String(args.name || args.inviter || '').trim()
+    if (!primaryValue) continue
+    return t(key, args)
   }
 
   const phraseMap: Record<string, string> = {

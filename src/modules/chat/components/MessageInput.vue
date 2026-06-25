@@ -1504,7 +1504,7 @@ async function refreshCurrentGroupMembersForAtSend() {
 
   try {
     // 发送群 @ 前强制校准成员资料，避免用户停留在群里时把旧昵称写进正文和 atUsers。
-    await groupStore.loadMembers(uid, targetGroupId, { forceRemote: true })
+    await groupStore.loadMembers(uid, targetGroupId, { forceRemote: true, loadAll: true })
   } catch (error) {
     console.warn('[MessageInput] refresh group members before @ send failed:', error)
   }

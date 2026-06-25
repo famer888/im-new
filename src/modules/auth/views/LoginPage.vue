@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
-import { useAuthStore } from '@/stores/useAuthStore'
+import { useAuthStore, PROCESS_LOCAL_INIT_SESSION_OPTIONS } from '@/stores/useAuthStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
@@ -93,7 +93,10 @@ onMounted(async () => {
       isLoginWindow.value = getCurrentWindow().label === 'login'
       loginDiag('window label resolved', { isLoginWindow: isLoginWindow.value })
       if (!isLoginWindow.value) {
-        await withRestoreTimeout('init session for main window', authStore.initSession())
+        await withRestoreTimeout(
+          'init session for main window',
+          authStore.initSession(PROCESS_LOCAL_INIT_SESSION_OPTIONS),
+        )
         if (authStore.uid) {
           loginDiag('main window session restored, route home', { uid: authStore.uid })
           await router.replace('/home')
@@ -119,7 +122,7 @@ onMounted(async () => {
       hasUid: !!authStore.uid,
       autoLoginAllowed,
     })
-    if (authStore.uid) {
+    if (authStore.uid && autoLoginAllowed) {
       if (isTauri()) {
         loginDiag('cached session found, invoke login', { uid: authStore.uid })
         await withRestoreTimeout('invoke login with cached session', invoke('login', {

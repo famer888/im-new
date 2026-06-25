@@ -50,6 +50,13 @@ interface InitSessionOptions {
   fallbackToCachedAccount?: boolean
 }
 
+/** 主窗口只恢复本进程 Rust 会话，避免多开时从共享 localStorage 误登其它账号 */
+export const PROCESS_LOCAL_INIT_SESSION_OPTIONS: InitSessionOptions = {
+  restoreSession: true,
+  autoLogin: false,
+  fallbackToCachedAccount: false,
+}
+
 const ACCOUNT_LIST_KEY = 'login-account-list'
 const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'

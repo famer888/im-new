@@ -103,6 +103,12 @@ async function copyId() {
   }
 }
 
+function openFriendDetail() {
+  if (!conv.value?.targetId) return
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('friend-detail')
+}
+
 async function togglePin() {
   if (!conv.value) return
   await chatStore.pinConversation(authStore.uid, conv.value.id, !conv.value.isPinned)
@@ -315,8 +321,15 @@ async function confirmDeleteContact() {
       <div class="profile-text">
         <h2>{{ contact.remark || contact.nickname || contact.id }}</h2>
         <p class="id-row">
-          <span class="id-line">{{ t('ID：') }}{{ displayId }}</span>
-          <button type="button" class="copy-btn" @click="copyId">{{ t('复制') }}</button>
+          <span
+            class="id-line"
+            :class="{ clickable: Boolean(displayId) }"
+            role="button"
+            :tabindex="displayId ? 0 : -1"
+            @click="displayId && openFriendDetail()"
+            @keyup.enter="displayId && openFriendDetail()"
+          >{{ t('ID：') }}{{ displayId }}</span>
+          <button type="button" class="copy-btn" @click.stop="copyId">{{ t('复制') }}</button>
         </p>
       </div>
     </div>
@@ -442,6 +455,15 @@ async function confirmDeleteContact() {
     flex: 1;
     min-width: 0;
     word-break: break-all;
+
+    &.clickable {
+      color: #326aff;
+      cursor: pointer;
+
+      &:hover {
+        text-decoration: underline;
+      }
+    }
   }
 }
 

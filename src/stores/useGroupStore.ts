@@ -7,8 +7,10 @@ import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 
 const MEMBER_ONLINE_STATUS_BATCH_SIZE = 40
 const MEMBER_PREVIEW_COUNT = 8
+const MEMBER_REMOTE_PAGE_SIZE = 200
 const GROUP_DETAIL_REFRESH_TTL_MS = 30 * 1000
 const memberLoadRequestMap = new Map<string, Promise<GroupMember[]>>()
+const memberLoadMoreRequestMap = new Map<string, Promise<GroupMember[]>>()
 const groupDetailRequestMap = new Map<string, Promise<Group | null>>()
 const groupDetailRefreshAtMap = new Map<string, number>()
 const GROUP_PATCH_EVENT = 'group:patch'
@@ -17,6 +19,25 @@ interface LoadMembersOptions {
   forceRemote?: boolean
   /** 通讯录详情页仅需头像预览，不拉全量成员与在线状态 */
   previewOnly?: boolean
+  /** 强制分页拉完全部成员（@ 提及、移出成员等需要全量搜索的场景） */
+  loadAll?: boolean
+}
+
+interface MemberPaginationState {
+  nextPageNum: number
+  pageSize: number
+  hasMore: boolean
+  loadingMore: boolean
+  expectedCount: number
+}
+
+interface FetchMembersRemotePageResult {
+  members: GroupMember[]
+  pageNum: number
+  pageSize: number
+  hasMore: boolean
+  complete: boolean
+  expectedMemberCount: number
 }
 
 type MemberCountSource = 'remote-full' | 'fallback'
@@ -147,8 +168,9 @@ export interface GroupMember {
 export const useGroupStore = defineStore('group', () => {
   const groups = ref<Group[]>([])
   const memberMap = ref<Map<string, GroupMember[]>>(new Map())
-  /** 记录成员列表是否仅为预览（8 人）或已全量加载 */
-  const memberLoadDepthMap = ref<Map<string, 'preview' | 'full'>>(new Map())
+  /** 记录成员列表是否仅为预览（8 人）、分页部分加载或已全量加载 */
+  const memberLoadDepthMap = ref<Map<string, 'preview' | 'partial' | 'full'>>(new Map())
+  const memberPaginationMap = ref<Map<string, MemberPaginationState>>(new Map())
   const loading = ref(false)
 
   function setGroupMembers(
@@ -371,23 +393,168 @@ export const useGroupStore = defineStore('group', () => {
   }
 
   function isMemberListFullyLoaded(groupId: string, cached: GroupMember[]): boolean {
-    const expected = getGroup(groupId)?.memberCount ?? 0
+    const expected = getGroup(groupId)?.memberCount ?? memberPaginationMap.value.get(groupId)?.expectedCount ?? 0
     if (memberLoadDepthMap.value.get(groupId) === 'full') {
       return expected > 0 ? cached.length >= expected : cached.length > 0
     }
     return expected > 0 && cached.length >= expected
   }
 
+  function getMemberPagination(groupId: string): MemberPaginationState | undefined {
+    return memberPaginationMap.value.get(groupId)
+  }
+
+  function hasMoreMembers(groupId: string): boolean {
+    return Boolean(memberPaginationMap.value.get(groupId)?.hasMore)
+  }
+
+  function isLoadingMoreMembers(groupId: string): boolean {
+    return Boolean(memberPaginationMap.value.get(groupId)?.loadingMore)
+  }
+
+  function setMemberPagination(groupId: string, patch: Partial<MemberPaginationState>) {
+    const prev = memberPaginationMap.value.get(groupId)
+    const next = new Map(memberPaginationMap.value)
+    next.set(groupId, {
+      nextPageNum: patch.nextPageNum ?? prev?.nextPageNum ?? 1,
+      pageSize: patch.pageSize ?? prev?.pageSize ?? MEMBER_REMOTE_PAGE_SIZE,
+      hasMore: patch.hasMore ?? prev?.hasMore ?? false,
+      loadingMore: patch.loadingMore ?? prev?.loadingMore ?? false,
+      expectedCount: patch.expectedCount ?? prev?.expectedCount ?? getGroup(groupId)?.memberCount ?? 0,
+    })
+    memberPaginationMap.value = next
+  }
+
+  function clearMemberPagination(groupId: string) {
+    if (!memberPaginationMap.value.has(groupId)) return
+    const next = new Map(memberPaginationMap.value)
+    next.delete(groupId)
+    memberPaginationMap.value = next
+  }
+
+  function resetGroupMembers(groupId: string) {
+    const normalizedId = String(groupId || '').trim()
+    if (!normalizedId) return
+    if (memberMap.value.has(normalizedId)) {
+      const next = new Map(memberMap.value)
+      next.delete(normalizedId)
+      memberMap.value = next
+    }
+    if (memberLoadDepthMap.value.has(normalizedId)) {
+      const nextDepth = new Map(memberLoadDepthMap.value)
+      nextDepth.delete(normalizedId)
+      memberLoadDepthMap.value = nextDepth
+    }
+    clearMemberPagination(normalizedId)
+  }
+
+  function appendGroupMembers(groupId: string, incoming: GroupMember[]): GroupMember[] {
+    const existing = memberMap.value.get(groupId) ?? []
+    if (!incoming.length) return existing
+    const existingIds = new Set(existing.map((member) => member.userId))
+    const toAdd = incoming.filter((member) => member.userId && !existingIds.has(member.userId))
+    if (!toAdd.length) return existing
+    const merged = sortMembersForDisplay([...existing, ...toAdd])
+    setGroupMembers(groupId, merged, { updateMemberCount: false })
+    return merged
+  }
+
+  async function fetchMembersRemotePage(
+    groupId: string,
+    pageNum: number,
+    pageSize = MEMBER_REMOTE_PAGE_SIZE,
+  ): Promise<FetchMembersRemotePageResult> {
+    const requestPayload = {
+      groupId,
+      pageNum,
+      pageSize,
+      time: 0,
+    }
+    const resp = await getGroupMemberList(requestPayload)
+    let list = resp.members || []
+    let groupBase = (resp as any)?.groupBase
+
+    const shouldFallbackToV2 = !isCommonResultOk(resp) || (pageNum === 1 && list.length === 0)
+    if (shouldFallbackToV2) {
+      const respV2 = await getGroupMemberListV2(requestPayload)
+      list = respV2.members || []
+      groupBase = (respV2 as any)?.groupBase || groupBase
+      groupMemberRefreshDebug('remote page fallback to v2', {
+        groupId,
+        pageNum,
+        pageSize,
+        v1ErrCode: (resp as any)?.commonResult?.errCode ?? null,
+        v1ErrMsg: (resp as any)?.commonResult?.errMsg ?? '',
+        v1Count: (resp?.members || []).length,
+        v2ErrCode: (respV2 as any)?.commonResult?.errCode ?? null,
+        v2ErrMsg: (respV2 as any)?.commonResult?.errMsg ?? '',
+        v2Count: list.length,
+      })
+    }
+
+    let expectedMemberCount = getGroup(groupId)?.memberCount ?? 0
+    if (groupBase) {
+      const remoteMemberCount = Number(groupBase.memberCount ?? groupBase.member_count ?? 0)
+      if (Number.isFinite(remoteMemberCount) && remoteMemberCount > 0) {
+        expectedMemberCount = remoteMemberCount
+      }
+      const existingGroup = getGroup(groupId)
+      if (
+        Number.isFinite(remoteMemberCount)
+        && remoteMemberCount > 0
+        && (!existingGroup || existingGroup.memberCount !== remoteMemberCount)
+      ) {
+        upsertRemoteGroup({
+          id: groupId,
+          name: groupBase.name ?? groupBase.groupName ?? existingGroup?.name,
+          avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar ?? existingGroup?.avatar,
+          ownerId: groupBase.hostId ? String(groupBase.hostId) : existingGroup?.ownerId,
+          memberCount: remoteMemberCount,
+        })
+      }
+    }
+
+    const members = (list as any[]).map((item) => normalizeMember(item, groupId))
+    const loadedCount = (pageNum - 1) * pageSize + members.length
+    const hasMore = expectedMemberCount > 0
+      ? loadedCount < expectedMemberCount && members.length > 0
+      : members.length >= pageSize
+    const complete = !hasMore
+
+    groupMemberRefreshDebug('remote page response', {
+      groupId,
+      pageNum,
+      pageCount: list.length,
+      expectedMemberCount,
+      loadedCount,
+      hasMore,
+      complete,
+    })
+
+    return {
+      members,
+      pageNum,
+      pageSize,
+      hasMore,
+      complete,
+      expectedMemberCount,
+    }
+  }
+
   async function loadMembers(uid: string, groupId: string, options: LoadMembersOptions = {}) {
     const previewOnly = Boolean(options.previewOnly)
-    const requestKey = `${groupId}:${options.forceRemote ? 'remote' : 'default'}:${previewOnly ? 'preview' : 'full'}`
+    const loadAll = Boolean(options.loadAll)
+    const requestKey = `${groupId}:${options.forceRemote ? 'remote' : 'default'}:${previewOnly ? 'preview' : loadAll ? 'all' : 'page'}`
     const cached = memberMap.value.get(groupId) ?? []
     const loadDepth = memberLoadDepthMap.value.get(groupId)
 
     if (previewOnly) {
       if (isMemberListFullyLoaded(groupId, cached)) return cached
       if (loadDepth === 'preview' && cached.length > 0) return cached
-    } else if (!options.forceRemote && isMemberListFullyLoaded(groupId, cached)) {
+    } else if (!options.forceRemote && !loadAll) {
+      if (memberLoadDepthMap.value.get(groupId) === 'partial' && cached.length > 0) return cached
+      if (isMemberListFullyLoaded(groupId, cached)) return cached
+    } else if (!options.forceRemote && loadAll && isMemberListFullyLoaded(groupId, cached)) {
       return cached
     }
 
@@ -397,6 +564,7 @@ export const useGroupStore = defineStore('group', () => {
       groupId,
       forceRemote: Boolean(options.forceRemote),
       previewOnly,
+      loadAll,
       requestKey,
       hasExistingRequest: Boolean(existingRequest),
       currentMemberMapCount: cached.length,
@@ -405,9 +573,14 @@ export const useGroupStore = defineStore('group', () => {
     if (existingRequest) return existingRequest
 
     const request = (async () => {
+      if (options.forceRemote && !loadAll && !previewOnly) {
+        resetGroupMembers(groupId)
+      }
+
       let members: GroupMember[] | null = null
       let membersSource: LoadedMembersSource | null = null
       let remoteMembersComplete = false
+      let onlineStatusTargets: GroupMember[] | null = null
 
       if (isTauri() && !options.forceRemote) {
         try {
@@ -446,14 +619,55 @@ export const useGroupStore = defineStore('group', () => {
           groupId,
           reason: options.forceRemote ? 'forceRemote' : 'noLocalMembers',
           previewOnly,
+          loadAll,
         })
-        const remoteResult = await loadMembersViaApi(groupId, {
-          pageSize: previewOnly ? MEMBER_PREVIEW_COUNT : 200,
-          maxPages: previewOnly ? 1 : undefined,
+        if (previewOnly || loadAll) {
+          const remoteResult = await loadMembersViaApi(groupId, {
+            pageSize: previewOnly ? MEMBER_PREVIEW_COUNT : MEMBER_REMOTE_PAGE_SIZE,
+            maxPages: previewOnly ? 1 : undefined,
+          })
+          members = mergeMembersWithExistingStatuses(groupId, remoteResult.members)
+          onlineStatusTargets = members
+          membersSource = 'remote'
+          remoteMembersComplete = remoteResult.complete
+          setMemberPagination(groupId, {
+            nextPageNum: remoteResult.complete ? 1 : Math.ceil(remoteResult.members.length / MEMBER_REMOTE_PAGE_SIZE) + 1,
+            pageSize: MEMBER_REMOTE_PAGE_SIZE,
+            hasMore: !remoteResult.complete,
+            loadingMore: false,
+            expectedCount: getGroup(groupId)?.memberCount ?? remoteResult.members.length,
+          })
+        } else {
+          if (options.forceRemote) {
+            clearMemberPagination(groupId)
+          }
+          const pageResult = await fetchMembersRemotePage(groupId, 1, MEMBER_REMOTE_PAGE_SIZE)
+          const incoming = mergeMembersWithExistingStatuses(groupId, pageResult.members)
+          onlineStatusTargets = incoming
+          members = memberMap.value.get(groupId)?.length
+            ? appendGroupMembers(groupId, incoming)
+            : incoming
+          membersSource = 'remote'
+          remoteMembersComplete = pageResult.complete
+          setMemberPagination(groupId, {
+            nextPageNum: 2,
+            pageSize: MEMBER_REMOTE_PAGE_SIZE,
+            hasMore: pageResult.hasMore,
+            loadingMore: false,
+            expectedCount: pageResult.expectedMemberCount || getGroup(groupId)?.memberCount || 0,
+          })
+        }
+      } else if (!previewOnly) {
+        members = mergeMembersWithExistingStatuses(groupId, members)
+        onlineStatusTargets = members
+        remoteMembersComplete = isMemberListFullyLoaded(groupId, members)
+        setMemberPagination(groupId, {
+          nextPageNum: 1,
+          pageSize: MEMBER_REMOTE_PAGE_SIZE,
+          hasMore: false,
+          loadingMore: false,
+          expectedCount: getGroup(groupId)?.memberCount ?? members.length,
         })
-        members = remoteResult.members
-        membersSource = 'remote'
-        remoteMembersComplete = remoteResult.complete
       }
 
       groupMemberRefreshDebug('members loaded before online merge', {
@@ -461,9 +675,14 @@ export const useGroupStore = defineStore('group', () => {
         count: members.length,
         memberIds: members.map((member) => member.userId).slice(0, 10),
       })
-      members = mergeMembersWithExistingStatuses(groupId, members)
 
-      const nextDepth = previewOnly || membersSource !== 'remote' || !remoteMembersComplete ? 'preview' : 'full'
+      const nextDepth: 'preview' | 'partial' | 'full' = previewOnly
+        ? 'preview'
+        : remoteMembersComplete
+          ? 'full'
+          : membersSource === 'remote'
+            ? 'partial'
+            : 'full'
       const nextDepthMap = new Map(memberLoadDepthMap.value)
       nextDepthMap.set(groupId, nextDepth)
       memberLoadDepthMap.value = nextDepthMap
@@ -475,7 +694,15 @@ export const useGroupStore = defineStore('group', () => {
       })
 
       if (!previewOnly) {
-        members = await loadMemberOnlineStatuses(groupId, members)
+        const statusTargets = onlineStatusTargets ?? members
+        const withOnline = await loadMemberOnlineStatuses(groupId, statusTargets)
+        const onlineMap = new Map(withOnline.map((member) => [member.userId, member]))
+        members = sortMembersForDisplay(
+          members.map((member) => {
+            const patched = onlineMap.get(member.userId)
+            return patched ? { ...member, ...patched } : member
+          }),
+        )
         setGroupMembers(groupId, members, {
           updateMemberCount: false,
         })
@@ -500,96 +727,91 @@ export const useGroupStore = defineStore('group', () => {
     return request
   }
 
+  async function loadMoreMembers(uid: string, groupId: string): Promise<GroupMember[]> {
+    void uid
+    const pagination = memberPaginationMap.value.get(groupId)
+    const cached = memberMap.value.get(groupId) ?? []
+    if (!pagination?.hasMore || pagination.loadingMore) return cached
+
+    const existingRequest = memberLoadMoreRequestMap.get(groupId)
+    if (existingRequest) return existingRequest
+
+    const request = (async () => {
+      setMemberPagination(groupId, { loadingMore: true })
+      try {
+        const pageResult = await fetchMembersRemotePage(
+          groupId,
+          pagination.nextPageNum,
+          pagination.pageSize,
+        )
+        if (!pageResult.members.length) {
+          setMemberPagination(groupId, {
+            hasMore: false,
+            loadingMore: false,
+            expectedCount: pageResult.expectedMemberCount || pagination.expectedCount,
+          })
+          const nextDepthMap = new Map(memberLoadDepthMap.value)
+          nextDepthMap.set(groupId, 'full')
+          memberLoadDepthMap.value = nextDepthMap
+          return memberMap.value.get(groupId) ?? []
+        }
+
+        const incoming = mergeMembersWithExistingStatuses(groupId, pageResult.members)
+        const withOnline = await loadMemberOnlineStatuses(groupId, incoming)
+        const merged = appendGroupMembers(groupId, withOnline)
+
+        const nextDepth: 'partial' | 'full' = pageResult.complete ? 'full' : 'partial'
+        const nextDepthMap = new Map(memberLoadDepthMap.value)
+        nextDepthMap.set(groupId, nextDepth)
+        memberLoadDepthMap.value = nextDepthMap
+
+        setMemberPagination(groupId, {
+          nextPageNum: pagination.nextPageNum + 1,
+          pageSize: pagination.pageSize,
+          hasMore: pageResult.hasMore,
+          loadingMore: false,
+          expectedCount: pageResult.expectedMemberCount || pagination.expectedCount,
+        })
+        return merged
+      } catch (error) {
+        setMemberPagination(groupId, { loadingMore: false })
+        console.error('[GroupStore] loadMoreMembers failed:', error)
+        return memberMap.value.get(groupId) ?? []
+      }
+    })().finally(() => {
+      memberLoadMoreRequestMap.delete(groupId)
+    })
+
+    memberLoadMoreRequestMap.set(groupId, request)
+    return request
+  }
+
   async function loadMembersViaApi(
     groupId: string,
     options: { pageSize?: number; maxPages?: number } = {},
   ): Promise<LoadMembersViaApiResult> {
-    const allMembers: GroupMember[] = []
-    const pageSize = options.pageSize ?? 200
+    const pageSize = options.pageSize ?? MEMBER_REMOTE_PAGE_SIZE
     const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY
+    const allMembers: GroupMember[] = []
     let pageNum = 1
-    let hasMore = true
     let complete = false
     let expectedMemberCount = 0
 
-    while (hasMore && pageNum <= maxPages) {
+    while (pageNum <= maxPages) {
       try {
         groupMemberRefreshDebug('remote page request', {
           groupId,
           pageNum,
           pageSize,
         })
-        const requestPayload = {
-          // 保持字符串 ID，避免大整数群 ID 被 Number 截断后查不到成员
-          groupId,
-          pageNum,
-          pageSize,
-          time: 0,
+        const pageResult = await fetchMembersRemotePage(groupId, pageNum, pageSize)
+        expectedMemberCount = pageResult.expectedMemberCount || expectedMemberCount
+        for (const member of pageResult.members) {
+          allMembers.push(member)
         }
-        const resp = await getGroupMemberList(requestPayload)
-        let list = resp.members || []
-        let source: 'v1' | 'v2' = 'v1'
-        let groupBase = (resp as any)?.groupBase
-
-        // 与旧 im 行为对齐：部分群在 V1 下会返回空列表/业务失败，需自动回退到 V2 才能拿到成员。
-        const shouldFallbackToV2 = !isCommonResultOk(resp) || (pageNum === 1 && list.length === 0)
-        if (shouldFallbackToV2) {
-          const respV2 = await getGroupMemberListV2(requestPayload)
-          list = respV2.members || []
-          groupBase = (respV2 as any)?.groupBase || groupBase
-          source = 'v2'
-          groupMemberRefreshDebug('remote page fallback to v2', {
-            groupId,
-            pageNum,
-            pageSize,
-            v1ErrCode: (resp as any)?.commonResult?.errCode ?? null,
-            v1ErrMsg: (resp as any)?.commonResult?.errMsg ?? '',
-            v1Count: (resp?.members || []).length,
-            v2ErrCode: (respV2 as any)?.commonResult?.errCode ?? null,
-            v2ErrMsg: (respV2 as any)?.commonResult?.errMsg ?? '',
-            v2Count: list.length,
-          })
-        }
-
-        if (groupBase) {
-          const remoteMemberCount = Number(groupBase.memberCount ?? groupBase.member_count ?? 0)
-          if (Number.isFinite(remoteMemberCount) && remoteMemberCount > 0) {
-            expectedMemberCount = remoteMemberCount
-          }
-          const existingGroup = getGroup(groupId)
-          if (
-            Number.isFinite(remoteMemberCount)
-            && remoteMemberCount > 0
-            && (!existingGroup || existingGroup.memberCount !== remoteMemberCount)
-          ) {
-            // 成员列表接口会带群基础资料；先用服务端声明的人数修正标题，避免等完整成员页拉完才更新。
-            upsertRemoteGroup({
-              id: groupId,
-              name: groupBase.name ?? groupBase.groupName ?? existingGroup?.name,
-              avatar: groupBase.pic ?? groupBase.avatar ?? groupBase.groupAvatar ?? existingGroup?.avatar,
-              ownerId: groupBase.hostId ? String(groupBase.hostId) : existingGroup?.ownerId,
-              memberCount: remoteMemberCount,
-            })
-          }
-        }
-
-        groupMemberRefreshDebug('remote page response', {
-          groupId,
-          pageNum,
-          pageCount: list.length,
-          totalLoaded: allMembers.length + list.length,
-          errCode: (resp as any)?.commonResult?.errCode ?? null,
-          errMsg: (resp as any)?.commonResult?.errMsg ?? '',
-          source,
-        })
-        for (const item of list as any[]) {
-          allMembers.push(normalizeMember(item, groupId))
-        }
-
-        hasMore = list.length >= pageSize
-        // 服务端声明总人数时，必须按总人数判断完整；异常短页不能被误认为完整列表。
-        complete = expectedMemberCount > 0 ? allMembers.length >= expectedMemberCount : !hasMore
-        pageNum++
+        complete = pageResult.complete
+        if (complete) break
+        pageNum += 1
       } catch (e) {
         groupMemberRefreshDebug('remote page failed', {
           groupId,
@@ -598,7 +820,7 @@ export const useGroupStore = defineStore('group', () => {
         }, 'error')
         console.error('[GroupStore] API loadMembers page failed:', e)
         complete = false
-        hasMore = false
+        break
       }
     }
 
@@ -817,6 +1039,7 @@ export const useGroupStore = defineStore('group', () => {
       nextDepth.delete(normalizedId)
       memberLoadDepthMap.value = nextDepth
     }
+    clearMemberPagination(normalizedId)
   }
 
   return {
@@ -825,6 +1048,11 @@ export const useGroupStore = defineStore('group', () => {
     loading,
     loadGroups,
     loadMembers,
+    loadMoreMembers,
+    resetGroupMembers,
+    hasMoreMembers,
+    isLoadingMoreMembers,
+    getMemberPagination,
     upsertGroup,
     upsertRemoteGroup,
     patchGroupDisturb,

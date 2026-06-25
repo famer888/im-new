@@ -144,6 +144,10 @@ function openInvite() {
 }
 
 function openRemoveMember() {
+  const groupId = conv.value?.targetId
+  if (groupId && authStore.uid && groupStore.hasMoreMembers(groupId)) {
+    void groupStore.loadMembers(authStore.uid, groupId, { forceRemote: true, loadAll: true })
+  }
   removeMemberVisible.value = true
 }
 
@@ -253,6 +257,7 @@ async function refreshMembers() {
   if (!conv.value?.targetId || !authStore.uid || refreshingMembers.value) return
   refreshingMembers.value = true
   try {
+    groupStore.resetGroupMembers(conv.value.targetId)
     await groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true })
   } catch (e) {
     console.error('[GroupInfoPanel] refresh members failed:', e)
@@ -261,6 +266,33 @@ async function refreshMembers() {
     refreshingMembers.value = false
   }
 }
+
+const hasMoreMembers = computed(() => {
+  const groupId = conv.value?.targetId ?? ''
+  return groupId ? groupStore.hasMoreMembers(groupId) : false
+})
+
+const loadingMoreMembers = computed(() => {
+  const groupId = conv.value?.targetId ?? ''
+  return groupId ? groupStore.isLoadingMoreMembers(groupId) : false
+})
+
+function handleMemberDirectoryScroll(event: Event) {
+  const groupId = conv.value?.targetId
+  if (!groupId || !authStore.uid || search.value.trim()) return
+  if (!groupStore.hasMoreMembers(groupId) || groupStore.isLoadingMoreMembers(groupId)) return
+
+  const el = event.target as HTMLElement
+  const threshold = 120
+  if (el.scrollTop + el.clientHeight < el.scrollHeight - threshold) return
+  void groupStore.loadMoreMembers(authStore.uid, groupId)
+}
+
+watch(showAllMembers, (visible) => {
+  const groupId = conv.value?.targetId
+  if (!visible || !groupId || !authStore.uid) return
+  void groupStore.loadMembers(authStore.uid, groupId)
+})
 
 const allMembers = computed(() => {
   if (!conv.value) return []
@@ -761,7 +793,7 @@ function handleOnlineTime(member: any) {
           <div class="member-cancel" @click="showAllMembers = false; search = ''">{{ t('取消') }}</div>
         </div>
 
-        <ul class="member-list directory-list">
+        <ul class="member-list directory-list" @scroll="handleMemberDirectoryScroll">
           <li v-for="member in members" :key="member.userId" class="member-item">
             <TextAvatar
               :name="member.nickname || member.userId"
@@ -777,6 +809,9 @@ function handleOnlineTime(member: any) {
             </div>
             <span v-if="member.role === 0" class="role-badge owner">{{ t('群主') }}</span>
             <span v-else-if="member.role === 1" class="role-badge admin">{{ t('管理员') }}</span>
+          </li>
+          <li v-if="!search.trim() && (loadingMoreMembers || hasMoreMembers)" class="member-load-more">
+            {{ loadingMoreMembers ? `${t('加载中')}...` : t('上滑加载更多') }}
           </li>
         </ul>
 
@@ -869,7 +904,7 @@ function handleOnlineTime(member: any) {
     <RemoveMemberDialog
       :visible="removeMemberVisible"
       :group-id="conv.targetId"
-      :members="members"
+      :members="allMembers"
       :current-role="effectiveMemberType ?? -1"
       @close="removeMemberVisible = false"
       @removed="handleRemoved"
@@ -1496,6 +1531,20 @@ function handleOnlineTime(member: any) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.member-load-more {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #999;
+  cursor: default;
+
+  &:hover {
+    background: transparent;
+  }
 }
 
 .directory-invite {

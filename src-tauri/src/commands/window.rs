@@ -101,6 +101,14 @@ pub async fn show_notification_window(
 }
 
 #[tauri::command]
+pub async fn reveal_notification_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    if !window.label().starts_with("notification_") {
+        return Ok(());
+    }
+    window.show().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn resize_notification_window(
     window: tauri::WebviewWindow,
     win_mgr: State<'_, WindowManager>,

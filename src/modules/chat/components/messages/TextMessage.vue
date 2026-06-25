@@ -180,6 +180,15 @@ const mentionCandidates = computed<MentionCandidate[]>(() => {
     }
   }
 
+  const conv = messageConversation.value
+  if (conv.type === ConversationType.Friend && conv.targetId) {
+    const contact = contactStore.getContact(conv.targetId)
+    const names = [contact?.remark, contact?.nickname, contact?.identify, contact?.id, conv.targetId]
+    for (const name of names) {
+      pushMentionCandidate(result, seen, String(name || ''), conv.targetId)
+    }
+  }
+
   return result.sort((a, b) => b.label.length - a.label.length)
 })
 
@@ -867,8 +876,11 @@ async function openRemoteAliasTarget(
   const target = await request
   if (target.type === 'member') {
     if (target.profile.isFriend) {
-      // 已是好友时直接进入单聊；资料弹窗只留给非好友或不能确定好友关系的别名结果。
-      openFriendMentionConversation(target.profile.userId)
+      if (messageConversation.value.type === ConversationType.Friend && !messageGroupId.value) {
+        openFriendMentionProfile(target.profile.userId)
+      } else {
+        openFriendMentionConversation(target.profile.userId)
+      }
     } else {
       uiStore.openMemberInfo(target.profile.userId, groupId, [target.context, target.profile.nickname], target.profile)
     }
@@ -1048,7 +1060,18 @@ function resolveFriendConversationMention(
     return contactToMentionProfile(currentContact)
   }
 
-  return resolveMentionLocalFriend(cleanLabel)
+  const localMatch = resolveMentionLocalFriend(cleanLabel)
+  if (localMatch) return localMatch
+
+  // 好友单聊里 @ 文本常见为对方好友号；identify 未缓存时仍应打开当前会话好友资料。
+  if (currentContact && cleanLabel) {
+    const selfIdentify = String(contactStore.getContact(authStore.uid || '')?.identify || '').trim()
+    if (cleanLabel !== selfIdentify && cleanLabel !== String(authStore.uid || '').trim()) {
+      return contactToMentionProfile(currentContact)
+    }
+  }
+
+  return null
 }
 
 function resolveLocalFriendMention(
@@ -1087,12 +1110,20 @@ function contactToMentionProfile(contact: { id: string; nickname?: string | null
 
 function openFriendMentionConversation(friendId: string) {
   if (!friendId) return
-  // 好友会话里点击 @ 好友要直接进入单聊，而不是先弹资料窗再让用户点“发送消息”。
   const conv = chatStore.ensureConversation(ConversationType.Friend, friendId)
   chatStore.setCurrentConversation(conv.id)
   uiStore.setSidebarTab('chats')
   uiStore.setRightPanel('none')
   uiStore.setDetailView('chat')
+}
+
+function openFriendMentionProfile(friendId: string) {
+  if (!friendId) return
+  const conv = chatStore.ensureConversation(ConversationType.Friend, friendId)
+  chatStore.setCurrentConversation(conv.id)
+  uiStore.setSidebarTab('chats')
+  uiStore.setRightPanel('none')
+  uiStore.setDetailView('friend-detail')
 }
 
 async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
@@ -1121,7 +1152,9 @@ async function handleAtClick(segment: Extract<ContentSegment, { type: 'at' }>) {
 
     if (!groupId && messageConversation.value.type === ConversationType.Friend) {
       if (friendMention) {
-        openFriendMentionConversation(friendMention.userId)
+        openFriendMentionProfile(friendMention.userId)
+      } else if (segment.memberId) {
+        openFriendMentionProfile(segment.memberId)
       } else {
         const slowTimer = window.setTimeout(() => {
           setMentionResolving(openingKey, true)

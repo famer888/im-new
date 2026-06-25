@@ -22,6 +22,15 @@ const BOOT_STEP_TIMEOUT_MS = 8000
 
 installTauriElectronBridge()
 
+if (import.meta.env.DEV) {
+  const originalWarn = console.warn.bind(console)
+  console.warn = (...args: unknown[]) => {
+    const message = String(args[0] ?? '')
+    if (message.includes('[TAURI]') && message.includes("Couldn't find callback id")) return
+    originalWarn(...args)
+  }
+}
+
 function bootDiag(message: string, data?: Record<string, unknown>) {
   void message
   void data
@@ -127,7 +136,11 @@ async function bootstrap() {
   app.use(i18n)
 
   const routeHash = window.location.hash || ''
-  if (!routeHash.startsWith('#/notification')) {
+  const isNotificationWindow = routeHash.startsWith('#/notification')
+  if (isNotificationWindow) {
+    document.documentElement.style.background = 'transparent'
+    document.body.style.background = 'transparent'
+  } else {
     setupTauriListeners().catch(console.error)
   }
 

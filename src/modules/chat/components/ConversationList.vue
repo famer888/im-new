@@ -1379,8 +1379,21 @@ function observeVirtualMetrics() {
   updateVirtualMetrics()
 }
 
+function handleWindowVisibilityRestore() {
+  if (document.hidden) return
+  void nextTick(() => {
+    updateVirtualMetrics()
+    const uid = String(authStore.uid || '')
+    if (uid && chatStore.conversations.length === 0) {
+      void chatStore.loadConversations(uid)
+    }
+  })
+}
+
 onMounted(() => {
   void nextTick(observeVirtualMetrics)
+  document.addEventListener('visibilitychange', handleWindowVisibilityRestore)
+  window.addEventListener('focus', handleWindowVisibilityRestore)
 })
 
 watch(archiveEntryVisible, () => {
@@ -1392,6 +1405,8 @@ onBeforeUnmount(() => {
     window.clearTimeout(previewRefreshTimer)
     previewRefreshTimer = null
   }
+  document.removeEventListener('visibilitychange', handleWindowVisibilityRestore)
+  window.removeEventListener('focus', handleWindowVisibilityRestore)
   resizeObserver?.disconnect()
   resizeObserver = null
 })
