@@ -36,6 +36,8 @@ export interface Channel {
   linkType: number | null
   ownerId: string | null
   description: string | null
+  /** 是否限制成员保存图片/文件等内容 */
+  contentLimit: boolean
   updatedAt: number
 }
 
@@ -262,6 +264,7 @@ export const useChannelStore = defineStore('channel', () => {
       linkType: item.linkType === undefined || item.linkType === null ? null : Number(item.linkType),
       ownerId: item.ownerId ?? item.owner_id ?? null,
       description: item.description ?? item.channelDesc ?? null,
+      contentLimit: toBool(item.contentLimit ?? item.content_limit, false),
       updatedAt: Number(item.updatedAt ?? item.updated_at ?? item.updateTime ?? item.createTime ?? 0),
     }
   }

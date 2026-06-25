@@ -15,6 +15,7 @@ import { mediaViewerState, type MediaViewerPayload } from '@/utils/mediaViewerSt
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import { getRuntimePlatform, type RuntimePlatform } from '@/utils/runtimePlatform'
+import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import closeIcon from '@/assets/windows_control_icons/close-w-30.png'
 import minimizeIcon from '@/assets/windows_control_icons/min-w-30.png'
 import squareIcon from '@/assets/windows_control_icons/max-w-30.png'
@@ -258,6 +259,11 @@ const localFilePath = computed(() => {
   return ''
 })
 const canOpenDirectory = computed(() => Boolean(localImagePath.value))
+const isChannelSaveRestricted = computed(() => {
+  const channelId = String(payload.value?.channelId || '').trim()
+  if (!channelId) return false
+  return isChannelContentSaveRestricted(channelId)
+})
 const contextMenuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = []
   if (isFile.value) {
@@ -266,14 +272,14 @@ const contextMenuItems = computed<MenuItem[]>(() => {
     }
     return items
   }
-  if (!isVideo.value) {
+  if (!isVideo.value && !isChannelSaveRestricted.value) {
     items.push(
       { key: 'copy', label: t('复制') },
       { key: 'save_as', label: t('另存为') },
     )
   }
   if (!isVideo.value) {
-    if (canOpenDirectory.value) {
+    if (canOpenDirectory.value && !isChannelSaveRestricted.value) {
       items.push({ key: 'open_directory', label: t('打开目录') })
     }
     if (canOpenWithDefaultApp.value) {
@@ -1101,6 +1107,10 @@ function resolveImageOverwrite(result: boolean) {
 }
 
 async function saveImageAs() {
+  if (isChannelSaveRestricted.value) {
+    showToast(t('频道已限制保存内容'), 'error')
+    return
+  }
   const dataUrl = await fetchImageAsPngDataUrl()
   if ((window as any).__TAURI_INTERNALS__) {
     const { filePath, canceled, needsOverwriteConfirm } =
@@ -1596,6 +1606,10 @@ async function openImageDirectory() {
 
 async function handleMenuSelect(key: string) {
   try {
+    if (isChannelSaveRestricted.value && (key === 'copy' || key === 'save_as' || key === 'open_directory')) {
+      showToast(t('频道已限制保存内容'), 'error')
+      return
+    }
     switch (key) {
       case 'copy':
         await copyImageToClipboard()

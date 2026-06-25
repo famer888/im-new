@@ -19,6 +19,7 @@ export interface MediaViewerPayload {
   fileKey?: string
   fileName?: string
   mimeType?: string
+  channelId?: string
   timestamp: number
 }
 

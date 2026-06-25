@@ -276,6 +276,7 @@
   "转发失败": "Forward failed",
   "替换": "Replace",
   "保存成功": "Saved successfully",
+  "频道已限制保存内容": "This channel has restricted saving content",
   "保存失败无画布": "Save failed: could not capture QR code",
   "保存失败详情": "Save failed: {detail}",
   "打开目录失败详情": "Failed to open directory: {detail}",

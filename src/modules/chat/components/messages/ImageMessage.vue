@@ -9,12 +9,16 @@ import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
+import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
+import { eventBus } from '@/utils/eventBus'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   message: Message
 }>()
 
 const authStore = useAuthStore()
+const { t } = useI18n()
 const isLoaded = ref(false)
 const loadError = ref(false)
 const activeSrc = ref('')
@@ -140,6 +144,13 @@ function imageSrcKind(src: string): string {
 
 function isChannelMessage(): boolean {
   return String(props.message.conversationId || '').startsWith('2_')
+}
+
+function blockChannelImageSaveIfRestricted(): boolean {
+  if (!isChannelMessage() || !channelId.value) return false
+  if (!isChannelContentSaveRestricted(channelId.value)) return false
+  eventBus.emit('show-toast', { message: t('频道已限制保存内容'), type: 'error' })
+  return true
 }
 
 function channelImageLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'info') {
@@ -667,6 +678,7 @@ async function openPreview() {
       fileName: imageData.value.name || '',
       width: imageData.value.width || undefined,
       height: imageData.value.height || undefined,
+      channelId: isChannelMessage() ? channelId.value : undefined,
     })
 
     await invoke('open_media_window', {
@@ -1193,6 +1205,10 @@ async function materializeDataImageForDrag() {
 }
 
 function handleImageDragStart(event: DragEvent) {
+  if (blockChannelImageSaveIfRestricted()) {
+    event.preventDefault()
+    return
+  }
   if (shouldUseNativeFileDrag.value) {
     // Windows 由原生拖拽命令接管，避免 WebView2 的 HTML 拖拽被桌面拒收（🚫）。
     imageDragLog('html dragstart blocked: native drag mode enabled', {
@@ -1293,6 +1309,7 @@ async function buildPluginDragIcon(filePath: string): Promise<string> {
 }
 
 async function startNativeImageFileDrag(filePath: string) {
+  if (blockChannelImageSaveIfRestricted()) return
   if (!(window as any).__TAURI_INTERNALS__ || !filePath) return
 
   try {

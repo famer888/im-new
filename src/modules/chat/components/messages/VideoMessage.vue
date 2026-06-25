@@ -203,6 +203,13 @@ const groupId = computed(() => {
   const convId = props.message.conversationId || ''
   return convId.startsWith('1_') ? convId.split('_')[1] || '' : ''
 })
+const channelId = computed(() => {
+  const extraChannelId = String(extraData.value.channelId || '').trim()
+  if (extraChannelId) return extraChannelId
+  const convId = props.message.conversationId || ''
+  return convId.startsWith('2_') ? convId.split('_')[1] || '' : ''
+})
+const isChannelMessage = computed(() => String(props.message.conversationId || '').startsWith('2_'))
 const privateAttachmentCandidates = computed(() => {
   const extra = extraData.value
   const candidates = Array.isArray(extra.cipherCandidates)
@@ -678,21 +685,22 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
     })
   }
 
-  mediaViewerState.send({
-    title: '视频',
-    mediaType: 'video',
-    src: mediaSrc,
-    filePath: mediaFilePath,
-    width: videoData.value.width || undefined,
-    height: videoData.value.height || undefined,
-    duration: videoData.value.duration || undefined,
-    cover: getMediaViewerCoverSrc(),
-    size: videoData.value.size || undefined,
-    originalUrl: options?.originalUrl || (/^https?:\/\//i.test(videoData.value.url) ? videoData.value.url : ''),
-    fileKey: options?.fileKey || fileKey.value || '',
-    fileName: getVideoFileName(videoData.value.url || target, videoData.value.name, localVideoSourcePath.value),
-    mimeType: videoData.value.mimeType || '',
-  })
+    mediaViewerState.send({
+      title: '视频',
+      mediaType: 'video',
+      src: mediaSrc,
+      filePath: mediaFilePath,
+      width: videoData.value.width || undefined,
+      height: videoData.value.height || undefined,
+      duration: videoData.value.duration || undefined,
+      cover: getMediaViewerCoverSrc(),
+      size: videoData.value.size || undefined,
+      originalUrl: options?.originalUrl || (/^https?:\/\//i.test(videoData.value.url) ? videoData.value.url : ''),
+      fileKey: options?.fileKey || fileKey.value || '',
+      fileName: getVideoFileName(videoData.value.url || target, videoData.value.name, localVideoSourcePath.value),
+      mimeType: videoData.value.mimeType || '',
+      channelId: isChannelMessage.value ? channelId.value : undefined,
+    })
 
   await invoke('open_media_window', {
     title: '视频',

@@ -56,6 +56,7 @@ import { writeClipboardText } from '@/utils/clipboard'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeResolvedFileKey } from '@/utils/e2ee'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
+import { isCurrentChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 
 import { API_CONFIG } from '@/api/config'
 import emptyBrandImg from '@/assets/images/common/defalut-icon.png'
@@ -1088,18 +1089,21 @@ function messageSupportsCopy(msgType: unknown): boolean {
 }
 
 function messageSupportsImageCopy(data: Record<string, unknown>): boolean {
+  if (isCurrentChannelContentSaveRestricted()) return false
   return Number(data.msgType) === MessageType.Image
     && typeof data.imageSrc === 'string'
     && data.imageSrc.trim().length > 0
 }
 
 function messageSupportsImageSave(data: Record<string, unknown>): boolean {
+  if (isCurrentChannelContentSaveRestricted()) return false
   return Number(data.msgType) === MessageType.Image
     && typeof data.imageSrc === 'string'
     && data.imageSrc.trim().length > 0
 }
 
 function messageSupportsVideoFileActions(data: Record<string, unknown>): boolean {
+  if (isCurrentChannelContentSaveRestricted()) return false
   const conversationType = chatStore.currentConversation?.type
   return (
     conversationType === ConversationType.Friend ||
@@ -1167,6 +1171,7 @@ function getFileMessageSource(data: Record<string, unknown>) {
 }
 
 function messageSupportsFileActions(data: Record<string, unknown>): boolean {
+  if (isCurrentChannelContentSaveRestricted()) return false
   if (!(window as any).__TAURI_INTERNALS__) return false
   if (Number(data.msgType) !== MessageType.File) return false
   const source = getFileMessageSource(data)
@@ -2944,6 +2949,14 @@ async function handleContextMenuSelect(key: string) {
         ...getCopyDebugMessageData(data),
         key,
       }, 'warn')
+      return
+    }
+    if (
+      isCurrentChannelContentSaveRestricted()
+      && (key === 'copy' || key === 'save_as' || key === 'open_directory')
+      && (messageSupportsImageCopy(data) || messageSupportsImageSave(data) || messageSupportsVideoFileActions(data) || messageSupportsFileActions(data))
+    ) {
+      showToast(t('频道已限制保存内容'), 'error')
       return
     }
     switch (key) {

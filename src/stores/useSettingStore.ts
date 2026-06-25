@@ -118,18 +118,9 @@ function isFriendVerifyRequiredFromPrivacy(privacy: unknown, fallback: boolean):
   return (value & FRIEND_VERIFY_PRIVACY_MASK) === FRIEND_VERIFY_PRIVACY_MASK
 }
 
-function buildFriendVerifyPrivacyValue(currentPrivacy: number, enabled: boolean): number {
-  const privacy = Number.isFinite(currentPrivacy) ? currentPrivacy : 0
-  return enabled
-    ? (privacy | FRIEND_VERIFY_PRIVACY_MASK)
-    : (privacy & ~FRIEND_VERIFY_PRIVACY_MASK)
-}
-
-async function fetchCurrentPrivacy(uid: number): Promise<number> {
-  const resp = await getUserInfo({ uid })
-  assertCommonResultOk(resp, 'load privacy failed')
-  const privacy = Number((resp as any)?.privacy ?? 0)
-  return Number.isFinite(privacy) ? privacy : 0
+/** 对齐旧 im privacy.vue：开启发 4096，关闭发 0，不做按位合并。 */
+function buildFriendVerifyPrivacyValue(enabled: boolean): number {
+  return enabled ? FRIEND_VERIFY_PRIVACY_MASK : 0
 }
 
 function assertCommonResultOk(resp: unknown, fallback: string) {
@@ -175,25 +166,21 @@ export const useSettingStore = defineStore('setting', () => {
       const resp = await getUserInfo({ uid })
       assertCommonResultOk(resp, 'load friend verify required failed')
 
-      const friendVerifyRequired = isFriendVerifyRequiredFromPrivacy(
+      const remoteFriendVerifyRequired = isFriendVerifyRequiredFromPrivacy(
         (resp as any)?.privacy,
         nextSettings.friendVerifyRequired,
       )
 
-      if (friendVerifyRequired === nextSettings.friendVerifyRequired) {
+      if (remoteFriendVerifyRequired === nextSettings.friendVerifyRequired) {
         return nextSettings
       }
 
-      // 用户已在本次 load 期间改过开关时，保留本地为准，避免远端延迟快照把“需要验证”写回关闭。
-      if (friendVerifyRequired !== settings.value.friendVerifyRequired) {
+      // 对齐旧 im：好友验证开关以本地账户设置为准，避免远端 privacy 延迟快照把刚开启的验证写回关闭。
+      if (remoteFriendVerifyRequired !== settings.value.friendVerifyRequired) {
         return settings.value
       }
 
-      // 远端同步可能较慢，落盘前重新读取本地最新设置，避免覆盖用户刚改过的提示音等项。
-      const latestSettings = isTauri() ? await readLocalSettings() : settings.value
-      const syncedSettings = { ...latestSettings, friendVerifyRequired }
-      await saveLocalSettings(syncedSettings)
-      return syncedSettings
+      return nextSettings
     } catch (error) {
       console.warn('[setting] sync friend verify required failed:', error)
       return nextSettings
@@ -234,10 +221,9 @@ export const useSettingStore = defineStore('setting', () => {
     if (partial.friendVerifyRequired !== undefined) {
       const uid = getCurrentUid()
       if (uid) {
-        const currentPrivacy = await fetchCurrentPrivacy(uid)
         const resp = await updateUserInfo({
           userParam: {
-            privacy: buildFriendVerifyPrivacyValue(currentPrivacy, partial.friendVerifyRequired),
+            privacy: buildFriendVerifyPrivacyValue(partial.friendVerifyRequired),
           },
           ops: [proto.UserOperator.PRIVACY],
         })

@@ -2476,6 +2476,18 @@ impl MessageBatcher {
         let mut out = Vec::new();
 
         if event.channel_id > 0 {
+            if let Some(info) = channel_info {
+                if info.operate_type == im::ChannelOperateType::ChannelContent as i32 {
+                    let _ = self.app_handle.emit(
+                        "channel:content-limit",
+                        serde_json::json!({
+                            "channelId": event.channel_id.to_string(),
+                            "contentLimit": info.content_limit,
+                        }),
+                    );
+                }
+            }
+
             if let Some(reason) = channel_removed_reason(
                 event.event_type,
                 subscriber_info.map(|item| item.operate_type),

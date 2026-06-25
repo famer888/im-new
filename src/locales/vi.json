@@ -277,6 +277,7 @@
   "转发失败": "Chuyển tiếp thất bại",
   "替换": "Thay thế",
   "保存成功": "Đã lưu",
+  "频道已限制保存内容": "Kênh đã hạn chế lưu nội dung",
   "保存失败无画布": "Lưu thất bại: không lấy được canvas mã QR",
   "保存失败详情": "Lưu thất bại: {detail}",
   "打开目录失败详情": "Mở thư mục thất bại: {detail}",

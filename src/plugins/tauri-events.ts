@@ -1358,6 +1358,16 @@ export async function setupTauriListeners() {
     await removeLocalChannelConversation(event.payload || {}, 'channel:removed')
   })
 
+  listen<{ channelId?: string; contentLimit?: boolean }>('channel:content-limit', (event) => {
+    const authStore = useAuthStore()
+    const channelStore = useChannelStore()
+    const channelId = String(event.payload?.channelId || '').trim()
+    if (!channelId) return
+    channelStore.patchChannel(channelId, {
+      contentLimit: Boolean(event.payload?.contentLimit),
+    }, { uid: String(authStore.uid || '') })
+  })
+
   listen<ForceLogoutPayload>('auth:force-logout', async (event) => {
     if (forceLogoutHandling) return
     forceLogoutHandling = true

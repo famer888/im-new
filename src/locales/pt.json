@@ -277,6 +277,7 @@
   "转发失败": "Falha ao encaminhar",
   "替换": "Substituir",
   "保存成功": "Guardado com sucesso",
+  "频道已限制保存内容": "Este canal restringiu o salvamento de conteúdo",
   "保存失败无画布": "Falha ao guardar: não foi possível capturar o código QR",
   "保存失败详情": "Falha ao guardar: {detail}",
   "打开目录失败详情": "Falha ao abrir a pasta: {detail}",

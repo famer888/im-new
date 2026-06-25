@@ -309,6 +309,8 @@ export interface ChannelListItem {
   remark?: string
   linkType?: number
   memberType?: number
+  contentLimit?: boolean
+  content_limit?: boolean
   updateTime?: number
   createTime?: number
 }
