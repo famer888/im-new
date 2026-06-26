@@ -394,8 +394,12 @@ export const useGroupStore = defineStore('group', () => {
 
   function isMemberListFullyLoaded(groupId: string, cached: GroupMember[]): boolean {
     const expected = getGroup(groupId)?.memberCount ?? memberPaginationMap.value.get(groupId)?.expectedCount ?? 0
+    if (expected > 0 && cached.length !== expected) {
+      // 踢人/退群后群人数会下降；不能只凭 cached.length >= expected 认为列表已同步。
+      return false
+    }
     if (memberLoadDepthMap.value.get(groupId) === 'full') {
-      return expected > 0 ? cached.length >= expected : cached.length > 0
+      return expected > 0 ? cached.length === expected : cached.length > 0
     }
     return expected > 0 && cached.length >= expected
   }
@@ -641,9 +645,14 @@ export const useGroupStore = defineStore('group', () => {
           const pageResult = await fetchMembersRemotePage(groupId, 1, MEMBER_REMOTE_PAGE_SIZE)
           const incoming = mergeMembersWithExistingStatuses(groupId, pageResult.members)
           onlineStatusTargets = incoming
-          members = memberMap.value.get(groupId)?.length
-            ? appendGroupMembers(groupId, incoming)
-            : incoming
+          if (options.forceRemote) {
+            // 强制远端刷新必须替换本地列表；append 只会补新成员，踢人后旧成员会一直残留。
+            members = incoming
+          } else {
+            members = memberMap.value.get(groupId)?.length
+              ? appendGroupMembers(groupId, incoming)
+              : incoming
+          }
           membersSource = 'remote'
           remoteMembersComplete = pageResult.complete
           setMemberPagination(groupId, {

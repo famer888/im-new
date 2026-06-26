@@ -83,6 +83,7 @@ type GroupPatchPayload = {
 
 const pendingGroupInfoRefreshIds = new Set<string>()
 let pendingGroupInfoRefreshTimer: ReturnType<typeof setTimeout> | null = null
+const pendingGroupMemberRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function getGroupEventUserId(raw: any): string {
   return String(raw?.userId ?? raw?.uid ?? raw?.id ?? raw?.user?.uid ?? '').trim()
@@ -149,6 +150,22 @@ function scheduleGroupInfoRefresh(
       }
     })
   }, 800)
+}
+
+function scheduleGroupMemberListRefresh(
+  groupStore: ReturnType<typeof useGroupStore>,
+  uid: string,
+  groupId: string,
+) {
+  if (!uid || !groupId) return
+  const existing = pendingGroupMemberRefreshTimers.get(groupId)
+  if (existing) window.clearTimeout(existing)
+  // 对齐旧 im：踢人/退群后延迟补拉成员列表，避免事件 extra 缺字段时本地列表长期残留。
+  pendingGroupMemberRefreshTimers.set(groupId, window.setTimeout(() => {
+    pendingGroupMemberRefreshTimers.delete(groupId)
+    groupStore.resetGroupMembers(groupId)
+    void groupStore.loadMembers(uid, groupId, { forceRemote: true, loadAll: true }).catch(() => {})
+  }, 100))
 }
 
 function normalizeGroupEventMember(
@@ -358,6 +375,10 @@ function collectGroupEventMemberPatches(
 
   if (removeMode) {
     addPatch(extra?.targetUser)
+    if (reqType === 6) {
+      addUidPatch(extra?.receiveUid)
+      addUidPatch(extra?.checkUid)
+    }
     if (reqType === 7) {
       addPatch(extra?.fromUser)
       addUidPatch(extra?.fromUid ?? extra?.sendUid)
@@ -2052,6 +2073,21 @@ export async function setupTauriListeners() {
         enrichGroupEventRemovedMemberNames(groupStore, contactStore, groupId, extra)
         patchGroupRemoveNoticeMessage(m, currentUid, groupId)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
+        if (shouldRemoveGroupEventMembers(extra)) {
+          const afterPatchCount = groupStore.getMembers(groupId).length
+          const patchedGroup = groupStore.getGroup(groupId)
+          if (
+            patchedGroup
+            && afterPatchCount > 0
+            && patchedGroup.memberCount > afterPatchCount
+          ) {
+            groupStore.upsertGroup({
+              id: groupId,
+              memberCount: afterPatchCount,
+            })
+          }
+          scheduleGroupMemberListRefresh(groupStore, currentUid, groupId)
+        }
         patchCurrentShutupOperatorRole(groupStore, groupId, extra, currentUid)
         if (String(extra?.source || '') === 'group-update-event' && Number(extra?.handleType ?? 0) === 5) {
           // 全员禁言事件可能只带操作者 ID，不带完整成员身份；后台刷新一次，避免本地旧角色长期影响权限判断。

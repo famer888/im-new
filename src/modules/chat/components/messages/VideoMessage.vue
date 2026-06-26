@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
+import { mediaViewerState } from '@/utils/mediaViewerState'
 import { eventBus } from '@/utils/eventBus'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
@@ -685,24 +686,24 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
     })
   }
 
-    const resolvedChannelId = isChannelMessage.value ? channelId.value : ''
-    mediaViewerState.send({
-      title: '视频',
-      mediaType: 'video',
-      src: mediaSrc,
-      filePath: mediaFilePath,
-      width: videoData.value.width || undefined,
-      height: videoData.value.height || undefined,
-      duration: videoData.value.duration || undefined,
-      cover: getMediaViewerCoverSrc(),
-      size: videoData.value.size || undefined,
-      originalUrl: options?.originalUrl || (/^https?:\/\//i.test(videoData.value.url) ? videoData.value.url : ''),
-      fileKey: options?.fileKey || fileKey.value || '',
-      fileName: getVideoFileName(videoData.value.url || target, videoData.value.name, localVideoSourcePath.value),
-      mimeType: videoData.value.mimeType || '',
-      channelId: resolvedChannelId || undefined,
-      saveRestricted: resolvedChannelId ? isChannelContentSaveRestricted(resolvedChannelId) : false,
-    })
+  const resolvedChannelId = isChannelMessage.value ? channelId.value : ''
+  mediaViewerState.send({
+    title: '视频',
+    mediaType: 'video',
+    src: mediaSrc,
+    filePath: mediaFilePath,
+    width: videoData.value.width || undefined,
+    height: videoData.value.height || undefined,
+    duration: videoData.value.duration || undefined,
+    cover: getMediaViewerCoverSrc(),
+    size: videoData.value.size || undefined,
+    originalUrl: options?.originalUrl || (/^https?:\/\//i.test(videoData.value.url) ? videoData.value.url : ''),
+    fileKey: options?.fileKey || fileKey.value || '',
+    fileName: getVideoFileName(videoData.value.url || target, videoData.value.name, localVideoSourcePath.value),
+    mimeType: videoData.value.mimeType || '',
+    channelId: resolvedChannelId || undefined,
+    saveRestricted: resolvedChannelId ? isChannelContentSaveRestricted(resolvedChannelId) : false,
+  })
 
   await invoke('open_media_window', {
     title: '视频',

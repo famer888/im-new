@@ -247,10 +247,9 @@ async function handleInvitePromptConfirm() {
 }
 
 async function handleRemoved() {
-  // 移除成功后刷新成员列表
-  if (conv.value?.targetId && authStore.uid) {
-    await groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true })
-  }
+  if (!conv.value?.targetId || !authStore.uid) return
+  groupStore.resetGroupMembers(conv.value.targetId)
+  await groupStore.loadMembers(authStore.uid, conv.value.targetId, { forceRemote: true, loadAll: true })
 }
 
 async function refreshMembers() {
