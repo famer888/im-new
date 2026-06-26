@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
+import { useMessageStore } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { isOfficialAccountTargetId } from '@/stores/useChatStore'
 import { ensureChannelRelKey, ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
@@ -8,7 +9,7 @@ import { API_CONFIG } from '@/api/config'
 import { mediaViewerState } from '@/utils/mediaViewerState'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
-import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
+import { isLocalLikePath, isRemoteUrl, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import { eventBus } from '@/utils/eventBus'
 import { useI18n } from 'vue-i18n'
@@ -18,6 +19,7 @@ const props = defineProps<{
 }>()
 
 const authStore = useAuthStore()
+const messageStore = useMessageStore()
 const { t } = useI18n()
 const showPreview = ref(false)
 const imageElRef = ref<HTMLImageElement | null>(null)
@@ -48,7 +50,7 @@ type LocalFilePayload = {
   data_base64?: string
 }
 
-const IMAGE_DISPLAY_CACHE_MAX = 240
+const IMAGE_DISPLAY_CACHE_MAX = 800
 const imageDisplayCache = new Map<string, ImageDisplayCacheEntry>()
 
 function getCachedImage(key: string) {
@@ -61,6 +63,8 @@ function getCachedImage(key: string) {
 
 function setCachedImage(key: string, entry: Omit<ImageDisplayCacheEntry, 'cachedAt'>) {
   if (!key || !entry.src || entry.src.startsWith('blob:')) return
+  // 需解密的图片不能把远端缩略图地址单独缓存，否则切回会话后会误判为已加载。
+  if (isRemoteImageSrc(entry.src) && !isTrustedPersistedLocalPath(entry.localFilePath)) return
   imageDisplayCache.delete(key)
   imageDisplayCache.set(key, {
     ...entry,
@@ -80,20 +84,137 @@ function deleteCachedImage(key: string) {
 
 function buildImageCacheKey(message: Pick<Message, 'conversationId' | 'id' | 'customMsgId' | 'sendTime'>): string {
   const convId = String(message.conversationId || '')
-  const msgId = String(message.id || message.customMsgId || '')
+  const idParts = [message.id, message.customMsgId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  const msgId = [...new Set(idParts)].join(':')
   const sendTime = String(message.sendTime || '')
   return `${convId}|${msgId}|${sendTime}`
 }
 
 function readImageCacheForMessage(message: Pick<Message, 'conversationId' | 'id' | 'customMsgId' | 'sendTime'>): ImageDisplayCacheEntry | null {
-  return getCachedImage(buildImageCacheKey(message))
+  const stableKey = buildImageCacheKey(message)
+  const direct = getCachedImage(stableKey)
+  if (direct) return direct
+  const idParts = [message.id, message.customMsgId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  for (const id of idParts) {
+    const legacyKey = `${String(message.conversationId || '')}|${id}|${String(message.sendTime || '')}`
+    const legacy = getCachedImage(legacyKey)
+    if (legacy) return legacy
+  }
+  return null
 }
 
-const initialCachedImage = readImageCacheForMessage(props.message)
-const isLoaded = ref(Boolean(initialCachedImage?.src))
+function isTrustedPersistedLocalPath(path: unknown): boolean {
+  const raw = String(path || '').trim()
+  if (!raw) return false
+  if (isRemoteUrl(raw) || isRemoteImageSrc(raw)) return false
+  return isLocalLikePath(raw)
+}
+
+function messageRequiresDecryptDownload(message: Pick<Message, 'content' | 'extra'>): boolean {
+  const raw = String(message.content ?? '').trim()
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (String(parsed?.fileKey || parsed?.file_key || '').trim()) return true
+    } catch {
+      // 非 JSON 内容继续看 extra。
+    }
+  }
+  const rawExtra = message.extra
+  let extra: Record<string, unknown> = {}
+  if (rawExtra && typeof rawExtra === 'object') {
+    extra = rawExtra as Record<string, unknown>
+  } else if (typeof rawExtra === 'string' && rawExtra.trim()) {
+    try {
+      const parsed = JSON.parse(rawExtra)
+      if (parsed && typeof parsed === 'object') extra = parsed as Record<string, unknown>
+    } catch {
+      extra = {}
+    }
+  }
+  return Boolean(
+    String(extra.fileKey || extra.file_key || '').trim() ||
+    String(extra.attachmentKey || extra.attachment_key || '').trim(),
+  )
+}
+
+function extractLocalPathFromMessage(message: Pick<Message, 'content' | 'extra'>): string {
+  const rawExtra = message.extra
+  let extra: Record<string, unknown> = {}
+  if (rawExtra && typeof rawExtra === 'object') {
+    extra = rawExtra as Record<string, unknown>
+  } else if (typeof rawExtra === 'string' && rawExtra.trim()) {
+    try {
+      const parsed = JSON.parse(rawExtra)
+      if (parsed && typeof parsed === 'object') extra = parsed as Record<string, unknown>
+    } catch {
+      extra = {}
+    }
+  }
+
+  const extraPath = String(
+    extra.local ||
+    extra.localPath ||
+    extra.local_path ||
+    '',
+  ).trim()
+  if (isTrustedPersistedLocalPath(extraPath)) return toFsPath(extraPath)
+
+  const raw = String(message.content ?? '').trim()
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const contentPath = String(
+        parsed.localPath ||
+        parsed.local_path ||
+        parsed.local ||
+        '',
+      ).trim()
+      if (isTrustedPersistedLocalPath(contentPath)) return toFsPath(contentPath)
+    }
+  } catch {
+    // 非 JSON 内容不走本地路径恢复。
+  }
+  return ''
+}
+
+function isRenderableCachedEntry(
+  cached: ImageDisplayCacheEntry | null | undefined,
+  message: Pick<Message, 'content' | 'extra'>,
+): boolean {
+  if (!cached?.src) return false
+  if (isTrustedPersistedLocalPath(cached.localFilePath)) return true
+  if (/^data:image\//i.test(cached.src)) return true
+  if (!messageRequiresDecryptDownload(message) && cached.src) return true
+  if (messageRequiresDecryptDownload(message) && isRemoteImageSrc(cached.src)) return false
+  return !isRemoteImageSrc(cached.src)
+}
+
+function readInitialImageDisplay(message: Message): ImageDisplayCacheEntry | null {
+  const cached = readImageCacheForMessage(message)
+  if (cached && isRenderableCachedEntry(cached, message)) return cached
+
+  const localPath = extractLocalPathFromMessage(message)
+  if (!localPath) return null
+  const src = toDisplaySrc(localPath)
+  if (!src) return null
+  return {
+    src,
+    localFilePath: localPath,
+    cachedAt: Date.now(),
+  }
+}
+
+const initialImageDisplay = readInitialImageDisplay(props.message)
+const isLoaded = ref(Boolean(initialImageDisplay?.src))
 const loadError = ref(false)
-const activeSrc = ref(initialCachedImage?.src || '')
-const localFilePath = ref(initialCachedImage?.localFilePath || '')
+const activeSrc = ref(initialImageDisplay?.src || '')
+const localFilePath = ref(initialImageDisplay?.localFilePath || '')
 
 function cacheActiveLocalPreview(markLoaded = false) {
   if (!activeSrc.value) return
@@ -190,7 +311,7 @@ const imageData = computed((): {
   try {
     const parsed = JSON.parse(raw)
     const localPath = String(
-      parsed.localPath || parsed.local_path || parsed.filePath || parsed.file_path || parsed.local || '',
+      parsed.localPath || parsed.local_path || parsed.local || '',
     ).trim()
     const name = String(parsed.name || parsed.fileName || parsed.file_name || '').trim()
     const url = normalizeImageSrc(
@@ -240,8 +361,17 @@ function toDisplayImageSrc(src: string): string {
 }
 
 const localSourcePath = computed(() => {
+  const extra = extraData.value
+  const extraPath = String(
+    extra.local ||
+    extra.localPath ||
+    extra.local_path ||
+    '',
+  ).trim()
+  if (isTrustedPersistedLocalPath(extraPath)) return toFsPath(extraPath)
+
   const explicitPath = imageData.value.localPath
-  if (explicitPath) return toFsPath(explicitPath)
+  if (isTrustedPersistedLocalPath(explicitPath)) return toFsPath(explicitPath)
   const url = imageData.value.url
   if (isLocalLikePath(url)) return toFsPath(url)
   const thumbnail = imageData.value.thumbnailUrl
@@ -312,11 +442,13 @@ const officialAccountTargetId = computed(() => {
 })
 const isOfficialAccountImage = computed(() => isOfficialAccountTargetId(officialAccountTargetId.value))
 const showImageLoading = computed(() => {
+  if (loadError.value) return false
   if (isOwnSingleImageUploadPlaceholder.value && activeSrc.value) {
     // 发送图片时本地预览已可用就按普通图片展示，避免 status=0 回执等待期间继续盖 loading 蒙层。
-    return !isLoaded.value && !loadError.value
+    return !isLoaded.value
   }
-  return !activeSrc.value || (!isLoaded.value && !loadError.value)
+  // 对齐旧 im：只要已有展示地址就不再盖 loading，等待 img 自然完成解码即可。
+  return !activeSrc.value
 })
 const showImageOverlay = computed(() => !loadError.value && showImageLoading.value)
 const canOpenPreview = computed(() => Boolean(previewSrc.value) && isLoaded.value && !loadError.value && !showImageOverlay.value)
@@ -416,17 +548,150 @@ watch(loadError, (failed) => {
 })
 
 function applyCachedImageIfAvailable(): boolean {
-  const cached = getCachedImage(imageCacheKey.value)
-  if (!cached?.src) return false
+  const cached = readImageCacheForMessage(props.message)
+  if (!isRenderableCachedEntry(cached, props.message)) return false
   channelImageLog('use memory cache', {
-    cachedSrcHead: shortLogValue(cached.src),
-    cachedLocalPathHead: shortLogValue(cached.localFilePath),
+    cachedSrcHead: shortLogValue(cached!.src),
+    cachedLocalPathHead: shortLogValue(cached!.localFilePath),
   })
-  activeSrc.value = cached.src
-  localFilePath.value = cached.localFilePath
+  activeSrc.value = cached!.src
+  localFilePath.value = cached!.localFilePath
   loadError.value = false
   isLoaded.value = true
+  setCachedImage(imageCacheKey.value, {
+    src: cached!.src,
+    localFilePath: cached!.localFilePath,
+  })
   return true
+}
+
+/** 对齐旧 im msgInfo.local：消息里已有本地路径时直接展示，不走下载蒙层。 */
+function applyStoredLocalImagePath(): boolean {
+  const path = localSourcePath.value || extractLocalPathFromMessage(props.message)
+  if (!isTrustedPersistedLocalPath(path)) return false
+  const displaySrc = toDisplayImageSrc(path)
+  if (!displaySrc) return false
+  localFilePath.value = path
+  activeSrc.value = displaySrc
+  loadError.value = false
+  isLoaded.value = true
+  setCachedImage(imageCacheKey.value, {
+    src: displaySrc,
+    localFilePath: path,
+  })
+  markLoadedIfImageAlreadyComplete()
+  return true
+}
+
+function tryRestoreKnownImageDisplay(): boolean {
+  if (applyCachedImageIfAvailable()) return true
+  if (applyStoredLocalImagePath()) return true
+  return false
+}
+
+function persistImageLocalPath(filePath: string) {
+  const path = toFsPath(String(filePath || '').trim())
+  if (!isTrustedPersistedLocalPath(path)) return
+  const messageId = String(props.message.id || props.message.customMsgId || '').trim()
+  if (!messageId) return
+
+  const existingPath = toFsPath(String(imageData.value.localPath || localFilePath.value || '').trim())
+  if (existingPath && existingPath === path) return
+
+  const raw = String(props.message.content ?? '').trim()
+  let parsed: Record<string, unknown> | null = null
+  try {
+    const value = JSON.parse(raw)
+    parsed = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null
+  } catch {
+    parsed = null
+  }
+  if (!parsed) {
+    const url = String(imageData.value.url || downloadUrl.value || '').trim()
+    if (!url) return
+    parsed = {
+      url,
+      thumbnailUrl: String(imageData.value.thumbnailUrl || thumbnailUrl.value || url).trim(),
+    }
+  }
+
+  messageStore.updateMessage(messageId, {
+    content: JSON.stringify({
+      ...parsed,
+      local: path,
+      localPath: path,
+    }),
+    extra: (() => {
+      const rawExtra = props.message.extra
+      let extraObj: Record<string, unknown> = {}
+      if (rawExtra && typeof rawExtra === 'object') {
+        extraObj = { ...(rawExtra as Record<string, unknown>) }
+      } else if (typeof rawExtra === 'string' && rawExtra.trim()) {
+        try {
+          const parsedExtra = JSON.parse(rawExtra)
+          if (parsedExtra && typeof parsedExtra === 'object') {
+            extraObj = { ...parsedExtra as Record<string, unknown> }
+          }
+        } catch {
+          extraObj = {}
+        }
+      }
+      return JSON.stringify({
+        ...extraObj,
+        local: path,
+        localPath: path,
+      })
+    })(),
+  })
+}
+
+function clearPersistedImageLocalPath() {
+  const messageId = String(props.message.id || props.message.customMsgId || '').trim()
+  if (!messageId) return
+
+  const raw = String(props.message.content ?? '').trim()
+  let nextContent: string | undefined
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        delete parsed.local
+        delete parsed.localPath
+        delete parsed.local_path
+        nextContent = JSON.stringify(parsed)
+      }
+    } catch {
+      nextContent = undefined
+    }
+  }
+
+  const rawExtra = props.message.extra
+  let extraObj: Record<string, unknown> | null = null
+  if (rawExtra && typeof rawExtra === 'object') {
+    extraObj = { ...(rawExtra as Record<string, unknown>) }
+  } else if (typeof rawExtra === 'string' && rawExtra.trim()) {
+    try {
+      const parsedExtra = JSON.parse(rawExtra)
+      if (parsedExtra && typeof parsedExtra === 'object') {
+        extraObj = { ...parsedExtra as Record<string, unknown> }
+      }
+    } catch {
+      extraObj = null
+    }
+  }
+  if (extraObj) {
+    delete extraObj.local
+    delete extraObj.localPath
+    delete extraObj.local_path
+  }
+
+  if (!nextContent && !extraObj) return
+  messageStore.updateMessage(messageId, {
+    ...(nextContent ? { content: nextContent } : {}),
+    ...(extraObj ? { extra: JSON.stringify(extraObj) } : {}),
+  })
 }
 
 function resetImageDisplayState() {
@@ -438,22 +703,26 @@ function resetImageDisplayState() {
 }
 
 watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
-  if (applyCachedImageIfAvailable()) return
+  if (tryRestoreKnownImageDisplay()) return
 
   const willDownload = (fileKey.value || attachmentKey.value)
     && downloadUrl.value
     && !shouldUseLocalPreview.value
     && !isOwnSingleImageUploadPlaceholder.value
-  const preserveDisplayed = Boolean(activeSrc.value && isLoaded.value && !loadError.value)
 
-  if (willDownload && preserveDisplayed && isUsingLocalCacheFile()) {
+  const persistedLocalPath = extractLocalPathFromMessage(props.message)
+  const hasPersistedLocal = isTrustedPersistedLocalPath(persistedLocalPath)
+  const cachedLocalPath = readImageCacheForMessage(props.message)?.localFilePath || ''
+  const hasCachedLocal = isTrustedPersistedLocalPath(cachedLocalPath)
+    || (localFilePath.value && isUsingLocalCacheFile())
+  if (activeSrc.value && !loadError.value && (hasPersistedLocal || hasCachedLocal)) {
     return
   }
-  if (!willDownload && preserveDisplayed && activeSrc.value) {
-    return
-  }
+
   if (!willDownload) {
-    resetImageDisplayState()
+    if (!activeSrc.value) {
+      resetImageDisplayState()
+    }
   } else {
     invalidLocalCacheRedownloadStarted.value = false
   }
@@ -514,6 +783,13 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   }
   if (localSourcePath.value) {
     localFilePath.value = localSourcePath.value
+    activeSrc.value = toDisplayImageSrc(localSourcePath.value)
+    channelImageLog('use stored local path', {
+      localPathHead: shortLogValue(localSourcePath.value),
+      activeSrcHead: shortLogValue(activeSrc.value),
+    })
+    markLoadedIfImageAlreadyComplete()
+    return
   }
   activeSrc.value = thumbnailUrl.value
   channelImageLog('use direct thumbnail path', {
@@ -539,6 +815,9 @@ function handleLoad() {
     src: activeSrc.value,
     localFilePath: localFilePath.value,
   })
+  if (localFilePath.value) {
+    persistImageLocalPath(localFilePath.value)
+  }
 }
 
 function markLoadedIfImageAlreadyComplete() {
@@ -625,6 +904,34 @@ async function retryAfterInvalidLocalCache(): Promise<boolean> {
   return true
 }
 
+async function retryStaleImageRestoreBeforeFail(): Promise<boolean> {
+  if (
+    invalidLocalCacheRedownloadStarted.value
+    || !(window as any).__TAURI_INTERNALS__
+    || !downloadUrl.value
+    || (!fileKey.value && !attachmentKey.value)
+  ) {
+    return false
+  }
+
+  const hadBadRestore = isRemoteImageSrc(activeSrc.value)
+    || (
+      isTrustedPersistedLocalPath(extractLocalPathFromMessage(props.message))
+      && !isUsingLocalCacheFile()
+    )
+  if (!hadBadRestore) return false
+
+  invalidLocalCacheRedownloadStarted.value = true
+  clearPersistedImageLocalPath()
+  deleteCachedImage(imageCacheKey.value)
+  localFilePath.value = ''
+  activeSrc.value = ''
+  loadError.value = false
+  isLoaded.value = false
+  await downloadAndDecryptImage({ ignoreCache: true })
+  return true
+}
+
 async function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (shouldUseLocalPreview.value && activeSrc.value !== localPreviewSrc.value) {
@@ -638,6 +945,7 @@ async function handleError() {
   }
   if (fallbackFromLocalPreviewError()) return
   if (await retryAfterInvalidLocalCache()) return
+  if (await retryStaleImageRestoreBeforeFail()) return
   const originalUrl = imageData.value.url
   if (!fileKey.value && !attachmentKey.value && retryDynamicImageWithHeadKey('img-error')) return
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
@@ -986,6 +1294,8 @@ async function resolveFileKey(): Promise<string> {
 
 async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) {
   if (isOwnSingleImageUploadPlaceholder.value) return
+  if (!options.ignoreCache && tryRestoreKnownImageDisplay()) return
+  if (activeSrc.value && !loadError.value) return
   const url = downloadUrl.value
   const key = await resolveFileKey()
   if (!url || !key) {
@@ -1017,6 +1327,12 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
     const savePath = await getImageSavePath(join, baseDir, id, getImageFileName(url, imageData.value.name))
     localFilePath.value = savePath
     const cachedSrc = toDisplayImageSrc(savePath)
+    if (!options.ignoreCache && cachedSrc) {
+      // 对齐旧 im：本地文件已存在时先直接展示，避免 file_exists 异步期间闪 loading。
+      activeSrc.value = cachedSrc
+      loadError.value = false
+      isLoaded.value = true
+    }
     const hasCachedFile = await invoke<boolean>('file_exists', { path: savePath }).catch(() => false)
     if (token !== downloadToken) return
     if (!options.ignoreCache && hasCachedFile && cachedSrc) {
@@ -1032,8 +1348,15 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
         src: cachedSrc,
         localFilePath: savePath,
       })
+      persistImageLocalPath(savePath)
       markLoadedIfImageAlreadyComplete()
       return
+    }
+    if (!hasCachedFile) {
+      isLoaded.value = false
+      if (!activeSrc.value || activeSrc.value === cachedSrc) {
+        activeSrc.value = ''
+      }
     }
     const doneEvent = `file:done:${id}`
     const errorEvent = `file:error:${id}`
@@ -1073,6 +1396,9 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
         src,
         localFilePath: localFilePath.value,
       })
+      if (localFilePath.value) {
+        persistImageLocalPath(localFilePath.value)
+      }
     })
     const unlistenError = await listen(errorEvent, (event) => {
       if (token !== downloadToken) return
@@ -1508,11 +1834,18 @@ function handleImageDragEnd(event: DragEvent) {
 }
 
 onBeforeUnmount(() => {
-  if (activeSrc.value && isLoaded.value && !loadError.value) {
+  if (activeSrc.value && !loadError.value) {
+    if (!localFilePath.value) {
+      const inferredPath = toFsPath(activeSrc.value)
+      if (isTrustedPersistedLocalPath(inferredPath)) localFilePath.value = inferredPath
+    }
     setCachedImage(imageCacheKey.value, {
       src: activeSrc.value,
       localFilePath: localFilePath.value,
     })
+    if (isTrustedPersistedLocalPath(localFilePath.value)) {
+      persistImageLocalPath(localFilePath.value)
+    }
   }
   downloadToken += 1
   materializeToken += 1

@@ -2310,7 +2310,16 @@ impl MessageBatcher {
                 (decode_content_obj(cm.msg_type, plain.as_slice()), false)
             }
             Err(e) => {
-                if cm.msg_type == 7 && imweb::FileObj::decode(cm.content.as_slice()).is_ok() {
+                if validate_plain_content(cm.msg_type, cm.content.as_slice(), &cm.content_md5) {
+                    warn!(
+                        "[channel] CHANNEL_MSG_RECEIVED decrypt failed but raw plaintext validated channel_id={} msg_id={} msg_type={} err={}",
+                        channel_id, cm.msg_id, cm.msg_type, e
+                    );
+                    (
+                        decode_content_obj(cm.msg_type, cm.content.as_slice()),
+                        false,
+                    )
+                } else if cm.msg_type == 7 && imweb::FileObj::decode(cm.content.as_slice()).is_ok() {
                     warn!(
                         "[channel] decrypt failed but raw FileObj parsed channel_id={} msg_id={} err={}",
                         channel_id, cm.msg_id, e

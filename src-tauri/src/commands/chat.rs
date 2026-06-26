@@ -2019,6 +2019,11 @@ pub fn decrypt_group_incoming(
                         .to_string());
                     }
                 }
+                7 => {
+                    if let Ok(obj) = crate::proto::imweb::FileObj::decode(plain.as_slice()) {
+                        return Ok(file_obj_to_json(obj));
+                    }
+                }
                 5 => {
                     if let Ok(obj) = crate::proto::imweb::NameCardObj::decode(plain.as_slice()) {
                         return Ok(name_card_obj_to_legacy_content(obj));
@@ -2166,6 +2171,11 @@ pub fn decrypt_channel_incoming(
                             "size": obj.file_size,
                         })
                         .to_string());
+                    }
+                }
+                7 => {
+                    if let Ok(obj) = crate::proto::imweb::FileObj::decode(plain.as_slice()) {
+                        return Ok(file_obj_to_json(obj));
                     }
                 }
                 5 => {

@@ -1755,9 +1755,27 @@ export async function setupTauriListeners() {
                   ciphertextHex: cipherHex,
                   msgType,
                 })
+                const attachmentKey = String(extra?.attachmentKey || extra?.attachment_key || '')
+                let resolvedFileKey = ''
+                if (attachmentKey) {
+                  try {
+                    resolvedFileKey = await invoke<string>('decrypt_channel_incoming', {
+                      channelId,
+                      ciphertextHex: attachmentKey,
+                      msgType: 0,
+                    })
+                  } catch {
+                    // attachmentKey 可能已是明文 fileKey，保留原值兜底。
+                    resolvedFileKey = attachmentKey
+                  }
+                }
                 m.content = plain
                 if (m.extra && typeof m.extra === 'object') {
                   m.extra.decryptPending = false
+                  m.extra.cipherHex = cipherHex
+                  if (resolvedFileKey && !normalizeResolvedFileKey(m.extra.fileKey)) {
+                    m.extra.fileKey = resolvedFileKey.trim()
+                  }
                 }
               } catch (err) {
                 console.warn('[channel] retry decrypt_channel FAILED', {

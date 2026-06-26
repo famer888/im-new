@@ -565,6 +565,59 @@ function parseImageContentObject(content: string | null | undefined): Record<str
   }
 }
 
+const DECRYPT_PENDING_CIPHER_HINT = '[加密消息，等待密钥同步]'
+
+function isDecryptPendingCipherHint(content: unknown): boolean {
+  return String(content ?? '').trim() === DECRYPT_PENDING_CIPHER_HINT
+}
+
+function parseFileContentObject(content: string | null | undefined): Record<string, unknown> | null {
+  const raw = String(content ?? '').trim()
+  if (!raw || isDecryptPendingCipherHint(raw)) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function isUsableFileMessageContent(content: unknown): boolean {
+  const raw = String(content ?? '').trim()
+  if (!raw || isDecryptPendingCipherHint(raw)) return false
+  const parsed = parseFileContentObject(raw)
+  if (parsed) {
+    const url = String(parsed.url || parsed.fileUrl || parsed.path || '').trim()
+    const name = String(parsed.name || parsed.fileName || '').trim()
+    return Boolean(url || name)
+  }
+  if (raw.includes('||')) return true
+  return /^https?:\/\//i.test(raw)
+}
+
+function mergeFileMessageContent(
+  incomingContent: string | null | undefined,
+  previousContent: string | null | undefined,
+): string | null {
+  const incoming = String(incomingContent ?? '').trim()
+  const previous = String(previousContent ?? '').trim()
+  const incomingUsable = isUsableFileMessageContent(incoming)
+  const previousUsable = isUsableFileMessageContent(previous)
+  if (incomingUsable && previousUsable) {
+    const incomingParsed = parseFileContentObject(incoming)
+    const previousParsed = parseFileContentObject(previous)
+    const incomingHasUrl = Boolean(String(incomingParsed?.url || incomingParsed?.fileUrl || '').trim())
+    const previousHasUrl = Boolean(String(previousParsed?.url || previousParsed?.fileUrl || '').trim())
+    if (!incomingHasUrl && previousHasUrl) return previous
+    return incoming
+  }
+  if (incomingUsable) return incoming
+  if (previousUsable) return previous
+  return null
+}
+
 function mergeImageLocalPreviewContent(
   incomingContent: string | null | undefined,
   previousContent: string | null | undefined,
@@ -3152,9 +3205,14 @@ export const useMessageStore = defineStore('message', () => {
       const mergedSingleImageContent = isReusableLocalImagePlaceholder(conversationId, message.msgType)
         ? mergeImageLocalPreviewContent(message.content, previous.content)
         : null
+      const mergedFileContent = Number(message.msgType) === 7
+        ? mergeFileMessageContent(message.content, previous.content)
+        : null
       let nextContent = message.content
       if (mergedSingleImageContent) {
         nextContent = mergedSingleImageContent
+      } else if (mergedFileContent) {
+        nextContent = mergedFileContent
       } else if (
         (previous.msgType === 12 || message.msgType === 12)
         && incomingDiceResult <= 0
@@ -3185,6 +3243,9 @@ export const useMessageStore = defineStore('message', () => {
         const mergedSingleImageContent = isReusableLocalImagePlaceholder(conversationId, message.msgType)
           ? mergeImageLocalPreviewContent(message.content, placeholder.content)
           : null
+        const mergedFileContent = Number(message.msgType) === 7
+          ? mergeFileMessageContent(message.content, placeholder.content)
+          : null
         const incomingContent = String(message.content ?? '').trim()
         next[placeholderIdx] = {
           ...placeholder,
@@ -3192,7 +3253,8 @@ export const useMessageStore = defineStore('message', () => {
           id: String(message.id || placeholder.id),
           customMsgId: placeholder.customMsgId || placeholder.id,
           content: mergedSingleImageContent
-            || (incomingContent ? message.content : placeholder.content),
+            || mergedFileContent
+            || (incomingContent && !isDecryptPendingCipherHint(incomingContent) ? message.content : placeholder.content),
           extra: message.extra ?? placeholder.extra,
           quoteMessage: message.quoteMessage ?? placeholder.quoteMessage,
           snapchatTime: message.snapchatTime ?? placeholder.snapchatTime,
@@ -3559,8 +3621,13 @@ export const useMessageStore = defineStore('message', () => {
     const mergedReceiptImageContent = isReusableLocalImagePlaceholder(params.conversationId, current.msgType)
       ? mergeImageLocalPreviewContent(remoteOrCurrentContent, current.content)
       : null
+    const mergedReceiptFileContent = Number(current.msgType) === 7
+      ? mergeFileMessageContent(remoteOrCurrentContent, current.content)
+      : null
     const nextContent = mergedReceiptImageContent
       ? mergedReceiptImageContent
+      : mergedReceiptFileContent
+      ? mergedReceiptFileContent
       : current.msgType === 12
       ? (
           resultRef
