@@ -53,6 +53,7 @@ import AppCheckbox from '@/components/AppCheckbox.vue'
 import Toast from '@/components/Toast.vue'
 import { groupMember } from '@/api/imBase'
 import { eventBus } from '@/utils/eventBus'
+import { rememberGroupMemberDisplayName } from '@/utils/groupRemovedMemberNameCache'
 
 const { t: $t } = useI18n()
 
@@ -148,6 +149,15 @@ async function handleConfirm() {
   }
   
   try {
+    for (const userId of selectedIds.value) {
+      const member = props.members.find((item) => String(item.userId) === String(userId))
+      rememberGroupMemberDisplayName(
+        props.groupId,
+        userId,
+        String(member?.nickname || member?.profileNickname || '').trim(),
+      )
+    }
+
     const res = await groupMember({
       op: 1, // 1: 移除
       groupId: props.groupId,

@@ -61,10 +61,15 @@ function notificationAvatarDebug(message: string, data?: Record<string, unknown>
   console[level](`[messageReminder] ${message}`, data || {})
 }
 
-function t(key: string): string {
+function t(key: string, args?: Record<string, unknown>): string {
   const settingStore = useSettingStore()
   const locale = String(settingStore.settings.language || 'ch') as LocaleKey
-  return localeMessages[locale]?.[key] || localeMessages.en[key] || key
+  const template = localeMessages[locale]?.[key] || localeMessages.en[key] || key
+  if (!args) return template
+  return Object.entries(args).reduce((result, [name, value]) => {
+    const replacement = String(value ?? '')
+    return result.replace(new RegExp(`\\{${name}\\}`, 'g'), replacement)
+  }, template)
 }
 
 function parseExtra(rawExtra: unknown): Record<string, unknown> {
@@ -203,6 +208,13 @@ async function ensureDirectoryLoadedForReminder(uid: string, conversationId: str
   }
 
   await directoryPreloadPromise
+}
+
+async function ensureGroupMembersForSystemNoticeReminder(uid: string, conversationId: string, message?: any) {
+  const targetId = conversationId.split('_')[1] || ''
+  const msgType = Number(message?.msgType ?? message?.msg_type ?? 0)
+  if (!uid || !conversationId.startsWith('1_') || !targetId || targetId === 'invitation' || msgType !== 8) return
+  await useGroupStore().loadMembers(uid, targetId, { previewOnly: true }).catch(() => undefined)
 }
 
 function getConversationAvatar(conversationId: string, message?: any): string | null {
@@ -441,6 +453,7 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     // 提醒可能已经排队；真正弹窗前再读一次当前免打扰状态，避免用户刚开启免打扰后仍弹旧队列。
     if (isConversationMuted(conversationId)) return
     await ensureDirectoryLoadedForReminder(uid, conversationId)
+    await ensureGroupMembersForSystemNoticeReminder(uid, conversationId, message)
     if (isConversationMuted(conversationId)) return
     const conversationType = getConversationType(conversationId)
     const extra = parseExtra(message?.extra)

@@ -36,6 +36,7 @@ import {
   getGroupNoticeActorId,
   getGroupNoticeGroupId,
 } from '@/utils/groupNoticeDisplay'
+import { resolveGroupMemberDisplayName } from '@/utils/groupRemovedMemberNameCache'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import {
   isGroupMemberLeaveNoticeHiddenForCurrentUser,
@@ -1056,8 +1057,20 @@ function filterMessagesHiddenByLogoutClear(uid: string, messages: Message[]) {
 
 export const useMessageStore = defineStore('message', () => {
   const chatStore = useChatStore()
-  function resolveUidNick(id: string) {
-    return useContactStore().getDisplayName(id)
+  function resolveUidNick(id: string, groupId?: string) {
+    const uid = String(id || '').trim()
+    if (!uid) return ''
+    const contactName = useContactStore().getDisplayName(uid)
+    if (contactName && contactName !== uid) return contactName
+    if (groupId) {
+      const cachedName = resolveGroupMemberDisplayName(groupId, uid)
+      if (cachedName && cachedName !== uid) return cachedName
+      const memberName = String(
+        useGroupStore().getMembers(groupId).find((member) => member.userId === uid)?.nickname || '',
+      ).trim()
+      if (memberName && memberName !== uid) return memberName
+    }
+    return contactName || uid
   }
   const messageMap = ref<Map<string, Message[]>>(new Map())
   const loadingMap = ref<Map<string, boolean>>(new Map())
@@ -1200,7 +1213,7 @@ export const useMessageStore = defineStore('message', () => {
     const formatted = formatGroupNoticeDisplayText(raw, extra, {
       currentUid: useAuthStore().uid,
       actorRole: getGroupNoticeActorRole(extra),
-      resolveUidPlaceholder: resolveUidNick,
+      resolveUidPlaceholder: (id) => resolveUidNick(id, getGroupNoticeGroupId(extra) || ''),
     })
     if (formatted !== raw) return formatted.slice(0, 200)
     if (/^\S*(?:群主|管理员|（群员）|（管理员）|（群主）)/.test(raw)) return raw
@@ -1242,7 +1255,7 @@ export const useMessageStore = defineStore('message', () => {
         currentUid: useAuthStore().uid,
         actorRole: getGroupNoticeActorRole(groupNoticeExtra),
         contextMembers: isGroupNotificationConversation ? [] : getGroupNoticeContextMembers(groupNoticeExtra),
-        resolveUidPlaceholder: resolveUidNick,
+        resolveUidPlaceholder: (id) => resolveUidNick(id, getGroupNoticeGroupId(groupNoticeExtra) || conversationId.split('_')[1] || ''),
       }).slice(0, 200)
     }
     digest = formatGroupIntroDigest(msg, digest)

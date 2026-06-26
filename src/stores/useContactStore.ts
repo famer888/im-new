@@ -342,9 +342,22 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
-  async function ensureContactDetailLoaded(id: string, options?: { force?: boolean }) {
+  function shouldRefreshContactDisplay(id: string): boolean {
+    const targetId = String(id || '').trim()
+    if (!targetId) return false
+    const contact = getContact(targetId)
+    if (!contact) return true
+    const display = String(contact.remark || contact.nickname || '').trim()
+    return !display || display === targetId
+  }
+
+  async function ensureContactDetailLoaded(
+    id: string,
+    options?: { force?: boolean; createIfMissing?: boolean; uid?: string },
+  ) {
     const targetId = String(id || '')
-    if (!targetId || !getContact(targetId)) return
+    if (!targetId) return
+    if (!getContact(targetId) && !options?.createIfMissing) return
     if (!options?.force && loadedDetailIds.has(targetId)) return
 
     const pendingRequest = detailRequestMap.get(targetId)
@@ -384,10 +397,23 @@ export const useContactStore = defineStore('contact', () => {
           detailPatch.remark = friendRelation.remarkName ? String(friendRelation.remarkName) : null
         }
 
-        patchContact(targetId, detailPatch, {
-          source: 'remote',
-          markDetailLoaded: true,
-        })
+        if (getContact(targetId)) {
+          patchContact(targetId, detailPatch, {
+            source: 'remote',
+            markDetailLoaded: true,
+          })
+        } else {
+          await upsertContact({
+            id: targetId,
+            ...detailPatch,
+            status: 1,
+            updatedAt: Date.now(),
+          }, {
+            uid: options?.uid,
+            source: 'remote',
+            markDetailLoaded: true,
+          })
+        }
       } catch (e) {
         console.warn('[ContactStore] load detail failed:', targetId, e)
       } finally {
@@ -397,6 +423,17 @@ export const useContactStore = defineStore('contact', () => {
 
     detailRequestMap.set(targetId, request)
     return request
+  }
+
+  async function refreshContactFromRemote(
+    friendId: string,
+    options?: { uid?: string },
+  ) {
+    return ensureContactDetailLoaded(friendId, {
+      force: true,
+      createIfMissing: true,
+      uid: options?.uid,
+    })
   }
 
   function removeContact(id: string) {
@@ -439,6 +476,8 @@ export const useContactStore = defineStore('contact', () => {
     patchContact,
     upsertContact,
     ensureContactDetailLoaded,
+    refreshContactFromRemote,
+    shouldRefreshContactDisplay,
     removeContact,
     applyOnlineStatusUpdates,
   }

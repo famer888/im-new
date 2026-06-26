@@ -2269,6 +2269,11 @@ impl MessageBatcher {
                 },
                 "fileKey": selected_file_key.unwrap_or_default(),
                 "messageContentAttachmentKey": selected_attachment_key,
+                "sendUser": om
+                    .send_user
+                    .as_ref()
+                    .map(user_base_to_json)
+                    .unwrap_or(serde_json::Value::Null),
             }),
         }])
     }

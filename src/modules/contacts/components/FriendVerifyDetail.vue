@@ -6,10 +6,14 @@ import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Toast from '@/components/Toast.vue'
 import { updateBlackContacts, updateContactsApply } from '@/api/imBase'
 import { proto } from '@/api/request'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { useContactStore } from '@/stores/useContactStore'
 
 import backIcon from '@/assets/images/setting/back.png'
 
 const { t } = useI18n()
+const authStore = useAuthStore()
+const contactStore = useContactStore()
 
 function isApiSuccess(res: unknown): boolean {
   const cr = (res as { commonResult?: { errCode?: number | LongLike } })?.commonResult
@@ -126,7 +130,16 @@ async function confirmBlacklist() {
     })
     if (isApiSuccess(res)) {
       bfMyBlack.value = op === proto.ContactsOperator.ADD_BLACK
-      if (op === proto.ContactsOperator.DEL_BLACK) showToast('移除成功')
+      const targetUid = String(toApplyUid(props.info.userInfo.uid))
+      contactStore.patchContact(targetUid, {
+        bfMyBlack: op === proto.ContactsOperator.ADD_BLACK,
+      })
+      if (op === proto.ContactsOperator.DEL_BLACK) {
+        await contactStore.refreshContactFromRemote(targetUid, {
+          uid: String(authStore.uid || ''),
+        })
+        showToast('移除成功')
+      }
     } else {
       const msg = getApiErrorMessage(res)
       if (msg) showToast(msg, 'error')

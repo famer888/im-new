@@ -403,7 +403,7 @@ watch(
   friendConversationTargetId,
   (targetId) => {
     if (!targetId) return
-    void contactStore.ensureContactDetailLoaded(targetId)
+    void contactStore.ensureContactDetailLoaded(targetId, { createIfMissing: true })
   },
   { immediate: true },
 )

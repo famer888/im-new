@@ -37,6 +37,7 @@ import {
 } from '@/utils/chatUnreadVisibility'
 import { emojiObj } from '@/utils/emoji'
 import { filterSensitiveWords } from '@/utils/sensitiveWords'
+import { resolveGroupMemberDisplayName } from '@/utils/groupRemovedMemberNameCache'
 import mdrIcon from '@/assets/images/message/mdr-icon.png'
 import archiveIcon from '@/assets/images/message/archive-icon.png'
 import groupNotificationIcon from '@/assets/images/logo/group-icon.png'
@@ -715,6 +716,10 @@ function resolveUidNick(id: string, groupId?: string, extra?: Record<string, unk
   }
 
   if (groupId) {
+    const cachedRemovedName = resolveGroupMemberDisplayName(groupId, uid)
+    if (cachedRemovedName && cachedRemovedName !== uid) {
+      return cachedRemovedName
+    }
     const groupMemberName = String(
       groupStore.getMembers(groupId).find((member) => member.userId === uid)?.nickname || '',
     ).trim()
@@ -1339,7 +1344,7 @@ function handleSelect(conv: Conversation) {
     return
   }
   if (conv.type === ConversationType.Friend && !isFileHelperTargetId(conv.targetId)) {
-    void contactStore.ensureContactDetailLoaded(conv.targetId)
+    void contactStore.ensureContactDetailLoaded(conv.targetId, { createIfMissing: true })
   }
   if (conv.type === ConversationType.Channel) {
     // 不阻塞切会话，后台补齐频道权限，避免点击频道产生明显延迟。

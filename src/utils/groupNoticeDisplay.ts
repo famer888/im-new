@@ -1,3 +1,5 @@
+import { resolveGroupMemberDisplayName } from '@/utils/groupRemovedMemberNameCache'
+
 interface FormatOptions {
   currentUid?: string | number | null
   maxMembers?: number
@@ -329,6 +331,12 @@ function resolveNoticePersonName(
   if (!id) return ''
   const currentUid = stringValue(options.currentUid)
   if (id === currentUid) return '你'
+
+  const groupId = getGroupNoticeGroupId(extra)
+  if (groupId) {
+    const cachedName = resolveGroupMemberDisplayName(groupId, id)
+    if (cachedName && cachedName !== id) return cachedName
+  }
 
   for (const candidate of memberCandidates(extra)) {
     if (getUserId(candidate) !== id) continue

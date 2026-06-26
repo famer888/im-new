@@ -22,6 +22,10 @@ import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
 import { logChannelContentLimitDebug, parseChannelContentLimitFromApi } from '@/utils/channelContentLimit'
+import {
+  rememberGroupMemberDisplayName,
+  resolveGroupMemberDisplayName,
+} from '@/utils/groupRemovedMemberNameCache'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -237,6 +241,10 @@ function enrichGroupEventRemovedMemberNames(
   if (Number(extra?.groupReqType ?? 0) !== 6) return
 
   const existingMembers = groupStore.getMembers(groupId)
+  for (const member of existingMembers) {
+    rememberGroupMemberDisplayName(groupId, member.userId, member.nickname)
+  }
+
   const memberNameById = new Map(
     existingMembers
       .filter((member) => member.userId)
@@ -249,13 +257,14 @@ function enrichGroupEventRemovedMemberNames(
     if (!userId) return raw
 
     const contactName = contactStore.getDisplayName(userId)
-    const cachedName = memberNameById.get(userId) || ''
+    const cachedName = memberNameById.get(userId) || resolveGroupMemberDisplayName(groupId, userId)
     const nickname = String(raw.nickname || raw.nickName || raw.nick_name || '').trim()
     const displayName = (contactName !== userId ? contactName : '')
       || cachedName
       || nickname
     if (!displayName || displayName === userId) return raw
 
+    rememberGroupMemberDisplayName(groupId, userId, displayName)
     return {
       ...raw,
       nickname: displayName,
@@ -270,6 +279,38 @@ function enrichGroupEventRemovedMemberNames(
   }
   if (extra.targetUser && typeof extra.targetUser === 'object') {
     extra.targetUser = enrichMember(extra.targetUser)
+  }
+}
+
+function patchGroupRemoveNoticeMessage(
+  message: any,
+  currentUid: string,
+  groupId: string,
+) {
+  const extra = message?.extra && typeof message.extra === 'object' ? message.extra : null
+  if (!extra || Number(extra.groupReqType ?? 0) !== 6) return
+
+  const removedId = getFirstGroupEventMemberId(extra)
+  if (!removedId) return
+
+  const removedName = resolveGroupMemberDisplayName(groupId, removedId)
+    || getGroupEventUserName(
+      Array.isArray(extra.members)
+        ? extra.members.find((member: any) => getGroupEventUserId(member) === removedId)
+        : null,
+    )
+    || ''
+  if (!removedName || removedName === removedId) return
+
+  const actorId = getGroupEventActorId(extra)
+  if (actorId && actorId === currentUid) {
+    message.content = `你将${removedName}移出群聊`
+    return
+  }
+
+  const content = String(message.content || '')
+  if (content.includes(removedId)) {
+    message.content = content.replace(removedId, removedName)
   }
 }
 
@@ -713,6 +754,53 @@ function unblockRemovedChannelConversation(channelId: string | number | null | u
 function isBlockedRemovedChannelConversation(conversationId: string): boolean {
   pruneRemovedChannelConversationBlocks()
   return removedChannelConversationBlockById.has(conversationId)
+}
+
+async function syncPrivateMessageSenderProfiles(
+  messages: any[],
+  currentUid: string,
+  contactStore: ReturnType<typeof useContactStore>,
+) {
+  if (!currentUid || messages.length === 0) return
+
+  const pendingDetailIds = new Set<string>()
+  for (const m of messages) {
+    const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+    const senderId = String(m?.senderId ?? m?.sender_id ?? '').trim()
+    if (!convId.startsWith('0_') || !senderId || senderId === currentUid) continue
+
+    const extra = m?.extra && typeof m.extra === 'object' ? m.extra : {}
+    const sendUser = extra?.sendUser
+    if (sendUser && typeof sendUser === 'object') {
+      const nickname = String(sendUser.nickName || sendUser.nickname || '').trim()
+      const avatar = String(sendUser.icon || sendUser.avatar || '').trim()
+      const remark = String(sendUser.remarkName || sendUser.remark || '').trim()
+      if (nickname || avatar || remark) {
+        await contactStore.upsertContact({
+          id: senderId,
+          nickname: nickname || null,
+          avatar: avatar || null,
+          remark: remark || null,
+          status: 1,
+          updatedAt: Number(m?.sendTime ?? m?.send_time ?? Date.now()),
+        }, {
+          uid: currentUid,
+          source: 'remote',
+        })
+      }
+    }
+
+    if (contactStore.shouldRefreshContactDisplay(senderId)) {
+      pendingDetailIds.add(senderId)
+    }
+  }
+
+  for (const friendId of pendingDetailIds) {
+    void contactStore.ensureContactDetailLoaded(friendId, {
+      createIfMissing: true,
+      uid: currentUid,
+    })
+  }
 }
 
 function isChannelRemovalBatchMessage(message: any): boolean {
@@ -1962,6 +2050,7 @@ export async function setupTauriListeners() {
 
         enrichGroupEventNoticeExtra(groupStore, groupId, extra)
         enrichGroupEventRemovedMemberNames(groupStore, contactStore, groupId, extra)
+        patchGroupRemoveNoticeMessage(m, currentUid, groupId)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
         patchCurrentShutupOperatorRole(groupStore, groupId, extra, currentUid)
         if (String(extra?.source || '') === 'group-update-event' && Number(extra?.handleType ?? 0) === 5) {
@@ -2063,6 +2152,7 @@ export async function setupTauriListeners() {
         currentUid,
       )
       const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
+      await syncPrivateMessageSenderProfiles(visibleAppendableNormalized, currentUid, contactStore)
       messageStore.batchAppendMessages(appendableNormalized as Message[], {
         fillGroupReadBurnFromCurrentGroup: true,
       })

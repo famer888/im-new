@@ -7,13 +7,17 @@ import {
   getGroupNoticeGroupId,
   parseGroupNoticeExtraObject,
 } from '@/utils/groupNoticeDisplay'
+import {
+  rememberGroupMemberDisplayName,
+  resolveGroupMemberDisplayName,
+} from '@/utils/groupRemovedMemberNameCache'
 import { formatSystemNotificationText } from '@/utils/chatUnreadVisibility'
 import { translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 
 const PURE_UID_RE = /\b\d{5,}\b/g
 
 interface SystemNotificationDisplayOptions {
-  t: (key: string) => string
+  t: (key: string, args?: Record<string, unknown>) => string
   currentUid?: string
 }
 
@@ -69,7 +73,10 @@ function getExtraUserNameById(extra: Record<string, unknown> | null): Map<string
   return userMap
 }
 
-function translateNoticeText(text: string, t: (key: string) => string): string {
+function translateNoticeText(
+  text: string,
+  t: (key: string, args?: Record<string, unknown>) => string,
+): string {
   return translateGroupNoticeText(text, t)
 }
 
@@ -155,6 +162,8 @@ export function formatSystemNotificationDisplayParts(
   const resolveUidDisplay = (id: string): string => {
     if (!id) return ''
     if (currentUid === id) return options.t('你')
+    const cachedRemovedName = resolveGroupMemberDisplayName(groupId, id)
+    if (cachedRemovedName && cachedRemovedName !== id) return cachedRemovedName
     const contactName = contactStore.getDisplayName(id)
     if (contactName && contactName !== id) return contactName
     const memberName = memberNameById.get(id) || ''
