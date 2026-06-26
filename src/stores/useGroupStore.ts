@@ -573,9 +573,6 @@ export const useGroupStore = defineStore('group', () => {
     if (existingRequest) return existingRequest
 
     const request = (async () => {
-      if (options.forceRemote && !loadAll && !previewOnly) {
-        resetGroupMembers(groupId)
-      }
 
       let members: GroupMember[] | null = null
       let membersSource: LoadedMembersSource | null = null

@@ -260,6 +260,9 @@ const localFilePath = computed(() => {
 })
 const canOpenDirectory = computed(() => Boolean(localImagePath.value))
 const isChannelSaveRestricted = computed(() => {
+  if (payload.value?.saveRestricted !== undefined) {
+    return Boolean(payload.value.saveRestricted)
+  }
   const channelId = String(payload.value?.channelId || '').trim()
   if (!channelId) return false
   return isChannelContentSaveRestricted(channelId)
@@ -282,7 +285,7 @@ const contextMenuItems = computed<MenuItem[]>(() => {
     if (canOpenDirectory.value && !isChannelSaveRestricted.value) {
       items.push({ key: 'open_directory', label: t('打开目录') })
     }
-    if (canOpenWithDefaultApp.value) {
+    if (canOpenWithDefaultApp.value && !isChannelSaveRestricted.value) {
       items.push({ key: 'open_default', label: t('使用默认应用打开') })
     }
     items.push({ key: 'rotate', label: t('向右旋转') })
@@ -1058,6 +1061,10 @@ async function fetchImageAsPngDataUrl(): Promise<string> {
 }
 
 async function copyImageToClipboard() {
+  if (isChannelSaveRestricted.value) {
+    showToast(t('频道已限制保存内容'), 'error')
+    return
+  }
   const localPath = isFile.value ? localFilePath.value : localImagePath.value
   if ((window as any).__TAURI_INTERNALS__ && localPath) {
     // 对齐旧 im：预览窗口复制本地图片时直接读磁盘写剪贴板，避免 fetch 本地展示 URL 触发 CORS/协议限制。
@@ -1178,6 +1185,10 @@ async function closeWindow() {
 }
 
 async function openWithDefaultApp() {
+  if (isChannelSaveRestricted.value) {
+    showToast(t('频道已限制保存内容'), 'error')
+    return
+  }
   const filePath = String(payload.value?.filePath || '').trim()
   const src = String(payload.value?.src || '').trim()
   let target = filePath || toFsPath(src)
@@ -1606,7 +1617,7 @@ async function openImageDirectory() {
 
 async function handleMenuSelect(key: string) {
   try {
-    if (isChannelSaveRestricted.value && (key === 'copy' || key === 'save_as' || key === 'open_directory')) {
+    if (isChannelSaveRestricted.value && (key === 'copy' || key === 'save_as' || key === 'open_directory' || key === 'open_default')) {
       showToast(t('频道已限制保存内容'), 'error')
       return
     }
@@ -1899,7 +1910,7 @@ onUnmounted(() => {
         </svg>
       </button>
       <button
-        v-if="canOpenWithDefaultApp"
+        v-if="canOpenWithDefaultApp && !isChannelSaveRestricted"
         class="action-btn-text"
         :class="{ 'action-btn-text-on-light-doc': isFile }"
         type="button"

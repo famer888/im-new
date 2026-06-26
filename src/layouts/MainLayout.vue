@@ -584,6 +584,8 @@ function isConversationInCurrentRelations(conv: Conversation): boolean {
 }
 
 function pruneUnknownConversations() {
+  // 通讯录/群列表仍在刷新时不要裁剪会话，避免双开或冷启动时第二个账号列表被清空。
+  if (contactStore.loading || groupStore.loading) return
   const validConversations = chatStore.conversations.filter(isConversationInCurrentRelations)
   if (validConversations.length === chatStore.conversations.length) return
 
@@ -1386,9 +1388,11 @@ function getGroupReadUserMenuItems(data: Record<string, unknown>): MenuItem[] {
 }
 
 function messageSupportsGroupReadCount(data: Record<string, unknown>): boolean {
+  // 对齐旧 im：0 人已读时不展示「0个已读」菜单项。
   return chatStore.currentConversation?.type === ConversationType.Group
     && Boolean(data.isSelf)
     && Number(data.readStatus ?? 0) !== -1
+    && getGroupReadTotal(data) > 0
 }
 
 function canCopyMessageInfo(): boolean {

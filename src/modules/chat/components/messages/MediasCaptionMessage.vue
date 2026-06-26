@@ -52,15 +52,16 @@ function buildMediaSlotExtra(index: number): string | null {
   const parentExtra = parseExtraObject(props.message.extra)
   const channelId = String(parentExtra.channelId || '').trim()
   const isChannelMessage = isChannelConversationId(props.message.conversationId) || Boolean(channelId)
-  if (!isChannelMessage) return null
 
-  // 频道多图子格子会复用 Image/Video 组件下载；必须保留父消息的附件 key，避免子格子 extra=null 后无法解密。
+  // 多图子格复用 Image/Video 组件下载；私聊/群聊/频道都要继承父消息附件 key，避免子格 extra=null 后无法解密。
   const slotExtra: Record<string, unknown> = {
-    channelId: channelId || String(props.message.conversationId || '').split('_')[1] || '',
     mediaSlotIndex: index,
     parentMsgId: props.message.id || props.message.customMsgId || '',
   }
-  for (const key of ['version', 'contentMd5', 'readTotal', 'decryptPending', 'cipherHex', 'attachmentKey', 'fileKey']) {
+  if (isChannelMessage) {
+    slotExtra.channelId = channelId || String(props.message.conversationId || '').split('_')[1] || ''
+  }
+  for (const key of ['version', 'contentMd5', 'readTotal', 'decryptPending', 'cipherHex', 'attachmentKey', 'fileKey', 'cipherCandidates', 'source']) {
     if (parentExtra[key] !== undefined && parentExtra[key] !== null && String(parentExtra[key]).length > 0) {
       slotExtra[key] = parentExtra[key]
     }

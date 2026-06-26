@@ -737,6 +737,11 @@ function onUnreadBannerClick() {
     void flushScrollToBottom()
   })
 }
+
+/** 对齐旧 im float-right-btns：点击上箭头跳到未读分隔条，不立即清除未读数展示 */
+function onClickScrollToUnread() {
+  void scrollUnreadBannerIntoView({ fallbackToBottom: false })
+}
 </script>
 
 <template>
@@ -797,6 +802,18 @@ function onUnreadBannerClick() {
       </div>
 
     </div>
+    <button
+      v-if="effectiveUnreadCount > 0"
+      class="scroll-unread-btn"
+      type="button"
+      @mousedown.stop.prevent
+      @click.stop="onClickScrollToUnread"
+    >
+      <img class="arrow-up-icon" src="@/assets/images/message/arrow-down.png" alt="" />
+      <span class="scroll-unread-label">
+        {{ effectiveUnreadCount > 99 ? '99+' : effectiveUnreadCount }}{{ $t('条未读消息') }}
+      </span>
+    </button>
     <button
       v-if="!isAtBottom"
       class="scroll-bottom-btn"
@@ -928,6 +945,39 @@ function onUnreadBannerClick() {
     color: #2273ad;
     white-space: nowrap;
     pointer-events: none;
+  }
+}
+
+.scroll-unread-btn {
+  position: absolute;
+  bottom: 64px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+  font-size: 12px;
+  color: #2273ad;
+
+  .arrow-up-icon {
+    width: 16px;
+    height: 16px;
+    transform: rotate(180deg);
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+
+  .scroll-unread-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 

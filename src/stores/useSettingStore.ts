@@ -118,9 +118,54 @@ function isFriendVerifyRequiredFromPrivacy(privacy: unknown, fallback: boolean):
   return (value & FRIEND_VERIFY_PRIVACY_MASK) === FRIEND_VERIFY_PRIVACY_MASK
 }
 
-/** 对齐旧 im privacy.vue：开启发 4096，关闭发 0，不做按位合并。 */
-function buildFriendVerifyPrivacyValue(enabled: boolean): number {
-  return enabled ? FRIEND_VERIFY_PRIVACY_MASK : 0
+function readPrivacyFromUserInfo(resp: unknown): number {
+  const raw = resp as { privacy?: unknown; userInfo?: { privacy?: unknown } } | null
+  const privacy = raw?.privacy ?? raw?.userInfo?.privacy ?? 0
+  const value = Number(privacy)
+  return Number.isFinite(value) ? value : 0
+}
+
+/** 按位更新好友验证位；保留 privacy 其它标志位。 */
+function buildFriendVerifyPrivacyValue(currentPrivacy: number, enabled: boolean): number {
+  const privacy = Number.isFinite(currentPrivacy) ? currentPrivacy : 0
+  return enabled
+    ? (privacy | FRIEND_VERIFY_PRIVACY_MASK)
+    : (privacy & ~FRIEND_VERIFY_PRIVACY_MASK)
+}
+
+async function fetchCurrentPrivacy(uid: number): Promise<number> {
+  const resp = await getUserInfo({ uid })
+  assertCommonResultOk(resp, 'load privacy failed')
+  return readPrivacyFromUserInfo(resp)
+}
+
+async function pushFriendVerifyPrivacy(uid: number, privacy: number) {
+  const resp = await updateUserInfo({
+    userParam: { privacy },
+    ops: [proto.UserOperator.PRIVACY],
+  })
+  assertCommonResultOk(resp, 'update friend verify required failed')
+}
+
+/**
+ * 对齐旧 im privacy.vue 的开关语义，同时兼容服务端按位 privacy：
+ * - 关闭：清掉 4096 位
+ * - 开启：先按位 OR 4096；若仍未生效，再补发旧 im 的纯 4096
+ */
+async function syncFriendVerifyPrivacyToServer(uid: number, enabled: boolean) {
+  const currentPrivacy = await fetchCurrentPrivacy(uid)
+  await pushFriendVerifyPrivacy(uid, buildFriendVerifyPrivacyValue(currentPrivacy, enabled))
+  if (!enabled) return
+
+  const remotePrivacy = await fetchCurrentPrivacy(uid)
+  if (isFriendVerifyRequiredFromPrivacy(remotePrivacy, false)) return
+
+  // 旧 im 开启时直接发 4096；部分环境按位更新后需要再补一次绝对值。
+  await pushFriendVerifyPrivacy(uid, FRIEND_VERIFY_PRIVACY_MASK)
+  const confirmedPrivacy = await fetchCurrentPrivacy(uid)
+  if (!isFriendVerifyRequiredFromPrivacy(confirmedPrivacy, false)) {
+    throw new Error('开启好友验证失败，请稍后重试')
+  }
 }
 
 function assertCommonResultOk(resp: unknown, fallback: string) {
@@ -167,7 +212,7 @@ export const useSettingStore = defineStore('setting', () => {
       assertCommonResultOk(resp, 'load friend verify required failed')
 
       const remoteFriendVerifyRequired = isFriendVerifyRequiredFromPrivacy(
-        (resp as any)?.privacy,
+        readPrivacyFromUserInfo(resp),
         nextSettings.friendVerifyRequired,
       )
 
@@ -219,20 +264,17 @@ export const useSettingStore = defineStore('setting', () => {
     const updated = { ...settings.value, ...partial }
 
     if (partial.friendVerifyRequired !== undefined) {
+      settingsWriteGeneration += 1
       const uid = getCurrentUid()
       if (uid) {
-        const resp = await updateUserInfo({
-          userParam: {
-            privacy: buildFriendVerifyPrivacyValue(partial.friendVerifyRequired),
-          },
-          ops: [proto.UserOperator.PRIVACY],
-        })
-        assertCommonResultOk(resp, 'update friend verify required failed')
+        await syncFriendVerifyPrivacyToServer(uid, partial.friendVerifyRequired)
       }
     }
 
     settings.value = updated
-    settingsWriteGeneration += 1
+    if (partial.friendVerifyRequired === undefined) {
+      settingsWriteGeneration += 1
+    }
     if (partial.theme !== undefined) applyTheme(updated.theme)
     if (partial.fontSize !== undefined) applyFontSize(updated.fontSize)
 

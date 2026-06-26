@@ -151,7 +151,7 @@ function getConversationTitle(conversationId: string, message?: any): string {
       item.id === channelId || item.channelId === channelId,
     )
     const channelName = extraString(extra, ['channelName', 'channel_name'])
-    return channel?.remark || channel?.channelName || channel?.name || channelName || t('频道通知')
+    return String(channel?.channelName || channel?.name || channelName || '').trim() || t('频道通知')
   }
 
   if (conversationId.startsWith('0_')) {
@@ -170,7 +170,8 @@ function getConversationTitle(conversationId: string, message?: any): string {
   if (conversationId.startsWith('2_')) {
     const channel = channelStore.channels.find((item) => item.id === targetId || item.channelId === targetId)
     const channelName = extraString(extra, ['channelName', 'channel_name'])
-    return channel?.remark || channel?.channelName || channel?.name || channelName || t('频道通知')
+    // 对齐会话列表/聊天顶栏：频道展示名不用 remark，避免通知标题与会话列表不一致。
+    return String(channel?.channelName || channel?.name || channelName || '').trim() || t('频道通知')
   }
 
   return t('新消息')
@@ -443,20 +444,29 @@ async function showNotificationWindow(message: any, unreadCount: number) {
     if (isConversationMuted(conversationId)) return
     const conversationType = getConversationType(conversationId)
     const extra = parseExtra(message?.extra)
+    const msgType = Number(message?.msgType ?? message?.msg_type ?? 0)
     const rawAvatar = getConversationAvatar(conversationId, message)
     const displayAvatar = await resolveReminderAvatarSrc(
       conversationId,
       conversationType,
       rawAvatar,
     )
-    const senderName = stripText(
-      extra.senderName
-        ?? extra.nickName
-        ?? extra.nickname
-        ?? message?.senderName
-        ?? message?.sender_name
-        ?? '',
-    )
+    const contactStore = useContactStore()
+    const senderId = String(message?.senderId ?? message?.sender_id ?? '')
+    let senderName = ''
+    if (msgType !== 8 && senderId) {
+      const displayName = contactStore.getDisplayName(senderId)
+      senderName = displayName && displayName !== senderId
+        ? displayName
+        : stripText(
+          extra.senderName
+            ?? extra.nickName
+            ?? extra.nickname
+            ?? message?.senderName
+            ?? message?.sender_name
+            ?? '',
+        )
+    }
     const digest = getMessageDigest(message)
 
     // 右下角提醒窗口是按需新建的，先在主窗口把头像资源拉进缓存，避免首帧偶发显示损坏图标。
@@ -480,7 +490,9 @@ async function showNotificationWindow(message: any, unreadCount: number) {
         body: digest || t('新消息'),
         avatar: displayAvatar,
         conversationType,
-        senderName: conversationType === 'group' || conversationType === 'channel' ? senderName : null,
+        senderName: msgType === 8
+          ? null
+          : (conversationType === 'group' || conversationType === 'channel' ? senderName || null : null),
         unreadCount,
       },
     })

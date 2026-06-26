@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useChannelStore } from '@/stores/useChannelStore'
+import { logChannelContentLimitDebug } from '@/utils/channelContentLimit'
 import { eventBus } from '@/utils/eventBus'
 import { writeClipboardText } from '@/utils/clipboard'
 import { useEmojiPanelDismiss } from '@/composables/useEmojiPanelDismiss'
@@ -230,10 +231,11 @@ function handleChannelPermissionRetry() {
 
 watch(
   () => chatStore.currentConversation?.type === ConversationType.Channel ? chatStore.currentConversation.targetId : '',
-  (channelId) => {
+  async (channelId) => {
     if (!channelId) return
     // 切会话后后台补齐频道详情，不阻塞聊天区切换速度。
-    void channelStore.ensureChannelDetailReady(channelId)
+    await channelStore.ensureChannelDetailReady(channelId)
+    logChannelContentLimitDebug(channelId, 'enter-channel')
   },
   { immediate: true },
 )

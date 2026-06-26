@@ -71,6 +71,29 @@ const currentGroupMember = computed(() => {
     .find((member) => member.userId === props.message.senderId) ?? null
 })
 
+function parseMessageExtraIcon(): string {
+  const raw = props.message.extra
+  if (!raw) return ''
+  let extra: Record<string, unknown> = {}
+  if (typeof raw === 'object') {
+    extra = raw as Record<string, unknown>
+  } else if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      extra = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+    } catch {
+      return ''
+    }
+  }
+  const user = extra.user && typeof extra.user === 'object'
+    ? extra.user as Record<string, unknown>
+    : null
+  return String(
+    extra.senderAvatar || extra.sender_avatar || extra.icon || extra.avatar
+    || user?.icon || user?.avatar || '',
+  ).trim()
+}
+
 const rawSenderName = computed(() => {
   if (isSelf.value) return '我'
   const contactName = contactStore.getDisplayName(props.message.senderId)
@@ -83,8 +106,9 @@ const senderName = computed(() => filterSensitiveWords(rawSenderName.value))
 const senderAvatar = computed(() => {
   if (isSelf.value) return authStore.avatar || null
   const contactAvatar = contactStore.getContact(props.message.senderId)?.avatar || null
-  // 群聊非好友头像来自群成员列表；好友头像仍优先用通讯录，保持备注/头像覆盖行为。
-  return contactAvatar || currentGroupMember.value?.avatar || null
+  const extraIcon = parseMessageExtraIcon()
+  // 群聊非好友头像来自群成员列表；成员缓存未就绪时回退消息自带头像，对齐旧 im msgInfo.user.icon。
+  return contactAvatar || currentGroupMember.value?.avatar || extraIcon || null
 })
 
 function openSenderMemberInfo() {

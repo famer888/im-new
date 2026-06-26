@@ -311,6 +311,8 @@ export interface ChannelListItem {
   memberType?: number
   contentLimit?: boolean
   content_limit?: boolean
+  isLimit?: boolean | number
+  is_limit?: boolean | number
   updateTime?: number
   createTime?: number
 }

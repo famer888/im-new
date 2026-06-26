@@ -3043,6 +3043,42 @@ export const useMessageStore = defineStore('message', () => {
         const remoteCaption = incomingContent.split('##caption##')[1] || ''
         if (localCaption && remoteCaption && localCaption === remoteCaption) return true
       }
+
+      // 文件占位内容是 uploadPending JSON，回显是 URL JSON；按 __clientMsgId / fileKey 合并。
+      if (Number(message.msgType) === 7) {
+        const parseExtraFields = (raw: unknown): Record<string, unknown> => {
+          if (!raw) return {}
+          if (typeof raw === 'object') return raw as Record<string, unknown>
+          if (typeof raw !== 'string') return {}
+          try {
+            const parsed = JSON.parse(raw)
+            return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+          } catch {
+            return {}
+          }
+        }
+        const parseFileMeta = (raw: string): Record<string, unknown> => {
+          if (!raw) return {}
+          try {
+            const parsed = JSON.parse(raw)
+            return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+          } catch {
+            return {}
+          }
+        }
+        const incomingExtra = parseExtraFields(message.extra)
+        const placeholderExtra = parseExtraFields(item.extra)
+        const incomingClientId = String(incomingExtra.__clientMsgId || message.customMsgId || '')
+        const placeholderClientId = String(placeholderExtra.__clientMsgId || item.customMsgId || item.id || '')
+        if (incomingClientId && placeholderClientId && incomingClientId === placeholderClientId) return true
+        const incomingKey = String(
+          incomingExtra.fileKey || incomingExtra.file_key || parseFileMeta(incomingContent).fileKey || '',
+        ).trim()
+        const placeholderKey = String(
+          placeholderExtra.fileKey || placeholderExtra.file_key || parseFileMeta(placeholderContent).fileKey || '',
+        ).trim()
+        if (incomingKey && placeholderKey && incomingKey === placeholderKey) return true
+      }
       return false
     })
   }

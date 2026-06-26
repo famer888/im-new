@@ -20,6 +20,8 @@ export interface MediaViewerPayload {
   fileName?: string
   mimeType?: string
   channelId?: string
+  /** 预览窗为独立 Webview，频道限制状态由主窗口打开时写入，不依赖预览窗内 store。 */
+  saveRestricted?: boolean
   timestamp: number
 }
 

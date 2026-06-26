@@ -7,6 +7,7 @@ import { useMessageStore } from '@/stores/useMessageStore'
 import { ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
 import { eventBus } from '@/utils/eventBus'
 import { mediaViewerState } from '@/utils/mediaViewerState'
+import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import { resolveMediaPreviewFileKind, type MediaPreviewFileKind } from '@/utils/mediaPreview'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { normalizeOpenTarget } from '@/utils/resourcePath'
@@ -555,6 +556,9 @@ function showDangerousFileDialog() {
 
 async function openFilePreviewWindow(kind: MediaPreviewFileKind, target: string) {
   const { invoke } = await import('@tauri-apps/api/core')
+  const conversationId = String(props.message.conversationId || '')
+  const isChannel = conversationId.startsWith('2_')
+  const resolvedChannelId = isChannel ? conversationId.split('_').slice(1).join('_') : ''
   mediaViewerState.send({
     title: fileName.value,
     mediaType: 'file',
@@ -563,6 +567,8 @@ async function openFilePreviewWindow(kind: MediaPreviewFileKind, target: string)
     filePath: target,
     fileName: fileName.value,
     size: Number(fileData.value.size || fileData.value.fileSize || 0) || 0,
+    channelId: resolvedChannelId || undefined,
+    saveRestricted: resolvedChannelId ? isChannelContentSaveRestricted(resolvedChannelId) : false,
   })
   await invoke('open_media_window', {
     title: fileName.value,

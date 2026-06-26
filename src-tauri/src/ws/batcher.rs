@@ -2483,6 +2483,7 @@ impl MessageBatcher {
                         serde_json::json!({
                             "channelId": event.channel_id.to_string(),
                             "contentLimit": info.content_limit,
+                            "isLimit": if info.content_limit { 1 } else { 0 },
                         }),
                     );
                 }

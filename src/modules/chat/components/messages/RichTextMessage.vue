@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { mediaViewerState } from '@/utils/mediaViewerState'
+import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import DOMPurify from 'dompurify'
 
@@ -72,10 +73,15 @@ async function openImagePreview(src: string) {
     ])
     const bounds = await getMediaWindowBounds(windowApi)
     // 旧 im 富文本图片点击会打开预览窗口；这里复用新项目统一媒体窗口，避免再维护一套弹窗链路。
+    const conversationId = String(props.message.conversationId || '')
+    const isChannel = conversationId.startsWith('2_')
+    const resolvedChannelId = isChannel ? getConversationTargetId(props.message) : ''
     mediaViewerState.send({
       title: '图片',
       mediaType: 'image',
       src: imageSrc,
+      channelId: resolvedChannelId || undefined,
+      saveRestricted: resolvedChannelId ? isChannelContentSaveRestricted(resolvedChannelId) : false,
     })
     await invoke('open_media_window', {
       title: '图片',

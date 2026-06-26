@@ -5,7 +5,7 @@ import TextAvatar from '@/components/TextAvatar.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import RadioSelectDialog from '@/components/RadioSelectDialog.vue'
 import Toast from '@/components/Toast.vue'
-import { contactsRelation, updateBlackContacts, updateContacts } from '@/api/imBase'
+import { contactsRelation, getContactsDetail, updateBlackContacts, updateContacts } from '@/api/imBase'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
 import { useContactStore } from '@/stores/useContactStore'
@@ -222,6 +222,32 @@ async function confirmBlacklist() {
     if (errCode == 200) {
       inBlacklist.value = next
       contactStore.patchContact(contact.value.id, { bfMyBlack: next })
+      if (!next) {
+        // 对齐旧 im：移出黑名单后主动拉详情，回填昵称/头像，避免列表和聊天窗只显示 uid。
+        await contactStore.ensureContactDetailLoaded(contact.value.id, { force: true })
+        try {
+          const resp = await getContactsDetail({ targetUid: Number(contact.value.id) })
+          const detail = (resp as any)?.contactsDetailBase
+          const userInfo = detail?.userInfo || {}
+          const nickname = String(userInfo.nickName || userInfo.nickname || '').trim()
+          const avatar = String(userInfo.icon || userInfo.avatar || '').trim()
+          if (nickname || avatar) {
+            await contactStore.upsertContact({
+              id: contact.value.id,
+              nickname: nickname || contact.value.nickname || contact.value.id,
+              avatar: avatar || contact.value.avatar || null,
+              bfMyBlack: false,
+              status: 1,
+            } as any, {
+              uid: String(authStore.uid || ''),
+              source: 'remote',
+              markDetailLoaded: true,
+            })
+          }
+        } catch (error) {
+          console.warn('[FriendInfo] refresh contact after blacklist remove failed:', error)
+        }
+      }
       showToast(next ? t('加入成功') : t('移除成功'))
     } else {
       const errorDesc = (res as any)?.errorDesc

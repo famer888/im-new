@@ -6,6 +6,7 @@ import {
   isAuthSessionExpiredError,
   isAuthSessionExpiredResponse,
 } from '@/utils/authSessionExpiry'
+import { logChannelContentLimitDebug, parseChannelContentLimitFromApi } from '@/utils/channelContentLimit'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -264,7 +265,7 @@ export const useChannelStore = defineStore('channel', () => {
       linkType: item.linkType === undefined || item.linkType === null ? null : Number(item.linkType),
       ownerId: item.ownerId ?? item.owner_id ?? null,
       description: item.description ?? item.channelDesc ?? null,
-      contentLimit: toBool(item.contentLimit ?? item.content_limit, false),
+      contentLimit: parseChannelContentLimitFromApi(item),
       updatedAt: Number(item.updatedAt ?? item.updated_at ?? item.updateTime ?? item.createTime ?? 0),
     }
   }
@@ -754,6 +755,7 @@ export const useChannelStore = defineStore('channel', () => {
     } else {
       channels.value.unshift(next)
     }
+    logChannelContentLimitDebug(id, 'getChannelById', detailData)
     channelDiag('detail applied', {
       channelId: id,
       name: next.channelName || next.name || '',

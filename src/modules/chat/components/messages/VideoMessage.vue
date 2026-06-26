@@ -4,7 +4,7 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { ensureGroupRelKey, normalizeResolvedFileKey, readMessageAttachmentKey, resolvePrivateAttachmentFileKey } from '@/utils/e2ee'
-import { mediaViewerState } from '@/utils/mediaViewerState'
+import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { eventBus } from '@/utils/eventBus'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
@@ -685,6 +685,7 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
     })
   }
 
+    const resolvedChannelId = isChannelMessage.value ? channelId.value : ''
     mediaViewerState.send({
       title: '视频',
       mediaType: 'video',
@@ -699,7 +700,8 @@ async function openMediaWindow(pathOrUrl: string, options?: { originalUrl?: stri
       fileKey: options?.fileKey || fileKey.value || '',
       fileName: getVideoFileName(videoData.value.url || target, videoData.value.name, localVideoSourcePath.value),
       mimeType: videoData.value.mimeType || '',
-      channelId: isChannelMessage.value ? channelId.value : undefined,
+      channelId: resolvedChannelId || undefined,
+      saveRestricted: resolvedChannelId ? isChannelContentSaveRestricted(resolvedChannelId) : false,
     })
 
   await invoke('open_media_window', {

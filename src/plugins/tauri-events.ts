@@ -21,6 +21,7 @@ import { openNotificationModuleByConversationId } from '@/utils/notificationNavi
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
+import { logChannelContentLimitDebug, parseChannelContentLimitFromApi } from '@/utils/channelContentLimit'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -1358,14 +1359,16 @@ export async function setupTauriListeners() {
     await removeLocalChannelConversation(event.payload || {}, 'channel:removed')
   })
 
-  listen<{ channelId?: string; contentLimit?: boolean }>('channel:content-limit', (event) => {
+  listen<{ channelId?: string; contentLimit?: boolean; isLimit?: boolean | number }>('channel:content-limit', (event) => {
     const authStore = useAuthStore()
     const channelStore = useChannelStore()
     const channelId = String(event.payload?.channelId || '').trim()
     if (!channelId) return
+    const contentLimit = parseChannelContentLimitFromApi(event.payload || {})
     channelStore.patchChannel(channelId, {
-      contentLimit: Boolean(event.payload?.contentLimit),
+      contentLimit,
     }, { uid: String(authStore.uid || '') })
+    logChannelContentLimitDebug(channelId, 'ws-channel-content-limit', event.payload || {})
   })
 
   listen<ForceLogoutPayload>('auth:force-logout', async (event) => {

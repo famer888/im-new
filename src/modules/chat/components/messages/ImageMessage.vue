@@ -19,10 +19,6 @@ const props = defineProps<{
 
 const authStore = useAuthStore()
 const { t } = useI18n()
-const isLoaded = ref(false)
-const loadError = ref(false)
-const activeSrc = ref('')
-const localFilePath = ref('')
 const showPreview = ref(false)
 const imageElRef = ref<HTMLImageElement | null>(null)
 const naturalImageWidth = ref(0)
@@ -81,6 +77,23 @@ function deleteCachedImage(key: string) {
   if (!key) return
   imageDisplayCache.delete(key)
 }
+
+function buildImageCacheKey(message: Pick<Message, 'conversationId' | 'id' | 'customMsgId' | 'sendTime'>): string {
+  const convId = String(message.conversationId || '')
+  const msgId = String(message.id || message.customMsgId || '')
+  const sendTime = String(message.sendTime || '')
+  return `${convId}|${msgId}|${sendTime}`
+}
+
+function readImageCacheForMessage(message: Pick<Message, 'conversationId' | 'id' | 'customMsgId' | 'sendTime'>): ImageDisplayCacheEntry | null {
+  return getCachedImage(buildImageCacheKey(message))
+}
+
+const initialCachedImage = readImageCacheForMessage(props.message)
+const isLoaded = ref(Boolean(initialCachedImage?.src))
+const loadError = ref(false)
+const activeSrc = ref(initialCachedImage?.src || '')
+const localFilePath = ref(initialCachedImage?.localFilePath || '')
 
 function cacheActiveLocalPreview(markLoaded = false) {
   if (!activeSrc.value) return
@@ -372,18 +385,7 @@ const privateAttachmentCandidates = computed(() => {
   }
   return candidates
 })
-const imageCacheKey = computed(() => [
-  props.message.id || '',
-  props.message.customMsgId || '',
-  String(props.message.sendTime || ''),
-  imageData.value.name || '',
-  localSourcePath.value || '',
-  imageData.value.localPreviewUrl || '',
-  downloadUrl.value || imageData.value.url || '',
-  thumbnailUrl.value || '',
-  fileKey.value || '',
-  attachmentKey.value || '',
-].join('|'))
+const imageCacheKey = computed(() => buildImageCacheKey(props.message))
 
 watch(loadError, (failed) => {
   if (!failed) return
@@ -427,14 +429,35 @@ function applyCachedImageIfAvailable(): boolean {
   return true
 }
 
-watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
-  if (applyCachedImageIfAvailable()) return
-
+function resetImageDisplayState() {
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
   localFilePath.value = ''
   invalidLocalCacheRedownloadStarted.value = false
+}
+
+watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
+  if (applyCachedImageIfAvailable()) return
+
+  const willDownload = (fileKey.value || attachmentKey.value)
+    && downloadUrl.value
+    && !shouldUseLocalPreview.value
+    && !isOwnSingleImageUploadPlaceholder.value
+  const preserveDisplayed = Boolean(activeSrc.value && isLoaded.value && !loadError.value)
+
+  if (willDownload && preserveDisplayed && isUsingLocalCacheFile()) {
+    return
+  }
+  if (!willDownload && preserveDisplayed && activeSrc.value) {
+    return
+  }
+  if (!willDownload) {
+    resetImageDisplayState()
+  } else {
+    invalidLocalCacheRedownloadStarted.value = false
+  }
+
   channelImageLog('watch decision start', {
     hasImageUrl: Boolean(imageData.value.url),
     imageUrlHead: shortLogValue(imageData.value.url),
@@ -486,7 +509,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   }
   if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
     channelImageLog('start download/decrypt path')
-    downloadAndDecryptImage()
+    void downloadAndDecryptImage()
     return
   }
   if (localSourcePath.value) {
@@ -668,6 +691,7 @@ async function openPreview() {
     const bounds = await getMediaWindowBounds(windowApi)
     const remoteOriginalUrl = isRemoteImageSrc(imageData.value.url) ? imageData.value.url : ''
 
+    const resolvedChannelId = isChannelMessage() ? channelId.value : ''
     mediaViewerState.send({
       title: '图片',
       mediaType: 'image',
@@ -678,7 +702,8 @@ async function openPreview() {
       fileName: imageData.value.name || '',
       width: imageData.value.width || undefined,
       height: imageData.value.height || undefined,
-      channelId: isChannelMessage() ? channelId.value : undefined,
+      channelId: resolvedChannelId || undefined,
+      saveRestricted: resolvedChannelId ? isChannelContentSaveRestricted(resolvedChannelId) : false,
     })
 
     await invoke('open_media_window', {
@@ -692,6 +717,7 @@ async function openPreview() {
 }
 
 async function openWithDefaultApp() {
+  if (blockChannelImageSaveIfRestricted()) return
   const filePath = String(localFilePath.value || '').trim()
   if (!filePath) return
   try {
@@ -1040,8 +1066,8 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
         hasDataUrl: Boolean(event.payload.dataUrl || event.payload.data_url),
       })
       loadError.value = false
-      isLoaded.value = false
       activeSrc.value = src
+      isLoaded.value = true
       markLoadedIfImageAlreadyComplete()
       setCachedImage(imageCacheKey.value, {
         src,
@@ -1482,6 +1508,12 @@ function handleImageDragEnd(event: DragEvent) {
 }
 
 onBeforeUnmount(() => {
+  if (activeSrc.value && isLoaded.value && !loadError.value) {
+    setCachedImage(imageCacheKey.value, {
+      src: activeSrc.value,
+      localFilePath: localFilePath.value,
+    })
+  }
   downloadToken += 1
   materializeToken += 1
   plainRemoteCacheToken += 1
@@ -1559,7 +1591,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="preview-actions">
           <button
-            v-if="localFilePath"
+            v-if="localFilePath && !isChannelContentSaveRestricted(channelId)"
             class="preview-action-btn"
             type="button"
             @click="openWithDefaultApp"
