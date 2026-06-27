@@ -13,6 +13,7 @@ import { useSettingStore } from '@/stores/useSettingStore'
 import type { Message } from '@/stores/useMessageStore'
 import { formatSystemNotificationPlainText } from '@/utils/systemNotificationDisplay'
 import { parseGroupNoticeExtraObject, replaceGroupNoticeUidPlaceholders } from '@/utils/groupNoticeDisplay'
+import { buildChannelTextAvatarDataUrl, isChannelImageAvatar } from '@/utils/channelTextAvatar'
 import { canUseNativeImageAvatar, resolveNativeAvatarSrc } from '@/utils/nativeImage'
 import ch from '@/locales/ch.json'
 import en from '@/locales/en.json'
@@ -217,6 +218,39 @@ async function ensureGroupMembersForSystemNoticeReminder(uid: string, conversati
   await useGroupStore().loadMembers(uid, targetId, { previewOnly: true }).catch(() => undefined)
 }
 
+function resolveChannelReminderAvatar(
+  conversationId: string,
+  message: any | undefined,
+  channelStore: ReturnType<typeof useChannelStore>,
+): string | null {
+  const targetId = conversationId.split('_')[1] || ''
+  const extra = parseExtra(message?.extra)
+  const channel = channelStore.channels.find((item) => item.id === targetId || item.channelId === targetId)
+  const imageAvatar = stripText(channel?.avatar || channel?.icon)
+    || extraString(extra, ['icon', 'channelIcon', 'channel_icon', 'avatar'])
+    || null
+
+  if (isChannelImageAvatar(imageAvatar)) {
+    return imageAvatar
+  }
+
+  const channelName = String(
+    channel?.channelName
+    || channel?.name
+    || extraString(extra, ['channelName', 'channel_name'])
+    || '',
+  ).trim() || t('频道通知')
+  const channelId = channel?.channelId || channel?.id || targetId
+  const logoColor = channel?.logoColor || extraString(extra, ['logoColor', 'logo_color']) || null
+
+  return buildChannelTextAvatarDataUrl({
+    name: channelName,
+    id: channelId,
+    logoColor,
+    size: 88,
+  })
+}
+
 function getConversationAvatar(conversationId: string, message?: any): string | null {
   const contactStore = useContactStore()
   const groupStore = useGroupStore()
@@ -248,8 +282,7 @@ function getConversationAvatar(conversationId: string, message?: any): string | 
     return group?.avatar || extraAvatar || null
   }
   if (conversationId.startsWith('2_')) {
-    const channel = channelStore.channels.find((item) => item.id === targetId || item.channelId === targetId)
-    return channel?.avatar || channel?.icon || null
+    return resolveChannelReminderAvatar(conversationId, message, channelStore)
   }
   return null
 }
@@ -312,7 +345,7 @@ function sleep(ms: number) {
 function isPreloadableAvatarSrc(value: string): boolean {
   return /^https?:\/\//i.test(value)
     || /^(asset|tauri|blob):/i.test(value)
-    || /^data:image\/(png|jpe?g|gif|webp|bmp|avif);base64,/i.test(value)
+    || /^data:image\/(png|jpe?g|gif|webp|bmp|avif|svg\+xml)(;base64|,)/i.test(value)
 }
 
 async function preloadReminderAvatar(avatar: string | null): Promise<void> {

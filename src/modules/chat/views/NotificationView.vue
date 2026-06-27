@@ -90,7 +90,7 @@ function safeImageSrc(value: unknown, fallback: string): string {
   if (!raw) return fallback
   if (/^https?:\/\//i.test(raw)) return raw
   if (/^(asset|tauri|blob):/i.test(raw)) return raw
-  if (/^data:image\/(png|jpe?g|gif|webp|bmp|avif);base64,/i.test(raw)) return raw
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp|avif|svg\+xml)(;base64|,)/i.test(raw)) return raw
   return fallback
 }
 
