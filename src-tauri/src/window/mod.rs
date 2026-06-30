@@ -458,7 +458,9 @@ impl WindowManager {
         if !label.starts_with("notification_") {
             return None;
         }
-        self.pending_notifications.remove(label)
+        self.pending_notifications
+            .remove(label)
+            .map(|(_, data)| data)
     }
 
     pub fn has_chat_window(&self, conversation_id: &str) -> bool {

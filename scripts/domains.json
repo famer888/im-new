@@ -30,6 +30,15 @@
     {
       "areaId": 8,
       "domainType": 0,
+      "domainUrl": "https://za.nyangyuangao.top",
+      "id": 2069,
+      "moduleCode": "biz",
+      "moduleId": 1,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
       "domainUrl": "https://za.cqmsx90.top",
       "id": 1119,
       "moduleCode": "biz",
@@ -39,8 +48,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://za.wifipai.top",
-      "id": 3207,
+      "domainUrl": "https://za.jufuhui.top",
+      "id": 2441,
       "moduleCode": "biz",
       "moduleId": 1,
       "paramType": 0
@@ -48,8 +57,17 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://za.phichaxun.top",
-      "id": 3215,
+      "domainUrl": "https://za.hlxxuj.xyz",
+      "id": 2442,
+      "moduleCode": "biz",
+      "moduleId": 1,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://za.zhangtian1014.top",
+      "id": 2443,
       "moduleCode": "biz",
       "moduleId": 1,
       "paramType": 0
@@ -86,6 +104,15 @@
       "domainType": 0,
       "domainUrl": "https://za.xiati.xyz",
       "id": 2524,
+      "moduleCode": "biz",
+      "moduleId": 1,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://imlo.tantan3.top",
+      "id": 2045,
       "moduleCode": "biz",
       "moduleId": 1,
       "paramType": 0
@@ -138,6 +165,15 @@
     {
       "areaId": 8,
       "domainType": 0,
+      "domainUrl": "https://za.linzj.xyz",
+      "id": 1802,
+      "moduleCode": "friend",
+      "moduleId": 3,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
       "domainUrl": "https://blo.yimengwh.xyz",
       "id": 1803,
       "moduleCode": "friend",
@@ -149,15 +185,6 @@
       "domainType": 0,
       "domainUrl": "https://za.nckiutwl.top",
       "id": 1309,
-      "moduleCode": "friend",
-      "moduleId": 3,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://za.wbyx.xyz",
-      "id": 3893,
       "moduleCode": "friend",
       "moduleId": 3,
       "paramType": 0
@@ -183,6 +210,15 @@
     {
       "areaId": 8,
       "domainType": 0,
+      "domainUrl": "https://za.linzj.xyz",
+      "id": 1806,
+      "moduleCode": "group",
+      "moduleId": 4,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
       "domainUrl": "https://blo.yimengwh.xyz",
       "id": 1807,
       "moduleCode": "group",
@@ -194,15 +230,6 @@
       "domainType": 0,
       "domainUrl": "https://za.nckiutwl.top",
       "id": 1313,
-      "moduleCode": "group",
-      "moduleId": 4,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://za.wssnm.xyz",
-      "id": 1314,
       "moduleCode": "group",
       "moduleId": 4,
       "paramType": 0
@@ -354,8 +381,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://cpp-img1.huangyu.xyz",
-      "id": 3507,
+      "domainUrl": "https://app-img1.zpyyrg258.xyz",
+      "id": 1397,
       "moduleCode": "ossDefaultUrl",
       "moduleId": 22,
       "paramType": 0
@@ -363,8 +390,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://cpp-img1.zpyyrg258.xyz",
-      "id": 3515,
+      "domainUrl": "https://app-img1.huangyu.xyz",
+      "id": 1889,
       "moduleCode": "ossDefaultUrl",
       "moduleId": 22,
       "paramType": 0
@@ -372,7 +399,16 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://dpp-img2.huangyu.xyz",
+      "domainUrl": "https://app-img1.qingchengwenhua.xyz",
+      "id": 2249,
+      "moduleCode": "ossDefaultUrl",
+      "moduleId": 22,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://bpp-img2.huangyu.xyz",
       "id": 1905,
       "moduleCode": "ossChatUrl",
       "moduleId": 23,
@@ -381,8 +417,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://dpp-img2.zpyyrg258.xyz",
-      "id": 3523,
+      "domainUrl": "https://bpp-img2.zpyyrg258.xyz",
+      "id": 1413,
       "moduleCode": "ossChatUrl",
       "moduleId": 23,
       "paramType": 0
@@ -417,15 +453,6 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://webbiz.atahime1.com",
-      "id": 3915,
-      "moduleCode": "webBiz",
-      "moduleId": 25,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
       "domainUrl": "https://webbiz.imono.xyz",
       "id": 3053,
       "moduleCode": "webBiz",
@@ -453,8 +480,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-channel.ddsvr2022.xyz",
-      "id": 3141,
+      "domainUrl": "https://openchat-channel.wuliminhazel.top",
+      "id": 2147,
       "moduleCode": "openchatChannel",
       "moduleId": 28,
       "paramType": 0
@@ -462,8 +489,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-channel.jsyncpj.top",
-      "id": 3802,
+      "domainUrl": "https://openchat-channel.fangcunjiaoyu.xyz",
+      "id": 1157,
       "moduleCode": "openchatChannel",
       "moduleId": 28,
       "paramType": 0
@@ -471,8 +498,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-channel.xiaofeitian.top",
-      "id": 3803,
+      "domainUrl": "https://openchat-channel.jiaoyukeji.xyz",
+      "id": 1698,
       "moduleCode": "openchatChannel",
       "moduleId": 28,
       "paramType": 0
@@ -480,8 +507,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-activity.ddsvr2022.xyz",
-      "id": 3151,
+      "domainUrl": "https://openchat-activity.wuliminhazel.top",
+      "id": 2157,
       "moduleCode": "openchatActivity",
       "moduleId": 29,
       "paramType": 0
@@ -489,8 +516,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-activity.jsyncpj.top",
-      "id": 3790,
+      "domainUrl": "https://openchat-activity.jiaoyukeji.xyz",
+      "id": 1692,
       "moduleCode": "openchatActivity",
       "moduleId": 29,
       "paramType": 0
@@ -498,8 +525,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-activity.xiaofeitian.top",
-      "id": 3791,
+      "domainUrl": "https://openchat-activity.fangcunjiaoyu.xyz",
+      "id": 1205,
       "moduleCode": "openchatActivity",
       "moduleId": 29,
       "paramType": 0
@@ -507,8 +534,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-global-config.ddsvr2022.xyz",
-      "id": 3159,
+      "domainUrl": "https://openchat-global-config.wuliminhazel.top",
+      "id": 2165,
       "moduleCode": "openchatGlobalConfig",
       "moduleId": 30,
       "paramType": 0
@@ -516,8 +543,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-global-config.jsyncpj.top",
-      "id": 3758,
+      "domainUrl": "https://openchat-global-config.jiaoyukeji.xyz",
+      "id": 1708,
       "moduleCode": "openchatGlobalConfig",
       "moduleId": 30,
       "paramType": 0
@@ -525,8 +552,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-global-config.xiaofeitian.top",
-      "id": 3759,
+      "domainUrl": "https://openchat-global-config.fangcunjiaoyu.xyz",
+      "id": 1229,
       "moduleCode": "openchatGlobalConfig",
       "moduleId": 30,
       "paramType": 0
@@ -534,8 +561,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-trade.ddsvr2022.xyz",
-      "id": 3167,
+      "domainUrl": "https://openchat-trade.wuliminhazel.top",
+      "id": 2173,
       "moduleCode": "openchatTrade",
       "moduleId": 31,
       "paramType": 0
@@ -543,8 +570,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-trade.jsyncpj.top",
-      "id": 3742,
+      "domainUrl": "https://openchat-trade.jiaoyukeji.xyz",
+      "id": 1724,
       "moduleCode": "openchatTrade",
       "moduleId": 31,
       "paramType": 0
@@ -552,8 +579,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-trade.xiaofeitian.top",
-      "id": 3743,
+      "domainUrl": "https://openchat-trade.fangcunjiaoyu.xyz",
+      "id": 1253,
       "moduleCode": "openchatTrade",
       "moduleId": 31,
       "paramType": 0
@@ -561,8 +588,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-user.ddsvr2022.xyz",
-      "id": 3175,
+      "domainUrl": "https://openchat-user.wuliminhazel.top",
+      "id": 2181,
       "moduleCode": "openchatUser",
       "moduleId": 32,
       "paramType": 0
@@ -570,8 +597,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-user.jsyncpj.top",
-      "id": 3774,
+      "domainUrl": "https://openchat-user.jiaoyukeji.xyz",
+      "id": 1732,
       "moduleCode": "openchatUser",
       "moduleId": 32,
       "paramType": 0
@@ -579,8 +606,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-user.xiaofeitian.top",
-      "id": 3775,
+      "domainUrl": "https://openchat-user.fangcunjiaoyu.xyz",
+      "id": 1181,
       "moduleCode": "openchatUser",
       "moduleId": 32,
       "paramType": 0
@@ -588,8 +615,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-wallet.ddsvr2022.xyz",
-      "id": 3177,
+      "domainUrl": "https://openchat-wallet.wuliminhazel.top",
+      "id": 2183,
       "moduleCode": "openchatWallet",
       "moduleId": 33,
       "paramType": 0
@@ -597,8 +624,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-wallet.jsyncpj.top",
-      "id": 3714,
+      "domainUrl": "https://openchat-wallet.jiaoyukeji.xyz",
+      "id": 1734,
       "moduleCode": "openchatWallet",
       "moduleId": 33,
       "paramType": 0
@@ -606,8 +633,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-wallet.xiaofeitian.top",
-      "id": 3715,
+      "domainUrl": "https://openchat-wallet.fangcunjiaoyu.xyz",
+      "id": 1259,
       "moduleCode": "openchatWallet",
       "moduleId": 33,
       "paramType": 0
@@ -626,15 +653,6 @@
       "domainType": 2,
       "domainUrl": "https://dymain.kindem.xyz",
       "id": 1384,
-      "moduleCode": "ossEndpoint",
-      "moduleId": 34,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://dymain.mydify.top",
-      "id": 3958,
       "moduleCode": "ossEndpoint",
       "moduleId": 34,
       "paramType": 0
@@ -678,6 +696,24 @@
     {
       "areaId": 8,
       "domainType": 0,
+      "domainUrl": "https://openchat-group.fangcunjiaoyu.xyz",
+      "id": 1929,
+      "moduleCode": "openchatGroup",
+      "moduleId": 36,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://openchat-group.jiaoyukeji.xyz",
+      "id": 1937,
+      "moduleCode": "openchatGroup",
+      "moduleId": 36,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
       "domainUrl": "https://openchat-group.ddsvr2022.xyz",
       "id": 2193,
       "moduleCode": "openchatGroup",
@@ -687,19 +723,10 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-group.jsyncpj.top",
-      "id": 3814,
-      "moduleCode": "openchatGroup",
-      "moduleId": 36,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://openchat-group.xiaofeitian.top",
-      "id": 3815,
-      "moduleCode": "openchatGroup",
-      "moduleId": 36,
+      "domainUrl": "https://openchat-contacts.fangcunjiaoyu.xyz",
+      "id": 1945,
+      "moduleCode": "openchatContacts",
+      "moduleId": 37,
       "paramType": 0
     },
     {
@@ -714,8 +741,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-contacts.jsyncpj.top",
-      "id": 3830,
+      "domainUrl": "https://openchat-contacts.jiaoyukeji.xyz",
+      "id": 1953,
       "moduleCode": "openchatContacts",
       "moduleId": 37,
       "paramType": 0
@@ -723,26 +750,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-contacts.xiaofeitian.top",
-      "id": 3831,
-      "moduleCode": "openchatContacts",
-      "moduleId": 37,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://openchat-sys.jsyncpj.top",
-      "id": 3846,
-      "moduleCode": "openchatSys",
-      "moduleId": 38,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://openchat-sys.xiaofeitian.top",
-      "id": 3847,
+      "domainUrl": "https://openchat-sys.fangcunjiaoyu.xyz",
+      "id": 1961,
       "moduleCode": "openchatSys",
       "moduleId": 38,
       "paramType": 0
@@ -759,19 +768,10 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-notify.jsyncpj.top",
-      "id": 3866,
-      "moduleCode": "openchatNotify",
-      "moduleId": 39,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://openchat-notify.xiaofeitian.top",
-      "id": 3867,
-      "moduleCode": "openchatNotify",
-      "moduleId": 39,
+      "domainUrl": "https://openchat-sys.jiaoyukeji.xyz",
+      "id": 1969,
+      "moduleCode": "openchatSys",
+      "moduleId": 38,
       "paramType": 0
     },
     {
@@ -779,6 +779,24 @@
       "domainType": 0,
       "domainUrl": "https://openchat-notify.ddsvr2022.xyz",
       "id": 2227,
+      "moduleCode": "openchatNotify",
+      "moduleId": 39,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://openchat-notify.fangcunjiaoyu.xyz",
+      "id": 1979,
+      "moduleCode": "openchatNotify",
+      "moduleId": 39,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://openchat-notify.jiaoyukeji.xyz",
+      "id": 1987,
       "moduleCode": "openchatNotify",
       "moduleId": 39,
       "paramType": 0
@@ -822,7 +840,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-loginv2.youxingcheng.top",
+      "domainUrl": "https://openchat-loginv2.tiankaixin.xyz",
       "id": 2955,
       "moduleCode": "login_v2",
       "moduleId": 40,
@@ -867,8 +885,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-red-packet.ddsvr2022.xyz",
-      "id": 2479,
+      "domainUrl": "https://openchat-red-packet.fangcunjiaoyu.xyz",
+      "id": 2008,
       "moduleCode": "redPacket",
       "moduleId": 42,
       "paramType": 0
@@ -876,8 +894,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-red-packet.jsyncpj.top",
-      "id": 3872,
+      "domainUrl": "https://openchat-red-packet.jiaoyukeji.xyz",
+      "id": 2001,
       "moduleCode": "redPacket",
       "moduleId": 42,
       "paramType": 0
@@ -993,8 +1011,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-points.ddsvr2022.xyz",
-      "id": 3191,
+      "domainUrl": "https://openchat-points.fangcunjiaoyu.xyz",
+      "id": 2301,
       "moduleCode": "points",
       "moduleId": 46,
       "paramType": 0
@@ -1002,17 +1020,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://openchat-points.jsyncpj.top",
-      "id": 3710,
-      "moduleCode": "points",
-      "moduleId": 46,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://openchat-points.xiaofeitian.top",
-      "id": 3711,
+      "domainUrl": "https://openchat-points.jiaoyukeji.xyz",
+      "id": 2302,
       "moduleCode": "points",
       "moduleId": 46,
       "paramType": 0
@@ -1245,6 +1254,15 @@
     {
       "areaId": 8,
       "domainType": 0,
+      "domainUrl": "https://mjido.y8ruxg.com",
+      "id": 2735,
+      "moduleCode": "groupGameThirdH5",
+      "moduleId": 47,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
       "domainUrl": "https://68o1108.com",
       "id": 2487,
       "moduleCode": "groupGameThirdH5",
@@ -1272,7 +1290,7 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://www.yz1000y.top",
+      "domainUrl": "https://www.wujiayong.top",
       "id": 3008,
       "moduleCode": "groupGameThirdH5",
       "moduleId": 47,
@@ -1281,8 +1299,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://www.hxtuky.com",
-      "id": 3251,
+      "domainUrl": "https://5yqxq6.com",
+      "id": 3004,
       "moduleCode": "groupGameThirdH5_2",
       "moduleId": 48,
       "paramType": 0
@@ -1290,8 +1308,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://www.butpmd.com",
-      "id": 3252,
+      "domainUrl": "https://876qqw.com",
+      "id": 3005,
       "moduleCode": "groupGameThirdH5_2",
       "moduleId": 48,
       "paramType": 0
@@ -1299,8 +1317,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://www.kmbagy.com",
-      "id": 3253,
+      "domainUrl": "https://d4h2la.com",
+      "id": 3006,
       "moduleCode": "groupGameThirdH5_2",
       "moduleId": 48,
       "paramType": 0
@@ -1308,8 +1326,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://www.tzxxjb.com",
-      "id": 3254,
+      "domainUrl": "https://gswz7z.com",
+      "id": 3007,
       "moduleCode": "groupGameThirdH5_2",
       "moduleId": 48,
       "paramType": 0
@@ -1317,433 +1335,10 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://www.wzimhs.com",
-      "id": 3255,
+      "domainUrl": "https://0koc8u.com",
+      "id": 3023,
       "moduleCode": "groupGameThirdH5_2",
       "moduleId": 48,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://newcozj.huaxueyanxishe.top",
-      "id": 3081,
-      "moduleCode": "zjC2C",
-      "moduleId": 49,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://newcozj.quanshiya.top",
-      "id": 3894,
-      "moduleCode": "zjC2C",
-      "moduleId": 49,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://newcozj.hhxingzhiyi.top",
-      "id": 3128,
-      "moduleCode": "zjC2C",
-      "moduleId": 49,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://cplay.huaxueyanxishe.top",
-      "id": 3126,
-      "moduleCode": "zjC2CChat",
-      "moduleId": 50,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://cplay.hhxingzhiyi.top",
-      "id": 3127,
-      "moduleCode": "zjC2CChat",
-      "moduleId": 50,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://cplay.quanshiya.top",
-      "id": 3909,
-      "moduleCode": "zjC2CChat",
-      "moduleId": 50,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz6.vip",
-      "id": 3333,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz7.vip",
-      "id": 3341,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz8.vip",
-      "id": 3349,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz9.vip",
-      "id": 3357,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz5.net",
-      "id": 3365,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz6.net",
-      "id": 3373,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz7.net",
-      "id": 3381,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz8.net",
-      "id": 3389,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz9.net",
-      "id": 3397,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz5.app",
-      "id": 3285,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz6.app",
-      "id": 3293,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz7.app",
-      "id": 3301,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz8.app",
-      "id": 3309,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz9.app",
-      "id": 3317,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 4,
-      "domainUrl": "https://dhz5.vip",
-      "id": 3325,
-      "moduleCode": "WebsiteNavigationH5",
-      "moduleId": 51,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.97chat.com",
-      "id": 3534,
-      "moduleCode": "officialWebsite_3",
-      "moduleId": 54,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.97chat.one",
-      "id": 3542,
-      "moduleCode": "officialWebsite_3",
-      "moduleId": 54,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.97chat.my",
-      "id": 3568,
-      "moduleCode": "officialWebsite_3",
-      "moduleId": 54,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.97chat.me",
-      "id": 3569,
-      "moduleCode": "officialWebsite_3",
-      "moduleId": 54,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.97chat.top",
-      "id": 3570,
-      "moduleCode": "officialWebsite_3",
-      "moduleId": 54,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.55chat.com",
-      "id": 3632,
-      "moduleCode": "officialWebsite_4",
-      "moduleId": 55,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.55chat.one",
-      "id": 3633,
-      "moduleCode": "officialWebsite_4",
-      "moduleId": 55,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.55chat.my",
-      "id": 3634,
-      "moduleCode": "officialWebsite_4",
-      "moduleId": 55,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.55chat.me",
-      "id": 3635,
-      "moduleCode": "officialWebsite_4",
-      "moduleId": 55,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.55chat.vip",
-      "id": 3636,
-      "moduleCode": "officialWebsite_4",
-      "moduleId": 55,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.45chat.com",
-      "id": 3640,
-      "moduleCode": "officialWebsite_6",
-      "moduleId": 57,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.45chat.app",
-      "id": 3641,
-      "moduleCode": "officialWebsite_6",
-      "moduleId": 57,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.45chat.vip",
-      "id": 3642,
-      "moduleCode": "officialWebsite_6",
-      "moduleId": 57,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.45chat.net",
-      "id": 3643,
-      "moduleCode": "officialWebsite_6",
-      "moduleId": 57,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://www.45chat.top",
-      "id": 3644,
-      "moduleCode": "officialWebsite_6",
-      "moduleId": 57,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-img2.mydify.top",
-      "id": 3939,
-      "moduleCode": "ossChatPicUrl",
-      "moduleId": 58,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-img2.zpyyrg258.xyz",
-      "id": 3428,
-      "moduleCode": "ossChatPicUrl",
-      "moduleId": 58,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-img2.huangyu.xyz",
-      "id": 3429,
-      "moduleCode": "ossChatPicUrl",
-      "moduleId": 58,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-img2.flcxhlkj.top",
-      "id": 3947,
-      "moduleCode": "ossChatPicUrl",
-      "moduleId": 58,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-ww8.tkkfxt.xyz",
-      "id": 3448,
-      "moduleCode": "ossChatPicLowRateUrl",
-      "moduleId": 59,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-qq8.tkkfxt.xyz",
-      "id": 3449,
-      "moduleCode": "ossChatPicLowRateUrl",
-      "moduleId": 59,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-dymain.mydify.top",
-      "id": 3923,
-      "moduleCode": "ossChatPicEndpoint",
-      "moduleId": 60,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-dymain.flcxhlkj.top",
-      "id": 3931,
-      "moduleCode": "ossChatPicEndpoint",
-      "moduleId": 60,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-dymain.kindem.xyz",
-      "id": 3468,
-      "moduleCode": "ossChatPicEndpoint",
-      "moduleId": 60,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-dymain.lchaizhilian.xyz",
-      "id": 3469,
-      "moduleCode": "ossChatPicEndpoint",
-      "moduleId": 60,
-      "paramType": 0
-    },
-    {
-      "areaId": 8,
-      "domainType": 0,
-      "domainUrl": "https://ulb-dymain.weifa.xyz",
-      "id": 3470,
-      "moduleCode": "ossChatPicEndpoint",
-      "moduleId": 60,
       "paramType": 0
     }
   ]

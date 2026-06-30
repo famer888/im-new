@@ -205,6 +205,7 @@ pub async fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
     app.exit(0);
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -212,5 +213,6 @@ pub async fn exit_app(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn restart_app_for_network(app: tauri::AppHandle) -> Result<(), String> {
     app.restart();
+    #[allow(unreachable_code)]
     Ok(())
 }

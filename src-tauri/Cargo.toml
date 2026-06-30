@@ -1,6 +1,6 @@
 [package]
 name = "ocs-chat"
-version = "1.7.1"
+version = "1.7.2"
 description = "OCS Chat - Rust + Vue3 + Tauri IM Application"
 authors = ["OCS Team"]
 edition = "2021"
