@@ -35,6 +35,8 @@ export function translateGroupNoticeText(raw: string, t: TranslateFn): string {
     申请加入: t('申请加入'),
     您已加入频道: t('您已加入频道'),
     你已加入频道: t('你已加入频道'),
+    频道已创建: t('频道已创建'),
+    您创建了频道: t('您创建了频道'),
     邀请你加入: t('邀请你加入'),
     加入群聊: t('群通知加入群聊'),
     邀请: t('群通知邀请'),
@@ -49,7 +51,7 @@ export function translateGroupNoticeText(raw: string, t: TranslateFn): string {
   }
 
   return normalized.replace(
-    /该群聊已解散|拒绝加入|同意加入|申请加入|您已加入频道|你已加入频道|邀请您加入频道|邀请你加入频道|邀请你加入|加入群聊|将您设置为管理员|将你设置为管理员|添加您至此频道|添加你至此频道|您已被移出频道|你已被移出频道|邀请/g,
+    /该群聊已解散|拒绝加入|同意加入|申请加入|您已加入频道|你已加入频道|频道已创建|您创建了频道|邀请您加入频道|邀请你加入频道|邀请你加入|加入群聊|将您设置为管理员|将你设置为管理员|添加您至此频道|添加你至此频道|您已被移出频道|你已被移出频道|邀请/g,
     (matched) => phraseMap[matched] || matched,
   )
 }

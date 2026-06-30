@@ -72,13 +72,25 @@ export function logChannelContentLimitDebug(
     saveRestricted: restricted,
     hint: restricted
       ? '当前账号应禁止保存图片/文件'
-      : (Number(memberType) === 1
-        ? '频道主不受「限制保存内容」约束'
+      : (isChannelManagerMemberType(memberType)
+        ? '频道主/管理员不受「限制保存内容」约束'
         : '当前账号可保存图片/文件'),
   })
 }
 
-/** 频道主（memberType=1）不受「限制保存内容」约束。 */
+/** 频道订阅者（memberType=3）；所有者=1、管理员=2，与 ChannelInfoPanel / MessageInput 一致。 */
+export function isChannelSubscriberMemberType(memberType?: number | null): boolean {
+  const role = Number(memberType)
+  return Number.isFinite(role) && role === 3
+}
+
+/** 频道主/管理员不受「限制保存内容」约束，仅订阅者受限。 */
+export function isChannelManagerMemberType(memberType?: number | null): boolean {
+  const role = Number(memberType)
+  return role === 1 || role === 2
+}
+
+/** 频道主/管理员不受「限制保存内容」约束；仅订阅者（memberType=3）受限。 */
 export function isChannelContentSaveRestricted(
   channelId: string,
   memberType?: number | null,
@@ -90,8 +102,11 @@ export function isChannelContentSaveRestricted(
   if (!channel?.contentLimit) return false
 
   const role = memberType ?? channel.memberType
-  if (Number(role) === 1) return false
-  return true
+  if (isChannelManagerMemberType(role)) return false
+  if (isChannelSubscriberMemberType(role)) return true
+
+  // 身份未回填时与 ChannelInfoPanel 一致：先按订阅者处理，避免误放开；详情加载后会更新 memberType。
+  return Number(role ?? 3) === 3
 }
 
 export function isCurrentChannelContentSaveRestricted(): boolean {

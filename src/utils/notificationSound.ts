@@ -22,27 +22,46 @@ async function playWebNotificationSound(): Promise<boolean> {
     if (!Ctor) return false
     const ctx = new Ctor()
     if (ctx.state === 'suspended') {
-      await ctx.resume()
+      try {
+        await ctx.resume()
+      } catch {
+        // 部分 WebView 在无用户手势时 resume 失败，仍尝试短音播放。
+      }
     }
-    if (ctx.state !== 'running') return false
     const startAt = ctx.currentTime
     const oscillator = ctx.createOscillator()
     const gainNode = ctx.createGain()
     oscillator.type = 'sine'
     oscillator.frequency.setValueAtTime(880, startAt)
-    oscillator.frequency.exponentialRampToValueAtTime(660, startAt + 0.12)
+    oscillator.frequency.exponentialRampToValueAtTime(660, startAt + 0.18)
     gainNode.gain.setValueAtTime(0.0001, startAt)
-    gainNode.gain.exponentialRampToValueAtTime(0.12, startAt + 0.01)
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.14)
+    gainNode.gain.exponentialRampToValueAtTime(0.18, startAt + 0.02)
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.2)
     oscillator.connect(gainNode)
     gainNode.connect(ctx.destination)
     oscillator.start(startAt)
-    oscillator.stop(startAt + 0.14)
-    oscillator.onended = () => {
-      void ctx.close()
-    }
+    oscillator.stop(startAt + 0.2)
+    await new Promise<void>((resolve) => {
+      oscillator.onended = () => {
+        void ctx.close()
+        resolve()
+      }
+      window.setTimeout(resolve, 240)
+    })
     return true
   } catch {
+    return false
+  }
+}
+
+async function playSystemNotificationSound(): Promise<boolean> {
+  if (!isTauri()) return false
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('system_beep')
+    return true
+  } catch (error) {
+    console.warn('[notificationSound] system_beep failed:', error)
     return false
   }
 }
@@ -54,19 +73,11 @@ export async function playNotificationSound(): Promise<boolean> {
   if (now - lastPlayAt < PLAY_COOLDOWN_MS) return false
 
   try {
-    let played = false
-    if (isTauri()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('system_beep')
-        played = true
-      } catch (error) {
-        console.warn('[notificationSound] system_beep failed:', error)
-      }
-    }
-    if (!played) {
-      played = await playWebNotificationSound()
-    }
+    const [systemPlayed, webPlayed] = await Promise.all([
+      playSystemNotificationSound(),
+      playWebNotificationSound(),
+    ])
+    const played = systemPlayed || webPlayed
     if (played) {
       lastPlayAt = now
     }

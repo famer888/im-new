@@ -273,6 +273,7 @@ const FILE_ENCRYPT_CHUNK_SIZE = 102400
 const VISIBLE_TRAILING_SPACE = '\u00a0'
 const EDITOR_EMOJI_CARET_ANCHOR = '\u200b'
 const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogg'])
+const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'])
 const EDITOR_HISTORY_LIMIT = 80
 const emojiMap = emojiObj as Record<string, string>
 
@@ -1948,7 +1949,14 @@ async function openDroppedFilePaths(paths: string[]) {
       count: metas.length,
       totalBytes: metas.reduce((sum, file) => sum + Number(file.size || 0), 0),
     })
-    const imageMetas = metas.filter((item) => String(item.mime || '').startsWith('image/'))
+    const imageMetas = metas.filter((item) => {
+      const mime = String(item.mime || '')
+      if (mime.startsWith('image/')) return true
+      const name = String(item.name || item.path || '')
+      const dot = name.lastIndexOf('.')
+      const suffix = dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+      return IMAGE_FILE_EXTENSIONS.has(suffix)
+    })
     const imageFilesByPath = new Map<string, File>()
 
     if (imageMetas.length > 0) {
@@ -2187,6 +2195,11 @@ async function appendLocalImagePreview(
     imageTraceId: trace.id,
     ...(localPath ? { local: localPath, localPath } : {}),
   })
+  messageStore.pruneOutgoingMisclassifiedFilePlaceholders(conversationId, {
+    fileName: file.name,
+    fileKey,
+    senderId: uid,
+  })
   messageStore.appendMessage(conversationId, {
     id: optimisticId,
     customMsgId: optimisticId,
@@ -2240,7 +2253,7 @@ async function handleChannelMediasCaptionSend(files: File[], caption: string): P
   const conversationId = convId.value
   const uid = authStore.uid
   const isChannel = chatStore.currentConversation?.type === ConversationType.Channel
-  const imageFiles = files.filter(file => file.type.startsWith('image/'))
+  const imageFiles = files.filter(file => isImageFile(file))
   if (!isChannel || files.length < 2 || imageFiles.length !== files.length || !conversationId || !uid) return false
   if (files.some(file => file.size > getFileSizeLimitBytes(file))) return false
 
@@ -2453,7 +2466,12 @@ function appendLocalFilePreview(
 }
 
 function getFileSizeLimitBytes(file: File): number {
-  return file.type.startsWith('image/') ? MAX_IMAGE_SIZE_BYTES : MAX_FILE_SIZE_BYTES
+  return isImageFile(file) ? MAX_IMAGE_SIZE_BYTES : MAX_FILE_SIZE_BYTES
+}
+
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  return IMAGE_FILE_EXTENSIONS.has(getFileSuffix(file))
 }
 
 function isVideoFile(file: File): boolean {
@@ -3392,7 +3410,7 @@ async function handleFileSend(payload: { text: string; files: File[] } | File[])
       }, 'warn')
       continue
     }
-    if (file.type.startsWith('image/')) {
+    if (isImageFile(file)) {
       let localPreview: LocalImagePreview | null = null
       let sendFile = file
       try {

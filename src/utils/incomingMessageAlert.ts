@@ -114,14 +114,16 @@ export async function playIncomingMessageAlertIfNeeded(
 ): Promise<void> {
   if (!currentUid || messages.length === 0) return
 
+  // 必须先同步筛选：msg:batch 里若先 await 设置再判断，同批消息可能已被 batchAppend 写入 store，
+  // isMessageAlreadyInStore 会误判，导致单聊/群聊永远不响（旧 ocs 在入站当下即 fnHint，不依赖 store 去重）。
+  const alertMessages = filterIncomingMessageAlerts(messages, currentUid)
+  if (alertMessages.length === 0) return
+
   const settingStore = useSettingStore()
   if (!settingStore.loaded) {
     await settingStore.loadSettings({ syncRemote: false })
   }
   if (!settingStore.settings.notificationSound) return
-
-  const alertMessages = filterIncomingMessageAlerts(messages, currentUid)
-  if (alertMessages.length === 0) return
 
   const played = await playNotificationSound()
   if (played) {

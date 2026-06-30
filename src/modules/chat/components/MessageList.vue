@@ -72,25 +72,45 @@ const entriesWithDate = computed(() =>
   attachDateSeparators(sortedMessages.value, t, locale.value),
 )
 
-/** 用户点击「未读消息」条后隐藏（对齐旧 im 点击消失） */
 const unreadBannerDismissed = ref(false)
 /** 每次进入会话只自动定位一次未读分隔条，避免后续图片高度变化反复抢滚动位置。 */
 const initialUnreadAutoScrollDone = ref(false)
 const dismissedAtMentionIdSet = ref(new Set<string>())
+/** 进入会话时的未读锚点数（分隔条位置固定，不随滚动递减） */
+const anchorUnreadCount = ref(0)
+/** 右上角「N条未读消息」浮标计数，随滚动已读递减（对齐旧 im initialUnreadCount） */
+const displayUnreadCount = ref(0)
+const seenUnreadMessageIds = ref(new Set<string>())
+
+function resetUnreadTracking(count = 0) {
+  const normalized = Math.max(0, Number(count || 0))
+  anchorUnreadCount.value = normalized
+  displayUnreadCount.value = normalized
+  seenUnreadMessageIds.value = new Set()
+}
 
 watch(
-  () => props.conversationId,
-  () => {
-    unreadBannerDismissed.value = false
-    initialUnreadAutoScrollDone.value = false
-    dismissedAtMentionIdSet.value = new Set()
+  () => props.unreadCount,
+  (count) => {
+    if (unreadBannerDismissed.value) {
+      anchorUnreadCount.value = Math.max(0, Number(count || 0))
+      return
+    }
+    resetUnreadTracking(count ?? 0)
   },
+  { immediate: true },
 )
 
-/** 实际用于分隔线逻辑：父组件快照未读数，可被点击清除 */
+/** 浮标展示用：可被滚动已读或点击清除 */
 const effectiveUnreadCount = computed(() => {
   if (unreadBannerDismissed.value) return 0
-  return props.unreadCount ?? 0
+  return displayUnreadCount.value
+})
+
+/** 分隔条锚点用：进入会话后保持不变 */
+const effectiveAnchorUnreadCount = computed(() => {
+  if (unreadBannerDismissed.value) return 0
+  return anchorUnreadCount.value
 })
 
 const unreadMessageIdSet = computed(() => new Set(
@@ -116,12 +136,100 @@ function isMessageEligibleForUnreadSnapshotAnchor(message: Message): boolean {
   return true
 }
 
+function getUnreadSnapshotMessages(): Message[] {
+  const ids = unreadMessageIdSet.value
+  if (ids.size > 0) {
+    return sortedMessages.value.filter((message) =>
+      isMessageEligibleForUnreadSnapshotAnchor(message)
+      && (ids.has(String(message.id || '')) || ids.has(String(message.customMsgId || ''))),
+    )
+  }
+
+  const count = effectiveAnchorUnreadCount.value
+  if (count <= 0) return []
+  const candidates = sortedMessages.value.filter((message) =>
+    isMessageEligibleForUnreadSnapshotAnchor(message),
+  )
+  return candidates.slice(-count)
+}
+
+function messageTrackingKey(message: Message): string {
+  return String(message.customMsgId || message.id || '')
+}
+
+function isMessageRowInViewport(message: Message, container: HTMLElement): boolean {
+  const id = String(message.id || '')
+  const customId = String(message.customMsgId || '')
+  const rows = container.querySelectorAll<HTMLElement>('.message-row[data-row-key]')
+  for (const row of rows) {
+    if (row.dataset.rowKey !== id && row.dataset.rowCustomKey !== customId) continue
+    const top = row.offsetTop
+    const bottom = top + row.offsetHeight
+    const viewTop = container.scrollTop
+    const viewBottom = viewTop + container.clientHeight
+    return bottom > viewTop && top < viewBottom
+  }
+  return false
+}
+
+let unreadSyncTimer: ReturnType<typeof setTimeout> | null = null
+function syncDisplayUnreadFromViewport() {
+  if (displayUnreadCount.value <= 0 || unreadBannerDismissed.value) return
+  const container = containerRef.value
+  if (!container) return
+
+  const snapshotMessages = getUnreadSnapshotMessages()
+  if (snapshotMessages.length === 0) return
+
+  const nextSeen = new Set(seenUnreadMessageIds.value)
+  let newSeenCount = 0
+  for (const message of snapshotMessages) {
+    const key = messageTrackingKey(message)
+    if (!key || nextSeen.has(key)) continue
+    if (isMessageRowInViewport(message, container)) {
+      nextSeen.add(key)
+      newSeenCount += 1
+    }
+  }
+
+  if (newSeenCount > 0) {
+    seenUnreadMessageIds.value = nextSeen
+    displayUnreadCount.value = Math.max(0, displayUnreadCount.value - newSeenCount)
+  }
+
+  if (!isAtBottom.value || displayUnreadCount.value <= 0) return
+
+  const divIdx = unreadDividerIndex.value
+  if (divIdx >= 0) {
+    const dividerRow = container.querySelector<HTMLElement>(`.message-row[data-row-key="unread-${divIdx}"]`)
+    if (dividerRow) {
+      const dividerBottom = dividerRow.offsetTop + dividerRow.offsetHeight
+      if (dividerBottom <= container.scrollTop + 8) {
+        displayUnreadCount.value = 0
+      }
+      return
+    }
+  }
+
+  if (snapshotMessages.every((message) => nextSeen.has(messageTrackingKey(message)))) {
+    displayUnreadCount.value = 0
+  }
+}
+
+function scheduleUnreadViewportSync() {
+  if (unreadSyncTimer) clearTimeout(unreadSyncTimer)
+  unreadSyncTimer = setTimeout(() => {
+    unreadSyncTimer = null
+    syncDisplayUnreadFromViewport()
+  }, 100)
+}
+
 /**
  * 对齐旧 im：未读分隔条必须锚到一条真实消息（旧逻辑用 unreadID/unreadMsgID）。
  * 进入会话会立刻 markAsRead，所以这里使用进入时的 ID 快照，不再依赖 message.readStatus。
  */
 const unreadDividerIndex = computed(() => {
-  if (effectiveUnreadCount.value <= 0) return -1
+  if (effectiveAnchorUnreadCount.value <= 0) return -1
   const ids = unreadMessageIdSet.value
   if (ids.size > 0) {
     const idx = sortedMessages.value.findIndex((message) =>
@@ -132,7 +240,7 @@ const unreadDividerIndex = computed(() => {
   }
 
   // 兜底对齐旧 im 的 count 跳转：快照 ID 暂不可用时，用最后 N 条可见的对方消息估算第一条未读。
-  const count = Math.max(0, Number(effectiveUnreadCount.value || 0))
+  const count = Math.max(0, Number(effectiveAnchorUnreadCount.value || 0))
   if (count <= 0) return -1
   const candidates = sortedMessages.value
     .map((message, index) => ({ message, index }))
@@ -361,7 +469,7 @@ function shouldHoldForInitialUnreadScroll(): boolean {
   return !initialUnreadAutoScrollDone.value
     && !unreadBannerDismissed.value
     // 只有多条历史未读才需要跳到分隔条；单条未读保持置底，避免新消息被推到输入框下方。
-    && effectiveUnreadCount.value > 1
+    && effectiveAnchorUnreadCount.value > 1
 }
 
 /** 用容器真实 scrollHeight 多次对齐底部，抵消虚拟列表首屏估算高度偏小导致的「停在顶部空白」 */
@@ -440,6 +548,7 @@ function handleScroll() {
   if (isAtBottom.value) {
     clearNewMessageTip()
   }
+  scheduleUnreadViewportSync()
   if (!isProgrammaticScroll) {
     if (gap > 100) {
       stickToBottom.value = false
@@ -478,11 +587,13 @@ async function settleInitialLayout() {
 
   if (await tryInitialUnreadAutoScroll()) {
     suppressAutoScrollUntil.value = Date.now() + 500
+    scheduleUnreadViewportSync()
     return
   }
   if (shouldHoldForInitialUnreadScroll()) return
   await flushScrollToBottom()
   suppressAutoScrollUntil.value = Date.now() + 500
+  scheduleUnreadViewportSync()
 }
 
 watch(
@@ -493,6 +604,7 @@ watch(
     unreadBannerDismissed.value = false
     initialUnreadAutoScrollDone.value = false
     dismissedAtMentionIdSet.value = new Set()
+    resetUnreadTracking(props.unreadCount ?? 0)
     stickToBottom.value = true
     topAutoLoadArmed = true
     clearNewMessageTip()
@@ -535,7 +647,7 @@ watch(
   () => (props.unreadMessageIds ?? []).join('|'),
   async (ids, prevIds) => {
     if (props.loading || props.messages.length === 0) return
-    if (ids && ids !== prevIds && effectiveUnreadCount.value > 1 && !unreadBannerDismissed.value) {
+    if (ids && ids !== prevIds && effectiveAnchorUnreadCount.value > 1 && !unreadBannerDismissed.value) {
       // 未读 ID 可能晚于 count 兜底到达；ID 到达后必须重新校正一次，避免分隔条停在过早的估算位置。
       initialUnreadAutoScrollDone.value = false
     }
@@ -632,6 +744,7 @@ async function onClickAtMention() {
 onUnmounted(() => {
   if (floatHideTimer) clearTimeout(floatHideTimer)
   if (throttleTimer) clearTimeout(throttleTimer)
+  if (unreadSyncTimer) clearTimeout(unreadSyncTimer)
   if (resizePinRaf !== null) cancelAnimationFrame(resizePinRaf)
   cancelScrollAnimation()
 })
@@ -731,6 +844,7 @@ function scrollToRow(key: string): boolean {
 /** 点击「未读消息」条后隐藏，并吸底避免虚拟列表少一行后视口错位 */
 function onUnreadBannerClick() {
   unreadBannerDismissed.value = true
+  displayUnreadCount.value = 0
   initialUnreadAutoScrollDone.value = true
   stickToBottom.value = true
   void nextTick(() => {
@@ -738,9 +852,11 @@ function onUnreadBannerClick() {
   })
 }
 
-/** 对齐旧 im float-right-btns：点击上箭头跳到未读分隔条，不立即清除未读数展示 */
-function onClickScrollToUnread() {
-  void scrollUnreadBannerIntoView({ fallbackToBottom: false })
+/** 对齐旧 im float-right-btns：点击上箭头跳到未读分隔条后清除浮标计数 */
+async function onClickScrollToUnread() {
+  await scrollUnreadBannerIntoView({ fallbackToBottom: false })
+  displayUnreadCount.value = 0
+  seenUnreadMessageIds.value = new Set()
 }
 </script>
 

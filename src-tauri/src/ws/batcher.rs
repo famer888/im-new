@@ -340,6 +340,11 @@ fn is_subscriber_remove_event(
     is_subscriber_remove_notice_text(notice_content)
 }
 
+fn is_channel_create_event(event_type: i32, channel_operate_type: Option<i32>) -> bool {
+    // 对齐旧 im / 手机端：创建频道时除「您创建了频道」外，还会有一条「频道已创建」频道事件。
+    event_type == 1 && channel_operate_type == Some(0)
+}
+
 fn channel_removed_reason(
     event_type: i32,
     subscriber_operate_type: Option<i32>,
@@ -496,6 +501,14 @@ mod private_decode_tests {
         assert_eq!(channel_removed_reason(2, Some(1), None), None);
         assert_eq!(channel_removed_reason(1, None, Some(5)), None);
         assert_eq!(channel_removed_reason(1, None, Some(6)), None);
+    }
+
+    #[test]
+    fn channel_create_event_should_be_detected() {
+        assert!(is_channel_create_event(1, Some(0)));
+        assert!(!is_channel_create_event(2, Some(0)));
+        assert!(!is_channel_create_event(1, Some(1)));
+        assert!(!is_channel_create_event(1, None));
     }
 
     fn group_remove_event(actor_uid: i64, removed_uid: i64) -> imweb::GroupReqEventMsgDto {
@@ -2593,6 +2606,41 @@ impl MessageBatcher {
                     });
                 }
             }
+        }
+
+        let channel_operate_type = channel_info.map(|item| item.operate_type);
+        if is_channel_create_event(event.event_type, channel_operate_type) && event.channel_id > 0 {
+            let content = event.msg.trim();
+            let content = if content.is_empty() {
+                "频道已创建"
+            } else {
+                content
+            };
+            info!(
+                "[channel] emit CHANNEL_EVENT_PUSH as channel create msg_id={} channel_id={} content={}",
+                base_msg_id, event.channel_id, content
+            );
+            out.push(DecodedMessage {
+                cmd: cmds::CHANNEL_EVENT_PUSH,
+                msg_id: format!("{}-channel-create", base_msg_id),
+                conversation_id: format!("2_{}", event.channel_id),
+                sender_id: event.channel_id.to_string(),
+                msg_type: 8,
+                content: content.to_string(),
+                send_time: timestamp,
+                status: 1,
+                read_status: 0,
+                extra: serde_json::json!({
+                    "source": "channel-event",
+                    "channelId": event.channel_id.to_string(),
+                    "channelName": channel_info
+                        .map(|item| item.channel_name.clone())
+                        .unwrap_or_default(),
+                    "icon": channel_info.map(|item| item.icon.clone()).unwrap_or_default(),
+                    "eventType": event.event_type,
+                    "channelOperateType": channel_operate_type.unwrap_or_default(),
+                }),
+            });
         }
 
         let is_subscriber_join = event.event_type == 2

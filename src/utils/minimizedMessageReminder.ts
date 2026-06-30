@@ -480,13 +480,45 @@ async function shouldShowMinimizedReminder(): Promise<boolean> {
   }
 }
 
-async function isMinimizedReminderEnabled(): Promise<boolean> {
+function readMessageReminderWhenMinimizedFlag(raw: Record<string, unknown> | null | undefined): boolean | null {
+  if (!raw) return null
+  const value = raw.message_reminder_when_minimized ?? raw.messageReminderWhenMinimized
+  return typeof value === 'boolean' ? value : null
+}
+
+/** 与旧 im `isMessageReminderWhenMinimized` 一致；优先读 Rust 持久化配置，避免内存被误刷新。 */
+export async function isMinimizedReminderSettingEnabled(): Promise<boolean> {
+  if (!isTauri()) return false
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const raw = await invoke<Record<string, unknown>>('get_settings')
+    const persisted = readMessageReminderWhenMinimizedFlag(raw)
+    if (persisted !== null) return persisted
+  } catch (error) {
+    console.warn('[messageReminder] read persisted setting failed:', error)
+  }
+
   const settingStore = useSettingStore()
   if (!settingStore.loaded) {
     // 监听器可能早于主页数据初始化收到消息；先读本地设置，避免用默认 true 误弹右下角提醒。
     await settingStore.loadSettings({ syncRemote: false })
   }
   return settingStore.settings.messageReminderWhenMinimized
+}
+
+export function dismissMinimizedMessageReminders() {
+  reminderQueue.length = 0
+  if (!isTauri()) return
+  void import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('close_notification_windows'))
+    .catch((error) => {
+      console.warn('[messageReminder] close notification windows failed:', error)
+    })
+}
+
+async function isMinimizedReminderEnabled(): Promise<boolean> {
+  return isMinimizedReminderSettingEnabled()
 }
 
 async function showNotificationWindow(message: any, unreadCount: number) {

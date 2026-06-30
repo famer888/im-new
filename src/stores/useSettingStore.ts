@@ -252,9 +252,11 @@ export const useSettingStore = defineStore('setting', () => {
       if (hasSettingsWriteSince(loadGeneration)) return
 
       applyLoadedSettings(nextSettings)
-    } catch {
+    } catch (error) {
       if (hasSettingsWriteSince(loadGeneration)) return
-      applyLoadedSettings({ ...defaultSettings })
+      // 加载失败时保留当前内存设置，避免把用户已关闭的「最小化时消息提醒」等项误重置为 default true。
+      console.warn('[setting] loadSettings failed, keep current settings:', error)
+      applyLoadedSettings({ ...settings.value })
     } finally {
       loaded.value = true
     }

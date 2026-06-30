@@ -457,7 +457,40 @@ function isSingleImageMessage(conversationId: string, msgType: number): boolean 
 
 function isReusableLocalImagePlaceholder(conversationId: string, msgType: number): boolean {
   const type = Number(msgType)
-  return /^(0|1)_/.test(String(conversationId || '')) && (type === 1 || type === 9)
+  return /^(0|1|2)_/.test(String(conversationId || '')) && (type === 1 || type === 9)
+}
+
+function parseMessageExtraFields(raw: unknown): Record<string, unknown> {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw as Record<string, unknown>
+  if (typeof raw !== 'string') return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function readMessageFileKey(message: Message, content?: string | null): string {
+  const extra = parseMessageExtraFields(message.extra)
+  const fromExtra = String(extra.fileKey || extra.file_key || '').trim()
+  if (fromExtra) return fromExtra
+  const raw = String(content ?? message.content ?? '').trim()
+  if (!raw) return ''
+  const imageParsed = parseImageContentObject(raw)
+  const imageKey = String(imageParsed?.fileKey || imageParsed?.file_key || '').trim()
+  if (imageKey) return imageKey
+  const fileParsed = parseFileContentObject(raw)
+  return String(fileParsed?.fileKey || fileParsed?.file_key || '').trim()
+}
+
+function isOutgoingUploadPendingFilePlaceholder(item: Message, currentUid: string): boolean {
+  if (Number(item.msgType) !== 7 || Number(item.status) !== 0) return false
+  if (currentUid && String(item.senderId || '') !== currentUid) return false
+  const extra = parseMessageExtraFields(item.extra)
+  const parsed = parseFileContentObject(item.content)
+  return Boolean(extra.uploadPending || parsed?.uploadPending)
 }
 
 function isSingleVideoMessage(conversationId: string, msgType: number): boolean {
@@ -2020,7 +2053,40 @@ export const useMessageStore = defineStore('message', () => {
 
   function hasVisibleChannelMessageId(messages: Message[], msgId: number): boolean {
     if (!msgId) return false
-    return messages.some((message) => toFiniteNumber(message.id) === msgId)
+    const target = String(msgId)
+    return messages.some((message) => {
+      const id = String(message.id)
+      return id === target
+        || id === `${target}-channel-join`
+        || id === `${target}-channel-create`
+    })
+  }
+
+  async function fetchChannelRecentHistoryItems(params: {
+    bizType: number
+    bizId: string
+    msgType: number
+    latestMsgId: number
+    latestSize: number
+  }): Promise<ChannelHistoryMessage[]> {
+    const shared = {
+      bizType: params.bizType,
+      bizId: params.bizId,
+      msgType: params.msgType,
+      latestSize: params.latestSize,
+      latestMsgId: params.latestMsgId,
+    }
+    // 频道创建等系统消息在 CHANNEL_EVENT(1)，订阅加入等在 CHANNEL_SUBSCRIBER_EVENT(2)，需合并补拉。
+    const [channelEvents, subscriberEvents] = await Promise.all([
+      getChannelHistoryMessages({ ...shared, eventType: 1 }),
+      getChannelHistoryMessages({ ...shared, eventType: 2 }),
+    ])
+    const merged = new Map<string, ChannelHistoryMessage>()
+    for (const item of [...channelEvents, ...subscriberEvents]) {
+      if (!item?.msgId) continue
+      merged.set(String(item.msgId), item)
+    }
+    return Array.from(merged.values())
   }
 
   async function resolveChannelAttachmentFileKey(channelId: string, attachmentKey: string): Promise<string> {
@@ -2175,7 +2241,6 @@ export const useMessageStore = defineStore('message', () => {
         bizType: 2,
         bizId: channelId,
         msgType: 0,
-        eventType: 2,
         latestSize: latestMsgId > CHANNEL_HISTORY_LATEST_SIZE ? CHANNEL_HISTORY_LATEST_SIZE : latestMsgId,
         latestMsgId: latestMsgId + 1,
       }
@@ -2188,7 +2253,7 @@ export const useMessageStore = defineStore('message', () => {
         hasLastTwo,
         historyParams,
       })
-      const historyItems = await getChannelHistoryMessages(historyParams)
+      const historyItems = await fetchChannelRecentHistoryItems(historyParams)
       channelHistoryLog('request history done', {
         uid,
         conversationId,
@@ -3123,39 +3188,15 @@ export const useMessageStore = defineStore('message', () => {
         if (localCaption && remoteCaption && localCaption === remoteCaption) return true
       }
 
-      // 文件占位内容是 uploadPending JSON，回显是 URL JSON；按 __clientMsgId / fileKey 合并。
-      if (Number(message.msgType) === 7) {
-        const parseExtraFields = (raw: unknown): Record<string, unknown> => {
-          if (!raw) return {}
-          if (typeof raw === 'object') return raw as Record<string, unknown>
-          if (typeof raw !== 'string') return {}
-          try {
-            const parsed = JSON.parse(raw)
-            return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
-          } catch {
-            return {}
-          }
-        }
-        const parseFileMeta = (raw: string): Record<string, unknown> => {
-          if (!raw) return {}
-          try {
-            const parsed = JSON.parse(raw)
-            return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
-          } catch {
-            return {}
-          }
-        }
-        const incomingExtra = parseExtraFields(message.extra)
-        const placeholderExtra = parseExtraFields(item.extra)
+      // 图片/文件占位与服务端回显正文格式不同；按 __clientMsgId / fileKey 合并。
+      if (Number(message.msgType) === 1 || Number(message.msgType) === 9 || Number(message.msgType) === 7) {
+        const incomingExtra = parseMessageExtraFields(message.extra)
+        const placeholderExtra = parseMessageExtraFields(item.extra)
         const incomingClientId = String(incomingExtra.__clientMsgId || message.customMsgId || '')
         const placeholderClientId = String(placeholderExtra.__clientMsgId || item.customMsgId || item.id || '')
         if (incomingClientId && placeholderClientId && incomingClientId === placeholderClientId) return true
-        const incomingKey = String(
-          incomingExtra.fileKey || incomingExtra.file_key || parseFileMeta(incomingContent).fileKey || '',
-        ).trim()
-        const placeholderKey = String(
-          placeholderExtra.fileKey || placeholderExtra.file_key || parseFileMeta(placeholderContent).fileKey || '',
-        ).trim()
+        const incomingKey = readMessageFileKey(message, incomingContent)
+        const placeholderKey = readMessageFileKey(item, placeholderContent)
         if (incomingKey && placeholderKey && incomingKey === placeholderKey) return true
       }
       return false
@@ -3287,6 +3328,15 @@ export const useMessageStore = defineStore('message', () => {
           deleteSeconds: message.deleteSeconds ?? placeholder.deleteSeconds,
           status: Math.max(Number(placeholder.status || 0), Number(message.status || 0), 1),
           readStatus: Math.max(Number(placeholder.readStatus || 0), Number(message.readStatus || 0)),
+        }
+        if (isReusableLocalImagePlaceholder(conversationId, message.msgType)) {
+          const pruned = removeStaleOutgoingFilePlaceholdersForImage(
+            next,
+            next[placeholderIdx],
+            getCurrentUidForUnread(),
+            placeholderIdx,
+          )
+          next.splice(0, next.length, ...pruned)
         }
       } else {
         next.push(message)
@@ -3853,6 +3903,55 @@ export const useMessageStore = defineStore('message', () => {
     hasMoreMap.value = new Map()
   }
 
+  function pruneOutgoingMisclassifiedFilePlaceholders(
+    conversationId: string,
+    options: { fileName?: string; fileKey?: string; senderId?: string },
+  ) {
+    const list = messageMap.value.get(conversationId)
+    if (!list?.length) return
+
+    const uid = String(options.senderId || getCurrentUidForUnread() || '')
+    const targetName = String(options.fileName || '').trim()
+    const targetKey = String(options.fileKey || '').trim()
+    if (!targetName && !targetKey) return
+
+    const next = list.filter((item) => {
+      if (!isOutgoingUploadPendingFilePlaceholder(item, uid)) return true
+      const parsed = parseFileContentObject(item.content)
+      const itemName = String(parsed?.name || parsed?.fileName || '').trim()
+      const itemKey = readMessageFileKey(item)
+      if (targetKey && itemKey && itemKey === targetKey) return false
+      if (targetName && itemName && itemName === targetName) return false
+      return true
+    })
+    if (next.length !== list.length) {
+      messageMap.value.set(conversationId, next)
+    }
+  }
+
+  function removeStaleOutgoingFilePlaceholdersForImage(
+    list: Message[],
+    anchor: Message,
+    currentUid: string,
+    keepIndex: number,
+  ): Message[] {
+    const fileKey = readMessageFileKey(anchor)
+    const parsed = parseImageContentObject(anchor.content)
+    const fileName = String(parsed?.name || parsed?.fileName || '').trim()
+    if (!fileKey && !fileName) return list
+
+    return list.filter((item, index) => {
+      if (index === keepIndex) return true
+      if (!isOutgoingUploadPendingFilePlaceholder(item, currentUid)) return true
+      const itemKey = readMessageFileKey(item)
+      if (fileKey && itemKey && itemKey === fileKey) return false
+      const itemParsed = parseFileContentObject(item.content)
+      const itemName = String(itemParsed?.name || itemParsed?.fileName || '').trim()
+      if (fileName && itemName && itemName === fileName) return false
+      return true
+    })
+  }
+
   return {
     messageMap,
     ensureWsConnected,
@@ -3866,6 +3965,7 @@ export const useMessageStore = defineStore('message', () => {
     resendMessage,
     appendMessage,
     batchAppendMessages,
+    pruneOutgoingMisclassifiedFilePlaceholders,
     appendLocalSystemNotice,
     updateMessageStatus,
     updateMessage,

@@ -3,6 +3,7 @@ use tauri::Manager;
 use tauri::State;
 use tauri::{PhysicalSize, Size};
 
+use crate::config::ConfigManager;
 use crate::window::{self, NotificationData, WindowManager};
 
 const SIDEBAR_WIDTH: u32 = 256;
@@ -81,8 +82,14 @@ pub async fn close_chat_window(
 pub async fn show_notification_window(
     app: tauri::AppHandle,
     win_mgr: State<'_, WindowManager>,
+    config: State<'_, ConfigManager>,
     data: NotificationData,
 ) -> Result<(), String> {
+    let settings = config.get_settings().map_err(|e| e.to_string())?;
+    if !settings.message_reminder_when_minimized {
+        return Ok(());
+    }
+
     let should_show = app
         .get_webview_window("main")
         .map(|window| {
@@ -106,6 +113,15 @@ pub async fn get_notification_payload(
     win_mgr: State<'_, WindowManager>,
 ) -> Result<Option<NotificationData>, String> {
     Ok(win_mgr.take_notification_payload(&label))
+}
+
+#[tauri::command]
+pub async fn close_notification_windows(
+    app: tauri::AppHandle,
+    win_mgr: State<'_, WindowManager>,
+) -> Result<(), String> {
+    win_mgr.close_notifications(&app);
+    Ok(())
 }
 
 #[tauri::command]

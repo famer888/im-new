@@ -6,6 +6,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { checkVersion } from '@/api/imBase'
 import { API_CONFIG } from '@/api/config'
 import AppSwitch from '@/components/AppSwitch.vue'
+import { dismissMinimizedMessageReminders } from '@/utils/minimizedMessageReminder'
 import Toast from '@/components/Toast.vue'
 import pkg from '../../../../package.json'
 
@@ -40,6 +41,7 @@ async function toggleNewMessageAlertTone(v: boolean) {
 
 async function toggleMessageReminderWhenMinimized(v: boolean) {
   await settingStore.updateSettings({ messageReminderWhenMinimized: v })
+  if (!v) dismissMinimizedMessageReminders()
 }
 
 const versionText = computed(() => `v${appVersion.value}`)

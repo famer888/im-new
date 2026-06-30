@@ -11,11 +11,14 @@ import { useGroupStore } from '@/stores/useGroupStore'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { useSettingStore } from '@/stores/useSettingStore'
 import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
 import { clearIncomingMessageAlertState, playIncomingMessageAlertIfNeeded } from '@/utils/incomingMessageAlert'
-import { isRepeatableGroupInviteReminderMessage, showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
+import {
+  isMinimizedReminderSettingEnabled,
+  isRepeatableGroupInviteReminderMessage,
+  showMinimizedMessageReminder,
+} from '@/utils/minimizedMessageReminder'
 import { eventBus } from '@/utils/eventBus'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
@@ -608,15 +611,6 @@ interface TrayLogoutPayload {
   quit?: boolean
 }
 
-async function isMessageReminderWhenMinimizedEnabled(): Promise<boolean> {
-  const settingStore = useSettingStore()
-  if (!settingStore.loaded) {
-    // 托盘/Dock 闪动也属于最小化提醒范围；先读本地设置，避免启动早期按默认 true 请求系统注意。
-    await settingStore.loadSettings({ syncRemote: false })
-  }
-  return settingStore.settings.messageReminderWhenMinimized
-}
-
 function getMessageIdentity(message: any): { conversationId: string; id: string; customMsgId: string; senderId: string } {
   return {
     conversationId: String(message?.conversationId ?? message?.conversation_id ?? ''),
@@ -1097,7 +1091,7 @@ async function flashTrayForIncomingMessage(incomingCount = 1) {
   if (!isTauri()) return
 
   try {
-    if (!(await isMessageReminderWhenMinimizedEnabled())) return
+    if (!(await isMinimizedReminderSettingEnabled())) return
 
     const now = Date.now()
     if (now - lastTrayFlashAt < 1200) {
@@ -1571,7 +1565,7 @@ export async function setupTauriListeners() {
 
     // 对齐旧 ocs fnHint：收到实时消息后尽快播放提示音，不等待解密/落库等长链路。
     const visibleForAlert = filtered.filter((m: any) => !isHiddenBatchMessage(m))
-    void playIncomingMessageAlertIfNeeded(visibleForAlert, currentUid)
+    await playIncomingMessageAlertIfNeeded(visibleForAlert, currentUid)
 
     // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
     // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
