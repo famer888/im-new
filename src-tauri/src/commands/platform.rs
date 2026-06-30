@@ -178,10 +178,16 @@ pub fn system_beep() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = hidden_windows_command("powershell.exe")
-            .args(["-NoProfile", "-Command", "[console]::Beep(800,180)"])
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        // 对齐 Electron shell.beep：走系统默认提示音，而不是依赖 PC 扬声器的 Console.Beep。
+        #[link(name = "user32")]
+        extern "system" {
+            fn MessageBeep(u_type: u32) -> i32;
+        }
+        unsafe {
+            if MessageBeep(0xFFFF_FFFF) == 0 {
+                return Err("MessageBeep failed".to_string());
+            }
+        }
         return Ok(());
     }
 

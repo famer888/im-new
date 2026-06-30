@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useChatStore, isFileHelperTargetId } from '@/stores/useChatStore'
@@ -10,6 +10,10 @@ import { useSearchStore } from '@/stores/useSearchStore'
 import { ConversationType, MessageType, isHiddenMessageType } from '@/types'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import { filterSensitiveWords } from '@/utils/sensitiveWords'
+import {
+  ingestGroupSenderProfileFromMessage,
+  resolveGroupMessageSenderDisplay,
+} from '@/utils/groupMessageSender'
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
@@ -94,21 +98,45 @@ function parseMessageExtraIcon(): string {
   ).trim()
 }
 
-const rawSenderName = computed(() => {
-  if (isSelf.value) return '我'
-  const contactName = contactStore.getDisplayName(props.message.senderId)
-  if (contactName && contactName !== props.message.senderId) return contactName
-  // 群聊非好友不会在好友表里；按旧 im 逻辑回退到群成员昵称，避免直接显示 uid。
-  return currentGroupMember.value?.nickname || contactName || props.message.senderId
+const senderDisplay = computed(() => {
+  if (isSelf.value) {
+    return {
+      displayName: '我',
+      nickname: '我',
+      avatar: authStore.avatar || null,
+    }
+  }
+  const contact = contactStore.getContact(props.message.senderId)
+  const member = currentGroupMember.value
+  return resolveGroupMessageSenderDisplay(
+    currentGroupId.value,
+    props.message.senderId,
+    props.message.extra,
+    {
+      contactName: contactStore.getDisplayName(props.message.senderId),
+      memberNickname: member?.nickname || null,
+      memberAvatar: member?.avatar || null,
+    },
+  )
 })
+
+watch(
+  () => [currentGroupId.value, props.message.senderId, props.message.extra] as const,
+  () => {
+    if (!isGroupChat.value || !currentGroupId.value) return
+    ingestGroupSenderProfileFromMessage(currentGroupId.value, props.message)
+  },
+  { immediate: true },
+)
+
+const rawSenderName = computed(() => senderDisplay.value.displayName)
 const senderName = computed(() => filterSensitiveWords(rawSenderName.value))
 
 const senderAvatar = computed(() => {
   if (isSelf.value) return authStore.avatar || null
   const contactAvatar = contactStore.getContact(props.message.senderId)?.avatar || null
   const extraIcon = parseMessageExtraIcon()
-  // 群聊非好友头像来自群成员列表；成员缓存未就绪时回退消息自带头像，对齐旧 im msgInfo.user.icon。
-  return contactAvatar || currentGroupMember.value?.avatar || extraIcon || null
+  return contactAvatar || extraIcon || senderDisplay.value.avatar || currentGroupMember.value?.avatar || null
 })
 
 function openSenderMemberInfo() {

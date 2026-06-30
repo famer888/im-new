@@ -26,6 +26,7 @@ import {
   rememberGroupMemberDisplayName,
   resolveGroupMemberDisplayName,
 } from '@/utils/groupRemovedMemberNameCache'
+import { ingestGroupSenderProfilesFromMessages } from '@/utils/groupMessageSender'
 import { router } from '@/router'
 import { watch, type WatchStopHandle } from 'vue'
 import {
@@ -607,10 +608,13 @@ interface TrayLogoutPayload {
   quit?: boolean
 }
 
-function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): boolean {
+async function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): Promise<boolean> {
   if (!currentUid) return false
 
   const settingStore = useSettingStore()
+  if (!settingStore.loaded) {
+    await settingStore.loadSettings({ syncRemote: false })
+  }
   if (!settingStore.settings.notificationSound) return false
 
   const chatStore = useChatStore()
@@ -821,6 +825,25 @@ async function syncPrivateMessageSenderProfiles(
       createIfMissing: true,
       uid: currentUid,
     })
+  }
+}
+
+function syncGroupMessageSenderProfiles(messages: any[]) {
+  const grouped = new Map<string, Array<{ senderId?: string | null; extra?: unknown }>>()
+  for (const message of messages) {
+    const convId = String(message?.conversationId ?? message?.conversation_id ?? '')
+    if (!convId.startsWith('1_')) continue
+    const groupId = convId.slice(2)
+    if (!groupId || groupId === GROUP_NOTIFICATION_TARGET_ID) continue
+    const bucket = grouped.get(groupId) ?? []
+    bucket.push({
+      senderId: message?.senderId ?? message?.sender_id ?? '',
+      extra: message?.extra,
+    })
+    grouped.set(groupId, bucket)
+  }
+  for (const [groupId, bucket] of grouped.entries()) {
+    ingestGroupSenderProfilesFromMessages(groupId, bucket)
   }
 }
 
@@ -2187,8 +2210,9 @@ export async function setupTauriListeners() {
         newIncomingMessages,
         currentUid,
       )
-      const shouldPlaySound = shouldPlayIncomingMessageSound(newIncomingMessages, currentUid)
+      const shouldPlaySound = await shouldPlayIncomingMessageSound(desktopReminderMessages, currentUid)
       await syncPrivateMessageSenderProfiles(visibleAppendableNormalized, currentUid, contactStore)
+      syncGroupMessageSenderProfiles(visibleAppendableNormalized)
       messageStore.batchAppendMessages(appendableNormalized as Message[], {
         fillGroupReadBurnFromCurrentGroup: true,
       })

@@ -22,27 +22,23 @@ const props = withDefaults(defineProps<{
 const initial = computed(() => (props.name || '?')[0].toUpperCase())
 const imageLoadError = ref(false)
 const resolvedImageSrc = ref<string | null>(null)
-const nativeImageLoading = ref(false)
 // src 频繁切换时用 token 丢弃过期异步结果，避免旧请求回写新头像。
 let resolveTaskToken = 0
+let lastResolvedSrcKey = ''
 
 const AVATAR_PRELOAD_TIMEOUT_MS = 1200
-const AVATAR_NATIVE_SKELETON_TIMEOUT_MS = 1400
 const AVATAR_FAIL_RETRY_MS = 15_000
 const AVATAR_RETRY_MS = 3_000
 // 同一地址复用同一预加载任务，避免列表里重复头像并发请求。
 const avatarPreloadPromises = new Map<string, Promise<boolean>>()
+type AvatarLoadEntry = {
+  loaded: boolean
+  updatedAt: number
+  resolvedSrc?: string | null
+}
 // 记录最近一次加载结果：成功直接复用，失败短时间内不重复探测。
-const avatarLoadStates = new Map<string, { loaded: boolean; updatedAt: number }>()
+const avatarLoadStates = new Map<string, AvatarLoadEntry>()
 let retryTimer: number | null = null
-let nativeLoadingTimer: number | null = null
-
-const SKELETON_SVG =
-  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' preserveAspectRatio='xMidYMid slice'>" +
-  "<rect width='40' height='40' fill='#e0e0e0'>" +
-  "<animate attributeName='fill' values='#e0e0e0;#f0f0f0;#e0e0e0' dur='1.2s' repeatCount='indefinite'/>" +
-  '</rect></svg>'
-const SKELETON_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent(SKELETON_SVG)}`
 
 const legacyChannelGradientColors = [
   ['#ff516a', '#ff885e'],
@@ -63,7 +59,6 @@ watch([() => props.src, () => props.avatarType], () => {
 
 onBeforeUnmount(() => {
   clearAvatarRetry()
-  clearNativeLoadingTimer()
 })
 
 const defaultSrc = computed(() => {
@@ -72,11 +67,8 @@ const defaultSrc = computed(() => {
   return friendIcon
 })
 
-const showImage = computed(() => props.avatarType !== 'text' && (nativeImageLoading.value || props.avatarType !== 'channel' || !!resolvedImageSrc.value))
-const imageSrc = computed<string>(() => {
-  if (nativeImageLoading.value) return SKELETON_DATA_URL
-  return resolvedImageSrc.value || defaultSrc.value
-})
+const showImage = computed(() => props.avatarType !== 'text' && (props.avatarType !== 'channel' || !!resolvedImageSrc.value))
+const imageSrc = computed<string>(() => resolvedImageSrc.value || defaultSrc.value)
 const useCircle = computed(() => props.rounded || props.avatarType === 'group' || props.avatarType === 'channel' || props.avatarType === 'text')
 
 function legacyGradientById(id: string | number | null | undefined): string | null {
@@ -108,10 +100,7 @@ function handleImageError() {
   const src = normalizeAvatarSrc(props.src)
   if (src) {
     // 真实渲染报错后把地址标记为失败，防止列表滚动时反复触发同一错误请求。
-    avatarLoadStates.set(src, {
-      loaded: false,
-      updatedAt: Date.now(),
-    })
+    rememberResolvedAvatar(src, null, false)
     scheduleAvatarRetry(src)
   }
   resolvedImageSrc.value = null
@@ -124,23 +113,12 @@ function clearAvatarRetry() {
   retryTimer = null
 }
 
-// 清理 NativeImage 骨架超时计时器，避免组件卸载或 src 切换后旧计时器回写状态。
-function clearNativeLoadingTimer() {
-  if (nativeLoadingTimer === null || typeof window === 'undefined') return
-  window.clearTimeout(nativeLoadingTimer)
-  nativeLoadingTimer = null
-}
-
-// 开启桌面端头像加载态；超时后先展示兜底头像，后台解析完成再替换为真图。
-function startNativeImageLoading(token: number) {
-  nativeImageLoading.value = true
-  clearNativeLoadingTimer()
-  if (typeof window === 'undefined') return
-  // NativeImage 可能因线上 OSS 签名/候选域名慢而等待较久；骨架超时后先显示兜底，后台完成再换真图。
-  nativeLoadingTimer = window.setTimeout(() => {
-    nativeLoadingTimer = null
-    if (token === resolveTaskToken) nativeImageLoading.value = false
-  }, AVATAR_NATIVE_SKELETON_TIMEOUT_MS)
+function rememberResolvedAvatar(src: string, resolvedSrc: string | null, loaded: boolean) {
+  avatarLoadStates.set(src, {
+    loaded,
+    updatedAt: Date.now(),
+    resolvedSrc: loaded ? resolvedSrc : null,
+  })
 }
 
 function scheduleAvatarRetry(src: string) {
@@ -169,6 +147,12 @@ function getCachedAvatarLoadState(src: string): boolean | null {
     return null
   }
   return state.loaded
+}
+
+function getCachedResolvedSrc(src: string): string | null {
+  const state = avatarLoadStates.get(src)
+  if (!state?.loaded || !state.resolvedSrc) return null
+  return state.resolvedSrc
 }
 
 function preloadAvatar(src: string): Promise<boolean> {
@@ -210,11 +194,22 @@ function preloadAvatar(src: string): Promise<boolean> {
 async function refreshResolvedImageSrc(forceRetry = false) {
   const token = ++resolveTaskToken
   const src = normalizeAvatarSrc(props.src)
-  clearNativeLoadingTimer()
-  nativeImageLoading.value = false
+  const srcKey = `${props.avatarType}:${src}`
+  if (!forceRetry && src && srcKey === lastResolvedSrcKey && resolvedImageSrc.value) {
+    return
+  }
   if (!src || (!forceRetry && imageLoadError.value) || props.avatarType === 'text') {
     if (token !== resolveTaskToken) return
     resolvedImageSrc.value = null
+    lastResolvedSrcKey = ''
+    return
+  }
+
+  const cachedResolved = !forceRetry ? getCachedResolvedSrc(src) : null
+  if (cachedResolved) {
+    if (token !== resolveTaskToken) return
+    resolvedImageSrc.value = cachedResolved
+    lastResolvedSrcKey = srcKey
     return
   }
 
@@ -222,12 +217,12 @@ async function refreshResolvedImageSrc(forceRetry = false) {
   if (!forceRetry && cachedState === false) {
     if (token !== resolveTaskToken) return
     resolvedImageSrc.value = null
+    lastResolvedSrcKey = ''
     return
   }
 
   if (canUseNativeImageAvatar(src)) {
     // 桌面端远程头像走 NativeImage：本地缓存 + 候选域名 + 明文/加密识别，避免 WebView 反复直连头像源。
-    startNativeImageLoading(token)
     try {
       const nativeSrc = await resolveNativeAvatarSrc({
         id: props.id,
@@ -237,9 +232,12 @@ async function refreshResolvedImageSrc(forceRetry = false) {
       if (token !== resolveTaskToken) return
       resolvedImageSrc.value = nativeSrc
       imageLoadError.value = !nativeSrc
-      if (!nativeSrc) {
-        // NativeImage 已经尝试原地址和备用 OSS 域名；失败后先锁定兜底态，避免会话列表每 3 秒闪回加载态。
-        avatarLoadStates.set(src, { loaded: false, updatedAt: Date.now() })
+      if (nativeSrc) {
+        rememberResolvedAvatar(src, nativeSrc, true)
+        lastResolvedSrcKey = srcKey
+      } else {
+        rememberResolvedAvatar(src, null, false)
+        lastResolvedSrcKey = ''
       }
     } catch (error) {
       if (token !== resolveTaskToken) return
@@ -247,13 +245,8 @@ async function refreshResolvedImageSrc(forceRetry = false) {
       console.warn('[TextAvatar] native image resolve failed', error)
       resolvedImageSrc.value = null
       imageLoadError.value = true
-      // 失败原因通常是 URL 过期、下载失败或解密失败；短间隔重试会导致头像位反复重新加载。
-      avatarLoadStates.set(src, { loaded: false, updatedAt: Date.now() })
-    } finally {
-      if (token === resolveTaskToken) {
-        clearNativeLoadingTimer()
-        nativeImageLoading.value = false
-      }
+      rememberResolvedAvatar(src, null, false)
+      lastResolvedSrcKey = ''
     }
     return
   }
@@ -261,26 +254,21 @@ async function refreshResolvedImageSrc(forceRetry = false) {
   if (cachedState === true) {
     if (token !== resolveTaskToken) return
     resolvedImageSrc.value = src
-    return
-  }
-  if (cachedState === false) {
-    if (token !== resolveTaskToken) return
-    resolvedImageSrc.value = null
+    lastResolvedSrcKey = srcKey
     return
   }
 
   const loaded = await preloadAvatar(src)
-  avatarLoadStates.set(src, {
-    loaded,
-    updatedAt: Date.now(),
-  })
+  rememberResolvedAvatar(src, loaded ? src : null, loaded)
   // 如果这次异步结果已过期（props 又变了），直接丢弃，避免错图闪回。
   if (token !== resolveTaskToken) return
   if (loaded && normalizeAvatarSrc(props.src) === src && !imageLoadError.value) {
     resolvedImageSrc.value = src
+    lastResolvedSrcKey = srcKey
     return
   }
   resolvedImageSrc.value = null
+  lastResolvedSrcKey = ''
   if (!loaded && normalizeAvatarSrc(props.src) === src) scheduleAvatarRetry(src)
 }
 </script>

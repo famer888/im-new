@@ -20,6 +20,8 @@ type ResolveNativeAvatarOptions = {
 }
 
 const REMOTE_URL_RE = /^https?:\/\//i
+const resolvedNativeCache = new Map<string, string>()
+const pendingNativeResolves = new Map<string, Promise<string | null>>()
 
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__)
@@ -87,25 +89,47 @@ export function buildNativeAvatarResourceKey(src: string, type?: string | null):
   return stableHash(normalized) || normalized
 }
 
+function buildNativeCacheKey(options: ResolveNativeAvatarOptions): string {
+  const src = String(options.src || '').trim()
+  const resourceKey = buildNativeAvatarResourceKey(src, options.type)
+  return `${String(options.type || 'friend')}:${String(options.id ?? '')}:${resourceKey}`
+}
+
 export async function resolveNativeAvatarSrc(options: ResolveNativeAvatarOptions): Promise<string | null> {
   const src = String(options.src || '').trim()
   if (!canUseNativeImageAvatar(src)) return null
 
-  const resourceKey = buildNativeAvatarResourceKey(src, options.type)
-  const candidateUrls = buildCandidateUrls(src)
-  // 解析命令返回磁盘路径，展示层再转成 Tauri asset URL，保证 mac/Windows 路径规则由 Tauri 处理。
-  const response = await invoke<ResolveNativeImageResponse>('resolve_native_image', {
-    request: {
-      scopeKind: 'avatar',
-      scopeId: String(options.id ?? ''),
-      sub: String(options.type || 'friend'),
-      resourceKey,
-      url: src,
-      candidateUrls,
-      encryptKey: options.encryptKey ?? API_CONFIG.headAesKey,
-    },
+  const cacheKey = buildNativeCacheKey(options)
+  const cached = resolvedNativeCache.get(cacheKey)
+  if (cached) return cached
+
+  const pending = pendingNativeResolves.get(cacheKey)
+  if (pending) return pending
+
+  const task = (async () => {
+    const resourceKey = buildNativeAvatarResourceKey(src, options.type)
+    const candidateUrls = buildCandidateUrls(src)
+    // 解析命令返回磁盘路径，展示层再转成 Tauri asset URL，保证 mac/Windows 路径规则由 Tauri 处理。
+    const response = await invoke<ResolveNativeImageResponse>('resolve_native_image', {
+      request: {
+        scopeKind: 'avatar',
+        scopeId: String(options.id ?? ''),
+        sub: String(options.type || 'friend'),
+        resourceKey,
+        url: src,
+        candidateUrls,
+        encryptKey: options.encryptKey ?? API_CONFIG.headAesKey,
+      },
+    })
+
+    if (response.state !== 'ready' || !response.localPath) return null
+    const resolved = convertFileSrc(response.localPath)
+    if (resolved) resolvedNativeCache.set(cacheKey, resolved)
+    return resolved
+  })().finally(() => {
+    pendingNativeResolves.delete(cacheKey)
   })
 
-  if (response.state !== 'ready' || !response.localPath) return null
-  return convertFileSrc(response.localPath)
+  pendingNativeResolves.set(cacheKey, task)
+  return task
 }

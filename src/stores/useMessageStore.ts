@@ -37,6 +37,7 @@ import {
   getGroupNoticeGroupId,
 } from '@/utils/groupNoticeDisplay'
 import { resolveGroupMemberDisplayName } from '@/utils/groupRemovedMemberNameCache'
+import { ingestGroupSenderProfilesFromMessages } from '@/utils/groupMessageSender'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
 import {
   isGroupMemberLeaveNoticeHiddenForCurrentUser,
@@ -2399,6 +2400,12 @@ export const useMessageStore = defineStore('message', () => {
           loadStartedAt,
         )
         messageMap.value.set(conversationId, sortMessagesChronologically(mergedResult.messages))
+        if (conversationId.startsWith('1_')) {
+          const groupId = conversationId.slice(2)
+          if (groupId && groupId !== GROUP_NOTIFICATION_TARGET_ID) {
+            ingestGroupSenderProfilesFromMessages(groupId, mergedResult.messages)
+          }
+        }
         refreshConversationSummary(conversationId, mergedResult.messages, { preserveListOrder: true })
         const loadedGroupImages = filteredResult.messages.filter((message) => isGroupImageMessage(conversationId, message.msgType))
         if (existingGroupImages.length > 0 || loadedGroupImages.length > 0 || mergedResult.preserved.length > 0) {
@@ -2502,6 +2509,12 @@ export const useMessageStore = defineStore('message', () => {
             merged.splice(0, merged.length - MAX_CACHED_MESSAGES)
           }
           messageMap.value.set(conversationId, merged)
+          if (conversationId.startsWith('1_')) {
+            const groupId = conversationId.slice(2)
+            if (groupId && groupId !== GROUP_NOTIFICATION_TARGET_ID) {
+              ingestGroupSenderProfilesFromMessages(groupId, filteredResult.messages)
+            }
+          }
         }
         hasMoreMap.value.set(
           conversationId,

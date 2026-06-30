@@ -1570,6 +1570,27 @@ impl MessageBatcher {
                         ),
                     );
                 }
+                if let Some(send_member) = gm.send_member.as_ref() {
+                    let member_json = group_member_to_json(send_member);
+                    map.insert("sendMember".to_string(), member_json);
+                    if let Some(user) = send_member.user.as_ref() {
+                        map.insert("user".to_string(), user_base_to_json(user));
+                        let nick = user.nick_name.trim();
+                        if !nick.is_empty() {
+                            map.insert(
+                                "senderName".to_string(),
+                                serde_json::Value::String(nick.to_string()),
+                            );
+                        }
+                        let icon = user.icon.trim();
+                        if !icon.is_empty() {
+                            map.insert(
+                                "senderAvatar".to_string(),
+                                serde_json::Value::String(icon.to_string()),
+                            );
+                        }
+                    }
+                }
             }
             if let Some((notice_id, show_notify)) = group_notice_meta {
                 if let Some(map) = extra.as_object_mut() {

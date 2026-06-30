@@ -545,6 +545,15 @@ export const useGroupStore = defineStore('group', () => {
     }
   }
 
+  function hasUsableLocalMemberNicknames(members: GroupMember[]): boolean {
+    if (!members.length) return false
+    const namedCount = members.filter((member) => {
+      const nickname = String(member.nickname || '').trim()
+      return nickname && nickname !== member.userId
+    }).length
+    return namedCount >= Math.min(members.length, Math.max(3, Math.ceil(members.length * 0.2)))
+  }
+
   async function loadMembers(uid: string, groupId: string, options: LoadMembersOptions = {}) {
     const previewOnly = Boolean(options.previewOnly)
     const loadAll = Boolean(options.loadAll)
@@ -599,6 +608,9 @@ export const useGroupStore = defineStore('group', () => {
               const expected = getGroup(groupId)?.memberCount ?? 0
               if (expected > 0 && members.length < expected) {
                 // 本地库可能只保存了旧缓存；已知群人数更多时继续拉远端，不能把本地缓存当全量。
+                members = null
+              } else if (members && !hasUsableLocalMemberNicknames(members)) {
+                // 本地成员只有 uid 没有昵称时不可信，必须回源拉远端成员资料。
                 members = null
               }
             }
@@ -887,6 +899,9 @@ export const useGroupStore = defineStore('group', () => {
         return {
           ...prev,
           ...member,
+          nickname: member.nickname || prev.nickname,
+          profileNickname: member.profileNickname || prev.profileNickname,
+          avatar: member.avatar || prev.avatar,
           online: member.online ?? prev.online,
           createTime: member.createTime ?? prev.createTime,
         }
