@@ -14,6 +14,7 @@ import type { Message } from '@/stores/useMessageStore'
 import { formatSystemNotificationPlainText } from '@/utils/systemNotificationDisplay'
 import { parseGroupNoticeExtraObject, replaceGroupNoticeUidPlaceholders } from '@/utils/groupNoticeDisplay'
 import { buildChannelTextAvatarDataUrl, isChannelImageAvatar } from '@/utils/channelTextAvatar'
+import { resolveIncomingSenderId } from '@/utils/incomingMessageAlert'
 import { canUseNativeImageAvatar, resolveNativeAvatarSrc } from '@/utils/nativeImage'
 import ch from '@/locales/ch.json'
 import en from '@/locales/en.json'
@@ -262,10 +263,20 @@ function getConversationAvatar(conversationId: string, message?: any): string | 
 
   if (conversationId === `0_${CHANNEL_NOTIFICATION_TARGET_ID}`) {
     const channelId = extraString(extra, ['channelId', 'channel_id'])
-    const channel = channelStore.channels.find((item) =>
-      item.id === channelId || item.channelId === channelId,
-    )
-    return stripText(extra.icon) || channel?.avatar || channel?.icon || null
+    if (channelId) {
+      return resolveChannelReminderAvatar(`2_${channelId}`, message, channelStore)
+    }
+    const imageAvatar = stripText(extra.icon) || null
+    if (isChannelImageAvatar(imageAvatar)) {
+      return imageAvatar
+    }
+    const channelName = extraString(extra, ['channelName', 'channel_name']) || t('频道通知')
+    return buildChannelTextAvatarDataUrl({
+      name: channelName,
+      id: channelId || channelName,
+      logoColor: extraString(extra, ['logoColor', 'logo_color']) || null,
+      size: 88,
+    })
   }
 
   if (conversationId.startsWith('0_')) {
@@ -305,7 +316,7 @@ function getReminderCandidates(messages: any[], currentUid: string) {
   return messages
     .filter((item) => {
       const conversationId = String(item?.conversationId ?? item?.conversation_id ?? '')
-      const senderId = String(item?.senderId ?? item?.sender_id ?? '')
+      const senderId = resolveIncomingSenderId(item)
       if (!conversationId.includes('_') || !senderId || senderId === currentUid) return false
       if (Boolean(item?.isDeleted ?? item?.is_deleted ?? false)) return false
       return !isConversationMuted(conversationId)
@@ -395,6 +406,9 @@ async function resolveReminderAvatarSrc(
   avatar: string | null,
 ): Promise<string | null> {
   const src = String(avatar || '').trim()
+  if (!src) return null
+  if (/^data:image\//i.test(src)) return src
+
   const nativeCandidate = canUseNativeImageAvatar(src)
   notificationAvatarDebug('avatar resolve start', {
     conversationId,
@@ -402,7 +416,6 @@ async function resolveReminderAvatarSrc(
     rawAvatar: src,
     nativeCandidate,
   })
-  if (!src) return null
   if (!nativeCandidate) return src
 
   try {

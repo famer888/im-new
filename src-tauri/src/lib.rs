@@ -207,6 +207,7 @@ pub fn run() {
             commands::window::open_chat_window,
             commands::window::close_chat_window,
             commands::window::show_notification_window,
+            commands::window::get_notification_payload,
             commands::window::reveal_notification_window,
             commands::window::resize_notification_window,
             commands::window::toggle_side_bar,

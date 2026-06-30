@@ -56,6 +56,7 @@ const actionButtonLabel = computed(() => (
   notificationModuleTarget.value ? t('查看') : t('回复')
 ))
 let notificationWindowRevealStarted = false
+let notificationPayloadLoadStarted = false
 const NOTIFICATION_REPLY_DEBUG_PREFIX = '[notification-reply-debug]'
 
 function shouldLogNotificationAvatar(): boolean {
@@ -90,7 +91,7 @@ function safeImageSrc(value: unknown, fallback: string): string {
   if (!raw) return fallback
   if (/^https?:\/\//i.test(raw)) return raw
   if (/^(asset|tauri|blob):/i.test(raw)) return raw
-  if (/^data:image\/(png|jpe?g|gif|webp|bmp|avif|svg\+xml)(;base64|,)/i.test(raw)) return raw
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp|avif|svg\+xml)/i.test(raw)) return raw
   return fallback
 }
 
@@ -161,17 +162,8 @@ function waitForWindowsRevealDelay(): Promise<void> {
 }
 
 async function revealWindowsNotificationAfterPaint() {
+  if (!data.value) return
   if (notificationWindowRevealStarted) return
-  if (!data.value) {
-    if (isWindowsNotificationWindow()) {
-      try {
-        await getCurrentWindow().close()
-      } catch {
-        // ignore close failure
-      }
-    }
-    return
-  }
   notificationWindowRevealStarted = true
 
   // Windows 端通知窗先隐藏创建，等 Vue 首帧完成后再显示，避免 WebView2 默认白底闪一下。
@@ -185,6 +177,56 @@ async function revealWindowsNotificationAfterPaint() {
   } catch (error) {
     console.warn('[notification] reveal window failed:', error)
   }
+}
+
+async function loadNotificationPayload(): Promise<boolean> {
+  if (notificationPayloadLoadStarted) return Boolean(data.value)
+  notificationPayloadLoadStarted = true
+
+  const label = sanitizeText(route.query.label, 128)
+  if (label) {
+    try {
+      const payload = await invoke<NotificationData | null>('get_notification_payload', { label })
+      const sanitized = sanitizeNotificationData(payload)
+      if (sanitized) {
+        data.value = sanitized
+        notificationAvatarDebug('invoke payload', {
+          conversationId: sanitized.conversationId,
+          conversationType: sanitized.conversationType,
+          avatar: sanitized.avatar,
+          avatarSrc: avatarSrc.value,
+        })
+        notificationWindowRevealStarted = false
+        await revealWindowsNotificationAfterPaint()
+        return true
+      }
+    } catch (error) {
+      console.warn('[notification] load payload failed:', error)
+    }
+  }
+
+  const queryData = readNotificationData(route.query.data)
+  if (queryData) {
+    data.value = queryData
+    notificationAvatarDebug('mounted payload', {
+      conversationId: data.value?.conversationId,
+      conversationType: data.value?.conversationType,
+      avatar: data.value?.avatar,
+      avatarSrc: avatarSrc.value,
+    })
+    notificationWindowRevealStarted = false
+    await revealWindowsNotificationAfterPaint()
+    return true
+  }
+
+  if (isWindowsNotificationWindow()) {
+    window.setTimeout(() => {
+      if (!data.value) {
+        void getCurrentWindow().close().catch(() => undefined)
+      }
+    }, 3000)
+  }
+  return false
 }
 
 watch(() => [data.value?.avatar, data.value?.conversationType], () => {
@@ -206,14 +248,7 @@ onMounted(async () => {
       console.warn('[notification] load settings failed:', error)
     })
   }
-  data.value = readNotificationData(route.query.data)
-  notificationAvatarDebug('mounted payload', {
-    conversationId: data.value?.conversationId,
-    conversationType: data.value?.conversationType,
-    avatar: data.value?.avatar,
-    avatarSrc: avatarSrc.value,
-  })
-  void revealWindowsNotificationAfterPaint()
+  await loadNotificationPayload()
 
   await listen<NotificationData>('notification:data', (event) => {
     data.value = sanitizeNotificationData(event.payload)
@@ -223,6 +258,7 @@ onMounted(async () => {
       avatar: data.value?.avatar,
       avatarSrc: avatarSrc.value,
     })
+    notificationWindowRevealStarted = false
     void revealWindowsNotificationAfterPaint()
   })
 })

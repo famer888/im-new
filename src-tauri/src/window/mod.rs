@@ -32,6 +32,7 @@ pub struct WindowManager {
     chat_windows: DashMap<String, String>, // conversation_id → window_label
     notification_labels: RwLock<VecDeque<String>>,
     notification_pinned: Arc<DashMap<String, bool>>,
+    pending_notifications: DashMap<String, NotificationData>,
     max_notifications: usize,
 }
 
@@ -41,6 +42,7 @@ impl WindowManager {
             chat_windows: DashMap::new(),
             notification_labels: RwLock::new(VecDeque::new()),
             notification_pinned: Arc::new(DashMap::new()),
+            pending_notifications: DashMap::new(),
             max_notifications: 1,
         }
     }
@@ -314,6 +316,7 @@ impl WindowManager {
         while labels.len() >= self.max_notifications {
             if let Some(old_label) = labels.pop_front() {
                 self.notification_pinned.remove(&old_label);
+                self.pending_notifications.remove(&old_label);
                 if let Some(w) = app.get_webview_window(&old_label) {
                     let _ = w.close();
                 }
@@ -322,11 +325,9 @@ impl WindowManager {
 
         let label = format!("notification_{}", chrono::Utc::now().timestamp_millis());
         let index = labels.len();
-        let data_json =
-            serde_json::to_string(&data).map_err(|e| WindowError::TauriError(e.to_string()))?;
-        let data_query =
-            url::form_urlencoded::byte_serialize(data_json.as_bytes()).collect::<String>();
-        let notification_url = format!("/#/notification?data={}", data_query);
+        self.pending_notifications
+            .insert(label.clone(), data.clone());
+        let notification_url = format!("/#/notification?label={}", label);
 
         let builder =
             WebviewWindowBuilder::new(app, &label, WebviewUrl::App(notification_url.into()))
@@ -416,6 +417,7 @@ impl WindowManager {
             };
             for other_label in other_labels {
                 self.notification_pinned.remove(&other_label);
+                self.pending_notifications.remove(&other_label);
                 if let Some(other_window) = window.app_handle().get_webview_window(&other_label) {
                     let _ = other_window.close();
                 }
@@ -445,10 +447,18 @@ impl WindowManager {
         };
         for label in labels {
             self.notification_pinned.remove(&label);
+            self.pending_notifications.remove(&label);
             if let Some(window) = app.get_webview_window(&label) {
                 let _ = window.close();
             }
         }
+    }
+
+    pub fn take_notification_payload(&self, label: &str) -> Option<NotificationData> {
+        if !label.starts_with("notification_") {
+            return None;
+        }
+        self.pending_notifications.remove(label)
     }
 
     pub fn has_chat_window(&self, conversation_id: &str) -> bool {

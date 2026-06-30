@@ -14,7 +14,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSettingStore } from '@/stores/useSettingStore'
 import { useScheduleDeletionStore } from '@/stores/useScheduleDeletionStore'
 import { setupGlobalErrorHandler } from '@/utils/sentry'
-import { playNotificationSound } from '@/utils/notificationSound'
+import { clearIncomingMessageAlertState, playIncomingMessageAlertIfNeeded } from '@/utils/incomingMessageAlert'
 import { isRepeatableGroupInviteReminderMessage, showMinimizedMessageReminder } from '@/utils/minimizedMessageReminder'
 import { eventBus } from '@/utils/eventBus'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
@@ -608,36 +608,6 @@ interface TrayLogoutPayload {
   quit?: boolean
 }
 
-async function shouldPlayIncomingMessageSound(messages: any[], currentUid: string): Promise<boolean> {
-  if (!currentUid) return false
-
-  const settingStore = useSettingStore()
-  if (!settingStore.loaded) {
-    await settingStore.loadSettings({ syncRemote: false })
-  }
-  if (!settingStore.settings.notificationSound) return false
-
-  const chatStore = useChatStore()
-  const channelStore = useChannelStore()
-  return messages.some((item) => {
-    const convId = String(item?.conversationId ?? item?.conversation_id ?? '')
-    const senderId = String(item?.senderId ?? item?.sender_id ?? '')
-    if (!convId.includes('_') || !senderId || senderId === currentUid) return false
-    if (Boolean(item?.isDeleted ?? item?.is_deleted ?? false)) return false
-
-    const conv = chatStore.conversations.find((row) => row.id === convId)
-    if (conv?.isMuted) return false
-    if (convId.startsWith('2_')) {
-      const channelId = conv?.targetId || convId.split('_')[1] || ''
-      const channel = channelStore.getChannel(channelId)
-        || channelStore.channels.find((row) => row.id === channelId || row.channelId === channelId)
-      if (channel?.isDisturb) return false
-    }
-
-    return true
-  })
-}
-
 async function isMessageReminderWhenMinimizedEnabled(): Promise<boolean> {
   const settingStore = useSettingStore()
   if (!settingStore.loaded) {
@@ -1159,6 +1129,7 @@ function resetClientStateAfterLogout() {
   const networkStore = useNetworkStore()
 
   alertBaselineByUid.clear()
+  clearIncomingMessageAlertState()
   networkStore.setWsStatus('disconnected')
   chatStore.enablePersistence('')
   chatStore.currentConversationId = null
@@ -1597,6 +1568,11 @@ export async function setupTauriListeners() {
       // Dropped stale messages after local logout history clear.
     }
     if (filtered.length === 0) return
+
+    // 对齐旧 ocs fnHint：收到实时消息后尽快播放提示音，不等待解密/落库等长链路。
+    const visibleForAlert = filtered.filter((m: any) => !isHiddenBatchMessage(m))
+    void playIncomingMessageAlertIfNeeded(visibleForAlert, currentUid)
+
     // 入站时兜底预热 relKey（防止首次收到该联系人/群的消息时 Rust 侧还没缓存 key）。
     // 1. 私聊：所有 `0_xxx` 会话；2. 群聊：仅对真正需要重试解密（decryptPending）
     //    的消息按 groupId 预热，避免对每条已正常的群消息都发 HTTP 请求。
@@ -2210,7 +2186,6 @@ export async function setupTauriListeners() {
         newIncomingMessages,
         currentUid,
       )
-      const shouldPlaySound = await shouldPlayIncomingMessageSound(desktopReminderMessages, currentUid)
       await syncPrivateMessageSenderProfiles(visibleAppendableNormalized, currentUid, contactStore)
       syncGroupMessageSenderProfiles(visibleAppendableNormalized)
       messageStore.batchAppendMessages(appendableNormalized as Message[], {
@@ -2265,9 +2240,6 @@ export async function setupTauriListeners() {
           return convId === activeConversationId && senderId && senderId !== currentUid
         }),
       )
-      if (shouldPlaySound) {
-        void playNotificationSound()
-      }
       void showMinimizedMessageReminder(desktopReminderMessages as Message[], currentUid)
       if (hasIncomingMessageForTray) {
         void flashTrayForIncomingMessage(newIncomingMessages.length)

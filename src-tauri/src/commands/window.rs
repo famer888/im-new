@@ -101,6 +101,14 @@ pub async fn show_notification_window(
 }
 
 #[tauri::command]
+pub async fn get_notification_payload(
+    label: String,
+    win_mgr: State<'_, WindowManager>,
+) -> Result<Option<NotificationData>, String> {
+    Ok(win_mgr.take_notification_payload(&label))
+}
+
+#[tauri::command]
 pub async fn reveal_notification_window(window: tauri::WebviewWindow) -> Result<(), String> {
     if !window.label().starts_with("notification_") {
         return Ok(());

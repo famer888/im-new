@@ -32,7 +32,7 @@ async function playWebNotificationSound(): Promise<boolean> {
     oscillator.frequency.setValueAtTime(880, startAt)
     oscillator.frequency.exponentialRampToValueAtTime(660, startAt + 0.12)
     gainNode.gain.setValueAtTime(0.0001, startAt)
-    gainNode.gain.exponentialRampToValueAtTime(0.05, startAt + 0.01)
+    gainNode.gain.exponentialRampToValueAtTime(0.12, startAt + 0.01)
     gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.14)
     oscillator.connect(gainNode)
     gainNode.connect(ctx.destination)
@@ -47,21 +47,32 @@ async function playWebNotificationSound(): Promise<boolean> {
   }
 }
 
-export async function playNotificationSound(): Promise<void> {
-  if (!(await ensureNotificationSoundSettingLoaded())) return
+export async function playNotificationSound(): Promise<boolean> {
+  if (!(await ensureNotificationSoundSettingLoaded())) return false
 
   const now = Date.now()
-  if (now - lastPlayAt < PLAY_COOLDOWN_MS) return
+  if (now - lastPlayAt < PLAY_COOLDOWN_MS) return false
 
   try {
-    // 对齐旧 ocs shell.beep：桌面端优先走 WebView 内合成音，比 PowerShell Console.Beep 更稳定。
-    const playedInWebView = await playWebNotificationSound()
-    if (!playedInWebView && isTauri()) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('system_beep')
+    let played = false
+    if (isTauri()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('system_beep')
+        played = true
+      } catch (error) {
+        console.warn('[notificationSound] system_beep failed:', error)
+      }
     }
-    lastPlayAt = now
+    if (!played) {
+      played = await playWebNotificationSound()
+    }
+    if (played) {
+      lastPlayAt = now
+    }
+    return played
   } catch (error) {
     console.warn('[notificationSound] play failed:', error)
+    return false
   }
 }
