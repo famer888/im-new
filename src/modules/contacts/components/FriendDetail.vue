@@ -10,6 +10,7 @@ import Toast from '@/components/Toast.vue'
 import { updateContacts } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { writeClipboardText } from '@/utils/clipboard'
+import { normalizeFriendIdentify } from '@/utils/friendIdentify'
 import { filterSensitiveWords } from '@/utils/sensitiveWords'
 import editIcon from '@/assets/images/message/edit-icon.png'
 
@@ -22,7 +23,7 @@ const groupStore = useGroupStore()
 
 const contact = computed(() => contactStore.getContact(props.contactId))
 // 对齐旧 im：资料面板里的 ID 只展示好友号 identify，不回退内部 uid。
-const displayId = computed(() => String(contact.value?.identify || '').trim())
+const displayId = computed(() => normalizeFriendIdentify(contact.value?.identify) || '')
 const displayName = computed(() => filterSensitiveWords(contact.value?.remark || contact.value?.nickname || contact.value?.id || ''))
 const displayNickname = computed(() => filterSensitiveWords(contact.value?.nickname || contact.value?.id || ''))
 const displayRemark = computed(() => filterSensitiveWords(contact.value?.remark || contact.value?.nickname || t('未设置')))

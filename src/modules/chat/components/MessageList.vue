@@ -40,6 +40,8 @@ const searchStore = useSearchStore()
 
 const containerRef = ref<HTMLElement | null>(null)
 const floatDateRef = ref<HTMLElement | null>(null)
+/** 切换会话后等首屏布局稳定再展示，避免群昵称先出、正文后到的闪动 */
+const timelinePaintReady = ref(false)
 
 function ensureMessagesAscending(messages: Message[]): Message[] {
   for (let i = 1; i < messages.length; i++) {
@@ -573,9 +575,17 @@ function handleScroll() {
 
 async function settleInitialLayout() {
   const token = conversationEnterToken
-  if (props.loading || sortedMessages.value.length === 0) return
+  if (props.loading) return
 
+  if (sortedMessages.value.length === 0) {
+    timelinePaintReady.value = true
+    return
+  }
+
+  timelinePaintReady.value = false
   await nextTick()
+  if (token !== conversationEnterToken) return
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   if (token !== conversationEnterToken) return
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
   if (token !== conversationEnterToken) return
@@ -588,18 +598,24 @@ async function settleInitialLayout() {
   if (await tryInitialUnreadAutoScroll()) {
     suppressAutoScrollUntil.value = Date.now() + 500
     scheduleUnreadViewportSync()
+    timelinePaintReady.value = true
     return
   }
-  if (shouldHoldForInitialUnreadScroll()) return
+  if (shouldHoldForInitialUnreadScroll()) {
+    timelinePaintReady.value = true
+    return
+  }
   await flushScrollToBottom()
   suppressAutoScrollUntil.value = Date.now() + 500
   scheduleUnreadViewportSync()
+  timelinePaintReady.value = true
 }
 
 watch(
   () => props.conversationId,
   () => {
     conversationEnterToken += 1
+    timelinePaintReady.value = false
     suppressAutoScrollUntil.value = Date.now() + 900
     unreadBannerDismissed.value = false
     initialUnreadAutoScrollDone.value = false
@@ -884,7 +900,7 @@ async function onClickScrollToUnread() {
         <span>{{ $t('加载中...') }}</span>
       </div>
 
-      <div class="scroll-content" :class="{ 'align-top': alignTop }">
+      <div class="scroll-content" :class="{ 'align-top': alignTop, 'is-paint-ready': timelinePaintReady }">
         <template
           v-for="row in rowsForList"
           :key="row.kind === 'unread' ? row.key : messageRenderKey(row.entry.message)"
@@ -1021,6 +1037,11 @@ async function onClickScrollToUnread() {
   flex-direction: column;
   justify-content: flex-end;
   box-sizing: border-box;
+  visibility: hidden;
+}
+
+.scroll-content.is-paint-ready {
+  visibility: visible;
 }
 
 .scroll-content.align-top {

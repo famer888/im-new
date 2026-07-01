@@ -1839,6 +1839,7 @@ impl MessageBatcher {
                     "bfReadCancel": detail.bf_read_cancel,
                     "msgCancelTime": detail.msg_cancel_time,
                     "bfReadReceipt": detail.bf_read_receipt,
+                    "bfMyBlack": detail.bf_my_black,
                     "letter": detail.letter.clone(),
                     "nickname": user.nick_name.clone(),
                     "avatar": user.icon.clone(),

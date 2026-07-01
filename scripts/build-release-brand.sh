@@ -90,10 +90,11 @@ find_png_size() {
 
 choose_icon_png() {
   local candidates=(
+    "$ICON_SOURCE_DIR/icon.png"
+    "$ICON_SOURCE_DIR/logo.png"
     "$ICON_SOURCE_DIR/1024x1024.png"
     "$ICON_SOURCE_DIR/512x512.png"
     "$ICON_SOURCE_DIR/256x256.png"
-    "$ICON_SOURCE_DIR/icon.png"
   )
   local best_path=""
   local best_size=0
@@ -126,7 +127,7 @@ if [[ -z "$ICON_PNG" ]]; then
   exit 1
 fi
 
-APP_NAME="${APP_NAME:-OCS Chat $BRAND_ID}"
+APP_NAME="${APP_NAME:-${BRAND_ID}-im}"
 PKG_IDENTIFIER="${PKG_IDENTIFIER:-cn.$BRAND_ID.chat}"
 OFFICIAL_URL="${OFFICIAL_URL:-${BRAND_ID}chat.com}"
 TAURI_BUILD_MODE="${TAURI_BUILD_MODE:-production}"
@@ -237,27 +238,45 @@ fi
 
 pnpm tauri icon "$ICON_PNG" --output "$ICON_TARGET_DIR"
 
+if [[ -f "$ICON_SOURCE_DIR/installer.ico" ]]; then
+  cp -f "$ICON_SOURCE_DIR/installer.ico" "$ICON_TARGET_DIR/icon.ico"
+elif [[ "$PLATFORM" == "win" && -f "$ICON_SOURCE_DIR/icon.ico" ]]; then
+  cp -f "$ICON_SOURCE_DIR/icon.ico" "$ICON_TARGET_DIR/icon.ico"
+fi
+
 if [[ "$USE_SOURCE_ICNS" == "1" && -f "$ICON_SOURCE_DIR/icon.icns" ]] && file "$ICON_SOURCE_DIR/icon.icns" | grep -q "Mac OS X icon"; then
   cp -f "$ICON_SOURCE_DIR/icon.icns" "$ICON_TARGET_DIR/icon.icns"
 fi
 
 node -e '
   const fs = require("fs");
-  const [out, productName, identifier, iconDir] = process.argv.slice(1);
+  const [out, productName, identifier, iconDir, platform] = process.argv.slice(1);
+  const bundle = {
+    icon: [
+      `${iconDir}/32x32.png`,
+      `${iconDir}/128x128.png`,
+      `${iconDir}/128x128@2x.png`,
+      `${iconDir}/icon.icns`,
+      `${iconDir}/icon.ico`,
+    ],
+  };
+  if (platform === "win") {
+    bundle.windows = {
+      nsis: {
+        installerIcon: `${iconDir}/icon.ico`,
+        uninstallerIcon: `${iconDir}/icon.ico`,
+        shortcutName: productName,
+        languages: ["SimpChinese"],
+        installMode: "both",
+      },
+    };
+  }
   fs.writeFileSync(out, JSON.stringify({
     productName,
     identifier,
-    bundle: {
-      icon: [
-        `${iconDir}/32x32.png`,
-        `${iconDir}/128x128.png`,
-        `${iconDir}/128x128@2x.png`,
-        `${iconDir}/icon.icns`,
-        `${iconDir}/icon.ico`,
-      ],
-    },
+    bundle,
   }, null, 2));
-' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL"
+' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL" "$PLATFORM"
 
 echo "Building $APP_NAME ($PKG_IDENTIFIER) with icons_$BRAND_ID for $PLATFORM"
 

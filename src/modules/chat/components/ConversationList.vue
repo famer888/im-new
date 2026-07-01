@@ -994,18 +994,9 @@ function getLoadedLatestDigest(conv: Conversation): string {
 
   if (!summaryNeedsRepair && !isCurrentConversation && !latestMatchesSummary && latestTime < convTime) return ''
   const digest = getMessageDigest(latest)
-  // groupNoticeDebug('loaded latest digest', {
-  //   conversationId: conv.id,
-  //   name: getName(conv),
-  //   isCurrentConversation,
-  //   summaryNeedsRepair,
-  //   latestId: latest.id || latest.customMsgId || '',
-  //   latestTime,
-  //   convTime,
-  //   latestMatchesSummary,
-  //   rawDigest: conv.lastMsgDigest || '',
-  //   digest,
-  // }, digest ? 'info' : 'warn')
+  // 当前会话切换窗口时，正文解密/渲染未完成前不要用空摘要覆盖列表预览。
+  if (!digest.trim()) return ''
+  if (isCurrentConversation && messageStore.isLoading(conv.id)) return ''
   return digest
 }
 
@@ -1344,7 +1335,7 @@ function handleSelect(conv: Conversation) {
     return
   }
   if (conv.type === ConversationType.Friend && !isFileHelperTargetId(conv.targetId)) {
-    void contactStore.ensureContactDetailLoaded(conv.targetId, { createIfMissing: true })
+    void contactStore.ensureContactDetailLoaded(conv.targetId, { force: true, createIfMissing: true })
   }
   if (conv.type === ConversationType.Channel) {
     // 不阻塞切会话，后台补齐频道权限，避免点击频道产生明显延迟。

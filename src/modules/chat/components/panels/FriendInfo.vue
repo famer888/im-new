@@ -14,6 +14,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from 'vue-i18n'
 import { proto } from '@/api/request'
 import { writeClipboardText } from '@/utils/clipboard'
+import { normalizeFriendIdentify } from '@/utils/friendIdentify'
 import { DEFAULT_READ_BURN_SECONDS, READ_BURN_TIME_OPTIONS } from '@/utils/readBurn'
 import choiceIcon from '@/assets/images/setting/choice-icon.png'
 
@@ -54,7 +55,7 @@ const currentReadBurnLabel = computed(() => readBurnDurationLabel(msgCancelTime.
 const conv = computed(() => chatStore.currentConversation)
 const contact = computed(() => (conv.value ? contactStore.getContact(conv.value.targetId) : undefined))
 // 对齐旧 im `friend-info.vue`：右侧资料面板直接显示 chatContent.identify，不兜底 uid。
-const displayId = computed(() => String(contact.value?.identify || '').trim())
+const displayId = computed(() => normalizeFriendIdentify(contact.value?.identify) || '')
 
 const readBurn = ref(false)
 const msgCancelTime = ref(DEFAULT_READ_BURN_SECONDS)
@@ -85,10 +86,18 @@ watch(
 
 watch(
   () => [contact.value?.bfReadCancel, contact.value?.msgCancelTime, contact.value?.bfMyBlack],
-  ([nextReadBurn, nextMsgCancelTime, nextInBlacklist]) => {
+  ([nextReadBurn, nextMsgCancelTime, nextInBlacklist], previous) => {
     readBurn.value = Boolean(nextReadBurn)
     msgCancelTime.value = Number(nextMsgCancelTime || DEFAULT_READ_BURN_SECONDS)
     inBlacklist.value = Boolean(nextInBlacklist)
+    const wasBlacklisted = Boolean(previous?.[2])
+    const contactId = contact.value?.id
+    if (contactId && wasBlacklisted && !nextInBlacklist) {
+      // App/其它端解除黑名单后，PC 需重新拉详情回填好友号。
+      void contactStore.refreshContactFromRemote(contactId, {
+        uid: String(authStore.uid || ''),
+      })
+    }
   },
   { immediate: true },
 )

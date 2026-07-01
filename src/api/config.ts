@@ -63,7 +63,7 @@ function normalizeBrandId(input?: string): '45' | '55' | '97' {
 }
 
 export function getBrandDisplayName(input?: string): string {
-  return `OCS Chat ${normalizeBrandId(input)}`
+  return `${normalizeBrandId(input)}-im`
 }
 
 const BRAND_ID = normalizeBrandId(import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME)

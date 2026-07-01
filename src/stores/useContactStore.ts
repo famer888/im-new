@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getContactsApplyList, getContactsDetail, getContactsList } from '@/api/imBase'
 import { isOfficialAccountTargetId, OFFICIAL_ACCOUNT_NAME } from '@/stores/useChatStore'
+import { normalizeFriendIdentify } from '@/utils/friendIdentify'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
 
 const NEW_FRIEND_REQ_TOTAL_SUFFIX = '-newFriendReqTotal'
@@ -107,7 +108,10 @@ export const useContactStore = defineStore('contact', () => {
         let localContacts: Contact[] = []
         try {
           const localRows = await tauriInvoke<Contact[]>('get_contacts', { uid })
-          localContacts = Array.isArray(localRows) ? localRows : []
+          localContacts = (Array.isArray(localRows) ? localRows : []).map((contact) => ({
+            ...contact,
+            identify: normalizeFriendIdentify(contact.identify),
+          }))
           if (localContacts.length > 0) {
             contacts.value = localContacts
           }
@@ -145,7 +149,7 @@ export const useContactStore = defineStore('contact', () => {
             letter: contact.letter ?? null,
             remark: contact.remark ?? null,
             depict: contact.depict ?? null,
-            identify: contact.identify ?? null,
+            identify: normalizeFriendIdentify(contact.identify),
             status: Number(contact.status ?? 1),
             updated_at: Number(contact.updatedAt || Date.now()),
           },
@@ -191,7 +195,7 @@ export const useContactStore = defineStore('contact', () => {
             letter: (item as any).letter || null,
             remark: u.friendRelation?.remarkName || null,
             depict: u.depict || null,
-            identify: u.identify || null,
+            identify: normalizeFriendIdentify(u.identify),
             bfDisturb: Boolean((item as any).bfDisturb),
             status: Number(u.uid) > 0 ? 1 : 0,
             updatedAt: Number((item as any).updateTime || 0),
@@ -258,7 +262,8 @@ export const useContactStore = defineStore('contact', () => {
       || Object.prototype.hasOwnProperty.call(patch, 'msgCancelTime')
 
     if (touchesDetailFields) {
-      if (options?.markDetailLoaded || options?.source !== 'remote') {
+      // 本地拉黑/阅后即焚开关不应挡住后续详情拉取（对齐旧 im 每次打开会话都会 getContactsDetail）。
+      if (options?.markDetailLoaded || options?.source === 'remote') {
         loadedDetailIds.add(id)
       }
       if (options?.source !== 'remote') {
@@ -305,7 +310,7 @@ export const useContactStore = defineStore('contact', () => {
         letter: patch.letter ?? null,
         remark: patch.remark ?? null,
         depict: patch.depict ?? null,
-        identify: patch.identify ?? null,
+        identify: normalizeFriendIdentify(patch.identify),
         bfReadCancel: patch.bfReadCancel,
         bfMyBlack: patch.bfMyBlack,
         msgCancelTime: patch.msgCancelTime,
@@ -332,7 +337,7 @@ export const useContactStore = defineStore('contact', () => {
           letter: patch.letter ?? null,
           remark: patch.remark ?? null,
           depict: patch.depict ?? null,
-          identify: patch.identify ?? null,
+          identify: normalizeFriendIdentify(patch.identify),
           status: Number(patch.status ?? 1),
           updated_at: Number(patch.updatedAt || now),
         },
@@ -347,6 +352,7 @@ export const useContactStore = defineStore('contact', () => {
     if (!targetId) return false
     const contact = getContact(targetId)
     if (!contact) return true
+    if (!normalizeFriendIdentify(contact.identify)) return true
     const display = String(contact.remark || contact.nickname || '').trim()
     return !display || display === targetId
   }
@@ -385,7 +391,7 @@ export const useContactStore = defineStore('contact', () => {
         // 这样右侧资料面板显示好友号时不会退回成内部 uid。
         const nickname = String(userInfo.nickName || userInfo.nickname || '').trim()
         const avatar = String(userInfo.icon || userInfo.avatar || '').trim()
-        const identify = String(userInfo.identify || '').trim()
+        const identify = normalizeFriendIdentify(userInfo.identify)
         const depict = String(detail.depict || userInfo.depict || '').trim()
         const friendRelation = userInfo.friendRelation as { remarkName?: string } | undefined
 

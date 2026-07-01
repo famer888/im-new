@@ -403,7 +403,8 @@ watch(
   friendConversationTargetId,
   (targetId) => {
     if (!targetId) return
-    void contactStore.ensureContactDetailLoaded(targetId, { createIfMissing: true })
+    // 对齐旧 im fnFriendDetailsGet：每次进入好友会话都拉最新详情（含 identify / bfMyBlack）。
+    void contactStore.ensureContactDetailLoaded(targetId, { force: true, createIfMissing: true })
   },
   { immediate: true },
 )
@@ -729,6 +730,10 @@ function handleWindowVisibilityRestore() {
   if (!id || !uid) return
   if (messageStore.getMessages(id).length === 0 && !messageStore.isLoading(id)) {
     void messageStore.loadMessages(uid, id, true)
+  }
+  const targetId = friendConversationTargetId.value
+  if (targetId) {
+    void contactStore.refreshContactFromRemote(targetId, { uid: String(uid) })
   }
 }
 

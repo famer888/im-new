@@ -25,7 +25,7 @@ pub fn brand_id_from_identifier(identifier: &str) -> &'static str {
 }
 
 pub fn brand_display_name(brand_id: &str) -> String {
-    format!("{} {}", BRAND_NAME_PREFIX, normalize_brand_id(brand_id))
+    format!("{}-im", normalize_brand_id(brand_id))
 }
 
 pub fn app_brand_id<R: Runtime, M: Manager<R>>(manager: &M) -> &'static str {
@@ -65,6 +65,6 @@ mod tests {
 
     #[test]
     fn build_display_name() {
-        assert_eq!(brand_display_name("55"), "OCS Chat 55");
+        assert_eq!(brand_display_name("55"), "55-im");
     }
 }

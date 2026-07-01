@@ -22,6 +22,7 @@ import {
 import { eventBus } from '@/utils/eventBus'
 import { openNotificationModuleByConversationId } from '@/utils/notificationNavigation'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
+import { normalizeFriendIdentify } from '@/utils/friendIdentify'
 import { isRemoteDefaultGroupIcon } from '@/utils/domainSafety'
 import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
 import { logChannelContentLimitDebug, parseChannelContentLimitFromApi } from '@/utils/channelContentLimit'
@@ -2154,8 +2155,12 @@ export async function setupTauriListeners() {
         }
         if (typeof extra.nickname === 'string' && extra.nickname) patch.nickname = extra.nickname
         if (typeof extra.avatar === 'string') patch.avatar = extra.avatar || null
-        if (typeof extra.identify === 'string' && extra.identify) patch.identify = extra.identify
+        const recordIdentify = normalizeFriendIdentify(extra.identify)
+        if (recordIdentify) patch.identify = recordIdentify
         if (typeof extra.remark === 'string') patch.remark = extra.remark || null
+        if (Object.prototype.hasOwnProperty.call(extra, 'bfMyBlack')) {
+          patch.bfMyBlack = Boolean(extra.bfMyBlack)
+        }
         if (Object.keys(patch).length > 0) {
           await contactStore.upsertContact({
             id: friendId,
@@ -2167,6 +2172,9 @@ export async function setupTauriListeners() {
             source: 'remote',
             markDetailLoaded: true,
           })
+          if (patch.bfMyBlack === false) {
+            void contactStore.refreshContactFromRemote(friendId, { uid: currentUid })
+          }
         }
       }
       const appendableNormalized = locallyConsumedGroupRemovalMessageKeys.size > 0

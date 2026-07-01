@@ -25,7 +25,7 @@ const devScriptByMode = {
 function buildBrandTauriConfig(brandId) {
   const iconDir = `../resources/icons_${brandId}`
   return {
-    productName: `OCS Chat ${brandId}`,
+    productName: `${brandId}-im`,
     identifier: `cn.${brandId}.chat`,
     bundle: {
       icon: [

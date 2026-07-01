@@ -17,23 +17,23 @@ import {
 import TextAvatar from '@/components/TextAvatar.vue'
 import MessageTimeStatusLabel from '@/components/MessageTimeStatusLabel.vue'
 import readDeleteFireUrl from '@/assets/images/read-delete01.svg'
+import TextMessage from './messages/TextMessage.vue'
+import ImageMessage from './messages/ImageMessage.vue'
+import AudioMessage from './messages/AudioMessage.vue'
+import VideoMessage from './messages/VideoMessage.vue'
+import FileMessage from './messages/FileMessage.vue'
+import BusinessCardMessage from './messages/BusinessCardMessage.vue'
+import RichTextMessage from './messages/RichTextMessage.vue'
+import MediasCaptionMessage from './messages/MediasCaptionMessage.vue'
+import SystemNotification from './messages/SystemNotification.vue'
+import GroupIntroNoticeMessage from './messages/GroupIntroNoticeMessage.vue'
 
-const TextMessage = defineAsyncComponent(() => import('./messages/TextMessage.vue'))
-const ImageMessage = defineAsyncComponent(() => import('./messages/ImageMessage.vue'))
-const AudioMessage = defineAsyncComponent(() => import('./messages/AudioMessage.vue'))
-const VideoMessage = defineAsyncComponent(() => import('./messages/VideoMessage.vue'))
-const FileMessage = defineAsyncComponent(() => import('./messages/FileMessage.vue'))
-const BusinessCardMessage = defineAsyncComponent(() => import('./messages/BusinessCardMessage.vue'))
 const DiceMessage = defineAsyncComponent(() => import('./messages/DiceMessage.vue'))
 const PokerMessage = defineAsyncComponent(() => import('./messages/PokerMessage.vue'))
-const RichTextMessage = defineAsyncComponent(() => import('./messages/RichTextMessage.vue'))
-const MediasCaptionMessage = defineAsyncComponent(() => import('./messages/MediasCaptionMessage.vue'))
 const QuoteMessage = defineAsyncComponent(() => import('./messages/QuoteMessage.vue'))
 const RedPacketMessage = defineAsyncComponent(() => import('./messages/RedPacketMessage.vue'))
 const TransferMessage = defineAsyncComponent(() => import('./messages/TransferMessage.vue'))
 const LocationMessage = defineAsyncComponent(() => import('./messages/LocationMessage.vue'))
-const SystemNotification = defineAsyncComponent(() => import('./messages/SystemNotification.vue'))
-const GroupIntroNoticeMessage = defineAsyncComponent(() => import('./messages/GroupIntroNoticeMessage.vue'))
 
 const props = defineProps<{
   message: Message
