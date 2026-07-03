@@ -44,6 +44,16 @@ sync_one_brand() {
   if git -C "$OCS_DIR" cat-file -e "$branch:favicon.ico" 2>/dev/null; then
     git -C "$OCS_DIR" show "$branch:favicon.ico" > "$dest/installer.ico"
   fi
+
+  # 97 渠道参考仓库里的 icon.icns 是过期章鱼图，与 icon.png/favicon 不一致，需按 icon.png 重生。
+  if [[ "$brand" == "97" && -f "$dest/icon.png" ]]; then
+    local regen_dir
+    regen_dir="$(mktemp -d "/tmp/ocs-regen-icns-$brand.XXXXXX")"
+    echo "Regenerating icons_$brand/icon.icns from icon.png (reference icns is stale)"
+    (cd "$ROOT_DIR" && pnpm tauri icon "$dest/icon.png" --output "$regen_dir" >/dev/null)
+    cp -f "$regen_dir/icon.icns" "$dest/icon.icns"
+    rm -rf "$regen_dir"
+  fi
 }
 
 case "$BRAND_ID" in

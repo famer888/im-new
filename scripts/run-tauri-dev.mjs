@@ -33,6 +33,7 @@ function buildBrandTauriConfig(brandId) {
         `${iconDir}/128x128.png`,
         `${iconDir}/256x256.png`,
         `${iconDir}/icon.icns`,
+        `${iconDir}/icon.ico`,
       ],
     },
   }

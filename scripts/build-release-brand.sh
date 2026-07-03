@@ -89,6 +89,7 @@ find_png_size() {
 }
 
 choose_icon_png() {
+  # 对齐旧 im build/icons：以 icon.png 为唯一主源，避免误用 1024x1024 占位图。
   local candidates=(
     "$ICON_SOURCE_DIR/icon.png"
     "$ICON_SOURCE_DIR/logo.png"
@@ -96,8 +97,6 @@ choose_icon_png() {
     "$ICON_SOURCE_DIR/512x512.png"
     "$ICON_SOURCE_DIR/256x256.png"
   )
-  local best_path=""
-  local best_size=0
 
   for candidate in "${candidates[@]}"; do
     if [[ ! -f "$candidate" ]]; then
@@ -105,19 +104,11 @@ choose_icon_png() {
     fi
 
     read -r width height < <(find_png_size "$candidate")
-    if [[ -z "${width:-}" || "$width" != "$height" ]]; then
-      continue
-    fi
-
-    if (( width > best_size )); then
-      best_size="$width"
-      best_path="$candidate"
+    if [[ -n "${width:-}" && "$width" == "$height" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
     fi
   done
-
-  if [[ -n "$best_path" ]]; then
-    printf '%s\n' "$best_path"
-  fi
 }
 
 ICON_PNG="$(choose_icon_png)"
@@ -236,16 +227,30 @@ if (( ICON_WIDTH < 512 )); then
   echo "Warning: $ICON_PNG is ${ICON_WIDTH}x${ICON_HEIGHT}; macOS app icons are best from 1024x1024 or 512x512." >&2
 fi
 
+echo "Brand icon source PNG: $ICON_PNG"
 pnpm tauri icon "$ICON_PNG" --output "$ICON_TARGET_DIR"
 
-if [[ -f "$ICON_SOURCE_DIR/installer.ico" ]]; then
-  cp -f "$ICON_SOURCE_DIR/installer.ico" "$ICON_TARGET_DIR/icon.ico"
-elif [[ "$PLATFORM" == "win" && -f "$ICON_SOURCE_DIR/icon.ico" ]]; then
-  cp -f "$ICON_SOURCE_DIR/icon.ico" "$ICON_TARGET_DIR/icon.ico"
+HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
+
+# Mac/Win 桌面图标统一以 icon.png 为准生成 icon.icns/icon.ico。
+# 旧 im 的 build/icons/icon.icns 在 97 渠道是过期章鱼图，不能覆盖生成结果。
+if [[ "$USE_SOURCE_ICNS" == "1" && -f "$ICON_SOURCE_DIR/icon.icns" ]] \
+  && file "$ICON_SOURCE_DIR/icon.icns" | grep -q "Mac OS X icon"; then
+  cp -f "$ICON_SOURCE_DIR/icon.icns" "$ICON_TARGET_DIR/icon.icns"
+  echo "USE_SOURCE_ICNS=1: using icon.icns from $ICON_SOURCE_DIR"
 fi
 
-if [[ "$USE_SOURCE_ICNS" == "1" && -f "$ICON_SOURCE_DIR/icon.icns" ]] && file "$ICON_SOURCE_DIR/icon.icns" | grep -q "Mac OS X icon"; then
-  cp -f "$ICON_SOURCE_DIR/icon.icns" "$ICON_TARGET_DIR/icon.icns"
+# Win 本机打包优先用参考项目 favicon.ico；交叉编译继续用 icon.png 生成的 icon.ico。
+if [[ "$PLATFORM" == "win" && -f "$ICON_SOURCE_DIR/installer.ico" ]]; then
+  case "$HOST_OS" in
+    MINGW*|MSYS*|CYGWIN*|Windows*)
+      cp -f "$ICON_SOURCE_DIR/installer.ico" "$ICON_TARGET_DIR/icon.ico"
+      echo "Windows native build: using installer.ico from reference project"
+      ;;
+    *)
+      echo "Cross-compiling on $HOST_OS: using icon.ico generated from $ICON_PNG"
+      ;;
+  esac
 fi
 
 node -e '
@@ -263,11 +268,7 @@ node -e '
   if (platform === "win") {
     bundle.windows = {
       nsis: {
-        installerIcon: `${iconDir}/icon.ico`,
-        uninstallerIcon: `${iconDir}/icon.ico`,
-        shortcutName: productName,
-        languages: ["SimpChinese"],
-        installMode: "both",
+        compression: "zlib",
       },
     };
   }
@@ -279,6 +280,7 @@ node -e '
 ' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL" "$PLATFORM"
 
 echo "Building $APP_NAME ($PKG_IDENTIFIER) with icons_$BRAND_ID for $PLATFORM"
+echo "  packname=$VITE_PACKNAME officialUrl=$OFFICIAL_URL iconPng=$ICON_PNG"
 
 if [[ "$PLATFORM" == "mac" ]]; then
   APP_NAME="$APP_NAME" \

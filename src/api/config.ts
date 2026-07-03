@@ -59,6 +59,8 @@ const ENV_NAME = String(import.meta.env.VITE_APP_ENV || DEFAULT_ENV_NAME).trim()
 function normalizeBrandId(input?: string): '45' | '55' | '97' {
   const value = String(input || '').trim()
   if (value === '45' || value === '55' || value === '97') return value
+  const matched = value.match(/^(45|55|97)(?:-im)?$/i)
+  if (matched) return matched[1] as '45' | '55' | '97'
   return '97'
 }
 
