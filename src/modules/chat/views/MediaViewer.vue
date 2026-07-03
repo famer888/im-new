@@ -288,7 +288,6 @@ const contextMenuItems = computed<MenuItem[]>(() => {
     if (canOpenWithDefaultApp.value && !isChannelSaveRestricted.value) {
       items.push({ key: 'open_default', label: t('使用默认应用打开') })
     }
-    items.push({ key: 'rotate', label: t('向右旋转') })
   }
   return items
 })
@@ -1634,9 +1633,6 @@ async function handleMenuSelect(key: string) {
         break
       case 'open_default':
         await openWithDefaultApp()
-        break
-      case 'rotate':
-        rotateImage()
         break
     }
   } catch (error) {
