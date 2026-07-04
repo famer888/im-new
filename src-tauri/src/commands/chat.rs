@@ -2520,6 +2520,7 @@ pub async fn mark_message_sent(
         } else {
             None
         };
+        let has_duplicate_server_row = duplicate.is_some();
 
         let (duplicate_content, duplicate_extra, duplicate_read_status, duplicate_send_time) =
             duplicate.unwrap_or((None, None, 0, 0));
@@ -2584,72 +2585,159 @@ pub async fn mark_message_sent(
         }
 
         if local_exists {
+            let local_id: String = tx
+                .query_row(
+                    "SELECT id FROM messages WHERE rowid = ?1",
+                    rusqlite::params![local_rowid],
+                    |row| row.get(0),
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            let server_row_exists = has_duplicate_server_row || local_id == server_id;
+
+            // 仅清理遗留 flag 占位行；服务端 id 行留给后续合并或改名。
             tx.execute(
                 "DELETE FROM messages
-                 WHERE conversation_id = ?1 AND id = ?2 AND rowid <> ?3",
-                rusqlite::params![request.conversation_id, server_id, local_rowid],
+                 WHERE conversation_id = ?1
+                   AND rowid <> ?2
+                   AND (
+                        id = ?3
+                        OR COALESCE(custom_msg_id, '') = ?4
+                   )",
+                rusqlite::params![
+                    request.conversation_id,
+                    local_rowid,
+                    request.custom_msg_id,
+                    request.custom_msg_id,
+                ],
             )
             .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-        }
 
-        if local_exists {
-            if next_sent_time > 0 {
-                let changed = tx.execute(
+            if server_row_exists && local_id != server_id {
+                // 推送已落库服务端 id 行：合并内容后删除本地 flag 行，不再 UPDATE id。
+                tx.execute(
                     "UPDATE messages
-                     SET id = ?1,
-                         status = 1,
-                         read_status = MAX(read_status, ?2, 1),
-                         send_time = ?3,
-                         content = COALESCE(NULLIF(?4, ''), content),
-                         extra = COALESCE(?5, extra)
-                     WHERE rowid = ?6",
+                     SET status = 1,
+                         read_status = MAX(read_status, ?1, 1),
+                         send_time = CASE WHEN ?2 > 0 THEN ?2 ELSE send_time END,
+                         content = COALESCE(NULLIF(?3, ''), content),
+                         extra = COALESCE(?4, extra)
+                     WHERE conversation_id = ?5 AND id = ?6",
                     rusqlite::params![
-                        server_id,
                         duplicate_read_status,
                         next_sent_time,
                         merged_content.as_deref(),
                         duplicate_extra.as_deref(),
-                        local_rowid,
-                    ],
-                )
-                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-                warn!(
-                    target: "receipt",
-                    "[receipt] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={} next_sent_time={}",
-                    changed,
-                    server_id,
-                    request.custom_msg_id,
-                    duplicate_content_len,
-                    merged_content_len,
-                    next_sent_time
-                );
-            } else {
-                let changed = tx.execute(
-                    "UPDATE messages
-                     SET id = ?1,
-                         status = 1,
-                         read_status = MAX(read_status, ?2, 1),
-                         content = COALESCE(NULLIF(?3, ''), content),
-                         extra = COALESCE(?4, extra)
-                     WHERE rowid = ?5",
-                    rusqlite::params![
+                        request.conversation_id,
                         server_id,
-                        duplicate_read_status,
-                        merged_content.as_deref(),
-                        duplicate_extra.as_deref(),
-                        local_rowid,
                     ],
                 )
                 .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-                warn!(
-                    target: "receipt",
-                    "[receipt] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={}",
-                    changed,
-                    server_id,
-                    request.custom_msg_id,
-                    duplicate_content_len,
-                    merged_content_len
-                );
+                tx.execute(
+                    "DELETE FROM messages WHERE rowid = ?1",
+                    rusqlite::params![local_rowid],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+            } else if local_id == server_id {
+                if next_sent_time > 0 {
+                    tx.execute(
+                        "UPDATE messages
+                         SET status = 1,
+                             read_status = MAX(read_status, ?1, 1),
+                             send_time = ?2,
+                             content = COALESCE(NULLIF(?3, ''), content),
+                             extra = COALESCE(?4, extra)
+                         WHERE rowid = ?5",
+                        rusqlite::params![
+                            duplicate_read_status,
+                            next_sent_time,
+                            merged_content.as_deref(),
+                            duplicate_extra.as_deref(),
+                            local_rowid,
+                        ],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                } else {
+                    tx.execute(
+                        "UPDATE messages
+                         SET status = 1,
+                             read_status = MAX(read_status, ?1, 1),
+                             content = COALESCE(NULLIF(?2, ''), content),
+                             extra = COALESCE(?3, extra)
+                         WHERE rowid = ?4",
+                        rusqlite::params![
+                            duplicate_read_status,
+                            merged_content.as_deref(),
+                            duplicate_extra.as_deref(),
+                            local_rowid,
+                        ],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                }
+            } else {
+                tx.execute(
+                    "DELETE FROM messages
+                     WHERE conversation_id = ?1 AND id = ?2 AND rowid <> ?3",
+                    rusqlite::params![request.conversation_id, server_id, local_rowid],
+                )
+                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                if next_sent_time > 0 {
+                    let changed = tx.execute(
+                        "UPDATE messages
+                         SET id = ?1,
+                             status = 1,
+                             read_status = MAX(read_status, ?2, 1),
+                             send_time = ?3,
+                             content = COALESCE(NULLIF(?4, ''), content),
+                             extra = COALESCE(?5, extra)
+                         WHERE rowid = ?6",
+                        rusqlite::params![
+                            server_id,
+                            duplicate_read_status,
+                            next_sent_time,
+                            merged_content.as_deref(),
+                            duplicate_extra.as_deref(),
+                            local_rowid,
+                        ],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    warn!(
+                        target: "receipt",
+                        "[receipt] mark_message_sent updated with time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={} next_sent_time={}",
+                        changed,
+                        server_id,
+                        request.custom_msg_id,
+                        duplicate_content_len,
+                        merged_content_len,
+                        next_sent_time
+                    );
+                } else {
+                    let changed = tx.execute(
+                        "UPDATE messages
+                         SET id = ?1,
+                             status = 1,
+                             read_status = MAX(read_status, ?2, 1),
+                             content = COALESCE(NULLIF(?3, ''), content),
+                             extra = COALESCE(?4, extra)
+                         WHERE rowid = ?5",
+                        rusqlite::params![
+                            server_id,
+                            duplicate_read_status,
+                            merged_content.as_deref(),
+                            duplicate_extra.as_deref(),
+                            local_rowid,
+                        ],
+                    )
+                    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+                    warn!(
+                        target: "receipt",
+                        "[receipt] mark_message_sent updated no time changed={} server_id={} custom_msg_id={} duplicate_content_len={} merged_content_len={}",
+                        changed,
+                        server_id,
+                        request.custom_msg_id,
+                        duplicate_content_len,
+                        merged_content_len
+                    );
+                }
             }
         }
 
@@ -4072,5 +4160,112 @@ mod tests {
             .unwrap();
         assert_eq!(id, "90001");
         assert_eq!(status, 1);
+    }
+
+    #[test]
+    fn mark_message_sent_should_merge_when_server_row_already_exists() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                custom_msg_id TEXT UNIQUE,
+                conversation_id TEXT NOT NULL,
+                sender_id TEXT NOT NULL,
+                msg_type INTEGER NOT NULL DEFAULT 0,
+                content TEXT,
+                send_time INTEGER NOT NULL DEFAULT 0,
+                status INTEGER NOT NULL DEFAULT 0,
+                read_status INTEGER NOT NULL DEFAULT 0,
+                version INTEGER NOT NULL DEFAULT 0,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                extra TEXT
+            );",
+        )
+        .unwrap();
+
+        queries::insert_message(
+            &conn,
+            &models::Message {
+                id: "1783074915757001".to_string(),
+                custom_msg_id: Some("1783074915757001".to_string()),
+                conversation_id: "2_104795".to_string(),
+                sender_id: "1001".to_string(),
+                msg_type: 1,
+                content: Some(r#"{"url":"","localPath":"/tmp/preview.png"}"#.to_string()),
+                send_time: 1700000000000,
+                status: 0,
+                read_status: 0,
+                version: 0,
+                is_deleted: false,
+                extra: None,
+            },
+        )
+        .unwrap();
+        queries::insert_message(
+            &conn,
+            &models::Message {
+                id: "5".to_string(),
+                custom_msg_id: None,
+                conversation_id: "2_104795".to_string(),
+                sender_id: "1001".to_string(),
+                msg_type: 1,
+                content: Some(r#"{"url":"https://cdn.example.com/a.png"}"#.to_string()),
+                send_time: 1700000001000,
+                status: 1,
+                read_status: 0,
+                version: 0,
+                is_deleted: false,
+                extra: None,
+            },
+        )
+        .unwrap();
+
+        let local_rowid: i64 = conn
+            .query_row(
+                "SELECT rowid FROM messages WHERE id = '1783074915757001'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let server_id = "5";
+        let custom_msg_id = "1783074915757001";
+        let merged_content = r#"{"url":"","localPath":"/tmp/preview.png"}"#;
+
+        conn.execute(
+            "DELETE FROM messages
+             WHERE conversation_id = '2_104795'
+               AND rowid <> ?1
+               AND (id = ?2 OR COALESCE(custom_msg_id, '') = ?3)",
+            rusqlite::params![local_rowid, custom_msg_id, custom_msg_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE messages
+             SET status = 1,
+                 content = COALESCE(NULLIF(?1, ''), content)
+             WHERE conversation_id = '2_104795' AND id = ?2",
+            rusqlite::params![merged_content, server_id],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM messages WHERE rowid = ?1",
+            rusqlite::params![local_rowid],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let (id, status, content): (String, i32, String) = conn
+            .query_row(
+                "SELECT id, status, content FROM messages WHERE conversation_id = '2_104795'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(id, "5");
+        assert_eq!(status, 1);
+        assert!(content.contains("preview.png"));
     }
 }

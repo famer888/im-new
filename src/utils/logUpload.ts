@@ -67,9 +67,32 @@ function buildLogTextPath(uploadUrl = '', uploadKey = '', loginId = '') {
   const uidSuffix = uid ? `?${uid}` : ''
   const keyPath = String(uploadKey || urlPath)
     .replace(/^\/+/, '')
-    // 展示地址必须跟服务端实际 OSS key 一致；生产包不能再硬塞旧 debug 里的 test- 前缀。
-    .replace(/^common\/log\//, '')
-  return `logs:${host}/${keyPath}${uidSuffix}`
+    // 对齐旧 im renderer.js：去掉 common/log 前缀，展示路径带 test- 供客服检索。
+    .replace(/^(test\/)?common\/log\//, '')
+  return `logs:${host}/test-${keyPath}${uidSuffix}`
+}
+
+export function formatLogUploadAddress(filepath: string): string {
+  return String(filepath || '').trim()
+}
+
+export function formatLogUploadCopyText(filepath: string, label = '上传地址：'): string {
+  const address = formatLogUploadAddress(filepath)
+  return address ? `${label}${address}` : label
+}
+
+function formatLogUploadErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '')
+  if (/HTTP\s+401/i.test(raw)) {
+    return '上传配置未授权(401)：登录态失效或网关异常，请重新登录后重试'
+  }
+  if (/oss put failed:\s*HTTP\s+401/i.test(raw)) {
+    return 'OSS 上传未授权(401)：上传凭证已失效，请重新点击上传'
+  }
+  if (/missing oss token/i.test(raw)) {
+    return '获取 OSS 上传凭证失败，请重新登录后重试'
+  }
+  return raw || 'upload failed'
 }
 
 function buildPostLogUploadCandidates(responseUrl: string, bucket: string, endpoint: string, objectKey: string) {
@@ -128,6 +151,7 @@ export async function uploadPackagedLog(options: {
       attachWorkspaceType: 0,
       fileSize: 0,
       suffix,
+      ossSceneType: 0,
     })
     const bootstrapFileId = String(bootstrapKeyData.fileId || '').trim()
     if (!bootstrapFileId) {
@@ -165,8 +189,9 @@ export async function uploadPackagedLog(options: {
         attachWorkspaceType: 0,
         fileSize: preparedFileSize,
         suffix,
+        ossSceneType: 0,
       }),
-      getUploadToken(),
+      getUploadToken({ ossSceneType: 0 }),
     ])
 
     const objectKey = String(uploadUrlInfo.fileId || '').trim()
@@ -215,7 +240,8 @@ export async function uploadPackagedLog(options: {
     }
     if (!uploadUrl) throw lastError instanceof Error ? lastError : new Error('all oss endpoints failed')
 
-    const finalUrl = toHttpsUrl(stripQuery(responseUrl || uploadUrl))
+    // 对齐旧 im：展示/复制地址以实际上传成功的 URL 为准，避免 responseUrl 与真实落点域名不一致。
+    const finalUrl = toHttpsUrl(stripQuery(uploadUrl || responseUrl))
     options.onProgress?.(100)
     return {
       success: true,
@@ -225,7 +251,7 @@ export async function uploadPackagedLog(options: {
   } catch (error) {
     return {
       success: false,
-      msg: error instanceof Error ? error.message : 'upload failed',
+      msg: formatLogUploadErrorMessage(error),
       filepath: '',
     }
   } finally {

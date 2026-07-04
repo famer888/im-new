@@ -169,12 +169,16 @@ export const useChatStore = defineStore('chat', () => {
   let _persistUid = ''
 
   function normalizeConversation(raw: any): Conversation {
+    const lastMsgTime = Number(raw.lastMsgTime ?? raw.last_msg_time ?? 0)
+    const explicitUpdatedAt = Number(raw.updatedAt ?? raw.updated_at ?? 0)
+    // 对齐旧 im sendTime：排序以最后消息时间为准；updatedAt 缺失时不能回退 Date.now()，否则旧会话会被顶到列表顶部。
+    const updatedAt = explicitUpdatedAt > 0 ? explicitUpdatedAt : lastMsgTime
     return {
       id: String(raw.id ?? ''),
       type: Number(raw.type ?? raw.conv_type ?? 0),
       targetId: String(raw.targetId ?? raw.target_id ?? ''),
       lastMsgId: raw.lastMsgId ?? raw.last_msg_id ?? null,
-      lastMsgTime: Number(raw.lastMsgTime ?? raw.last_msg_time ?? 0),
+      lastMsgTime,
       lastMsgDigest: raw.lastMsgDigest ?? raw.last_msg_digest ?? null,
       unreadCount: Number(raw.unreadCount ?? raw.unread_count ?? 0),
       isPinned: Boolean(raw.isPinned ?? raw.is_pinned ?? false),
@@ -184,8 +188,15 @@ export const useChatStore = defineStore('chat', () => {
       senderName: raw.senderName ?? raw.sender_name ?? null,
       atMe: Boolean(raw.atMe ?? raw.at_me ?? false),
       scheduleDeletion: Number(raw.scheduleDeletion ?? raw.schedule_deletion ?? 0),
-      updatedAt: Number(raw.updatedAt ?? raw.updated_at ?? Date.now()),
+      updatedAt,
     }
+  }
+
+  /** 对齐旧 im fnChatListSort：非置顶会话按最后消息 sendTime 倒序。 */
+  function getConversationSortTime(conv: Conversation): number {
+    const lastMsgTime = Number(conv.lastMsgTime || 0)
+    if (lastMsgTime > 0) return lastMsgTime
+    return Number(conv.updatedAt || 0)
   }
 
   const currentConversation = computed(() =>
@@ -400,6 +411,7 @@ export const useChatStore = defineStore('chat', () => {
       }
 
       conversations.value = loaded
+      sortConversations()
     } catch (e) {
       console.error('[ChatStore] loadConversations failed:', e)
       conversations.value = isTauri() ? [] : loadConversationsFromCache(uid)
@@ -475,7 +487,7 @@ export const useChatStore = defineStore('chat', () => {
         senderName: null,
         atMe: false,
         scheduleDeletion: 0,
-        updatedAt: Date.now(),
+        updatedAt: 0,
       }
     }
 
@@ -494,7 +506,7 @@ export const useChatStore = defineStore('chat', () => {
       senderName: null,
       atMe: false,
       scheduleDeletion: 0,
-      updatedAt: Date.now(),
+      updatedAt: 0,
     }
     conversations.value.unshift(conv)
     sortConversations()
@@ -531,7 +543,7 @@ export const useChatStore = defineStore('chat', () => {
   function sortConversations() {
     conversations.value.sort((a, b) => {
       if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
-      const timeDelta = b.updatedAt - a.updatedAt
+      const timeDelta = getConversationSortTime(b) - getConversationSortTime(a)
       if (timeDelta !== 0) return timeDelta
       const aIsGroupNotification = a.type === 1 && a.targetId === GROUP_NOTIFICATION_TARGET_ID
       const bIsGroupNotification = b.type === 1 && b.targetId === GROUP_NOTIFICATION_TARGET_ID

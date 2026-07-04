@@ -312,7 +312,9 @@ function copyDebugPreview(value: unknown, limit = 160): string {
 }
 
 function copyDebugLog(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
-  console.warn(`[copy-debug] ${message}`, data)
+  if (!import.meta.env.DEV) return
+  const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.debug
+  logFn(`[copy-debug] ${message}`, data)
   if (!(window as any).__TAURI_INTERNALS__) return
   void import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('image_send_log', {

@@ -69,6 +69,19 @@ const isSearchHighlighted = computed(() => {
 })
 const isGroupIntroNotice = computed(() => isGroupIntroNoticeMessage(props.message))
 
+const isFileHelperChat = computed(
+  () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
+)
+const isChannelChat = computed(
+  () => chatStore.currentConversation?.type === ConversationType.Channel,
+)
+const isGroupChat = computed(
+  () => chatStore.currentConversation?.type === 1,
+)
+const currentGroupId = computed(() => (isGroupChat.value ? chatStore.currentConversation?.targetId ?? '' : ''))
+/** 旧 im 频道消息统一按左侧白色气泡展示，即使是自己发送的消息也不右对齐。 */
+const displayAsSelf = computed(() => (isSelf.value || isFileHelperChat.value) && !isChannelChat.value)
+
 const currentGroupMember = computed(() => {
   if (!isGroupChat.value || displayAsSelf.value) return null
   return groupStore.getMembers(currentGroupId.value)
@@ -259,18 +272,6 @@ function getNameCardDisplayName(content: string | null): string {
   }
 }
 
-const isFileHelperChat = computed(
-  () => isFileHelperTargetId(chatStore.currentConversation?.targetId),
-)
-const isChannelChat = computed(
-  () => chatStore.currentConversation?.type === ConversationType.Channel,
-)
-const isGroupChat = computed(
-  () => chatStore.currentConversation?.type === 1,
-)
-const currentGroupId = computed(() => (isGroupChat.value ? chatStore.currentConversation?.targetId ?? '' : ''))
-/** 旧 im 频道消息统一按左侧白色气泡展示，即使是自己发送的消息也不右对齐。 */
-const displayAsSelf = computed(() => (isSelf.value || isFileHelperChat.value) && !isChannelChat.value)
 const showAvatar = computed(
   // 对齐 im：仅群聊的他人消息显示头像；单聊/传输助手不显示头像
   () => isGroupChat.value && !displayAsSelf.value,
@@ -284,7 +285,9 @@ function copyDebugPreview(value: unknown, limit = 120): string {
 }
 
 function copyDebugLog(message: string, data: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'warn') {
-  console.warn(`[copy-debug] ${message}`, data)
+  if (!import.meta.env.DEV) return
+  const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.debug
+  logFn(`[copy-debug] ${message}`, data)
   if (!(window as any).__TAURI_INTERNALS__) return
   void import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('image_send_log', {

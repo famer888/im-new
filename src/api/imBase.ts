@@ -3,6 +3,7 @@
  */
 import { requestProto, proto, getSignedApiHeaders, getOpenChatSignedApiHeaders } from './request'
 import { API_CONFIG, getBaseUrl, getOpenChatBaseUrl } from './config'
+import { getOrderedDomainUrls, markDomainError } from '@/utils/domainPool'
 import * as $protobuf from 'protobufjs/minimal'
 import {
   GroupMemberOnLineStatusListReq,
@@ -90,6 +91,67 @@ function logUploadConfigResponse(path: string, data: unknown) {
   if (String(path).includes('/sys/unauthorized/uploadConfig/')) {
     console.log(`${path} 后面是解密的数据`, data)
   }
+}
+
+function normalizeHttpBaseUrl(value: string): string {
+  try {
+    const parsed = new URL(String(value || '').trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return ''
+  }
+}
+
+function getOpenChatUploadConfigCandidates(): string[] {
+  const seen = new Set<string>()
+  return [
+    getOpenChatBaseUrl(),
+    ...getOrderedDomainUrls('openchatChannel'),
+    API_CONFIG.rawOpenChatDomain,
+  ]
+    .map((item) => (String(item || '').startsWith('/') ? '' : normalizeHttpBaseUrl(item)))
+    .filter((base): base is string => {
+      if (!base || seen.has(base)) return false
+      seen.add(base)
+      return true
+    })
+}
+
+function extractHttpStatusFromError(error: unknown): number {
+  if (!(error instanceof Error)) return 0
+  const match = error.message.match(/HTTP\s+(\d{3})/i)
+  return match ? Number(match[1]) : 0
+}
+
+function shouldRetryUploadConfigHttpStatus(status: number): boolean {
+  // 对齐频道网关：401/487 可能是单个 openchatChannel 节点异常，继续尝试候选域名。
+  return status === 401 || status === 403 || status === 487 || status >= 500
+}
+
+async function requestOpenChatUploadConfig<T>(
+  path: string,
+  data: Record<string, unknown>,
+): Promise<T> {
+  const candidates = getOpenChatUploadConfigCandidates()
+  let lastError: Error | null = null
+  for (const baseUrl of candidates) {
+    try {
+      return await requestSignedJson<T>(path, data, {
+        baseUrl,
+        headers: getOpenChatSignedApiHeaders(),
+      })
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      const status = extractHttpStatusFromError(error)
+      if (shouldRetryUploadConfigHttpStatus(status)) {
+        markDomainError('openchatChannel', baseUrl)
+        continue
+      }
+      throw lastError
+    }
+  }
+  throw lastError || new Error('upload config request failed')
 }
 
 type SignedJsonHttpResponse = {
@@ -979,16 +1041,23 @@ export async function getUploadToken(
   baseUrl?: string,
 ): Promise<proto.GetUploadTokenResp> {
   const data = typeof dataOrBaseUrl === 'string' ? {} : (dataOrBaseUrl || {})
-  const resolvedBaseUrl = typeof dataOrBaseUrl === 'string' ? dataOrBaseUrl : baseUrl
-  // 对齐老 im：上传配置走 openchat gateway，并把聊天图片场景传给后端选 v2 图片桶。
+  if (typeof dataOrBaseUrl === 'string' || baseUrl) {
+    const resolvedBaseUrl = typeof dataOrBaseUrl === 'string' ? dataOrBaseUrl : baseUrl
+    const ossSceneType = Number.isFinite(Number(data.ossSceneType)) ? Number(data.ossSceneType) : 0
+    const response = await requestSignedJson<OpenChatUploadConfigResp<proto.GetUploadTokenResp>>(
+      '/sys/unauthorized/uploadConfig/getUploadToken',
+      { ossSceneType },
+      {
+        baseUrl: resolvedBaseUrl || getOpenChatBaseUrl(),
+        headers: getOpenChatSignedApiHeaders(),
+      },
+    )
+    return unwrapOpenChatUploadResp(response)
+  }
   const ossSceneType = Number.isFinite(Number(data.ossSceneType)) ? Number(data.ossSceneType) : 0
-  const response = await requestSignedJson<OpenChatUploadConfigResp<proto.GetUploadTokenResp>>(
+  const response = await requestOpenChatUploadConfig<OpenChatUploadConfigResp<proto.GetUploadTokenResp>>(
     '/sys/unauthorized/uploadConfig/getUploadToken',
     { ossSceneType },
-    {
-      baseUrl: resolvedBaseUrl || getOpenChatBaseUrl(),
-      headers: getOpenChatSignedApiHeaders(),
-    },
   )
   return unwrapOpenChatUploadResp(response)
 }
@@ -997,19 +1066,25 @@ export async function getUploadUrl(
   data: { attachType: number; attachWorkspaceType: number; fileSize: number; suffix: string; ossSceneType?: number },
   baseUrl?: string,
 ): Promise<proto.GetUploadUrlResp> {
-  // 对齐老 im：fileSize 和 ossSceneType 参与服务端选桶/选通道，不能被前端类型丢掉。
   const requestData = {
     ...data,
     fileSize: Number(data.fileSize || 0),
     ossSceneType: Number.isFinite(Number(data.ossSceneType)) ? Number(data.ossSceneType) : 0,
   }
-  const response = await requestSignedJson<OpenChatUploadConfigResp<proto.GetUploadUrlResp>>(
+  if (baseUrl) {
+    const response = await requestSignedJson<OpenChatUploadConfigResp<proto.GetUploadUrlResp>>(
+      '/sys/unauthorized/uploadConfig/getUploadUrl',
+      requestData,
+      {
+        baseUrl,
+        headers: getOpenChatSignedApiHeaders(),
+      },
+    )
+    return unwrapOpenChatUploadResp(response)
+  }
+  const response = await requestOpenChatUploadConfig<OpenChatUploadConfigResp<proto.GetUploadUrlResp>>(
     '/sys/unauthorized/uploadConfig/getUploadUrl',
     requestData,
-    {
-      baseUrl: baseUrl || getOpenChatBaseUrl(),
-      headers: getOpenChatSignedApiHeaders(),
-    },
   )
   return unwrapOpenChatUploadResp(response)
 }

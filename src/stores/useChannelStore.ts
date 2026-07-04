@@ -8,6 +8,28 @@ import {
 } from '@/utils/authSessionExpiry'
 import { logChannelContentLimitDebug, parseChannelContentLimitFromApi } from '@/utils/channelContentLimit'
 
+function isChannelExpiredOrInvalidText(text: unknown): boolean {
+  const value = String(text || '').trim().toLowerCase()
+  if (!value) return false
+  if (value === '1000001') return true
+  return value.includes('失效')
+    || value.includes('过期')
+    || value.includes('expired')
+    || value.includes('invalid')
+}
+
+function isChannelExpiredOrInvalidResponse(resp: {
+  msg?: unknown
+  errMsg?: unknown
+  errCode?: unknown
+} | null | undefined): boolean {
+  if (!resp) return false
+  const msg = String(resp.msg ?? resp.errMsg ?? '').trim()
+  if (isChannelExpiredOrInvalidText(msg)) return true
+  const errCode = Number(resp.errCode ?? 0)
+  return Number.isFinite(errCode) && errCode === 1000001
+}
+
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
 }
@@ -422,6 +444,10 @@ export const useChannelStore = defineStore('channel', () => {
         conversationChannels,
         localChannels,
       })
+      await refreshOrphanChannelConversations(
+        uid,
+        new Set(channels.value.map((item) => String(item.id || item.channelId || '')).filter(Boolean)),
+      )
     } catch (e) {
       console.error('[ChannelStore] loadChannels failed:', e)
       channelDiag('loadChannels failed', {
@@ -689,6 +715,58 @@ export const useChannelStore = defineStore('channel', () => {
     }
   }
 
+  async function purgeInvalidChannelAndConversation(channelId: string, reason: string) {
+    const id = String(channelId || '').trim()
+    if (!id || !activeUid) return
+    channelDiag('purge invalid channel conversation', { channelId: id, reason })
+
+    await removeChannel(activeUid, id)
+
+    const { useChatStore } = await import('@/stores/useChatStore')
+    const chatStore = useChatStore()
+    const convId = `2_${id}`
+    const wasCurrent = chatStore.currentConversationId === convId
+    await chatStore.deleteConversation(activeUid, convId).catch((e) => {
+      console.warn('[ChannelStore] delete invalid channel conversation failed:', { channelId: id, reason, e })
+    })
+
+    if (wasCurrent) {
+      const { useUIStore } = await import('@/stores/useUIStore')
+      const uiStore = useUIStore()
+      uiStore.setRightPanel('none')
+      uiStore.setDetailView('none')
+    }
+  }
+
+  async function refreshOrphanChannelConversations(uid: string, activeChannelIds: Set<string>) {
+    if (!uid) return
+    const { useChatStore, ConversationType } = await import('@/stores/useChatStore')
+    const chatStore = useChatStore()
+    const orphanIds = Array.from(new Set(
+      chatStore.conversations
+        .filter((conv) => {
+          if (conv.type !== ConversationType.Channel) return false
+          const channelId = String(conv.targetId || '').trim()
+          if (!channelId || !isValidChannelId(channelId)) return false
+          if (activeChannelIds.has(channelId)) return false
+          return !isChannelRemoved(channelId, uid)
+        })
+        .map((conv) => String(conv.targetId || '').trim()),
+    ))
+    if (orphanIds.length === 0) return
+
+    channelDiag('refresh orphan channel conversations start', {
+      uid,
+      count: orphanIds.length,
+      sampleIds: orphanIds.slice(0, 10),
+    })
+
+    for (const channelId of orphanIds) {
+      // 对齐旧 im deleteChat：不在成员列表里的频道会话，以详情接口为准决定是否删除。
+      await requestChannelDetail(channelId).catch(() => null)
+    }
+  }
+
   async function refreshChannelDetail(channelId: string | number): Promise<Channel | null> {
     const id = String(channelId || '').trim()
     if (!id) return null
@@ -716,6 +794,16 @@ export const useChannelStore = defineStore('channel', () => {
     if (code !== 200 && code !== 0) {
       if (isAuthSessionExpiredResponse(resp)) {
         void handleAuthSessionExpired('channel-detail', resp?.msg || '登录已过期，请重新登录')
+        throw new Error(resp?.msg || 'channel detail request failed')
+      }
+      if (isChannelExpiredOrInvalidResponse(resp)) {
+        channelDiag('detail says channel invalid/expired, remove', {
+          channelId: id,
+          code,
+          msg: resp?.msg || '',
+        })
+        await purgeInvalidChannelAndConversation(id, 'detail-invalid')
+        return null
       }
       throw new Error(resp?.msg || 'channel detail request failed')
     }
@@ -733,13 +821,7 @@ export const useChannelStore = defineStore('channel', () => {
       })
       // 对齐旧 im `deleteChat`：频道详情判定为非成员（未加入/已退出/被移出）时，
       // 私密频道仍同步删除会话；公开频道保留会话并在输入区展示“加入频道”。
-      await removeChannel(activeUid, id)
-      if (activeUid) {
-        const { useChatStore } = await import('@/stores/useChatStore')
-        await useChatStore().deleteConversation(activeUid, `2_${id}`).catch((e) => {
-          console.warn('[ChannelStore] delete channel conversation after non-member detail failed:', e)
-        })
-      }
+      await purgeInvalidChannelAndConversation(id, 'non-member-private')
       return null
     }
 
@@ -808,12 +890,18 @@ export const useChannelStore = defineStore('channel', () => {
         })
         return detail
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
         console.error('[ChannelStore] ensureChannelDetailReady failed:', e)
+        if (isChannelExpiredOrInvalidText(message)) {
+          await purgeInvalidChannelAndConversation(id, 'detail-error')
+          setChannelDetailStatus(id, 'ready')
+          return null
+        }
         setChannelDetailStatus(id, 'error')
         channelDiag('detail ensure failed', {
           channelId: id,
           durationMs: Date.now() - startedAt,
-          message: e instanceof Error ? e.message : String(e),
+          message,
         }, 'error')
         return getChannel(id) || null
       } finally {

@@ -12,9 +12,8 @@ export function resolveChannelAvatarBackground(
   id: string | number | null | undefined,
   logoColor?: string | null,
 ): string {
-  const normalizedColor = String(logoColor || '').trim()
-  if (normalizedColor) return normalizedColor
-  return legacyGradientByChannelId(id) || '#3369fe'
+  // 对齐旧 im text-avatar 与 TextAvatar：文字头像颜色优先按 channelId 取渐变，logoColor 仅作兜底。
+  return legacyGradientByChannelId(id) || String(logoColor || '').trim() || '#3369fe'
 }
 
 export function legacyGradientByChannelId(id: string | number | null | undefined): string | null {

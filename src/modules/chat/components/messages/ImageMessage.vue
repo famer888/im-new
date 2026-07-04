@@ -16,6 +16,12 @@ import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   message: Message
+  /** 多图子格下载限流：对齐旧 im，最多 3 个并发下载。 */
+  acquireDownloadSlot?: () => Promise<() => void>
+}>()
+
+const emit = defineEmits<{
+  'transfer-attempt': [payload: { started: boolean }]
 }>()
 
 const authStore = useAuthStore()
@@ -27,6 +33,9 @@ const naturalImageWidth = ref(0)
 const naturalImageHeight = ref(0)
 const dynamicImageHeadKeyFallbackStarted = ref(false)
 const invalidLocalCacheRedownloadStarted = ref(false)
+const imgErrorDownloadRetryStarted = ref(false)
+const thumbnailDownloadFallbackUsed = ref(false)
+let releaseDownloadSlot: (() => void) | null = null
 let downloadToken = 0
 let materializeToken = 0
 let plainRemoteCacheToken = 0
@@ -485,6 +494,14 @@ const fileKey = computed(() =>
   ).trim(),
 )
 const attachmentKey = computed(() => readMessageAttachmentKey(extraData.value))
+const isDecryptPending = computed(() => Boolean(extraData.value.decryptPending))
+const mediaSlotIndex = computed(() => {
+  const raw = extraData.value.mediaSlotIndex
+  if (raw === undefined || raw === null || raw === '') return -1
+  const index = Number(raw)
+  return Number.isFinite(index) ? index : -1
+})
+const isMediaCaptionSlot = computed(() => mediaSlotIndex.value >= 0)
 const groupId = computed(() => {
   const extraGroupId = String(extraData.value.groupId || '').trim()
   if (extraGroupId) return extraGroupId
@@ -581,6 +598,43 @@ function applyStoredLocalImagePath(): boolean {
   })
   markLoadedIfImageAlreadyComplete()
   return true
+}
+
+function shouldBlockDownloadForActiveRemoteSrc(): boolean {
+  if (!activeSrc.value || loadError.value) return false
+  if (messageRequiresDecryptDownload(props.message) && isRemoteImageSrc(activeSrc.value)) {
+    return false
+  }
+  return true
+}
+
+function resolveDownloadTargetUrl(options: { preferThumbnail?: boolean } = {}): string {
+  const original = imageData.value.url
+  const thumbnail = imageData.value.thumbnailUrl
+  if (options.preferThumbnail && isMediaCaptionSlot.value && isRemoteImageSrc(thumbnail)) {
+    return thumbnail
+  }
+  if (isRemoteImageSrc(original)) return original
+  if (isRemoteImageSrc(thumbnail)) return thumbnail
+  return ''
+}
+
+async function holdDownloadSlot(): Promise<boolean> {
+  if (!props.acquireDownloadSlot) return true
+  if (releaseDownloadSlot) return true
+  try {
+    releaseDownloadSlot = await props.acquireDownloadSlot()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function releaseHeldDownloadSlot() {
+  if (!releaseDownloadSlot) return
+  const release = releaseDownloadSlot
+  releaseDownloadSlot = null
+  release()
 }
 
 function tryRestoreKnownImageDisplay(): boolean {
@@ -702,7 +756,17 @@ function resetImageDisplayState() {
   invalidLocalCacheRedownloadStarted.value = false
 }
 
-watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
+watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, attachmentKey, isDecryptPending, isOwnSingleImageUploadPlaceholder, shouldUseLocalPreview], () => {
+  if (isDecryptPending.value) {
+    cleanupDownloadEvents()
+    loadError.value = false
+    isLoaded.value = false
+    if (isRemoteImageSrc(activeSrc.value)) {
+      activeSrc.value = ''
+    }
+    return
+  }
+
   if (tryRestoreKnownImageDisplay()) return
 
   const willDownload = (fileKey.value || attachmentKey.value)
@@ -789,6 +853,12 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
       activeSrcHead: shortLogValue(activeSrc.value),
     })
     markLoadedIfImageAlreadyComplete()
+    return
+  }
+  if (messageRequiresDecryptDownload(props.message)) {
+    // 需解密的远端缩略图不能直接挂到 img，否则会先报错再阻塞后续下载。
+    isLoaded.value = false
+    loadError.value = false
     return
   }
   activeSrc.value = thumbnailUrl.value
@@ -948,6 +1018,19 @@ async function handleError() {
   if (await retryStaleImageRestoreBeforeFail()) return
   const originalUrl = imageData.value.url
   if (!fileKey.value && !attachmentKey.value && retryDynamicImageWithHeadKey('img-error')) return
+  if (
+    !imgErrorDownloadRetryStarted.value
+    && (fileKey.value || attachmentKey.value)
+    && resolveDownloadTargetUrl()
+  ) {
+    // 对齐旧 im image-error：img 解码失败后再走一次下载解密，避免多图并发时偶发失败直接定格。
+    imgErrorDownloadRetryStarted.value = true
+    activeSrc.value = ''
+    loadError.value = false
+    isLoaded.value = false
+    await downloadAndDecryptImage({ ignoreCache: true })
+    return
+  }
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
     channelImageLog('img error: fallback to original url', {
       activeSrcHead: shortLogValue(activeSrc.value),
@@ -1039,6 +1122,7 @@ async function openWithDefaultApp() {
 function cleanupDownloadEvents() {
   stopDownloadEvents.forEach(stop => stop())
   stopDownloadEvents = []
+  releaseHeldDownloadSlot()
 }
 
 function cleanupPlainRemoteCacheEvents() {
@@ -1292,11 +1376,12 @@ async function resolveFileKey(): Promise<string> {
   return ''
 }
 
-async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) {
+async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferThumbnail?: boolean } = {}) {
   if (isOwnSingleImageUploadPlaceholder.value) return
+  if (isDecryptPending.value) return
   if (!options.ignoreCache && tryRestoreKnownImageDisplay()) return
-  if (activeSrc.value && !loadError.value) return
-  const url = downloadUrl.value
+  if (shouldBlockDownloadForActiveRemoteSrc()) return
+  const url = resolveDownloadTargetUrl({ preferThumbnail: options.preferThumbnail })
   const key = await resolveFileKey()
   if (!url || !key) {
     channelImageLog('download skipped: missing url or key', {
@@ -1310,11 +1395,17 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
     if (url && retryDynamicImageWithHeadKey('missing-key')) return
     loadError.value = true
     isLoaded.value = true
+    emit('transfer-attempt', { started: false })
     return
   }
 
   const token = ++downloadToken
   cleanupDownloadEvents()
+  if (!(await holdDownloadSlot())) {
+    emit('transfer-attempt', { started: false })
+    return
+  }
+  emit('transfer-attempt', { started: true })
 
   try {
     const [{ invoke }, { appDataDir, join }, { listen }] = await Promise.all([
@@ -1350,6 +1441,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
       })
       persistImageLocalPath(savePath)
       markLoadedIfImageAlreadyComplete()
+      releaseHeldDownloadSlot()
       return
     }
     if (!hasCachedFile) {
@@ -1413,6 +1505,20 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
         savePathHead: shortLogValue(savePath),
         fileKeyLen: key.length,
       }, 'error')
+      if (
+        !options.preferThumbnail
+        && !thumbnailDownloadFallbackUsed.value
+        && isMediaCaptionSlot.value
+        && isRemoteImageSrc(imageData.value.thumbnailUrl)
+        && imageData.value.thumbnailUrl !== imageData.value.url
+      ) {
+        thumbnailDownloadFallbackUsed.value = true
+        activeSrc.value = ''
+        loadError.value = false
+        isLoaded.value = false
+        void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: true })
+        return
+      }
       if (retryDynamicImageWithHeadKey('download-error')) return
       loadError.value = true
       isLoaded.value = true
@@ -1441,9 +1547,24 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean } = {}) 
       fileKeyLen: key.length,
       err: String(error),
     }, 'error')
+    if (
+      !options.preferThumbnail
+      && !thumbnailDownloadFallbackUsed.value
+      && isMediaCaptionSlot.value
+      && isRemoteImageSrc(imageData.value.thumbnailUrl)
+      && imageData.value.thumbnailUrl !== imageData.value.url
+    ) {
+      thumbnailDownloadFallbackUsed.value = true
+      activeSrc.value = ''
+      loadError.value = false
+      isLoaded.value = false
+      void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: true })
+      return
+    }
     if (retryDynamicImageWithHeadKey('download-throw')) return
     loadError.value = true
     isLoaded.value = true
+    releaseHeldDownloadSlot()
   }
 }
 
@@ -1847,6 +1968,7 @@ onBeforeUnmount(() => {
       persistImageLocalPath(localFilePath.value)
     }
   }
+  releaseHeldDownloadSlot()
   downloadToken += 1
   materializeToken += 1
   plainRemoteCacheToken += 1

@@ -2,8 +2,11 @@
 import { computed, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { MessageType } from '@/types'
-import ImageMessage from './ImageMessage.vue'
+import { createFifoConcurrencyQueue } from '@/utils/fifoConcurrencyQueue'
+import MediasCaptionCell from './MediasCaptionCell.vue'
 import VideoMessage from './VideoMessage.vue'
+
+const mediaDownloadQueue = createFifoConcurrencyQueue(3)
 
 const props = defineProps<{
   message: Message
@@ -215,6 +218,10 @@ const mediaItems = computed(() => parsed.value.items)
 const captionText = computed(() => parsed.value.caption)
 const gridColumnCount = computed(() => Math.max(1, Math.min(3, mediaItems.value.length || 1)))
 
+function waitMediaDownloadSlot() {
+  return mediaDownloadQueue.acquire()
+}
+
 watch(
   () => [
     props.message.id,
@@ -268,7 +275,7 @@ watch(
         class="media-cell"
       >
         <VideoMessage v-if="item.msgType === MessageType.Video" :message="item" />
-        <ImageMessage v-else :message="item" />
+        <MediasCaptionCell v-else :item="item" :acquire-download-slot="waitMediaDownloadSlot" />
       </div>
     </div>
     <div v-if="captionText" class="caption-text">{{ captionText }}</div>

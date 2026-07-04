@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/useAuthStore'
 import Toast from '@/components/Toast.vue'
-import { uploadPackagedLog } from '@/utils/logUpload'
+import { formatLogUploadAddress, formatLogUploadCopyText, uploadPackagedLog } from '@/utils/logUpload'
+import { writeClipboardText } from '@/utils/clipboard'
 import closeIcon from '@/assets/images/common/close-icon.png'
 
 const props = defineProps<{
@@ -30,6 +31,10 @@ const uploadButtonText = computed(() => {
   return `${t('上传中')} ${percent.value}%`
 })
 
+const uploadAddressText = computed(() => formatLogUploadAddress(filepath.value))
+
+const uploadCopyText = computed(() => formatLogUploadCopyText(uploadAddressText.value, t('上传地址：')))
+
 watch(
   () => props.visible,
   (visible) => {
@@ -53,33 +58,15 @@ function close() {
   emit('update:visible', false)
 }
 
-async function copyTextToClipboard(text: string) {
-  if ((window as any).__TAURI_INTERNALS__) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('write_clipboard_text', { text })
-      return
-    } catch {
-      /* fallback below */
-    }
+async function handleCopyResult() {
+  if (!uploadAddressText.value) return
+  try {
+    // 复制内容与界面展示完全一致（含「上传地址：」前缀 + logs 路径）。
+    await writeClipboardText(uploadCopyText.value)
+    showToast(t('已复制到剪贴板'))
+  } catch {
+    showToast(t('复制失败'), 'error')
   }
-
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', 'readonly')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  const copied = document.execCommand('copy')
-  document.body.removeChild(textarea)
-  if (!copied) throw new Error('copy command failed')
 }
 
 async function handleUpload() {
@@ -109,15 +96,6 @@ async function handleUpload() {
 
   filepath.value = res.filepath
 }
-
-async function handleCopyResult() {
-  try {
-    await copyTextToClipboard(`上传地址：${filepath.value || ''}`)
-    showToast(t('已复制到剪贴板'))
-  } catch {
-    showToast(t('复制失败'), 'error')
-  }
-}
 </script>
 
 <template>
@@ -135,7 +113,7 @@ async function handleCopyResult() {
       <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
 
       <div class="result">
-        <p><span>{{ t('上传地址：') }}</span>{{ filepath }}</p>
+        <p><span>{{ t('上传地址：') }}</span>{{ uploadAddressText }}</p>
       </div>
 
       <div class="action-bar">

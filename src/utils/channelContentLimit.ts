@@ -50,6 +50,7 @@ export function logChannelContentLimitDebug(
   source: string,
   rawApiData?: Record<string, unknown> | null,
 ) {
+  if (!import.meta.env.DEV) return
   const id = String(channelId || '').trim()
   if (!id) return
 
