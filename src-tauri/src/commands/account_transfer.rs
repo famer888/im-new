@@ -130,7 +130,7 @@ fn export_history_value(conn: &Connection) -> Result<Value, DbError> {
     Ok(Value::Object(history))
 }
 
-fn import_history_value(
+pub fn import_history_value(
     conn: &Connection,
     uid: &str,
     history_obj: &Map<String, Value>,

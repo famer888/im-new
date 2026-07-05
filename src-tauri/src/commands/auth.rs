@@ -356,6 +356,17 @@ pub async fn login(
             release_active_login_lock(&app, Some(uid));
             return Err(err.to_string());
         }
+
+        if let Err(err) = crate::commands::legacy_migration::migrate_legacy_desktop_data_for_uid(
+            &app,
+            &db,
+            uid,
+        ) {
+            warn!(
+                "[legacy-migration] login-time migration failed uid={}: {}",
+                uid, err
+            );
+        }
     }
 
     win_mgr.switch_to_main(&app).map_err(|e| e.to_string())?;
