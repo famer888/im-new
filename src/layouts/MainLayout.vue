@@ -1087,6 +1087,7 @@ function handleGlobalInviteInvited(payload?: { message?: string; type?: 'success
 }
 
 function messageSupportsCopy(msgType: unknown): boolean {
+  if (isCurrentChannelContentSaveRestricted()) return false
   const t = Number(msgType)
   // 对齐旧 im：50/51/52 是服务端下发的文本类通知，仍按文本消息允许右键复制。
   return LEGACY_TEXT_COPY_MESSAGE_TYPES.has(t)
@@ -2858,6 +2859,7 @@ const contextMenuItems = computed((): MenuItem[] => {
     const items: MenuItem[] = []
     const readBurnOnlyDelete = isReadBurnMessage(data)
     const isGroupIntroNoticeMenu = Boolean(data.isGroupIntroNotice)
+    const channelCopyForwardRestricted = isCurrentChannelContentSaveRestricted()
     const supportsTextCopy = messageSupportsCopy(data.msgType)
     const supportsImageCopy = messageSupportsImageCopy(data)
     const supportsVideoCopy = messageSupportsVideoCopy(data)
@@ -2889,7 +2891,7 @@ const contextMenuItems = computed((): MenuItem[] => {
       if (data.isSelf === true && hasCurrentChannelReplyAuthority()) {
         items.push({ key: 'reply', label: t('回复'), iconSrc: menuReply })
       }
-      if (!isGroupIntroNoticeMenu) {
+      if (!isGroupIntroNoticeMenu && !channelCopyForwardRestricted) {
         items.push({ key: 'forward', label: t('转发'), iconSrc: menuForward })
       }
     }
@@ -2959,7 +2961,14 @@ async function handleContextMenuSelect(key: string) {
     }
     if (
       isCurrentChannelContentSaveRestricted()
-      && (key === 'copy' || key === 'save_as' || key === 'open_directory')
+      && (key === 'copy' || key === 'forward')
+    ) {
+      showToast(t('频道已限制保存内容'), 'error')
+      return
+    }
+    if (
+      isCurrentChannelContentSaveRestricted()
+      && (key === 'save_as' || key === 'open_directory')
       && (messageSupportsImageCopy(data) || messageSupportsImageSave(data) || messageSupportsVideoFileActions(data) || messageSupportsFileActions(data))
     ) {
       showToast(t('频道已限制保存内容'), 'error')

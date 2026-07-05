@@ -20,6 +20,7 @@ import { API_CONFIG } from '@/api/config'
 import { formatLastActiveText } from '@/utils/userOnlineStatus'
 import { ConversationType } from '@/types'
 import { filterSensitiveWords } from '@/utils/sensitiveWords'
+import { isCurrentChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import TextAvatar from '@/components/TextAvatar.vue'
 import Toast from '@/components/Toast.vue'
 import fileHelperIcon from '@/assets/images/message/cszs-icon.png'
@@ -64,9 +65,10 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
 const selectedCount = computed(() => uiStore.selectedMessageIds.size)
 const allSelf = computed(() => uiStore.selectedMessageItems.every(item => item.isSelf))
 const isFriendConv = computed(() => conversation.value?.type === ConversationType.Friend)
+const showBatchForward = computed(() => !isCurrentChannelContentSaveRestricted())
 
 function handleBatchForward() {
-  if (selectedCount.value === 0) return
+  if (!showBatchForward.value || selectedCount.value === 0) return
   const firstId = [...uiStore.selectedMessageIds][0]
   uiStore.openForwardDialog(firstId)
 }
@@ -376,7 +378,7 @@ watch(
   <div class="chat-header">
     <!-- Selection mode toolbar overlay (matches im top.vue) -->
     <section v-if="uiStore.selectionMode" class="selected-toolbar">
-      <span @click="handleBatchForward">{{ t('操作数量', { action: t('转发'), count: selectedCount }) }}</span>
+      <span v-if="showBatchForward" @click="handleBatchForward">{{ t('操作数量', { action: t('转发'), count: selectedCount }) }}</span>
       <span @click="handleBatchDeleteLocal">{{ t('操作数量', { action: t('删除'), count: selectedCount }) }}</span>
       <span v-if="allSelf" @click="handleBatchDeleteForAll">
         {{ t('操作数量', { action: isFriendConv ? t('为双方删除') : t('为所有人删除'), count: selectedCount }) }}
