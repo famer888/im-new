@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getChannelDetail, getChannelList, type ChannelListItem } from '@/api/imChannel'
 import {
   handleAuthSessionExpired,
@@ -207,10 +207,6 @@ export const useChannelStore = defineStore('channel', () => {
     return Number(item.memberType) >= 0
   }
 
-  function isConfirmedJoinedChannel(item: Channel): boolean {
-    return item.memberType !== null && Number(item.memberType) > 0
-  }
-
   function isPublicChannel(item: any): boolean {
     const rawLinkType = item?.linkType ?? item?.link_type
     if (rawLinkType === undefined || rawLinkType === null || rawLinkType === '') return true
@@ -302,6 +298,24 @@ export const useChannelStore = defineStore('channel', () => {
     const displayName = getChannelDisplayName(channel)
     return !displayName || displayName === id
   }
+
+  /** 通讯录只展示有效成员频道；占位（仅 ID）或已失效成员关系的不展示。 */
+  function isChannelVisibleInAddressBook(channel: Channel | null | undefined, uid = activeUid): boolean {
+    const id = String(channel?.id || channel?.channelId || '').trim()
+    if (!id || !isValidChannelId(id) || isChannelRemoved(id, uid)) return false
+    if (isPlaceholderChannel(channel)) return false
+    const memberType = channel?.memberType
+    // 对齐旧 im channel-notice：!memberType || memberType < 0 视为失效/非成员。
+    if (memberType !== null && memberType !== undefined) {
+      const mt = Number(memberType)
+      if (!Number.isFinite(mt) || mt <= 0) return false
+    }
+    return true
+  }
+
+  const addressBookChannels = computed(() =>
+    channels.value.filter((item) => isChannelVisibleInAddressBook(item, activeUid)),
+  )
 
   function mergeChannelRecord(prev: Channel | undefined, next: Channel): Channel {
     if (!prev) return next
@@ -448,6 +462,7 @@ export const useChannelStore = defineStore('channel', () => {
         uid,
         new Set(channels.value.map((item) => String(item.id || item.channelId || '')).filter(Boolean)),
       )
+      channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
     } catch (e) {
       console.error('[ChannelStore] loadChannels failed:', e)
       channelDiag('loadChannels failed', {
@@ -457,6 +472,7 @@ export const useChannelStore = defineStore('channel', () => {
     } finally {
       channelDiag('loadChannels final', {
         count: channels.value.length,
+        addressBookCount: addressBookChannels.value.length,
         placeholderCount: channels.value.filter(isPlaceholderChannel).length,
         sampleIds: channels.value.slice(0, 5).map((item) => item.id),
         durationMs: Date.now() - startedAt,
@@ -500,6 +516,25 @@ export const useChannelStore = defineStore('channel', () => {
       remainingPlaceholderCount: channels.value.filter(isPlaceholderChannel).length,
       durationMs: Date.now() - startedAt,
     })
+    await pruneUnresolvedPlaceholderChannels(uid)
+  }
+
+  async function pruneUnresolvedPlaceholderChannels(uid = activeUid, reason = 'placeholder-unresolved') {
+    if (!uid) return
+    const unresolvedIds = channels.value
+      .filter((item) => isPlaceholderChannel(item))
+      .map((item) => String(item.id || item.channelId || '').trim())
+      .filter((id) => id && !isChannelRemoved(id, uid))
+    if (unresolvedIds.length === 0) return
+    channelDiag('prune unresolved placeholder channels', {
+      uid,
+      count: unresolvedIds.length,
+      sampleIds: unresolvedIds.slice(0, 10),
+      reason,
+    })
+    for (const id of unresolvedIds) {
+      await purgeInvalidChannelAndConversation(id, reason)
+    }
   }
 
   async function loadChannelsViaApi(
@@ -571,14 +606,17 @@ export const useChannelStore = defineStore('channel', () => {
     if (apiSucceeded) {
       const apiChannels = filterRemovedChannels(allChannels, uid)
       const apiIds = new Set(apiChannels.map((item) => String(item.id || item.channelId || '')))
-      const trustedSeedChannels = [
-        ...(seed?.conversationChannels || []),
-        ...(seed?.localChannels || []),
-      ].filter((item) => {
+      const seedChannels = filterRemovedChannels(mergeChannelsById(
+        seed?.conversationChannels || [],
+        seed?.localChannels || [],
+      ), uid)
+      // 对齐旧 im 通讯录 channelList：远端成功时以成员列表为准，不把会话里残留的占位 ID 混进通讯录。
+      const trustedSeedChannels = seedChannels.filter((item) => {
         const id = String(item.id || item.channelId || '')
-        return apiIds.has(id) || isConfirmedJoinedChannel(item)
+        if (!id || isPlaceholderChannel(item)) return false
+        if (apiIds.has(id)) return true
+        return item.memberType !== null && Number(item.memberType) > 0
       })
-      // 远端列表成功时以远端成员关系为准；只保留实时加入确认过的本地兜底，避免旧缓存把邀请/通知频道混进通讯录。
       const nextChannels = filterRemovedChannels(mergeChannelsById(
         trustedSeedChannels,
         apiChannels,
@@ -590,12 +628,20 @@ export const useChannelStore = defineStore('channel', () => {
         trustedSeedCount: trustedSeedChannels.length,
         seedConversationCount: seed?.conversationChannels?.length || 0,
         seedLocalCount: seed?.localChannels?.length || 0,
+        keptSeedOnly: apiChannels.length === 0 && trustedSeedChannels.length > 0,
         placeholderCount: nextChannels.filter(isPlaceholderChannel).length,
         durationMs: Date.now() - startedAt,
       })
-      channels.value = nextChannels
-      await hydratePlaceholderChannels(uid)
-      await saveChannelsToLocal(uid, channels.value)
+      if (nextChannels.length > 0) {
+        channels.value = nextChannels
+        await hydratePlaceholderChannels(uid)
+        channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
+        await saveChannelsToLocal(uid, channels.value)
+      } else if (trustedSeedChannels.length > 0) {
+        channels.value = trustedSeedChannels
+        await hydratePlaceholderChannels(uid)
+        channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
+      }
       return
     }
 
@@ -608,7 +654,8 @@ export const useChannelStore = defineStore('channel', () => {
     if (mergedChannels.length > 0) {
       channels.value = mergedChannels
       await hydratePlaceholderChannels(uid)
-      await saveChannelsToLocal(uid, mergedChannels)
+      channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
+      await saveChannelsToLocal(uid, channels.value)
       channelDiag('API failed, using merged fallback', {
         count: mergedChannels.length,
         placeholderCount: mergedChannels.filter(isPlaceholderChannel).length,
@@ -621,6 +668,7 @@ export const useChannelStore = defineStore('channel', () => {
     const fallbackChannels = seed?.conversationChannels || (await loadChannelsFromConversationCache(uid))
     channels.value = filterRemovedChannels(fallbackChannels, uid)
     await hydratePlaceholderChannels(uid)
+    channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
     channelDiag('API empty, using conversation fallback', {
       count: channels.value.length,
       placeholderCount: channels.value.filter(isPlaceholderChannel).length,
@@ -634,11 +682,12 @@ export const useChannelStore = defineStore('channel', () => {
   async function saveChannelsToLocal(uid: string, list: Channel[]) {
     if (!isTauri()) return
 
+    const persistable = list.filter((item) => isChannelVisibleInAddressBook(item, uid))
     const startedAt = Date.now()
     try {
       await tauriInvoke('save_channels', {
         uid,
-        channels: list.map((item) => ({
+        channels: persistable.map((item) => ({
           id: item.id,
           name: item.channelName || item.name || item.id,
           avatar: item.avatar || item.icon || null,
@@ -649,7 +698,7 @@ export const useChannelStore = defineStore('channel', () => {
       })
       channelDiag('save channels local done', {
         uid,
-        count: list.length,
+        count: persistable.length,
         placeholderCount: list.filter(isPlaceholderChannel).length,
         durationMs: Date.now() - startedAt,
       })
@@ -814,6 +863,14 @@ export const useChannelStore = defineStore('channel', () => {
     const detailData = resp.data as any
     const rawMemberType = detailData.memberType ?? detailData.member_type
     const hasMemberType = rawMemberType !== undefined && rawMemberType !== null && rawMemberType !== ''
+    if (hasMemberType && Number(rawMemberType) < 0) {
+      channelDiag('detail says channel expired, remove', {
+        channelId: id,
+        rawMemberType,
+      })
+      await purgeInvalidChannelAndConversation(id, 'detail-expired')
+      return null
+    }
     if (hasMemberType && Number(rawMemberType) <= 0 && !isPublicChannel(detailData)) {
       channelDiag('detail says non-member private channel, remove', {
         channelId: id,
@@ -897,6 +954,11 @@ export const useChannelStore = defineStore('channel', () => {
           setChannelDetailStatus(id, 'ready')
           return null
         }
+        if (isPlaceholderChannel(getChannel(id))) {
+          await purgeInvalidChannelAndConversation(id, 'detail-error-placeholder')
+          setChannelDetailStatus(id, 'ready')
+          return null
+        }
         setChannelDetailStatus(id, 'error')
         channelDiag('detail ensure failed', {
           channelId: id,
@@ -915,6 +977,7 @@ export const useChannelStore = defineStore('channel', () => {
 
   return {
     channels,
+    addressBookChannels,
     loading,
     detailStatusById,
     loadChannels,
@@ -926,5 +989,6 @@ export const useChannelStore = defineStore('channel', () => {
     refreshChannelDetail,
     ensureChannelDetailReady,
     hydratePlaceholderChannels,
+    isChannelVisibleInAddressBook,
   }
 })

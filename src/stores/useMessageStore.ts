@@ -171,6 +171,9 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
   }
 
   if (!sessionId) {
+    if ((window as any).__TAURI_INTERNALS__) {
+      sessionId = String(authStore.session?.sessionId || '').trim()
+    } else {
     try {
       const currentUid = localStorage.getItem('current-uid') || ''
       uid = uid || String(currentUid || '').trim()
@@ -182,6 +185,7 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
       }
     } catch {
       // ignore parse errors
+    }
     }
   }
 
@@ -297,7 +301,11 @@ function getLogoutClearedHistoryAt(uid: string): number {
 }
 
 function getCurrentUidForUnread(): string {
-  return String(useAuthStore().uid || localStorage.getItem('current-uid') || '').trim()
+  const currentUid = String(useAuthStore().uid || '').trim()
+  if (!currentUid && !(window as any).__TAURI_INTERNALS__) {
+    return String(localStorage.getItem('current-uid') || '').trim()
+  }
+  return currentUid
 }
 
 function parseExtraObject(rawExtra: unknown): Record<string, unknown> | null {

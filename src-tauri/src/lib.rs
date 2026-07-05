@@ -123,6 +123,7 @@ pub fn run() {
             commands::auth::logout,
             commands::auth::get_session,
             commands::auth::ensure_can_login_on_this_machine,
+            commands::auth::has_foreign_active_login,
             commands::chat::get_conversations,
             commands::chat::get_messages,
             commands::chat::send_message,

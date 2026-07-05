@@ -174,58 +174,6 @@ function isMessageRowInViewport(message: Message, container: HTMLElement): boole
   return false
 }
 
-let unreadSyncTimer: ReturnType<typeof setTimeout> | null = null
-function syncDisplayUnreadFromViewport() {
-  if (displayUnreadCount.value <= 0 || unreadBannerDismissed.value) return
-  const container = containerRef.value
-  if (!container) return
-
-  const snapshotMessages = getUnreadSnapshotMessages()
-  if (snapshotMessages.length === 0) return
-
-  const nextSeen = new Set(seenUnreadMessageIds.value)
-  let newSeenCount = 0
-  for (const message of snapshotMessages) {
-    const key = messageTrackingKey(message)
-    if (!key || nextSeen.has(key)) continue
-    if (isMessageRowInViewport(message, container)) {
-      nextSeen.add(key)
-      newSeenCount += 1
-    }
-  }
-
-  if (newSeenCount > 0) {
-    seenUnreadMessageIds.value = nextSeen
-    displayUnreadCount.value = Math.max(0, displayUnreadCount.value - newSeenCount)
-  }
-
-  if (!isAtBottom.value || displayUnreadCount.value <= 0) return
-
-  const divIdx = unreadDividerIndex.value
-  if (divIdx >= 0) {
-    const dividerRow = container.querySelector<HTMLElement>(`.message-row[data-row-key="unread-${divIdx}"]`)
-    if (dividerRow) {
-      const dividerBottom = dividerRow.offsetTop + dividerRow.offsetHeight
-      if (dividerBottom <= container.scrollTop + 8) {
-        displayUnreadCount.value = 0
-      }
-      return
-    }
-  }
-
-  if (snapshotMessages.every((message) => nextSeen.has(messageTrackingKey(message)))) {
-    displayUnreadCount.value = 0
-  }
-}
-
-function scheduleUnreadViewportSync() {
-  if (unreadSyncTimer) clearTimeout(unreadSyncTimer)
-  unreadSyncTimer = setTimeout(() => {
-    unreadSyncTimer = null
-    syncDisplayUnreadFromViewport()
-  }, 100)
-}
-
 /**
  * 对齐旧 im：未读分隔条必须锚到一条真实消息（旧逻辑用 unreadID/unreadMsgID）。
  * 进入会话会立刻 markAsRead，所以这里使用进入时的 ID 快照，不再依赖 message.readStatus。
@@ -387,6 +335,58 @@ let topAutoLoadArmed = true
 let programmaticScrollSeq = 0
 let conversationEnterToken = 0
 const suppressAutoScrollUntil = ref(0)
+
+let unreadSyncTimer: ReturnType<typeof setTimeout> | null = null
+function syncDisplayUnreadFromViewport() {
+  if (displayUnreadCount.value <= 0 || unreadBannerDismissed.value) return
+  const container = containerRef.value
+  if (!container) return
+
+  const snapshotMessages = getUnreadSnapshotMessages()
+  if (snapshotMessages.length === 0) return
+
+  const nextSeen = new Set(seenUnreadMessageIds.value)
+  let newSeenCount = 0
+  for (const message of snapshotMessages) {
+    const key = messageTrackingKey(message)
+    if (!key || nextSeen.has(key)) continue
+    if (isMessageRowInViewport(message, container)) {
+      nextSeen.add(key)
+      newSeenCount += 1
+    }
+  }
+
+  if (newSeenCount > 0) {
+    seenUnreadMessageIds.value = nextSeen
+    displayUnreadCount.value = Math.max(0, displayUnreadCount.value - newSeenCount)
+  }
+
+  if (!isAtBottom.value || displayUnreadCount.value <= 0) return
+
+  const divIdx = unreadDividerIndex.value
+  if (divIdx >= 0) {
+    const dividerRow = container.querySelector<HTMLElement>(`.message-row[data-row-key="unread-${divIdx}"]`)
+    if (dividerRow) {
+      const dividerBottom = dividerRow.offsetTop + dividerRow.offsetHeight
+      if (dividerBottom <= container.scrollTop + 8) {
+        displayUnreadCount.value = 0
+      }
+      return
+    }
+  }
+
+  if (snapshotMessages.every((message) => nextSeen.has(messageTrackingKey(message)))) {
+    displayUnreadCount.value = 0
+  }
+}
+
+function scheduleUnreadViewportSync() {
+  if (unreadSyncTimer) clearTimeout(unreadSyncTimer)
+  unreadSyncTimer = setTimeout(() => {
+    unreadSyncTimer = null
+    syncDisplayUnreadFromViewport()
+  }, 100)
+}
 
 function getBottomScrollTop(el: HTMLElement): number {
   return Math.max(0, el.scrollHeight - el.clientHeight)

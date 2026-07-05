@@ -62,6 +62,41 @@ function showToast(msg: string, type: 'success' | 'error' = 'success') {
   toastVisible.value = true
 }
 
+const conversation = computed(() =>
+  chatStore.conversations.find((c) => c.id === props.conversationId),
+)
+
+const isFileHelper = computed(
+  () => isFileHelperTargetId(conversation.value?.targetId),
+)
+
+const isFriendChat = computed(
+  () => conversation.value?.type === ConversationType.Friend && !isFileHelper.value,
+)
+const isGroupOrChannelChat = computed(
+  () => conversation.value?.type === ConversationType.Group
+    || conversation.value?.type === ConversationType.Channel,
+)
+const isOfficialAccountChat = computed(
+  () => {
+    const conv = conversation.value
+    if (!conv || conv.type !== ConversationType.Friend) return false
+    // 兼容不同包/不同账号数据：官方号既可能是固定 9900，也可能由服务端下发为品牌官方昵称。
+    if (isOfficialAccountTargetId(conv.targetId)) return true
+    const displayName = String(
+      contactStore.getDisplayName(conv.targetId) || conv.senderName || '',
+    ).trim()
+    return displayName === OFFICIAL_ACCOUNT_NAME
+  },
+)
+
+const canOpenHeaderMenu = computed(
+  () => (conversation.value?.type === ConversationType.Friend
+      && !isOfficialAccountChat.value)
+    || conversation.value?.type === ConversationType.Group
+    || conversation.value?.type === ConversationType.Channel,
+)
+
 const selectedCount = computed(() => uiStore.selectedMessageIds.size)
 const allSelf = computed(() => uiStore.selectedMessageItems.every(item => item.isSelf))
 const isFriendConv = computed(() => conversation.value?.type === ConversationType.Friend)
@@ -97,41 +132,6 @@ async function handleBatchDeleteForAll() {
 function handleCancelSelection() {
   uiStore.exitSelectionMode()
 }
-
-const conversation = computed(() =>
-  chatStore.conversations.find((c) => c.id === props.conversationId),
-)
-
-const isFileHelper = computed(
-  () => isFileHelperTargetId(conversation.value?.targetId),
-)
-
-const isFriendChat = computed(
-  () => conversation.value?.type === ConversationType.Friend && !isFileHelper.value,
-)
-const isGroupOrChannelChat = computed(
-  () => conversation.value?.type === ConversationType.Group
-    || conversation.value?.type === ConversationType.Channel,
-)
-const isOfficialAccountChat = computed(
-  () => {
-    const conv = conversation.value
-    if (!conv || conv.type !== ConversationType.Friend) return false
-    // 兼容不同包/不同账号数据：官方号既可能是固定 9900，也可能由服务端下发为品牌官方昵称。
-    if (isOfficialAccountTargetId(conv.targetId)) return true
-    const displayName = String(
-      contactStore.getDisplayName(conv.targetId) || conv.senderName || '',
-    ).trim()
-    return displayName === OFFICIAL_ACCOUNT_NAME
-  },
-)
-
-const canOpenHeaderMenu = computed(
-  () => (conversation.value?.type === ConversationType.Friend
-      && !isOfficialAccountChat.value)
-    || conversation.value?.type === ConversationType.Group
-    || conversation.value?.type === ConversationType.Channel,
-)
 
 const editingRemark = ref(false)
 const remarkDraft = ref('')

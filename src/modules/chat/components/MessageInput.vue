@@ -66,6 +66,17 @@ function sendDiag(message: string, data: Record<string, unknown> = {}, level: 'i
   void data
   void level
 }
+
+function toBool(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return false
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  const text = String(value).trim().toLowerCase()
+  if (text === '0' || text === 'false' || text === 'no') return false
+  if (text === '1' || text === 'true' || text === 'yes') return true
+  return Boolean(value)
+}
+
 const showAtList = ref(false)
 const atKeyword = ref('')
 const atListRef = ref<{ handleKeyboard: (key: string) => void } | null>(null)
@@ -382,16 +393,6 @@ function showToast(message: string, type: 'success' | 'error' = 'success') {
   toastMessage.value = message
   toastType.value = type
   toastVisible.value = true
-}
-
-function toBool(value: unknown): boolean {
-  if (value === undefined || value === null || value === '') return false
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  const text = String(value).trim().toLowerCase()
-  if (text === '0' || text === 'false' || text === 'no') return false
-  if (text === '1' || text === 'true' || text === 'yes') return true
-  return Boolean(value)
 }
 
 function responseOk(resp: { code?: number } | null | undefined): boolean {

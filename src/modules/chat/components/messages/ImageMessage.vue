@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Message } from '@/stores/useMessageStore'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -35,8 +35,11 @@ const dynamicImageHeadKeyFallbackStarted = ref(false)
 const invalidLocalCacheRedownloadStarted = ref(false)
 const imgErrorDownloadRetryStarted = ref(false)
 const thumbnailDownloadFallbackUsed = ref(false)
+const downloadInFlight = ref(false)
+const imageRenderKey = ref(0)
 let releaseDownloadSlot: (() => void) | null = null
 let downloadToken = 0
+let activeDownloadSignature = ''
 let materializeToken = 0
 let plainRemoteCacheToken = 0
 let stopDownloadEvents: Array<() => void> = []
@@ -619,6 +622,16 @@ function resolveDownloadTargetUrl(options: { preferThumbnail?: boolean } = {}): 
   return ''
 }
 
+function buildDownloadSignature(preferThumbnail = false): string {
+  const targetUrl = resolveDownloadTargetUrl({ preferThumbnail })
+  return [
+    targetUrl,
+    fileKey.value,
+    attachmentKey.value,
+    preferThumbnail ? 'thumb' : 'full',
+  ].join('|')
+}
+
 async function holdDownloadSlot(): Promise<boolean> {
   if (!props.acquireDownloadSlot) return true
   if (releaseDownloadSlot) return true
@@ -1004,6 +1017,8 @@ async function retryStaleImageRestoreBeforeFail(): Promise<boolean> {
 
 async function handleError() {
   if (isOwnSingleImageUploadPlaceholder.value) return
+  // 对齐旧 im image-error：下载/解密进行中时不把瞬时 img 错误定格为失败。
+  if (downloadInFlight.value || showImageOverlay.value) return
   if (shouldUseLocalPreview.value && activeSrc.value !== localPreviewSrc.value) {
     // 远端源切换瞬间失败时回到本地预览，不把可恢复错误展示成“图片加载失败”。
     localFilePath.value = localSourcePath.value
@@ -1064,6 +1079,23 @@ async function handleError() {
   }, 'error')
   loadError.value = true
   isLoaded.value = true
+}
+
+function retryImageDisplayAfterRestore() {
+  if (document.hidden) return
+  if (downloadInFlight.value) return
+  const canRetryDownload = Boolean(
+    (fileKey.value || attachmentKey.value) && downloadUrl.value,
+  )
+  if (!loadError.value && activeSrc.value) return
+  if (!loadError.value && !canRetryDownload) return
+  loadError.value = false
+  imgErrorDownloadRetryStarted.value = false
+  invalidLocalCacheRedownloadStarted.value = false
+  if (tryRestoreKnownImageDisplay()) return
+  if (canRetryDownload) {
+    void downloadAndDecryptImage({ ignoreCache: loadError.value })
+  }
 }
 
 async function openPreview() {
@@ -1376,12 +1408,29 @@ async function resolveFileKey(): Promise<string> {
   return ''
 }
 
+function finishDownloadAttempt() {
+  downloadInFlight.value = false
+  activeDownloadSignature = ''
+}
+
 async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferThumbnail?: boolean } = {}) {
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (isDecryptPending.value) return
   if (!options.ignoreCache && tryRestoreKnownImageDisplay()) return
   if (shouldBlockDownloadForActiveRemoteSrc()) return
   const url = resolveDownloadTargetUrl({ preferThumbnail: options.preferThumbnail })
+  const signature = buildDownloadSignature(Boolean(options.preferThumbnail))
+  if (
+    !options.ignoreCache
+    && downloadInFlight.value
+    && signature
+    && signature === activeDownloadSignature
+  ) {
+    channelImageLog('download skipped: same request in flight', {
+      signatureHead: shortLogValue(signature, 180),
+    })
+    return
+  }
   const key = await resolveFileKey()
   if (!url || !key) {
     channelImageLog('download skipped: missing url or key', {
@@ -1406,6 +1455,8 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
     return
   }
   emit('transfer-attempt', { started: true })
+  downloadInFlight.value = true
+  activeDownloadSignature = signature
 
   try {
     const [{ invoke }, { appDataDir, join }, { listen }] = await Promise.all([
@@ -1418,16 +1469,10 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
     const savePath = await getImageSavePath(join, baseDir, id, getImageFileName(url, imageData.value.name))
     localFilePath.value = savePath
     const cachedSrc = toDisplayImageSrc(savePath)
-    if (!options.ignoreCache && cachedSrc) {
-      // 对齐旧 im：本地文件已存在时先直接展示，避免 file_exists 异步期间闪 loading。
-      activeSrc.value = cachedSrc
-      loadError.value = false
-      isLoaded.value = true
-    }
     const hasCachedFile = await invoke<boolean>('file_exists', { path: savePath }).catch(() => false)
     if (token !== downloadToken) return
     if (!options.ignoreCache && hasCachedFile && cachedSrc) {
-      // 历史图片已经解密落盘时直接复用本地文件，避免切换会话后闪回下载蒙层。
+      // 对齐旧 im：确认本地文件存在后再挂 src，避免 file_exists 异步期间 img 误报加载失败。
       channelImageLog('download skipped: cache file exists', {
         savePathHead: shortLogValue(savePath),
         cachedSrcHead: shortLogValue(cachedSrc),
@@ -1435,6 +1480,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       activeSrc.value = cachedSrc
       loadError.value = false
       isLoaded.value = true
+      imageRenderKey.value += 1
       setCachedImage(imageCacheKey.value, {
         src: cachedSrc,
         localFilePath: savePath,
@@ -1442,14 +1488,12 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       persistImageLocalPath(savePath)
       markLoadedIfImageAlreadyComplete()
       releaseHeldDownloadSlot()
+      finishDownloadAttempt()
       return
     }
-    if (!hasCachedFile) {
-      isLoaded.value = false
-      if (!activeSrc.value || activeSrc.value === cachedSrc) {
-        activeSrc.value = ''
-      }
-    }
+    isLoaded.value = false
+    loadError.value = false
+    activeSrc.value = ''
     const doneEvent = `file:done:${id}`
     const errorEvent = `file:error:${id}`
     channelImageLog('download invoke start', {
@@ -1473,6 +1517,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
         }, 'error')
         loadError.value = true
         isLoaded.value = true
+        finishDownloadAttempt()
         return
       }
       channelImageLog('download done', {
@@ -1483,6 +1528,8 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       loadError.value = false
       activeSrc.value = src
       isLoaded.value = true
+      imageRenderKey.value += 1
+      finishDownloadAttempt()
       markLoadedIfImageAlreadyComplete()
       setCachedImage(imageCacheKey.value, {
         src,
@@ -1519,9 +1566,22 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
         void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: true })
         return
       }
-      if (retryDynamicImageWithHeadKey('download-error')) return
+      if (retryDynamicImageWithHeadKey('download-error')) {
+        finishDownloadAttempt()
+        return
+      }
+      if (!imgErrorDownloadRetryStarted.value) {
+        imgErrorDownloadRetryStarted.value = true
+        activeSrc.value = ''
+        loadError.value = false
+        isLoaded.value = false
+        finishDownloadAttempt()
+        void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: options.preferThumbnail })
+        return
+      }
       loadError.value = true
       isLoaded.value = true
+      finishDownloadAttempt()
     })
     stopDownloadEvents = [unlistenDone, unlistenError]
 
@@ -1561,10 +1621,23 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: true })
       return
     }
-    if (retryDynamicImageWithHeadKey('download-throw')) return
+    if (retryDynamicImageWithHeadKey('download-throw')) {
+      finishDownloadAttempt()
+      return
+    }
+    if (!imgErrorDownloadRetryStarted.value) {
+      imgErrorDownloadRetryStarted.value = true
+      activeSrc.value = ''
+      loadError.value = false
+      isLoaded.value = false
+      finishDownloadAttempt()
+      void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: options.preferThumbnail })
+      return
+    }
     loadError.value = true
     isLoaded.value = true
     releaseHeldDownloadSlot()
+    finishDownloadAttempt()
   }
 }
 
@@ -1954,7 +2027,14 @@ function handleImageDragEnd(event: DragEvent) {
   })
 }
 
+onMounted(() => {
+  document.addEventListener('visibilitychange', retryImageDisplayAfterRestore)
+  window.addEventListener('focus', retryImageDisplayAfterRestore)
+})
+
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', retryImageDisplayAfterRestore)
+  window.removeEventListener('focus', retryImageDisplayAfterRestore)
   if (activeSrc.value && !loadError.value) {
     if (!localFilePath.value) {
       const inferredPath = toFsPath(activeSrc.value)
@@ -1968,6 +2048,7 @@ onBeforeUnmount(() => {
       persistImageLocalPath(localFilePath.value)
     }
   }
+  finishDownloadAttempt()
   releaseHeldDownloadSlot()
   downloadToken += 1
   materializeToken += 1
@@ -1992,6 +2073,7 @@ onBeforeUnmount(() => {
       <img
         v-if="activeSrc && !loadError"
         ref="imageElRef"
+        :key="imageRenderKey"
         :src="activeSrc"
         :data-local-path="localFilePath || undefined"
         :draggable="!shouldUseNativeFileDrag"

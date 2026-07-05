@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChannelStore } from '@/stores/useChannelStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -15,12 +15,13 @@ const authStore = useAuthStore()
 const chatStore = useChatStore()
 const uiStore = useUIStore()
 const expanded = ref(true)
+const visibleChannels = computed(() => channelStore.addressBookChannels)
 
 onMounted(() => {
   if (authStore.uid) channelStore.loadChannels(authStore.uid)
 })
 
-function handleSelect(channel: typeof channelStore.channels[0]) {
+function handleSelect(channel: typeof channelStore.addressBookChannels[0]) {
   // 先切会话，详情权限后台补齐，避免点击频道时出现 1-2 秒阻塞。
   void channelStore.ensureChannelDetailReady(channel.id)
   const conv = chatStore.ensureConversation(2, channel.id)
@@ -29,7 +30,7 @@ function handleSelect(channel: typeof channelStore.channels[0]) {
   uiStore.setDetailView('chat')
 }
 
-function getChannelDisplayName(channel: typeof channelStore.channels[0]) {
+function getChannelDisplayName(channel: typeof channelStore.addressBookChannels[0]) {
   return filterSensitiveWords(channel.channelName || channel.name || channel.id || '').replaceAll('🪵', '?')
 }
 </script>
@@ -42,7 +43,7 @@ function getChannelDisplayName(channel: typeof channelStore.channels[0]) {
     </h2>
     <div
       v-if="expanded"
-      v-for="ch in channelStore.channels"
+      v-for="ch in visibleChannels"
       :key="ch.id"
       class="channel-item"
       @click="handleSelect(ch)"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getLastUsedUidHint } from '@/utils/windowSessionScope'
 import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
@@ -296,9 +297,8 @@ function loadLastLoginInfo() {
     if (stored) {
       const list = JSON.parse(stored)
       if (Array.isArray(list) && list.length > 0) {
-        const currentUid = String(localStorage.getItem('current-uid') || '').trim()
-        const preferred = currentUid
-          ? list.find((item: any) => String(item?.id || '').trim() === currentUid)
+        const preferred = getLastUsedUidHint()
+          ? list.find((item: any) => String(item?.id || '').trim() === getLastUsedUidHint())
           : null
         const last = preferred || list[list.length - 1] || {}
         lastLoginInfo.value = {

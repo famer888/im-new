@@ -1402,7 +1402,7 @@ export async function setupTauriListeners() {
       if (!consumeNotificationReplyRequest(requestId, conversationId, content)) return
 
       const authStore = useAuthStore()
-      const uid = String(authStore.uid || localStorage.getItem('current-uid') || '')
+      const uid = String(authStore.uid || '').trim()
       if (!uid) throw new Error('missing uid')
 
       const [convTypeRaw, convTargetId = ''] = conversationId.split('_')

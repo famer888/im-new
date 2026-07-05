@@ -11,9 +11,24 @@ const rootDir = path.resolve(__dirname, '..')
 const PROD_DEFAULT_BRAND_ID = '55'
 
 const BRAND_PRESETS = {
-  45: { packname: '45-im', officialUrl: '45chat.com' },
-  55: { packname: '55-im', officialUrl: '55chat.com' },
-  97: { packname: '97-im', officialUrl: '97chat.com' },
+  45: {
+    packname: '45-im',
+    officialUrl: '45chat.com',
+    secretName: 'da4beccf359c72236b0a5b3baf58bed6',
+    secretKey: '473551ace50e9d94',
+  },
+  55: {
+    packname: '55-im',
+    officialUrl: '55chat.com',
+    secretName: '9da979df2a2bd9bc6cea0ebdc98fde2e',
+    secretKey: 'd170deacb66075a0',
+  },
+  97: {
+    packname: '97-im',
+    officialUrl: '97chat.com',
+    secretName: '26b2e2f2308cd4b80f222d3df669d4df',
+    secretKey: 'ee2068510cf3f273',
+  },
 }
 
 const devScriptByMode = {
@@ -46,6 +61,8 @@ function buildBrandViteEnv(brandId) {
     VITE_APP_BRAND_ID: brandId,
     VITE_APP_PACKNAME: preset.packname,
     VITE_APP_OFFICIAL_URL: preset.officialUrl,
+    VITE_APP_SECRET_NAME: preset.secretName,
+    VITE_APP_SECRET_KEY: preset.secretKey,
   }
 }
 

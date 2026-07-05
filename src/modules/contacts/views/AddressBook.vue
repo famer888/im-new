@@ -30,7 +30,7 @@ let resizeObserver: ResizeObserver | null = null
 
 type ContactItem = (typeof contactStore.contacts)[number]
 type GroupItem = (typeof groupStore.groups)[number]
-type ChannelItem = (typeof channelStore.channels)[number]
+type ChannelItem = (typeof channelStore.addressBookChannels)[number]
 
 type BookRow =
   | { key: string; type: 'section'; section: 'groups' | 'channels'; title: string; expanded: boolean }
@@ -126,10 +126,6 @@ const groupedContacts = computed((): GroupedContacts[] => {
   })
 })
 
-const visibleChannelsInAddressBook = computed(() => (
-  channelStore.channels.filter((channel) => isJoinedChannelForAddressBook(channel))
-))
-
 const bookRows = computed((): BookRow[] => {
   const rows: BookRow[] = [
     {
@@ -156,7 +152,7 @@ const bookRows = computed((): BookRow[] => {
   })
 
   if (channelExpanded.value) {
-    for (const channel of visibleChannelsInAddressBook.value) {
+    for (const channel of channelStore.addressBookChannels) {
       rows.push({ key: `channel-${channel.id}`, type: 'channel', channel })
     }
 
@@ -286,12 +282,6 @@ function getChannelDisplayText(channel: ChannelItem) {
   return filterSensitiveWords(getChannelDisplayName(channel))
 }
 
-function isJoinedChannelForAddressBook(channel: ChannelItem): boolean {
-  const memberType = Number(channel.memberType ?? -1)
-  // 仅把 memberType=0 视为“未加入频道”，其余状态都不按“是否本人创建”过滤。
-  return memberType !== 0
-}
-
 function sanitizeName(value: string | null | undefined) {
   return String(value || '').replaceAll('🪵', '?')
 }
@@ -328,8 +318,8 @@ onMounted(() => {
     if (groupStore.groups.length === 0) {
       void groupStore.loadGroups(uid)
     }
-    if (channelStore.channels.length === 0) {
-      void channelStore.loadChannels(uid, { refreshRemote: false })
+    if (channelStore.addressBookChannels.length === 0) {
+      void channelStore.loadChannels(uid, { refreshRemote: true })
     }
   }
 

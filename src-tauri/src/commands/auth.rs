@@ -279,6 +279,18 @@ fn acquire_active_login_lock(app: &tauri::AppHandle, request: &LoginRequest) -> 
 }
 
 #[tauri::command]
+pub fn has_foreign_active_login(app: tauri::AppHandle) -> Result<bool, String> {
+    cleanup_legacy_active_login_lock(&app);
+
+    let path = active_login_lock_path(&app)?;
+    let locks = read_active_login_locks(&path);
+    let current_pid = std::process::id();
+    Ok(locks.values().any(|active| {
+        active.pid != current_pid && is_process_running(active.pid)
+    }))
+}
+
+#[tauri::command]
 pub async fn ensure_can_login_on_this_machine(app: tauri::AppHandle) -> Result<bool, String> {
     cleanup_legacy_active_login_lock(&app);
 

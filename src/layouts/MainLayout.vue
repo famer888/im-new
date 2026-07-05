@@ -884,7 +884,7 @@ async function confirmInitReset() {
   if (resettingInitData.value) return
   resettingInitData.value = true
 
-  const currentUid = String(authStore.uid || localStorage.getItem('current-uid') || '').trim()
+  const currentUid = String(authStore.uid || '').trim()
   const remainingAccounts = authStore.accounts.filter((item) => item.id !== currentUid)
 
   // 对齐老 im 初始化页：放弃当前账号本地数据后，移除该账号并重启到登录态。

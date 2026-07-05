@@ -75,6 +75,9 @@ export function getSessionIdFromStorage(): string {
   const activeSessionId = getActiveSessionId()
   if (activeSessionId) return activeSessionId
 
+  // 桌面端多开时 localStorage 会在进程间共享，不能用它推断当前窗口账号。
+  if ((window as any).__TAURI_INTERNALS__) return ''
+
   try {
     const currentUid = localStorage.getItem('current-uid') || ''
     const accountListText = localStorage.getItem('login-account-list')

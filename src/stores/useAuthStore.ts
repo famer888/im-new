@@ -7,6 +7,14 @@ import { getOrCreateInstallCode } from '@/utils/installCode'
 import { isProdSafeDomain } from '@/utils/domainSafety'
 import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
 import { scheduleLegacyDesktopMigration } from '@/utils/legacyMigration'
+import {
+  CURRENT_UID_KEY,
+  clearWindowScopedCurrentUid,
+  getLastUsedUidHint,
+  getWindowScopedCurrentUid,
+  setLastUsedUidHint,
+  setWindowScopedCurrentUid,
+} from '@/utils/windowSessionScope'
 
 function isTauri(): boolean {
   return !!(window as any).__TAURI_INTERNALS__
@@ -59,10 +67,24 @@ export const PROCESS_LOCAL_INIT_SESSION_OPTIONS: InitSessionOptions = {
 }
 
 const ACCOUNT_LIST_KEY = 'login-account-list'
-const CURRENT_UID_KEY = 'current-uid'
 const AUTO_LOGIN_KEY = 'auto-login-enabled'
 const LEGACY_WS_CONNECT_KEY = 'ws-connect-config'
 const WS_CONNECT_KEY = `${LEGACY_WS_CONNECT_KEY}:${API_CONFIG.env}:${API_CONFIG.brandId}`
+
+function wsConnectStorageKey(uid?: string): string {
+  const id = String(uid || getWindowScopedCurrentUid() || '').trim()
+  if (isTauri() && id) return `${WS_CONNECT_KEY}:${id}`
+  return WS_CONNECT_KEY
+}
+
+function persistCurrentUid(uid: string) {
+  setWindowScopedCurrentUid(uid)
+  setLastUsedUidHint(uid)
+}
+
+function clearPersistedCurrentUid(uid?: string) {
+  clearWindowScopedCurrentUid(uid)
+}
 
 function normalizeWsUrl(input: string): string {
   const raw = (input || '').trim()
@@ -85,8 +107,13 @@ function resolveCurrentUidForLogout(
   const normalizedSessionUid = String(sessionUid || '').trim()
   if (normalizedSessionUid) return normalizedSessionUid
 
-  const storedUid = String(localStorage.getItem(CURRENT_UID_KEY) || '').trim()
+  const storedUid = getWindowScopedCurrentUid()
   if (storedUid) return storedUid
+
+  if (isTauri()) return ''
+
+  const legacyStoredUid = String(localStorage.getItem(CURRENT_UID_KEY) || '').trim()
+  if (legacyStoredUid) return legacyStoredUid
 
   const accountWithSession = accounts.find((item) => String(item.sessionId || '').trim())
   if (accountWithSession?.id) return String(accountWithSession.id)
@@ -172,49 +199,33 @@ export const useAuthStore = defineStore('auth', () => {
     } catch { /* empty */ }
   }
 
-  function loadWsConnectConfig() {
+  function loadWsConnectConfig(uid?: string) {
     try {
-      const stored = localStorage.getItem(WS_CONNECT_KEY)
-      if (!stored) {
-        const legacyStored = localStorage.getItem(LEGACY_WS_CONNECT_KEY)
-        if (!legacyStored) return
-        const legacyParsed = JSON.parse(legacyStored) as Partial<WsConnectConfig>
-        if (legacyParsed.wsUrl && legacyParsed.aesKey && isWsConnectConfigCompatibleWithEnv(normalizeWsUrl(legacyParsed.wsUrl))) {
+      const storageKeys = [
+        wsConnectStorageKey(uid),
+        WS_CONNECT_KEY,
+        LEGACY_WS_CONNECT_KEY,
+      ]
+      for (const storageKey of [...new Set(storageKeys)]) {
+        const stored = localStorage.getItem(storageKey)
+        if (!stored) continue
+        const parsed = JSON.parse(stored) as Partial<WsConnectConfig>
+        if (parsed.wsUrl && parsed.aesKey && isWsConnectConfigCompatibleWithEnv(normalizeWsUrl(parsed.wsUrl))) {
           wsConnectConfig.value = {
-            wsUrl: normalizeWsUrl(legacyParsed.wsUrl),
-            aesKey: String(legacyParsed.aesKey).trim(),
-            installCode: String(legacyParsed.installCode || '').trim() || getOrCreateInstallCode(),
+            wsUrl: normalizeWsUrl(parsed.wsUrl),
+            aesKey: String(parsed.aesKey).trim(),
+            installCode: String(parsed.installCode || '').trim() || getOrCreateInstallCode(),
           }
-          localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(wsConnectConfig.value))
-          localStorage.removeItem(LEGACY_WS_CONNECT_KEY)
-          authDiag('migrated ws config from legacy key', {
-            storageKey: WS_CONNECT_KEY,
+          authDiag('loaded ws config', {
+            storageKey,
             wsHost: safeUrlHost(wsConnectConfig.value.wsUrl),
             hasAesKey: !!wsConnectConfig.value.aesKey,
           })
-        } else {
-          authDiag('ignored incompatible legacy ws config', {
-            env: API_CONFIG.env,
-            wsUrl: legacyParsed.wsUrl || '',
-          })
+          return
         }
-        return
-      }
-      const parsed = JSON.parse(stored) as Partial<WsConnectConfig>
-      if (parsed.wsUrl && parsed.aesKey && isWsConnectConfigCompatibleWithEnv(normalizeWsUrl(parsed.wsUrl))) {
-        wsConnectConfig.value = {
-          wsUrl: normalizeWsUrl(parsed.wsUrl),
-          aesKey: String(parsed.aesKey).trim(),
-          installCode: String(parsed.installCode || '').trim() || getOrCreateInstallCode(),
-        }
-        authDiag('loaded ws config', {
-          storageKey: WS_CONNECT_KEY,
-          wsHost: safeUrlHost(wsConnectConfig.value.wsUrl),
-          hasAesKey: !!wsConnectConfig.value.aesKey,
-        })
-      } else {
-        localStorage.removeItem(WS_CONNECT_KEY)
+        localStorage.removeItem(storageKey)
         authDiag('removed incompatible ws config', {
+          storageKey,
           env: API_CONFIG.env,
           wsUrl: parsed.wsUrl || '',
         })
@@ -225,15 +236,14 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function saveWsConnectConfig(config: WsConnectConfig) {
+  function saveWsConnectConfig(config: WsConnectConfig, uid?: string) {
     const normalized = {
       wsUrl: normalizeWsUrl(config.wsUrl),
       aesKey: String(config.aesKey || '').trim(),
       installCode: String(config.installCode || '').trim() || getOrCreateInstallCode(),
     }
     if (!isWsConnectConfigCompatibleWithEnv(normalized.wsUrl)) {
-      // 登录接口偶尔会回历史测试 session 地址；生产包丢弃后让消息模块走 webSession 域名池兜底。
-      clearWsConnectConfig()
+      clearWsConnectConfig(uid)
       authDiag('ignored incompatible ws config on save', {
         env: API_CONFIG.env,
         wsHost: safeUrlHost(normalized.wsUrl),
@@ -241,17 +251,22 @@ export const useAuthStore = defineStore('auth', () => {
       return
     }
     wsConnectConfig.value = normalized
-    localStorage.setItem(WS_CONNECT_KEY, JSON.stringify(normalized))
+    const storageKey = wsConnectStorageKey(uid)
+    localStorage.setItem(storageKey, JSON.stringify(normalized))
     authDiag('saved ws config', {
-      storageKey: WS_CONNECT_KEY,
+      storageKey,
       wsHost: safeUrlHost(normalized.wsUrl),
       hasAesKey: !!normalized.aesKey,
     })
   }
 
-  function clearWsConnectConfig() {
+  function clearWsConnectConfig(uid?: string) {
     wsConnectConfig.value = null
-    localStorage.removeItem(WS_CONNECT_KEY)
+    localStorage.removeItem(wsConnectStorageKey(uid))
+    if (!uid) {
+      localStorage.removeItem(WS_CONNECT_KEY)
+      localStorage.removeItem(LEGACY_WS_CONNECT_KEY)
+    }
   }
 
   function saveAccounts() {
@@ -297,7 +312,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function getPreferredAccount(): AccountInfo | null {
-    const lastUid = localStorage.getItem(CURRENT_UID_KEY) || ''
+    const lastUid = isTauri()
+      ? (getWindowScopedCurrentUid() || getLastUsedUidHint())
+      : (localStorage.getItem(CURRENT_UID_KEY) || '')
     if (lastUid) {
       const matched = accounts.value.find(a => a.id === lastUid && String(a.sessionId || '').trim())
       if (matched) return matched
@@ -313,7 +330,9 @@ export const useAuthStore = defineStore('auth', () => {
     } = options
 
     loadAccounts()
-    loadWsConnectConfig()
+    if (!isTauri()) {
+      loadWsConnectConfig()
+    }
     authDiag('init session start', {
       isTauri: isTauri(),
       restoreSession,
@@ -333,7 +352,8 @@ export const useAuthStore = defineStore('auth', () => {
             const result = normalizeTauriSession(stored)
             if (result.uid) {
               setSession(result)
-              localStorage.setItem(CURRENT_UID_KEY, result.uid)
+              persistCurrentUid(result.uid)
+              loadWsConnectConfig(result.uid)
               authDiag('restored tauri session', {
                 uid: result.uid,
                 hasSessionId: !!result.sessionId,
@@ -346,9 +366,14 @@ export const useAuthStore = defineStore('auth', () => {
         }
 
         if (autoLogin && autoLoginEnabled.value && accounts.value.length > 0) {
+          const hasForeignActiveLogin = await tauriInvoke<boolean>('has_foreign_active_login').catch(() => false)
+          if (hasForeignActiveLogin) {
+            authDiag('skip shared account auto login: other desktop window already active')
+          } else {
           const account = getPreferredAccount()
           if (account?.sessionId) {
             try {
+              loadWsConnectConfig(account.id)
               const tauriSession = await tauriInvoke<SessionInfo>('login', {
                 request: {
                   uid: account.id,
@@ -366,7 +391,7 @@ export const useAuthStore = defineStore('auth', () => {
               })
               if (result.uid) {
                 setSession(result)
-                localStorage.setItem(CURRENT_UID_KEY, result.uid)
+                persistCurrentUid(result.uid)
                 authDiag('auto login restored from account', {
                   uid: result.uid,
                   hasSessionId: !!result.sessionId,
@@ -378,6 +403,7 @@ export const useAuthStore = defineStore('auth', () => {
               authDiag('auto login failed')
               return
             }
+          }
           }
         }
 
@@ -392,7 +418,8 @@ export const useAuthStore = defineStore('auth', () => {
               avatar: account.icon || '',
               sourceId: account.sourceId,
             })
-            localStorage.setItem(CURRENT_UID_KEY, account.id)
+            persistCurrentUid(account.id)
+            loadWsConnectConfig(account.id)
             authDiag('fallback restored from cached account', {
               uid: account.id,
               hasSessionId: !!account.sessionId,
@@ -458,7 +485,7 @@ export const useAuthStore = defineStore('auth', () => {
         avatar: request.avatar || '',
         sourceId: request.sourceId,
       }
-      const previousUid = localStorage.getItem(CURRENT_UID_KEY)
+      const previousUid = getWindowScopedCurrentUid()
       const optimisticAccountIndex = optimisticSession.uid
         ? accounts.value.findIndex(a => a.id === optimisticSession.uid)
         : -1
@@ -468,7 +495,7 @@ export const useAuthStore = defineStore('auth', () => {
       const wroteOptimisticAccount = Boolean(optimisticSession.uid)
       const installCode = String(request.installCode || '').trim() || getOrCreateInstallCode()
       if (optimisticSession.uid) {
-        localStorage.setItem(CURRENT_UID_KEY, optimisticSession.uid)
+        persistCurrentUid(optimisticSession.uid)
         addOrUpdateAccount({
           id: optimisticSession.uid,
           name: optimisticSession.nickname || optimisticSession.uid,
@@ -482,7 +509,7 @@ export const useAuthStore = defineStore('auth', () => {
           wsUrl: request.wsUrl.trim(),
           aesKey: request.aesKey.trim(),
           installCode,
-        })
+        }, optimisticSession.uid)
       }
 
       let tauriSession: SessionInfo
@@ -506,9 +533,9 @@ export const useAuthStore = defineStore('auth', () => {
           message: error instanceof Error ? error.message : String(error),
         })
         if (previousUid) {
-          localStorage.setItem(CURRENT_UID_KEY, previousUid)
+          persistCurrentUid(previousUid)
         } else {
-          localStorage.removeItem(CURRENT_UID_KEY)
+          clearPersistedCurrentUid()
         }
         if (wroteOptimisticAccount) {
           if (previousOptimisticAccount && optimisticAccountIndex >= 0) {
@@ -528,7 +555,7 @@ export const useAuthStore = defineStore('auth', () => {
       })
       if (result.uid) {
         setSession(result)
-        localStorage.setItem(CURRENT_UID_KEY, result.uid)
+        persistCurrentUid(result.uid)
         addOrUpdateAccount({
           id: result.uid,
           name: result.nickname || result.uid,
@@ -578,7 +605,7 @@ export const useAuthStore = defineStore('auth', () => {
         avatar: account.icon,
       })
       setSession(result)
-      localStorage.setItem(CURRENT_UID_KEY, result.uid)
+      persistCurrentUid(result.uid)
     } else {
       setSession({
         uid: account.id,
@@ -586,7 +613,7 @@ export const useAuthStore = defineStore('auth', () => {
         nickname: account.name,
         avatar: account.icon || '',
       })
-      localStorage.setItem(CURRENT_UID_KEY, account.id)
+      persistCurrentUid(account.id)
     }
   }
 
@@ -596,7 +623,7 @@ export const useAuthStore = defineStore('auth', () => {
     const preserveLoginCache = options?.preserveLoginCache ?? false
 
     const previousSession = session.value
-    const previousCurrentUid = localStorage.getItem(CURRENT_UID_KEY)
+    const previousCurrentUid = getWindowScopedCurrentUid()
     const previousBrowserSession = localStorage.getItem('browser-session')
     const previousWsConfig = wsConnectConfig.value
     const accountIndex = accounts.value.findIndex(a => a.id === currentUid)
@@ -612,9 +639,9 @@ export const useAuthStore = defineStore('auth', () => {
     setSession(null)
     clearActiveSessionContext(currentUid)
     if (!preserveLoginCache) {
-      localStorage.removeItem(CURRENT_UID_KEY)
+      clearPersistedCurrentUid(currentUid)
       localStorage.removeItem('browser-session')
-      clearWsConnectConfig()
+      clearWsConnectConfig(currentUid)
     }
     if (!preserveLoginCache && accountIndex >= 0) {
       accounts.value[accountIndex] = {
@@ -632,13 +659,13 @@ export const useAuthStore = defineStore('auth', () => {
       } catch (error) {
         setSession(previousSession)
         if (previousCurrentUid) {
-          localStorage.setItem(CURRENT_UID_KEY, previousCurrentUid)
+          persistCurrentUid(previousCurrentUid)
         }
         if (previousBrowserSession) {
           localStorage.setItem('browser-session', previousBrowserSession)
         }
         if (previousWsConfig) {
-          saveWsConnectConfig(previousWsConfig)
+          saveWsConnectConfig(previousWsConfig, previousSession?.uid)
         }
         if (previousAccount && accountIndex >= 0) {
           accounts.value[accountIndex] = previousAccount
