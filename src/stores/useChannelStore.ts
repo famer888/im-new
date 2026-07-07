@@ -7,6 +7,7 @@ import {
   isAuthSessionExpiredResponse,
 } from '@/utils/authSessionExpiry'
 import { logChannelContentLimitDebug, parseChannelContentLimitFromApi } from '@/utils/channelContentLimit'
+import { ConversationType } from '@/types'
 
 function isChannelExpiredOrInvalidText(text: unknown): boolean {
   const value = String(text || '').trim().toLowerCase()
@@ -789,7 +790,7 @@ export const useChannelStore = defineStore('channel', () => {
 
   async function refreshOrphanChannelConversations(uid: string, activeChannelIds: Set<string>) {
     if (!uid) return
-    const { useChatStore, ConversationType } = await import('@/stores/useChatStore')
+    const { useChatStore } = await import('@/stores/useChatStore')
     const chatStore = useChatStore()
     const orphanIds = Array.from(new Set(
       chatStore.conversations

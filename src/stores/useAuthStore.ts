@@ -6,7 +6,6 @@ import { clearActiveSessionContext, setActiveSessionContext } from '@/api/sessio
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { isProdSafeDomain } from '@/utils/domainSafety'
 import { clearSensitiveWords, refreshChatSensitiveWords } from '@/utils/sensitiveWords'
-import { scheduleLegacyDesktopMigration } from '@/utils/legacyMigration'
 import {
   CURRENT_UID_KEY,
   clearWindowScopedCurrentUid,
@@ -359,7 +358,6 @@ export const useAuthStore = defineStore('auth', () => {
                 hasSessionId: !!result.sessionId,
                 hasWsConfig: !!wsConnectConfig.value,
               })
-              scheduleLegacyDesktopMigration(result.uid)
               return
             }
           }

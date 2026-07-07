@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -8,9 +9,19 @@ use tauri::{AppHandle, Manager, State};
 use tracing::{info, warn};
 
 use crate::branding::{self, app_brand_id};
+use crate::commands::legacy_indexeddb;
 use crate::commands::account_transfer;
 use crate::crypto::aes;
 use crate::db::DbManager;
+
+static LEGACY_MIGRATION_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, Clone)]
+struct LegacyCacheCandidate {
+    path: PathBuf,
+    cache_key: &'static str,
+    source: &'static str,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct LegacyMigrationStore {
@@ -51,6 +62,10 @@ pub fn migrate_legacy_desktop_data_for_uid(
     db: &DbManager,
     uid: &str,
 ) -> Result<LegacyMigrationResult, String> {
+    let _guard = LEGACY_MIGRATION_LOCK
+        .lock()
+        .map_err(|_| "legacy migration lock poisoned".to_string())?;
+
     let uid = uid.trim().to_string();
     if uid.is_empty() {
         return Ok(LegacyMigrationResult {
@@ -79,7 +94,7 @@ pub fn migrate_legacy_desktop_data_for_uid(
         .app_data_dir()
         .map_err(|e| e.to_string())?;
 
-    if is_uid_already_migrated(&app_data_dir, uid.as_str())? {
+    if should_skip_migration(&app_data_dir, db, &uid)? {
         return Ok(LegacyMigrationResult {
             attempted: false,
             migrated: false,
@@ -91,129 +106,195 @@ pub fn migrate_legacy_desktop_data_for_uid(
 
     db.get_or_create(&uid).map_err(|e| e.to_string())?;
 
-    let existing_messages = db
-        .with_connection(&uid, count_messages)
-        .map_err(|e| e.to_string())?;
-    if existing_messages > 0 {
+    let candidates = legacy_cache_candidates(&uid, brand_id);
+    let tried_paths = candidates
+        .iter()
+        .map(|item| format!("{}:{:?}", item.source, item.path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut last_reason = "legacy cache not found".to_string();
+    for candidate in candidates {
+        let Some((payload_uid, history_obj)) = read_legacy_history_from_cache(&candidate)? else {
+            continue;
+        };
+
+        if payload_uid != uid {
+            warn!(
+                "[legacy-migration] cache uid mismatch expected={} actual={} source={} path={:?}",
+                uid, payload_uid, candidate.source, candidate.path
+            );
+            last_reason = "legacy cache uid mismatch".to_string();
+            continue;
+        }
+
+        if history_obj.is_empty() {
+            last_reason = "legacy cache history is empty".to_string();
+            continue;
+        }
+
+        let imported_count = db
+            .with_connection(&uid, |conn| {
+                account_transfer::import_history_value(conn, &uid, &history_obj)
+            })
+            .map_err(|e| e.to_string())?;
+
         mark_uid_migrated(
             &app_data_dir,
             &uid,
             LegacyMigrationRecord {
                 uid: uid.clone(),
                 migrated_at: chrono::Utc::now().timestamp_millis(),
-                source: "existing_sqlite".to_string(),
-                imported_count: existing_messages,
+                source: format!("temp_cache:{}:{}", brand_id, candidate.source),
+                imported_count,
             },
         )?;
-        return Ok(LegacyMigrationResult {
-            attempted: false,
-            migrated: false,
-            skipped: true,
-            reason: "sqlite already has messages".to_string(),
-            imported_count: 0,
-        });
-    }
 
-    let cache_key = branding::legacy_history_cache_key(brand_id);
-    let cache_path = legacy_temp_cache_file(&uid, brand_id);
-
-    if !cache_path.is_file() {
         info!(
-            "[legacy-migration] no legacy cache uid={} brand={} legacy_user_data={} path={:?}",
-            uid,
-            brand_id,
-            branding::legacy_electron_user_data_name(brand_id),
-            cache_path
+            "[legacy-migration] imported uid={} brand={} count={} source={} from {:?}",
+            uid, brand_id, imported_count, candidate.source, candidate.path
         );
+
         return Ok(LegacyMigrationResult {
             attempted: true,
-            migrated: false,
-            skipped: true,
-            reason: "legacy cache not found".to_string(),
-            imported_count: 0,
-        });
-    }
-
-    let encrypted = std::fs::read(&cache_path).map_err(|e| {
-        format!(
-            "failed to read legacy cache {:?}: {}",
-            cache_path, e
-        )
-    })?;
-
-    let decrypted = aes::decrypt_message(&encrypted, cache_key).map_err(|e| {
-        format!(
-            "failed to decrypt legacy cache uid={} brand={}: {}",
-            uid, brand_id, e
-        )
-    })?;
-
-    let payload: Value = serde_json::from_slice(&decrypted).map_err(|e| {
-        format!(
-            "failed to parse legacy cache uid={} brand={}: {}",
-            uid, brand_id, e
-        )
-    })?;
-
-    let (payload_uid, history_obj) = normalize_legacy_history_payload(&payload)?;
-    if payload_uid != uid {
-        warn!(
-            "[legacy-migration] cache uid mismatch expected={} actual={} brand={}",
-            uid, payload_uid, brand_id
-        );
-        return Ok(LegacyMigrationResult {
-            attempted: true,
-            migrated: false,
-            skipped: true,
-            reason: "legacy cache uid mismatch".to_string(),
-            imported_count: 0,
-        });
-    }
-
-    if history_obj.is_empty() {
-        return Ok(LegacyMigrationResult {
-            attempted: true,
-            migrated: false,
-            skipped: true,
-            reason: "legacy cache history is empty".to_string(),
-            imported_count: 0,
-        });
-    }
-
-    let imported_count = db
-        .with_connection(&uid, |conn| account_transfer::import_history_value(conn, &uid, &history_obj))
-        .map_err(|e| e.to_string())?;
-
-    mark_uid_migrated(
-        &app_data_dir,
-        &uid,
-        LegacyMigrationRecord {
-            uid: uid.clone(),
-            migrated_at: chrono::Utc::now().timestamp_millis(),
-            source: format!("temp_cache:{brand_id}"),
+            migrated: true,
+            skipped: false,
+            reason: format!("imported from legacy temp cache ({})", candidate.source),
             imported_count,
-        },
-    )?;
+        });
+    }
 
     info!(
-        "[legacy-migration] imported uid={} brand={} count={} from {:?}",
-        uid, brand_id, imported_count, cache_path
+        "[legacy-migration] no legacy cache uid={} brand={} legacy_user_data={} tried={}",
+        uid,
+        brand_id,
+        branding::legacy_electron_user_data_name(brand_id),
+        tried_paths
     );
+
+    for user_data_path in legacy_indexeddb::legacy_electron_user_data_paths(brand_id) {
+        let (history_obj, row_count) =
+            legacy_indexeddb::import_history_from_user_data(&user_data_path, &uid);
+        if history_obj.is_empty() || row_count == 0 {
+            continue;
+        }
+
+        let imported_count = db
+            .with_connection(&uid, |conn| {
+                account_transfer::import_history_value(conn, &uid, &history_obj)
+            })
+            .map_err(|e| e.to_string())?;
+
+        mark_uid_migrated(
+            &app_data_dir,
+            &uid,
+            LegacyMigrationRecord {
+                uid: uid.clone(),
+                migrated_at: chrono::Utc::now().timestamp_millis(),
+                source: format!(
+                    "indexeddb:{}:{}",
+                    brand_id,
+                    user_data_path.to_string_lossy()
+                ),
+                imported_count,
+            },
+        )?;
+
+        info!(
+            "[legacy-migration] imported uid={} brand={} count={} from indexeddb {:?}",
+            uid, brand_id, imported_count, user_data_path
+        );
+
+        return Ok(LegacyMigrationResult {
+            attempted: true,
+            migrated: true,
+            skipped: false,
+            reason: "imported from legacy electron indexeddb".to_string(),
+            imported_count,
+        });
+    }
 
     Ok(LegacyMigrationResult {
         attempted: true,
-        migrated: true,
-        skipped: false,
-        reason: "imported from legacy temp cache".to_string(),
-        imported_count,
+        migrated: false,
+        skipped: true,
+        reason: last_reason,
+        imported_count: 0,
     })
 }
 
-fn count_messages(conn: &Connection) -> Result<usize, crate::db::DbError> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
-        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-    Ok(count.max(0) as usize)
+fn legacy_cache_candidates(uid: &str, brand_id: &str) -> Vec<LegacyCacheCandidate> {
+    let mut candidates = Vec::new();
+    let mut seen_paths = HashMap::<String, ()>::new();
+
+    let mut push_candidate = |storage_brand: &str, cache_key: &'static str, source: &'static str| {
+        let path = legacy_temp_cache_file(uid, storage_brand);
+        let path_key = path.to_string_lossy().to_string();
+        if seen_paths.contains_key(&path_key) {
+            return;
+        }
+        seen_paths.insert(path_key, ());
+        candidates.push(LegacyCacheCandidate {
+            path,
+            cache_key,
+            source,
+        });
+    };
+
+    push_candidate(brand_id, branding::legacy_history_cache_key(brand_id), "brand");
+    // 旧 Electron 工程 tools.js/cacheDB.js 固定写 97LocalStorage + 9754，45/55 包也走这里。
+    if brand_id != "97" {
+        push_candidate("97", "9754", "legacy97");
+    }
+
+    candidates
+}
+
+fn read_legacy_history_from_cache(
+    candidate: &LegacyCacheCandidate,
+) -> Result<Option<(String, Map<String, Value>)>, String> {
+    if !candidate.path.is_file() {
+        return Ok(None);
+    }
+
+    let encrypted = std::fs::read(&candidate.path).map_err(|e| {
+        format!(
+            "failed to read legacy cache {:?}: {}",
+            candidate.path, e
+        )
+    })?;
+
+    let decrypted = match aes::decrypt_message(&encrypted, candidate.cache_key) {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(
+                "[legacy-migration] decrypt failed source={} path={:?}: {}",
+                candidate.source, candidate.path, err
+            );
+            return Ok(None);
+        }
+    };
+
+    let payload: Value = match serde_json::from_slice(&decrypted) {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(
+                "[legacy-migration] parse failed source={} path={:?}: {}",
+                candidate.source, candidate.path, err
+            );
+            return Ok(None);
+        }
+    };
+
+    match normalize_legacy_history_payload(&payload) {
+        Ok(result) => Ok(Some(result)),
+        Err(err) => {
+            warn!(
+                "[legacy-migration] normalize failed source={} path={:?}: {}",
+                candidate.source, candidate.path, err
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn migration_store_path(app_data_dir: &Path) -> PathBuf {
@@ -241,7 +322,42 @@ fn write_migration_store(app_data_dir: &Path, store: &LegacyMigrationStore) -> R
 
 fn is_uid_already_migrated(app_data_dir: &Path, uid: &str) -> Result<bool, String> {
     let store = read_migration_store(app_data_dir)?;
-    Ok(store.records.contains_key(uid))
+    let Some(record) = store.records.get(uid) else {
+        return Ok(false);
+    };
+    // 旧逻辑在频道消息先写入 SQLite 时会误标 migrated，允许重新导入单聊/群聊历史。
+    if record.source == "existing_sqlite" {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn should_skip_migration(
+    app_data_dir: &Path,
+    db: &DbManager,
+    uid: &str,
+) -> Result<bool, String> {
+    if !is_uid_already_migrated(app_data_dir, uid)? {
+        return Ok(false);
+    }
+
+    let friend_group_count = db
+        .with_connection(uid, count_friend_group_messages)
+        .map_err(|e| e.to_string())?;
+    // 已迁移但单聊/群聊仍为空时，继续尝试旧 Electron IndexedDB 补导。
+    Ok(friend_group_count > 0)
+}
+
+fn count_friend_group_messages(conn: &Connection) -> Result<usize, crate::db::DbError> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages
+             WHERE conversation_id GLOB '0_*' OR conversation_id GLOB '1_*'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    Ok(count.max(0) as usize)
 }
 
 fn mark_uid_migrated(
@@ -311,6 +427,31 @@ fn normalize_legacy_history_payload(payload: &Value) -> Result<(String, Map<Stri
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn legacy_cache_candidates_include_legacy97_for_non_97_brand() {
+        let candidates = legacy_cache_candidates("123", "45");
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].source, "brand");
+        assert_eq!(candidates[0].cache_key, "4554");
+        assert_eq!(candidates[1].source, "legacy97");
+        assert_eq!(candidates[1].cache_key, "9754");
+        assert_eq!(
+            candidates[1].path,
+            std::env::temp_dir()
+                .join("97LocalStorage")
+                .join("user-123")
+                .join("abc")
+        );
+    }
+
+    #[test]
+    fn legacy_cache_candidates_only_brand_for_97() {
+        let candidates = legacy_cache_candidates("123", "97");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].source, "brand");
+        assert_eq!(candidates[0].cache_key, "9754");
+    }
 
     #[test]
     fn normalize_array_history_payload() {

@@ -11,26 +11,31 @@ function isTauri(): boolean {
 }
 
 /**
- * 覆盖安装后，尝试从旧 Electron 桌面端 Temp 缓存导入本地聊天记录。
- * 失败不阻塞登录，成功后会写入 legacy_migration.json 避免重复导入。
+ * 覆盖安装后，从旧 Electron 桌面端 Temp 缓存导入本地聊天记录。
+ * 必须在加载会话/消息前 await，避免频道 API 先写入导致迁移被跳过。
  */
-export function scheduleLegacyDesktopMigration(uid: string): void {
+export async function runLegacyDesktopMigration(uid: string): Promise<LegacyMigrationResult | null> {
   const normalizedUid = String(uid || '').trim()
-  if (!normalizedUid || !isTauri()) return
+  if (!normalizedUid || !isTauri()) return null
 
-  void (async () => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      const result = await invoke<LegacyMigrationResult>('try_migrate_legacy_desktop_data', {
-        uid: normalizedUid,
-      })
-      if (result.migrated) {
-        console.info(
-          `[legacy-migration] imported ${result.importedCount} messages for uid=${normalizedUid}`,
-        )
-      }
-    } catch (error) {
-      console.warn('[legacy-migration] failed', error)
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<LegacyMigrationResult>('try_migrate_legacy_desktop_data', {
+      uid: normalizedUid,
+    })
+    if (result.migrated) {
+      console.info(
+        `[legacy-migration] imported ${result.importedCount} messages for uid=${normalizedUid}`,
+      )
     }
-  })()
+    return result
+  } catch (error) {
+    console.warn('[legacy-migration] failed', error)
+    return null
+  }
+}
+
+/** @deprecated 请使用 runLegacyDesktopMigration 并在数据加载前 await */
+export function scheduleLegacyDesktopMigration(uid: string): void {
+  void runLegacyDesktopMigration(uid)
 }

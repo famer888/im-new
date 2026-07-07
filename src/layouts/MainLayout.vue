@@ -56,6 +56,7 @@ import { writeClipboardText } from '@/utils/clipboard'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeResolvedFileKey } from '@/utils/e2ee'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
+import { runLegacyDesktopMigration } from '@/utils/legacyMigration'
 import { isCurrentChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 
 import { API_CONFIG } from '@/api/config'
@@ -715,6 +716,20 @@ onMounted(async () => {
         isAccountInitialized: !firstInitProgressVisible.value,
       })
       setFirstInitProgress(0, 0)
+
+      if ((window as any).__TAURI_INTERNALS__) {
+        const migrationResult = await traceInitStep(
+          'legacy desktop migration',
+          () => runLegacyDesktopMigration(authStore.uid),
+        )
+        if (migrationResult?.migrated) {
+          messageStore.clearAllMessageCaches()
+          initDiag('legacy desktop migration imported history', {
+            importedCount: migrationResult.importedCount,
+            reason: migrationResult.reason,
+          })
+        }
+      }
 
       // 头像/昵称刷新只是启动增强信息，线上 /user/userInfo 慢时不能阻塞本地数据加载和进入主页。
       void traceOptionalInitStep('refresh profile', () => authStore.refreshProfile(), 3000)

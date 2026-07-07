@@ -57,8 +57,8 @@
     {
       "areaId": 8,
       "domainType": 0,
-      "domainUrl": "https://za.bybcloud.top",
-      "id": 2467,
+      "domainUrl": "https://za.yijingluo.top",
+      "id": 3990,
       "moduleCode": "biz",
       "moduleId": 1,
       "paramType": 0
@@ -349,6 +349,15 @@
       "id": 3040,
       "moduleCode": "domainConfig",
       "moduleId": 21,
+      "paramType": 0
+    },
+    {
+      "areaId": 8,
+      "domainType": 0,
+      "domainUrl": "https://app-img1.qingchengwenhua.xyz",
+      "id": 3978,
+      "moduleCode": "ossDefaultUrl",
+      "moduleId": 22,
       "paramType": 0
     },
     {
