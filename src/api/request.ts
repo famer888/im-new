@@ -40,6 +40,35 @@ function shouldMigrateLegacyDeviceConfig(config: { sysModel?: string; sysMac?: s
 
 let cachedDeviceConfig: { sysModel: string; sysMac: string } | null = null
 
+export async function refreshDeviceSysMacFromNative(): Promise<void> {
+  if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) return
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const packName = String(import.meta.env.VITE_APP_PACKNAME || `${API_CONFIG.brandId}-im`).trim()
+    const sysMac = String(await invoke<string>('get_device_sys_mac', { packName: packName })).trim()
+    if (!sysMac.includes('-') || !sysMac.includes(':')) return
+
+    let sysModel = ''
+    const stored = localStorage.getItem('device-config')
+    if (stored) {
+      try {
+        sysModel = String(JSON.parse(stored)?.sysModel || '').trim()
+      } catch { /* ignore */ }
+    }
+    if (!sysModel) {
+      sysModel = Array.from(Array(16), () =>
+        Math.floor(Math.random() * 36).toString(36),
+      ).join('')
+    }
+
+    cachedDeviceConfig = { sysModel, sysMac }
+    localStorage.setItem('device-config', JSON.stringify(cachedDeviceConfig))
+  } catch {
+    // 读取网卡失败时继续走本地缓存/随机 sysMac。
+  }
+}
+
 export function getDeviceConfig() {
   if (cachedDeviceConfig) return cachedDeviceConfig
 

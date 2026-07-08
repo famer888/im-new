@@ -158,7 +158,18 @@ pub async fn update_tray_unread_count(
     count: u32,
     flash: Option<bool>,
 ) -> Result<(), String> {
-    window::tray::update_unread_count(&app, count, flash.unwrap_or(false))
+    let flash = flash.unwrap_or(false);
+    // macOS 托盘（NSStatusItem）只能在主线程访问；异步命令跑在 tokio 线程，
+    // 直接调用 tray_by_id / set_tooltip 会触发 EXC_BREAKPOINT 闪退，这里切回主线程执行。
+    let main_thread_app = app.clone();
+    app.run_on_main_thread(move || {
+        if let Err(error) =
+            window::tray::update_unread_count(&main_thread_app, count, flash)
+        {
+            tracing::warn!("update_tray_unread_count failed on main thread: {}", error);
+        }
+    })
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

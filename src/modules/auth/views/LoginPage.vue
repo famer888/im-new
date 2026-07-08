@@ -10,6 +10,7 @@ import { getOrCreateInstallCode } from '@/utils/installCode'
 import QRCodeLogin from '../components/QRCodeLogin.vue'
 import NetworkConfig from '../components/NetworkConfig.vue'
 import FileImport from '../components/FileImport.vue'
+import Toast from '@/components/Toast.vue'
 import {
   getCachedNetworkBenchmarkDomains,
   preloadNetworkBenchmarkDomains,
@@ -31,6 +32,9 @@ const isLoginWindow = ref(!isTauri())
 const extraDomains = ref<string[]>([])
 const networkBenchmarkDomains = ref<string[]>(getCachedNetworkBenchmarkDomains())
 const qrLoginKey = ref(0)
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('error')
 const LOGIN_RESTORE_STEP_TIMEOUT_MS = 10000
 let networkBenchmarkPreloadPromise: Promise<string[]> | null = null
 
@@ -39,8 +43,14 @@ function isTauri(): boolean {
 }
 
 function loginDiag(message: string, data?: Record<string, unknown>) {
-  void message
-  void data
+  if (!import.meta.env.DEV) return
+  console.info('[LOGIN-DIAG]', message, data || {})
+}
+
+function showToast(message: string, type: 'success' | 'error' = 'error') {
+  toastMessage.value = message
+  toastType.value = type
+  toastVisible.value = true
 }
 
 function startNetworkBenchmarkPreload() {
@@ -190,10 +200,15 @@ async function handleLoginSuccess(session: {
     }
   } catch (e) {
     console.error('Login failed:', e)
+    showToast(e instanceof Error ? e.message : String(e), 'error')
     qrLoginKey.value += 1
   } finally {
     isLoading.value = false
   }
+}
+
+function handleLoginError(message: string) {
+  showToast(message, 'error')
 }
 
 async function handleClose() {
@@ -237,6 +252,7 @@ function startWindowDrag(e: MouseEvent) {
       :loading="isLoading"
       :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
+      @login-error="handleLoginError"
       @show-network="handleShowNetwork"
       @show-import="showFileImport = true"
     />
@@ -244,6 +260,13 @@ function startWindowDrag(e: MouseEvent) {
     <FileImport
       :visible="showFileImport"
       @close="showFileImport = false"
+    />
+
+    <Toast
+      :visible="toastVisible"
+      :message="toastMessage"
+      :type="toastType"
+      @update:visible="toastVisible = $event"
     />
   </div>
 </template>

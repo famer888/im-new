@@ -47,8 +47,9 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "nsis": {
-        "installMode": "both",
-        "languages": ["SimpChinese"]
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"],
+        "installerIcon": "icons/icon.ico"
       }
     }
   },

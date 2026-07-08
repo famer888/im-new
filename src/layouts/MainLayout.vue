@@ -56,7 +56,7 @@ import { writeClipboardText } from '@/utils/clipboard'
 import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeResolvedFileKey } from '@/utils/e2ee'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
-import { runLegacyDesktopMigration } from '@/utils/legacyMigration'
+import { runLegacyDesktopMigration, runLegacyDesktopMigrationWithRetry } from '@/utils/legacyMigration'
 import { isCurrentChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 
 import { API_CONFIG } from '@/api/config'
@@ -727,6 +727,23 @@ onMounted(async () => {
           initDiag('legacy desktop migration imported history', {
             importedCount: migrationResult.importedCount,
             reason: migrationResult.reason,
+          })
+        } else if (!migrationResult?.skipped || migrationResult.reason !== 'already migrated') {
+          // 旧包被踢下线后才会导出 abc 缓存，登录初始化时通常还没生成。
+          // 后台有限次轮询补迁移，导入成功后清缓存并刷新会话列表（不阻塞进入主页）。
+          void runLegacyDesktopMigrationWithRetry(authStore.uid, {
+            onImported: async (result) => {
+              messageStore.clearAllMessageCaches()
+              initDiag('legacy desktop migration late import', {
+                importedCount: result.importedCount,
+                reason: result.reason,
+              })
+              try {
+                await chatStore.loadConversations(authStore.uid)
+              } catch (err) {
+                console.warn('[legacy-migration] reload conversations after late import failed', err)
+              }
+            },
           })
         }
       }

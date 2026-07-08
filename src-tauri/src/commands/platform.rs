@@ -147,6 +147,141 @@ pub fn get_platform_info() -> PlatformInfo {
     }
 }
 
+fn normalize_mac_for_legacy(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    if cleaned.len() != 12 {
+        return String::new();
+    }
+    cleaned
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            String::from_utf8(pair.to_vec())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        })
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+#[cfg(target_os = "windows")]
+fn collect_primary_mac_address() -> String {
+    let output = run_command_output("ipconfig.exe", &["/all"]).unwrap_or_default();
+    collect_mac_from_ipconfig(&output)
+}
+
+#[cfg(target_os = "macos")]
+fn collect_primary_mac_address() -> String {
+    let output = run_command_output("ifconfig", &[]).unwrap_or_default();
+    collect_mac_from_ifconfig(&output)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn collect_primary_mac_address() -> String {
+    String::new()
+}
+
+fn collect_mac_from_ipconfig(output: &str) -> String {
+    let mut preferred = String::new();
+    let mut fallback = String::new();
+    let mut in_wireless = false;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("adapter")
+            && (lower.contains("wireless") || lower.contains("wi-fi") || lower.contains("wlan"))
+        {
+            in_wireless = true;
+        } else if lower.ends_with(':') && lower.contains("adapter") {
+            in_wireless = false;
+        }
+
+        if !lower.contains("physical address") {
+            continue;
+        }
+
+        let Some(mac_raw) = trimmed.split(':').nth(1) else {
+            continue;
+        };
+        let mac = normalize_mac_for_legacy(mac_raw.trim());
+        if mac.is_empty() {
+            continue;
+        }
+        if in_wireless {
+            preferred = mac;
+            break;
+        }
+        if fallback.is_empty() {
+            fallback = mac;
+        }
+    }
+
+    if !preferred.is_empty() {
+        preferred
+    } else {
+        fallback
+    }
+}
+
+fn collect_mac_from_ifconfig(output: &str) -> String {
+    let mut preferred = String::new();
+    let mut fallback = String::new();
+    let mut current_iface = String::new();
+
+    for line in output.lines() {
+        if !line.starts_with('\t') && line.contains(':') {
+            current_iface = line
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+        }
+
+        let trimmed = line.trim();
+        let Some(mac_raw) = trimmed.strip_prefix("ether ") else {
+            continue;
+        };
+        let mac = normalize_mac_for_legacy(
+            mac_raw
+                .split_whitespace()
+                .next()
+                .unwrap_or_default(),
+        );
+        if mac.is_empty() {
+            continue;
+        }
+        if current_iface == "en0" {
+            preferred = mac;
+            break;
+        }
+        if fallback.is_empty() {
+            fallback = mac;
+        }
+    }
+
+    if !preferred.is_empty() {
+        preferred
+    } else {
+        fallback
+    }
+}
+
+/// 对齐旧 im `getMacAddress()`：`{packname}-{真实网卡 MAC}`，用于扫码登录 isLogin 配对。
+#[tauri::command]
+pub fn get_device_sys_mac(pack_name: String) -> String {
+    let pack = pack_name.trim();
+    let mac = collect_primary_mac_address();
+    if pack.is_empty() || mac.is_empty() {
+        return String::new();
+    }
+    format!("{pack}-{mac}")
+}
+
 #[tauri::command]
 pub fn get_network_snapshot() -> NetworkEnvSnapshot {
     let proxy = collect_proxy_snapshot();

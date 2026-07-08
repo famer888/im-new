@@ -21,6 +21,14 @@ expected_secret_key() {
   esac
 }
 
+expected_electron_nsis_guid() {
+  case "$1" in
+    45) echo ec684072-a6cf-58c4-8142-6d7a780d0150 ;;
+    55) echo d6cb7ce9-cb6f-57a0-9cd7-7b7cef4d38f3 ;;
+    97) echo 32559e51-0b7c-570e-9aa8-cca71370f0fa ;;
+  esac
+}
+
 failed=0
 
 echo "Brand pack config checklist (reference: ocs */1.7.1)"
@@ -40,7 +48,11 @@ for brand in 45 55 97; do
   echo "  VITE_APP_OFFICIAL_URL: $official_url"
   echo "  icon source dir      : resources/icons_$brand"
   echo "  mac desktop icon     : icon.icns (from icon.png; 97 不用参考仓库过期 icns)"
-  echo "  win desktop icon     : icon.ico (from icon.png; native win build may use installer.ico)"
+  echo "  win desktop icon     : icon.ico (from installer.ico / favicon.ico)"
+  echo "  win nsis installer   : bundle.windows.nsis.installerIcon = installer.ico"
+  echo "  win main binary      : mainBinaryName = {brand}-im.exe"
+  echo "  win legacy migrate   : NSIS hook uninstalls old Electron (GUID=$(expected_electron_nsis_guid "$brand"))"
+  echo "  win install dir      : %LOCALAPPDATA%\\Programs\\${app_name}"
 
   if [[ ! -d "$icon_dir" ]]; then
     echo "  FAIL missing $icon_dir" >&2
@@ -68,6 +80,7 @@ for brand in 45 55 97; do
 
   echo "  OK   secrets preset in build-release-brand.sh"
   echo "       SECRET_NAME=$(expected_secret_name "$brand")"
+  echo "  OK   Windows legacy Electron GUID=$(expected_electron_nsis_guid "$brand")"
   echo ""
 done
 

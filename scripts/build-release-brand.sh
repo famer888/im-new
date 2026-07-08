@@ -144,6 +144,7 @@ BRAND_BACKUP_DIR="$(mktemp -d "$ROOT_DIR/.brand-source-backup-$BRAND_ID.XXXXXX")
 cleanup_generated() {
   restore_branded_sources
   rm -rf "$ICON_TARGET_DIR"
+  rm -rf "$ROOT_DIR/src-tauri/.generated-nsis"
   rm -f "$TAURI_CONFIG_FILE"
   if [[ -n "$BRAND_BACKUP_DIR" ]]; then
     rm -rf "$BRAND_BACKUP_DIR"
@@ -240,22 +241,62 @@ if [[ "$USE_SOURCE_ICNS" == "1" && -f "$ICON_SOURCE_DIR/icon.icns" ]] \
   echo "USE_SOURCE_ICNS=1: using icon.icns from $ICON_SOURCE_DIR"
 fi
 
-# Win 本机打包优先用参考项目 favicon.ico；交叉编译继续用 icon.png 生成的 icon.ico。
+# Win 安装包/桌面 exe 统一用参考项目 favicon.ico（installer.ico），对齐旧 im electron-builder。
 if [[ "$PLATFORM" == "win" && -f "$ICON_SOURCE_DIR/installer.ico" ]]; then
-  case "$HOST_OS" in
-    MINGW*|MSYS*|CYGWIN*|Windows*)
-      cp -f "$ICON_SOURCE_DIR/installer.ico" "$ICON_TARGET_DIR/icon.ico"
-      echo "Windows native build: using installer.ico from reference project"
-      ;;
-    *)
-      echo "Cross-compiling on $HOST_OS: using icon.ico generated from $ICON_PNG"
-      ;;
+  cp -f "$ICON_SOURCE_DIR/installer.ico" "$ICON_TARGET_DIR/installer.ico"
+  cp -f "$ICON_SOURCE_DIR/installer.ico" "$ICON_TARGET_DIR/icon.ico"
+  echo "Windows build: using installer.ico from $ICON_SOURCE_DIR"
+fi
+
+NSIS_HOOK_REL=""
+if [[ "$PLATFORM" == "win" ]]; then
+  case "$BRAND_ID" in
+    45) ELECTRON_NSI_GUID="ec684072-a6cf-58c4-8142-6d7a780d0150" ;;
+    55) ELECTRON_NSI_GUID="d6cb7ce9-cb6f-57a0-9cd7-7b7cef4d38f3" ;;
+    97) ELECTRON_NSI_GUID="32559e51-0b7c-570e-9aa8-cca71370f0fa" ;;
+    *) ELECTRON_NSI_GUID="" ;;
   esac
+  if [[ -n "$ELECTRON_NSI_GUID" ]]; then
+    NSIS_HOOK_REL=".generated-nsis/electron-migrate-${BRAND_ID}.nsh"
+    NSIS_HOOK_FILE="$ROOT_DIR/src-tauri/$NSIS_HOOK_REL"
+    mkdir -p "$(dirname "$NSIS_HOOK_FILE")"
+    cat > "$NSIS_HOOK_FILE" <<EOF
+!define LEGACY_ELECTRON_GUID "${ELECTRON_NSI_GUID}"
+
+!macro NSIS_HOOK_PREINSTALL
+  ReadRegStr \$R0 HKCU "Software\\\${LEGACY_ELECTRON_GUID}" "InstallLocation"
+  \${If} \$R0 != ""
+    StrCpy \$INSTDIR \$R0
+  \${Else}
+    ReadRegStr \$R0 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${LEGACY_ELECTRON_GUID}" "InstallLocation"
+    \${If} \$R0 != ""
+      StrCpy \$INSTDIR \$R0
+    \${Else}
+      StrCpy \$INSTDIR "\$LOCALAPPDATA\\Programs\\${APP_NAME}"
+    \${EndIf}
+  \${EndIf}
+
+  ReadRegStr \$R1 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${LEGACY_ELECTRON_GUID}" "UninstallString"
+  \${If} \$R1 != ""
+    ExecWait '\$R1 /S' \$R2
+  \${EndIf}
+!macroend
+EOF
+    echo "Windows build: legacy Electron migrate hook -> $NSIS_HOOK_REL"
+  fi
 fi
 
 node -e '
   const fs = require("fs");
-  const [out, productName, identifier, iconDir, platform] = process.argv.slice(1);
+  const path = require("path");
+  const [out, productName, identifier, iconDir, platform, nsisHookRel] = process.argv.slice(1);
+  const pickNsisIcon = () => {
+    for (const name of ["installer.ico", "icon.ico"]) {
+      const rel = `${iconDir}/${name}`;
+      if (fs.existsSync(path.join("src-tauri", rel))) return rel;
+    }
+    return `${iconDir}/icon.ico`;
+  };
   const bundle = {
     icon: [
       `${iconDir}/32x32.png`,
@@ -266,18 +307,24 @@ node -e '
     ],
   };
   if (platform === "win") {
-    bundle.windows = {
-      nsis: {
-        compression: "zlib",
-      },
+    const nsisIcon = pickNsisIcon();
+    const nsis = {
+      compression: "zlib",
+      installerIcon: nsisIcon,
+      installMode: "currentUser",
     };
+    if (nsisHookRel) {
+      nsis.installerHooks = nsisHookRel;
+    }
+    bundle.windows = { nsis };
   }
   fs.writeFileSync(out, JSON.stringify({
     productName,
     identifier,
+    mainBinaryName: productName,
     bundle,
   }, null, 2));
-' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL" "$PLATFORM"
+' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL" "$PLATFORM" "$NSIS_HOOK_REL"
 
 echo "Building $APP_NAME ($PKG_IDENTIFIER) with icons_$BRAND_ID for $PLATFORM"
 echo "  packname=$VITE_PACKNAME officialUrl=$OFFICIAL_URL iconPng=$ICON_PNG"

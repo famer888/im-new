@@ -239,6 +239,7 @@ pub fn run() {
             commands::domain::proxy_http_text,
             commands::domain::proxy_http_binary,
             commands::platform::get_platform_info,
+            commands::platform::get_device_sys_mac,
             commands::platform::get_network_snapshot,
             commands::platform::system_beep,
             commands::platform::read_clipboard_files,

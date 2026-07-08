@@ -7,7 +7,7 @@ import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl, isLoginOnlyBaseUrl } from '@/api/config'
-import { getDeviceConfig } from '@/api/request'
+import { getDeviceConfig, refreshDeviceSysMacFromNative } from '@/api/request'
 import { getAllDomains, getOrderedDomainUrls, initDomainPoolFromApi, initDomainPoolFromOss, markDomainError } from '@/utils/domainPool'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { WebLoginStatus } from '@/proto/generated'
@@ -26,6 +26,7 @@ const emit = defineEmits<{
   }): void
   (e: 'show-network'): void
   (e: 'show-import'): void
+  (e: 'login-error', message: string): void
 }>()
 
 const loginToken = ref('')
@@ -36,6 +37,8 @@ const qrCodeUrlError = ref(false)
 const isLoading = ref(true)
 const isScanned = ref(false)
 const isScanCancelled = ref(false)
+const loginPollErrorCount = ref(0)
+const loginPollErrorMessage = ref('')
 const hasLoadedFirstQr = ref(false)
 const lastLoginInfo = ref<{ id?: string | number; icon?: string; name?: string; sessionId?: string }>({})
 const lastAvatarLoadError = ref(false)
@@ -82,6 +85,12 @@ const currentBaseUrl = computed(() => {
 })
 
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
+const scanStatusText = computed(() => {
+  if (loginPollErrorMessage.value) return loginPollErrorMessage.value
+  if (isScanCancelled.value) return t('扫码已取消，正在刷新二维码')
+  if (isScanned.value) return t('请在手机上确认登录')
+  return ''
+})
 const overlayText = computed(() => {
   if (qrCodeUrlError.value) return t('登录二维码获取失败!')
   return ''
@@ -351,8 +360,8 @@ function handleLastAvatarError() {
 }
 
 function qrDiag(message: string, data?: Record<string, unknown>) {
-  void message
-  void data
+  if (!import.meta.env.DEV) return
+  console.info('[QR-DIAG]', message, data || {})
 }
 
 function startQrLoadCycle(reason: string) {
@@ -595,12 +604,43 @@ async function handleIsLoginGet() {
       resolvedLoginBaseUrl,
       uid: res?.uid ? String(res.uid) : '',
       loginStatus: res?.loginStatus,
+      errCode: res?.commonResult?.errCode,
+      errMsg: res?.commonResult?.errMsg || '',
       hasSessionId: !!res?.sessionId,
       hasSessionUrl: !!res?.urls?.session,
     })
 
+    const errCode = Number(res?.commonResult?.errCode ?? 200)
+    const errMsg = String(res?.commonResult?.errMsg || '').trim()
+    const loginStatus = res?.loginStatus
+    const isConfirming = loginStatus === WebLoginStatus.SCANNED
+      || loginStatus === WebLoginStatus.ALREADY_LOGIN
+
+    if (errCode !== 200 && errCode !== 1023 && !isConfirming) {
+      loginPollErrorCount.value += 1
+      loginPollErrorMessage.value = errMsg || t('登录失败，请重试')
+      qrDiag('isLogin poll rejected by server', { errCode, errMsg })
+      if (loginPollErrorCount.value >= 2) {
+        emit('login-error', loginPollErrorMessage.value)
+        clearTimers()
+        qrCodeUrlError.value = false
+        isOutTime.value = false
+        isScanned.value = false
+        startQrLoadCycle('refresh after isLogin server error')
+        cancelRefreshTimer = setTimeout(() => {
+          handleGetQrCodeUrl()
+        }, 1200)
+        return
+      }
+    } else {
+      loginPollErrorCount.value = 0
+      loginPollErrorMessage.value = ''
+    }
+
     // 与老 im 一致：扫码登录成功仅以 uid > 0 为准
     if (res && res.uid && Number(res.uid) > 0) {
+      loginPollErrorCount.value = 0
+      loginPollErrorMessage.value = ''
       const loginId = String(res.uid)
       clearTimers()
       const sessionBaseUrl = getBusinessSessionBaseUrl(resolvedLoginBaseUrl)
@@ -624,6 +664,8 @@ async function handleIsLoginGet() {
     } else if (res?.loginStatus === WebLoginStatus.CANCEL_LOGIN) {
       isScanned.value = false
       isScanCancelled.value = true
+      loginPollErrorCount.value = 0
+      loginPollErrorMessage.value = ''
       clearTimers()
       startQrLoadCycle('refresh after scan cancelled')
       cancelRefreshTimer = setTimeout(() => {
@@ -632,6 +674,7 @@ async function handleIsLoginGet() {
     } else {
       isScanCancelled.value = false
       isScanned.value = res?.loginStatus === WebLoginStatus.SCANNED
+        || res?.loginStatus === WebLoginStatus.ALREADY_LOGIN
       loginPollingTimer = setTimeout(() => {
         if (isOutTime.value || qrCodeUrlError.value) return
         handleIsLoginGet()
@@ -671,6 +714,7 @@ onMounted(async () => {
     initialDomainCount: domainList.value.length,
     hasExtraDomains: !!props.extraDomains?.length,
   })
+  await refreshDeviceSysMacFromNative()
   getDeviceConfig()
   loadLastLoginInfo()
   refreshLastLoginAvatar()
@@ -750,6 +794,7 @@ onBeforeUnmount(() => {
         </p>
       </div>
     </section>
+    <p v-if="scanStatusText" class="scanStatus">{{ scanStatusText }}</p>
     <p>{{ t('使用品牌手机版扫描二维码登录', { brand: API_CONFIG.brandId }) }}</p>
     <a :href="`https://${officialUrl}`" target="_blank">{{ officialUrl }}</a>
     <button class="primaryBtn" @click="emit('show-import')">
@@ -775,6 +820,13 @@ onBeforeUnmount(() => {
     display: block;
     line-height: 25px;
     margin-bottom: 5px;
+  }
+
+  .scanStatus {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: #3369fe;
+    line-height: 18px;
   }
 
   > section {

@@ -263,7 +263,9 @@ fn read_legacy_history_from_cache(
         )
     })?;
 
-    let decrypted = match aes::decrypt_message(&encrypted, candidate.cache_key) {
+    // 旧 Electron cacheDB.js 用 CryptoJS AES-ECB + 4 字节 key（如 5554）加密，
+    // 属于非标准轮数密码，必须用兼容解密，不能用标准 AES-128。
+    let decrypted = match aes::decrypt_cryptojs_ecb(&encrypted, candidate.cache_key) {
         Ok(value) => value,
         Err(err) => {
             warn!(
