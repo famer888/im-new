@@ -728,3 +728,70 @@ fn nested_nested_string(value: Option<&Value>, parent: &str, key: &str) -> Optio
 fn json_err(err: serde_json::Error) -> DbError {
     DbError::SqliteError(err.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::migrations::run_migrations;
+    use serde_json::json;
+
+    #[test]
+    fn imports_old_app_private_and_group_history() {
+        let uid = "10001";
+        let conn = Connection::open_in_memory().expect("open memory db");
+        run_migrations(&conn).expect("run migrations");
+
+        let history = json!({
+            "10001-message.man20001": [
+                {
+                    "MsgID": "private-msg-1",
+                    "customMsgId": "private-custom-1",
+                    "sendUid": "10001",
+                    "sendTime": 1000,
+                    "msgType": 1,
+                    "content": "private hello"
+                }
+            ],
+            "10001-groupMessage.man30001": [
+                {
+                    "MsgID": "group-msg-1",
+                    "customMsgId": "group-custom-1",
+                    "sendUid": "20001",
+                    "sendTime": 2000,
+                    "msgType": 1,
+                    "content": "group hello"
+                }
+            ]
+        });
+        let history_obj = history.as_object().expect("history object");
+
+        let imported = import_history_value(&conn, uid, history_obj).expect("import history");
+        assert_eq!(imported, 2);
+
+        let private_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = '0_20001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("private count");
+        let group_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = '1_30001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("group count");
+        assert_eq!(private_count, 1);
+        assert_eq!(group_count, 1);
+
+        let conversation_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM conversations WHERE id IN ('0_20001', '1_30001')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("conversation count");
+        assert_eq!(conversation_count, 2);
+    }
+}

@@ -13,20 +13,48 @@ pub fn legacy_electron_user_data_paths(brand_id: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut seen = BTreeSet::new();
 
-    let mut push = |brand: &str| {
-        if let Some(path) = platform_user_data_path(&branding::legacy_electron_user_data_name(brand)) {
-            if path.is_dir() && seen.insert(path.clone()) {
-                paths.push(path);
-            }
+    let mut push_app_name = |app_name: &str| {
+        if let Some(path) = platform_user_data_path(app_name) {
+            push_user_data_path(path, &mut paths, &mut seen);
         }
     };
 
-    push(brand_id);
+    push_app_name(&branding::legacy_electron_user_data_name(brand_id));
     if brand_id != "97" {
-        push("97");
+        push_app_name(&branding::legacy_electron_user_data_name("97"));
+    }
+    // 老 Electron 包曾经使用过这些 userData 名称；覆盖安装后目录仍可能保留。
+    for app_name in ["ocs-im", "ocs-im-dev", "ocs-im-new-test", "ocs-im-new-uat"] {
+        push_app_name(app_name);
     }
 
     paths
+}
+
+fn push_user_data_path(path: PathBuf, paths: &mut Vec<PathBuf>, seen: &mut BTreeSet<PathBuf>) {
+    if !path.is_dir() {
+        return;
+    }
+    if seen.insert(path.clone()) {
+        paths.push(path.clone());
+    }
+
+    let Ok(entries) = fs::read_dir(&path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        let Some(name) = child.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        // 旧 Electron 多开会把真正的 userData 切到 DATA_* 子目录，历史库就在其 IndexedDB 下。
+        if name.starts_with("DATA_")
+            && child.join("IndexedDB").is_dir()
+            && seen.insert(child.clone())
+        {
+            paths.push(child);
+        }
+    }
 }
 
 fn platform_user_data_path(app_name: &str) -> Option<PathBuf> {
@@ -75,10 +103,7 @@ fn read_indexeddb_blob(user_data: &Path) -> Vec<u8> {
         match fs::read(&path) {
             Ok(bytes) => blob.extend_from_slice(&bytes),
             Err(err) => {
-                warn!(
-                    "[legacy-indexeddb] failed to read {:?}: {}",
-                    path, err
-                );
+                warn!("[legacy-indexeddb] failed to read {:?}: {}", path, err);
             }
         }
     }
@@ -322,10 +347,7 @@ fn parse_digits_after(text: &str, marker: &str) -> Option<i64> {
     rest[..digit_len].parse().ok()
 }
 
-pub fn import_history_from_user_data(
-    user_data: &Path,
-    uid: &str,
-) -> (Map<String, Value>, usize) {
+pub fn import_history_from_user_data(user_data: &Path, uid: &str) -> (Map<String, Value>, usize) {
     let history = extract_history_from_user_data(user_data, uid);
     let table_count = history.len();
     let row_count = history
@@ -348,16 +370,21 @@ mod tests {
 
     #[test]
     fn find_legacy_tables_from_sample_blob() {
-        let sample = "894508-message.man634037\"sendTime\"\r1781593843158\"msgTypeI\x00\"content\"hi\"";
+        let sample =
+            "894508-message.man634037\"sendTime\"\r1781593843158\"msgTypeI\x00\"content\"hi\"";
         let tables = find_legacy_tables(sample, "894508");
         assert!(tables.contains(&"894508-message.man634037".to_string()));
     }
 
     #[test]
     fn parse_message_chunk_reads_send_time_and_type() {
-        let chunk = "894508-message.man634037\"sendTime\"\r1781593843158\"msgTypeI\x02\"content\"\x02hi\"";
+        let chunk =
+            "894508-message.man634037\"sendTime\"\r1781593843158\"msgTypeI\x02\"content\"\x02hi\"";
         let row = parse_message_chunk(chunk).expect("row");
-        assert_eq!(row.get("sendTime").and_then(Value::as_i64), Some(1781593843158));
+        assert_eq!(
+            row.get("sendTime").and_then(Value::as_i64),
+            Some(1781593843158)
+        );
         assert_eq!(row.get("msgType").and_then(Value::as_i64), Some(2));
         assert_eq!(row.get("content").and_then(Value::as_str), Some("hi"));
     }
@@ -367,5 +394,25 @@ mod tests {
         let paths = legacy_electron_user_data_paths("55");
         assert!(!paths.is_empty());
         assert!(paths[0].to_string_lossy().ends_with("55-im"));
+    }
+
+    #[test]
+    fn user_data_path_includes_data_children() {
+        let temp = std::env::temp_dir().join(format!(
+            "legacy-indexeddb-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let base = temp.join("55-im");
+        let data_child = base.join("DATA_1");
+        fs::create_dir_all(data_child.join("IndexedDB")).expect("create data child");
+        fs::create_dir_all(base.join("Cache")).expect("create unrelated child");
+
+        let mut paths = Vec::new();
+        let mut seen = BTreeSet::new();
+        push_user_data_path(base.clone(), &mut paths, &mut seen);
+
+        assert_eq!(paths, vec![base, data_child]);
+        let _ = fs::remove_dir_all(temp);
     }
 }

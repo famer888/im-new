@@ -9,8 +9,8 @@ use tauri::{AppHandle, Manager, State};
 use tracing::{info, warn};
 
 use crate::branding::{self, app_brand_id};
-use crate::commands::legacy_indexeddb;
 use crate::commands::account_transfer;
+use crate::commands::legacy_indexeddb;
 use crate::crypto::aes;
 use crate::db::DbManager;
 
@@ -89,10 +89,7 @@ pub fn migrate_legacy_desktop_data_for_uid(
     }
 
     let brand_id = app_brand_id(app);
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     if should_skip_migration(&app_data_dir, db, &uid)? {
         return Ok(LegacyMigrationResult {
@@ -226,8 +223,7 @@ fn legacy_cache_candidates(uid: &str, brand_id: &str) -> Vec<LegacyCacheCandidat
     let mut candidates = Vec::new();
     let mut seen_paths = HashMap::<String, ()>::new();
 
-    let mut push_candidate = |storage_brand: &str, cache_key: &'static str, source: &'static str| {
-        let path = legacy_temp_cache_file(uid, storage_brand);
+    let mut push_path = |path: PathBuf, cache_key: &'static str, source: &'static str| {
         let path_key = path.to_string_lossy().to_string();
         if seen_paths.contains_key(&path_key) {
             return;
@@ -240,10 +236,21 @@ fn legacy_cache_candidates(uid: &str, brand_id: &str) -> Vec<LegacyCacheCandidat
         });
     };
 
-    push_candidate(brand_id, branding::legacy_history_cache_key(brand_id), "brand");
-    // 旧 Electron 工程 tools.js/cacheDB.js 固定写 97LocalStorage + 9754，45/55 包也走这里。
+    push_path(
+        legacy_temp_cache_file(uid, brand_id),
+        branding::legacy_history_cache_key(brand_id),
+        "brand",
+    );
+    // 老 im 的 cacheDB.js 固定写 68LocalStorage/user-uid/abc + 6854；
+    // 新包按当前渠道优先，旧 68 只作为历史包兼容兜底。
+    push_path(
+        legacy_temp_cache_file_with_dir(uid, "68LocalStorage"),
+        "6854",
+        "legacy68",
+    );
+    // 兼容曾经按 97LocalStorage 写入的旧桌面缓存，放在当前渠道和老 68 之后避免抢占。
     if brand_id != "97" {
-        push_candidate("97", "9754", "legacy97");
+        push_path(legacy_temp_cache_file(uid, "97"), "9754", "legacy97");
     }
 
     candidates
@@ -256,12 +263,8 @@ fn read_legacy_history_from_cache(
         return Ok(None);
     }
 
-    let encrypted = std::fs::read(&candidate.path).map_err(|e| {
-        format!(
-            "failed to read legacy cache {:?}: {}",
-            candidate.path, e
-        )
-    })?;
+    let encrypted = std::fs::read(&candidate.path)
+        .map_err(|e| format!("failed to read legacy cache {:?}: {}", candidate.path, e))?;
 
     // 旧 Electron cacheDB.js 用 CryptoJS AES-ECB + 4 字节 key（如 5554）加密，
     // 属于非标准轮数密码，必须用兼容解密，不能用标准 AES-128。
@@ -334,11 +337,7 @@ fn is_uid_already_migrated(app_data_dir: &Path, uid: &str) -> Result<bool, Strin
     Ok(true)
 }
 
-fn should_skip_migration(
-    app_data_dir: &Path,
-    db: &DbManager,
-    uid: &str,
-) -> Result<bool, String> {
+fn should_skip_migration(app_data_dir: &Path, db: &DbManager, uid: &str) -> Result<bool, String> {
     if !is_uid_already_migrated(app_data_dir, uid)? {
         return Ok(false);
     }
@@ -373,13 +372,19 @@ fn mark_uid_migrated(
 }
 
 fn legacy_temp_cache_file(uid: &str, brand_id: &str) -> PathBuf {
+    legacy_temp_cache_file_with_dir(uid, &branding::legacy_temp_storage_dir_name(brand_id))
+}
+
+fn legacy_temp_cache_file_with_dir(uid: &str, dir_name: &str) -> PathBuf {
     std::env::temp_dir()
-        .join(branding::legacy_temp_storage_dir_name(brand_id))
+        .join(dir_name)
         .join(format!("user-{uid}"))
         .join("abc")
 }
 
-fn normalize_legacy_history_payload(payload: &Value) -> Result<(String, Map<String, Value>), String> {
+fn normalize_legacy_history_payload(
+    payload: &Value,
+) -> Result<(String, Map<String, Value>), String> {
     let payload_obj = payload
         .as_object()
         .ok_or_else(|| "legacy payload must be an object".to_string())?;
@@ -431,15 +436,24 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn legacy_cache_candidates_include_legacy97_for_non_97_brand() {
+    fn legacy_cache_candidates_include_old_68_and_legacy97_for_non_97_brand() {
         let candidates = legacy_cache_candidates("123", "45");
-        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates.len(), 3);
         assert_eq!(candidates[0].source, "brand");
         assert_eq!(candidates[0].cache_key, "4554");
-        assert_eq!(candidates[1].source, "legacy97");
-        assert_eq!(candidates[1].cache_key, "9754");
+        assert_eq!(candidates[1].source, "legacy68");
+        assert_eq!(candidates[1].cache_key, "6854");
         assert_eq!(
             candidates[1].path,
+            std::env::temp_dir()
+                .join("68LocalStorage")
+                .join("user-123")
+                .join("abc")
+        );
+        assert_eq!(candidates[2].source, "legacy97");
+        assert_eq!(candidates[2].cache_key, "9754");
+        assert_eq!(
+            candidates[2].path,
             std::env::temp_dir()
                 .join("97LocalStorage")
                 .join("user-123")
@@ -450,9 +464,11 @@ mod tests {
     #[test]
     fn legacy_cache_candidates_only_brand_for_97() {
         let candidates = legacy_cache_candidates("123", "97");
-        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates.len(), 2);
         assert_eq!(candidates[0].source, "brand");
         assert_eq!(candidates[0].cache_key, "9754");
+        assert_eq!(candidates[1].source, "legacy68");
+        assert_eq!(candidates[1].cache_key, "6854");
     }
 
     #[test]

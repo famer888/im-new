@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRAND_ID="${1:-}"
 PLATFORM="${2:-mac}"
-USE_SOURCE_ICNS="${USE_SOURCE_ICNS:-0}"
+USE_SOURCE_ICNS="${USE_SOURCE_ICNS:-auto}"
 
 usage() {
   echo "Usage: bash ./scripts/build-release-brand.sh <45|55|97|all> [mac|win]" >&2
@@ -233,12 +233,14 @@ pnpm tauri icon "$ICON_PNG" --output "$ICON_TARGET_DIR"
 
 HOST_OS="$(uname -s 2>/dev/null || echo unknown)"
 
-# Mac/Win 桌面图标统一以 icon.png 为准生成 icon.icns/icon.ico。
-# 旧 im 的 build/icons/icon.icns 在 97 渠道是过期章鱼图，不能覆盖生成结果。
-if [[ "$USE_SOURCE_ICNS" == "1" && -f "$ICON_SOURCE_DIR/icon.icns" ]] \
+# 45/55 的 macOS 图标沿用参考仓库 icns；97 的源 icns 过期，仍使用 icon.png 重新生成。
+if [[ "$PLATFORM" == "mac" && -f "$ICON_SOURCE_DIR/icon.icns" ]] \
+  && [[ "$USE_SOURCE_ICNS" == "1" || ( "$USE_SOURCE_ICNS" == "auto" && "$BRAND_ID" != "97" ) ]] \
   && file "$ICON_SOURCE_DIR/icon.icns" | grep -q "Mac OS X icon"; then
   cp -f "$ICON_SOURCE_DIR/icon.icns" "$ICON_TARGET_DIR/icon.icns"
-  echo "USE_SOURCE_ICNS=1: using icon.icns from $ICON_SOURCE_DIR"
+  # 外置盘上的参考图标可能带 700 权限；安装到 /Applications 后必须让普通用户可读。
+  chmod 644 "$ICON_TARGET_DIR/icon.icns"
+  echo "macOS build: using source icon.icns from $ICON_SOURCE_DIR"
 fi
 
 # Win 安装包/桌面 exe 统一用参考项目 favicon.ico（installer.ico），对齐旧 im electron-builder。

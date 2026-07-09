@@ -90,6 +90,10 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
+# pkgbuild 会保留 app bundle 内的文件权限；资源文件如果是 700，安装后会变成 root 私有，
+# Launchpad/Finder 就读不到图标，所以打包前统一补齐普通用户可读/可进入权限。
+chmod -R u+rwX,go+rX "$APP_PATH"
+
 ARCH_LABEL="${TAURI_TARGET:-$(uname -m)}"
 PKG_STAGE_ROOT="/tmp/ocs-chat-pkg-root"
 PKG_COMPONENT_PLIST="/tmp/ocs-chat-component.plist"
@@ -117,6 +121,7 @@ pkgbuild \
   --install-location / \
   --component-plist "$PKG_COMPONENT_PLIST" \
   "$PKG_OUTPUT_PATH" >/dev/null
+chmod 644 "$PKG_OUTPUT_PATH"
 
 if [[ "$COPY_APP_BUNDLE" == "1" ]]; then
   ditto "$APP_PATH" "$RELEASE_DIST_DIR/$APP_NAME.app"
