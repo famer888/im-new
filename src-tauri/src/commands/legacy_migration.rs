@@ -236,19 +236,24 @@ fn legacy_cache_candidates(uid: &str, brand_id: &str) -> Vec<LegacyCacheCandidat
         });
     };
 
+    // 当前渠道优先；同时兼容旧包曾写过的 45/55/68/97 Temp 目录。
+    // 解密时会对同一文件再尝试其它常见 key（见 read_legacy_history_from_cache）。
     push_path(
         legacy_temp_cache_file(uid, brand_id),
         branding::legacy_history_cache_key(brand_id),
         "brand",
     );
-    // 老 im 的 cacheDB.js 固定写 68LocalStorage/user-uid/abc + 6854；
-    // 新包按当前渠道优先，旧 68 只作为历史包兼容兜底。
+    if brand_id != "55" {
+        push_path(legacy_temp_cache_file(uid, "55"), "5554", "legacy55");
+    }
+    if brand_id != "45" {
+        push_path(legacy_temp_cache_file(uid, "45"), "4554", "legacy45");
+    }
     push_path(
         legacy_temp_cache_file_with_dir(uid, "68LocalStorage"),
         "6854",
         "legacy68",
     );
-    // 兼容曾经按 97LocalStorage 写入的旧桌面缓存，放在当前渠道和老 68 之后避免抢占。
     if brand_id != "97" {
         push_path(legacy_temp_cache_file(uid, "97"), "9754", "legacy97");
     }
@@ -266,14 +271,34 @@ fn read_legacy_history_from_cache(
     let encrypted = std::fs::read(&candidate.path)
         .map_err(|e| format!("failed to read legacy cache {:?}: {}", candidate.path, e))?;
 
-    // 旧 Electron cacheDB.js 用 CryptoJS AES-ECB + 4 字节 key（如 5554）加密，
-    // 属于非标准轮数密码，必须用兼容解密，不能用标准 AES-128。
-    let decrypted = match aes::decrypt_cryptojs_ecb(&encrypted, candidate.cache_key) {
-        Ok(value) => value,
-        Err(err) => {
+    // 旧 Electron cacheDB.js 用 CryptoJS AES-ECB + 4 字节 key（如 5554）加密。
+    // 同一 abc 文件可能被不同渠道 key 写出，主 key 失败时再试其它常见 key。
+    let mut keys = vec![candidate.cache_key];
+    for fallback in ["5554", "4554", "6854", "9754"] {
+        if !keys.contains(&fallback) {
+            keys.push(fallback);
+        }
+    }
+
+    let mut decrypted = None;
+    let mut last_err = None;
+    for key in keys {
+        match aes::decrypt_cryptojs_ecb(&encrypted, key) {
+            Ok(value) => {
+                decrypted = Some(value);
+                break;
+            }
+            Err(err) => last_err = Some((key, err)),
+        }
+    }
+
+    let decrypted = match decrypted {
+        Some(value) => value,
+        None => {
+            let (key, err) = last_err.unwrap();
             warn!(
-                "[legacy-migration] decrypt failed source={} path={:?}: {}",
-                candidate.source, candidate.path, err
+                "[legacy-migration] decrypt failed source={} path={:?} last_key={}: {}",
+                candidate.source, candidate.path, key, err
             );
             return Ok(None);
         }
@@ -436,39 +461,37 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn legacy_cache_candidates_include_old_68_and_legacy97_for_non_97_brand() {
+    fn legacy_cache_candidates_include_cross_brand_temp_dirs() {
         let candidates = legacy_cache_candidates("123", "45");
-        assert_eq!(candidates.len(), 3);
+        let sources: Vec<_> = candidates.iter().map(|c| c.source).collect();
         assert_eq!(candidates[0].source, "brand");
         assert_eq!(candidates[0].cache_key, "4554");
-        assert_eq!(candidates[1].source, "legacy68");
-        assert_eq!(candidates[1].cache_key, "6854");
+        assert!(sources.contains(&"legacy55"));
+        assert!(sources.contains(&"legacy68"));
+        assert!(sources.contains(&"legacy97"));
         assert_eq!(
-            candidates[1].path,
+            candidates
+                .iter()
+                .find(|c| c.source == "legacy55")
+                .unwrap()
+                .path,
             std::env::temp_dir()
-                .join("68LocalStorage")
-                .join("user-123")
-                .join("abc")
-        );
-        assert_eq!(candidates[2].source, "legacy97");
-        assert_eq!(candidates[2].cache_key, "9754");
-        assert_eq!(
-            candidates[2].path,
-            std::env::temp_dir()
-                .join("97LocalStorage")
+                .join("55LocalStorage")
                 .join("user-123")
                 .join("abc")
         );
     }
 
     #[test]
-    fn legacy_cache_candidates_only_brand_for_97() {
+    fn legacy_cache_candidates_for_97_skip_duplicate_97_dir() {
         let candidates = legacy_cache_candidates("123", "97");
-        assert_eq!(candidates.len(), 2);
+        let sources: Vec<_> = candidates.iter().map(|c| c.source).collect();
         assert_eq!(candidates[0].source, "brand");
         assert_eq!(candidates[0].cache_key, "9754");
-        assert_eq!(candidates[1].source, "legacy68");
-        assert_eq!(candidates[1].cache_key, "6854");
+        assert!(sources.contains(&"legacy55"));
+        assert!(sources.contains(&"legacy45"));
+        assert!(sources.contains(&"legacy68"));
+        assert!(!sources.contains(&"legacy97"));
     }
 
     #[test]

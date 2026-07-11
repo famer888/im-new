@@ -354,13 +354,14 @@ fn import_legacy_history(
         else {
             continue;
         };
-        let Some(rows) = rows_value.as_array() else {
-            continue;
-        };
 
         legacy_conversation_meta
             .entry(conversation_id.clone())
             .or_insert((conv_type, target_id));
+
+        let Some(rows) = rows_value.as_array() else {
+            continue;
+        };
 
         for (index, row) in rows.iter().enumerate() {
             let Some(message) = legacy_message_to_current(row, &conversation_id, index) else {
@@ -401,6 +402,10 @@ fn import_legacy_history(
             params![conversation_id, conv_type, target_id],
         )
         .map_err(|e| DbError::SqliteError(e.to_string()))?;
+        // 即使没有解析出消息，也保证会话窗口存在。
+        if !touched_conversations.contains(&conversation_id) {
+            touched_conversations.insert(conversation_id);
+        }
     }
 
     for conversation_id in touched_conversations {

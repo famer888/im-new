@@ -19,12 +19,23 @@ pub fn legacy_electron_user_data_paths(brand_id: &str) -> Vec<PathBuf> {
         }
     };
 
+    // 旧 ocs 的 background.js 用 webpack 打进包里的源 package.json name 调用
+    // `app.setName("otc-pc-chat")`，ready 之后 Chromium IndexedDB 实际落在这个目录，
+    // 而不是 electron-builder 的 productName（55-im / ocs-im-new-test）。必须优先扫这里。
+    push_app_name("otc-pc-chat");
     push_app_name(&branding::legacy_electron_user_data_name(brand_id));
     if brand_id != "97" {
         push_app_name(&branding::legacy_electron_user_data_name("97"));
     }
     // 老 Electron 包曾经使用过这些 userData 名称；覆盖安装后目录仍可能保留。
-    for app_name in ["ocs-im", "ocs-im-dev", "ocs-im-new-test", "ocs-im-new-uat"] {
+    for app_name in [
+        "ocs-im",
+        "ocs-im-dev",
+        "ocs-im-new-test",
+        "ocs-im-new-uat",
+        "45-im",
+        "68-im",
+    ] {
         push_app_name(app_name);
     }
 
@@ -122,13 +133,29 @@ fn collect_idb_files(dir: &Path, out: &mut Vec<PathBuf>) {
             collect_idb_files(&path, out);
             continue;
         }
-        let is_idb_file = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "ldb" || ext == "log");
-        if is_idb_file {
+        if is_indexeddb_data_file(&path) {
             out.push(path);
         }
+    }
+}
+
+/// LevelDB 主库是 `.ldb`/`.log`；大字段还会落到 `*.indexeddb.blob/` 下的无扩展名分片。
+fn is_indexeddb_data_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    if name.is_empty() || name == "LOCK" || name == "CURRENT" || name.starts_with("MANIFEST") {
+        return false;
+    }
+    if name == "LOG" || name.starts_with("LOG.") {
+        return true;
+    }
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("ldb") | Some("log") => true,
+        Some(_) => false,
+        // blob 分片通常没有扩展名（纯数字文件名）
+        None => name.chars().all(|ch| ch.is_ascii_digit()) || name.len() <= 4,
     }
 }
 
@@ -141,10 +168,9 @@ fn extract_history_from_blob(blob: &[u8], uid: &str) -> Map<String, Value> {
 
     let mut history = Map::new();
     for table in tables {
+        // 即使当前启发式解不出消息行，也保留表名，后续可据此创建会话窗口。
         let rows = extract_rows_for_table(&text, &table);
-        if !rows.is_empty() {
-            history.insert(table, Value::Array(rows));
-        }
+        history.insert(table, Value::Array(rows));
     }
     history
 }
@@ -355,13 +381,19 @@ pub fn import_history_from_user_data(user_data: &Path, uid: &str) -> (Map<String
         .filter_map(Value::as_array)
         .map(|rows| rows.len())
         .sum();
+    // 有表名但行数为 0 时也算有效：至少能补出会话窗口。
+    let import_score = if row_count > 0 {
+        row_count
+    } else {
+        table_count
+    };
     if table_count > 0 {
         info!(
             "[legacy-indexeddb] extracted uid={} from {:?}: tables={} rows={}",
             uid, user_data, table_count, row_count
         );
     }
-    (history, row_count)
+    (history, import_score)
 }
 
 #[cfg(test)]
@@ -390,10 +422,30 @@ mod tests {
     }
 
     #[test]
-    fn legacy_user_data_path_uses_brand_im_suffix() {
+    fn legacy_user_data_paths_prefer_otc_pc_chat() {
         let paths = legacy_electron_user_data_paths("55");
-        assert!(!paths.is_empty());
-        assert!(paths[0].to_string_lossy().ends_with("55-im"));
+        let names: Vec<String> = paths
+            .iter()
+            .map(|path| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+
+        if platform_user_data_path("otc-pc-chat")
+            .map(|path| path.is_dir())
+            .unwrap_or(false)
+        {
+            assert_eq!(names.first().map(String::as_str), Some("otc-pc-chat"));
+        }
+        if platform_user_data_path("55-im")
+            .map(|path| path.is_dir())
+            .unwrap_or(false)
+        {
+            assert!(names.iter().any(|name| name == "55-im"));
+        }
     }
 
     #[test]
