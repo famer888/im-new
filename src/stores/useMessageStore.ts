@@ -1127,6 +1127,8 @@ export const useMessageStore = defineStore('message', () => {
   const messageMap = ref<Map<string, Message[]>>(new Map())
   const loadingMap = ref<Map<string, boolean>>(new Map())
   const hasMoreMap = ref<Map<string, boolean>>(new Map())
+  // 实时群事件可能早于本地历史进入 messageMap，不能用“内存中有消息”判定首屏已加载。
+  const loadedConversationIds = new Set<string>()
   let pendingWsConnect: Promise<void> | null = null
 
   function getGroupNoticeActorRole(extra: Record<string, unknown> | null): number | null {
@@ -2434,7 +2436,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     const existingBeforeLoad = getMessages(conversationId)
-    if (!force && existingBeforeLoad.length > 0) {
+    if (!force && loadedConversationIds.has(conversationId)) {
       if (channelIdForHistory) {
         channelHistoryLog('loadMessages skipped: use memory cache', {
           uid,
@@ -2510,6 +2512,7 @@ export const useMessageStore = defineStore('message', () => {
 
       // 先渲染首屏，避免被解密耗时阻塞；解密成功后再静默回填真实文案/附件信息。
       applyLoadedSnapshot(normalizedBase)
+      loadedConversationIds.add(conversationId)
       // 频道会话对齐旧 im：进入聊天窗口后校验服务端最新消息，必要时补最近 30 条离线漏消息。
       if (getChannelIdFromConversationId(conversationId)) {
         channelHistoryLog('loadMessages local snapshot applied', {
@@ -3903,6 +3906,7 @@ export const useMessageStore = defineStore('message', () => {
   function clearConversationMessages(conversationId: string) {
     messageMap.value.delete(conversationId)
     hasMoreMap.value.delete(conversationId)
+    loadedConversationIds.delete(conversationId)
   }
 
   async function clearConversationHistory(conversationId: string, remote = false) {
@@ -3926,6 +3930,7 @@ export const useMessageStore = defineStore('message', () => {
     messageMap.value = new Map()
     loadingMap.value = new Map()
     hasMoreMap.value = new Map()
+    loadedConversationIds.clear()
   }
 
   function pruneOutgoingMisclassifiedFilePlaceholders(
