@@ -48,20 +48,26 @@ VITE_APP_VERSION_CODE="${VITE_APP_VERSION_CODE:-$(node -e "
   const [maj = 0, min = 0, pat = 0] = parts;
   console.log(maj * 100 + min * 10 + pat);
 " "$VERSION_NAME")}"
-VITE_APP_OPEN_CHAT_APP_VER="${VITE_APP_OPEN_CHAT_APP_VER:-$VITE_APP_VERSION_CODE}"
+# OpenChat 密钥来自 ocs */1.7.1，服务端按 appVer=171 登记；不能跟包版本 1.7.2→172 走，否则频道 401。
+VITE_APP_OPEN_CHAT_APP_VER="${VITE_APP_OPEN_CHAT_APP_VER:-171}"
 
+# 对齐旧 ocs 各品牌分支 .env.production：OpenChat 签名密钥与 packageCode 必须成对，
+# 三品牌不能共用同一套 SECRET（97 用错密钥时频道列表会解密/鉴权失败并整页空白）。
 case "$BRAND_ID" in
   45)
-    VITE_APP_SECRET_NAME="${VITE_APP_SECRET_NAME:-da4beccf359c72236b0a5b3baf58bed6}"
-    VITE_APP_SECRET_KEY="${VITE_APP_SECRET_KEY:-473551ace50e9d94}"
+    VITE_APP_PACKAGE_CODE="${VITE_APP_PACKAGE_CODE:-4520}"
+    VITE_APP_SECRET_NAME="${VITE_APP_SECRET_NAME:-27283795908588a8b2e751f4241f562b}"
+    VITE_APP_SECRET_KEY="${VITE_APP_SECRET_KEY:-d9950fe6bbc4c6a9}"
     ;;
   55)
-    VITE_APP_SECRET_NAME="${VITE_APP_SECRET_NAME:-9da979df2a2bd9bc6cea0ebdc98fde2e}"
-    VITE_APP_SECRET_KEY="${VITE_APP_SECRET_KEY:-d170deacb66075a0}"
+    VITE_APP_PACKAGE_CODE="${VITE_APP_PACKAGE_CODE:-5520}"
+    VITE_APP_SECRET_NAME="${VITE_APP_SECRET_NAME:-2e4632b94cf15b90cb02d40742186d69}"
+    VITE_APP_SECRET_KEY="${VITE_APP_SECRET_KEY:-52e61b2052ae35c7}"
     ;;
   97)
-    VITE_APP_SECRET_NAME="${VITE_APP_SECRET_NAME:-26b2e2f2308cd4b80f222d3df669d4df}"
-    VITE_APP_SECRET_KEY="${VITE_APP_SECRET_KEY:-ee2068510cf3f273}"
+    VITE_APP_PACKAGE_CODE="${VITE_APP_PACKAGE_CODE:-7100}"
+    VITE_APP_SECRET_NAME="${VITE_APP_SECRET_NAME:-28b41fd6e4226b9e768ffcfc5a482966}"
+    VITE_APP_SECRET_KEY="${VITE_APP_SECRET_KEY:-9a7979a586830fbf}"
     ;;
 esac
 
@@ -262,8 +268,12 @@ if [[ "$PLATFORM" == "win" ]]; then
     NSIS_HOOK_REL=".generated-nsis/electron-migrate-${BRAND_ID}.nsh"
     NSIS_HOOK_FILE="$ROOT_DIR/src-tauri/$NSIS_HOOK_REL"
     mkdir -p "$(dirname "$NSIS_HOOK_FILE")"
+    # 旧 Electron NSIS 开了 deleteAppDataOnUninstall：静默卸载会清掉 %APPDATA%\55-im 等聊天库。
+    # 覆盖安装前先备份 IndexedDB / Temp abc，卸载后再还原，供新包登录迁移继续读到历史。
+    LEGACY_TEMP_DIR="${BRAND_ID}LocalStorage"
     cat > "$NSIS_HOOK_FILE" <<EOF
 !define LEGACY_ELECTRON_GUID "${ELECTRON_NSI_GUID}"
+!define LEGACY_BACKUP_ROOT "\$APPDATA\\${PKG_IDENTIFIER}\\legacy-electron-backup"
 
 !macro NSIS_HOOK_PREINSTALL
   ReadRegStr \$R0 HKCU "Software\\\${LEGACY_ELECTRON_GUID}" "InstallLocation"
@@ -278,10 +288,21 @@ if [[ "$PLATFORM" == "win" ]]; then
     \${EndIf}
   \${EndIf}
 
+  CreateDirectory "\${LEGACY_BACKUP_ROOT}"
+  ; robocopy 退出码 0-7 都算成功，不要因此中断安装。
+  ExecWait 'cmd /c if exist "%APPDATA%\\otc-pc-chat" (mkdir "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" 2>nul & robocopy "%APPDATA%\\otc-pc-chat" "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+  ExecWait 'cmd /c if exist "%APPDATA%\\${APP_NAME}" (mkdir "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" 2>nul & robocopy "%APPDATA%\\${APP_NAME}" "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+  ExecWait 'cmd /c if exist "%TEMP%\\${LEGACY_TEMP_DIR}" (mkdir "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" 2>nul & robocopy "%TEMP%\\${LEGACY_TEMP_DIR}" "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+
   ReadRegStr \$R1 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${LEGACY_ELECTRON_GUID}" "UninstallString"
   \${If} \$R1 != ""
     ExecWait '\$R1 /S' \$R2
   \${EndIf}
+
+  ; 卸载清掉 AppData 后还原旧聊天数据，迁移逻辑才能继续按原路径找到。
+  ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" (mkdir "%APPDATA%\\otc-pc-chat" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" "%APPDATA%\\otc-pc-chat" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+  ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" (mkdir "%APPDATA%\\${APP_NAME}" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" "%APPDATA%\\${APP_NAME}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+  ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" (mkdir "%TEMP%\\${LEGACY_TEMP_DIR}" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" "%TEMP%\\${LEGACY_TEMP_DIR}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
 !macroend
 EOF
     echo "Windows build: legacy Electron migrate hook -> $NSIS_HOOK_REL"
@@ -320,6 +341,14 @@ node -e '
     }
     bundle.windows = { nsis };
   }
+  // Mac：对齐旧 ocs electron-builder —— 用 "-" 做 adhoc 整包签名，并带 entitlements。
+  // signingIdentity=null 时 Tauri 会跳过签 bundle，只剩 linker-signed，Finder 双击直接被系统杀掉。
+  if (platform === "mac") {
+    bundle.macOS = {
+      signingIdentity: "-",
+      entitlements: "entitlements.mac.plist",
+    };
+  }
   fs.writeFileSync(out, JSON.stringify({
     productName,
     identifier,
@@ -329,7 +358,7 @@ node -e '
 ' "$TAURI_CONFIG_FILE" "$APP_NAME" "$PKG_IDENTIFIER" "$ICON_TARGET_REL" "$PLATFORM" "$NSIS_HOOK_REL"
 
 echo "Building $APP_NAME ($PKG_IDENTIFIER) with icons_$BRAND_ID for $PLATFORM"
-echo "  packname=$VITE_PACKNAME officialUrl=$OFFICIAL_URL iconPng=$ICON_PNG"
+echo "  packname=$VITE_PACKNAME officialUrl=$OFFICIAL_URL packageCode=$VITE_APP_PACKAGE_CODE openChatAppVer=$VITE_APP_OPEN_CHAT_APP_VER iconPng=$ICON_PNG"
 
 if [[ "$PLATFORM" == "mac" ]]; then
   APP_NAME="$APP_NAME" \
@@ -341,6 +370,7 @@ if [[ "$PLATFORM" == "mac" ]]; then
   VITE_APP_OFFICIAL_URL="$OFFICIAL_URL" \
   VITE_APP_SECRET_NAME="$VITE_APP_SECRET_NAME" \
   VITE_APP_SECRET_KEY="$VITE_APP_SECRET_KEY" \
+  VITE_APP_PACKAGE_CODE="$VITE_APP_PACKAGE_CODE" \
   VITE_APP_VERSION_NAME="$VITE_APP_VERSION_NAME" \
   VITE_APP_VERSION_CODE="$VITE_APP_VERSION_CODE" \
   VITE_APP_OPEN_CHAT_APP_VER="$VITE_APP_OPEN_CHAT_APP_VER" \
@@ -358,6 +388,7 @@ else
   VITE_APP_OFFICIAL_URL="$OFFICIAL_URL" \
   VITE_APP_SECRET_NAME="$VITE_APP_SECRET_NAME" \
   VITE_APP_SECRET_KEY="$VITE_APP_SECRET_KEY" \
+  VITE_APP_PACKAGE_CODE="$VITE_APP_PACKAGE_CODE" \
   VITE_APP_VERSION_NAME="$VITE_APP_VERSION_NAME" \
   VITE_APP_VERSION_CODE="$VITE_APP_VERSION_CODE" \
   VITE_APP_OPEN_CHAT_APP_VER="$VITE_APP_OPEN_CHAT_APP_VER" \

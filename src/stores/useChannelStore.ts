@@ -75,9 +75,10 @@ export const useChannelStore = defineStore('channel', () => {
   const detailRequestById = new Map<string, Promise<Channel | null>>()
 
   function channelDiag(message: string, data: Record<string, unknown> = {}, level: 'info' | 'warn' | 'error' = 'warn') {
-    void message
-    void data
-    void level
+    // 频道列表排查用：保留 warn/error，避免生产刷屏 info。
+    if (level === 'info') return
+    const logger = level === 'error' ? console.error : console.warn
+    logger(`[ChannelStore] ${message}`, data)
   }
 
   function removedChannelKey(uid: string): string {
@@ -300,17 +301,17 @@ export const useChannelStore = defineStore('channel', () => {
     return !displayName || displayName === id
   }
 
-  /** 通讯录只展示有效成员频道；占位（仅 ID）或已失效成员关系的不展示。 */
+  /**
+   * 通讯录频道可见性，对齐旧 ocs `address-book/channels.vue`：
+   * channelList 返回的条目直接展示，不做「必须有名称 / memberType>0」过滤。
+   * 仅 memberType < 0（已退出/失效）不展示。
+   */
   function isChannelVisibleInAddressBook(channel: Channel | null | undefined, uid = activeUid): boolean {
     const id = String(channel?.id || channel?.channelId || '').trim()
     if (!id || !isValidChannelId(id) || isChannelRemoved(id, uid)) return false
-    if (isPlaceholderChannel(channel)) return false
-    const memberType = channel?.memberType
-    // 对齐旧 im channel-notice：!memberType || memberType < 0 视为失效/非成员。
-    if (memberType !== null && memberType !== undefined) {
-      const mt = Number(memberType)
-      if (!Number.isFinite(mt) || mt <= 0) return false
-    }
+    // 对齐旧 ocs 通讯录：仅已退出（memberType < 0）不展示。
+    const mt = Number(channel?.memberType)
+    if (channel?.memberType != null && Number.isFinite(mt) && mt < 0) return false
     return true
   }
 
@@ -482,7 +483,7 @@ export const useChannelStore = defineStore('channel', () => {
     }
   }
 
-  async function hydratePlaceholderChannels(uid = activeUid) {
+  async function hydratePlaceholderChannels(uid = activeUid, options?: { pruneUnresolved?: boolean }) {
     if (!uid) return
     const placeholders = channels.value.filter((item) => isPlaceholderChannel(item))
     if (placeholders.length === 0) {
@@ -517,15 +518,24 @@ export const useChannelStore = defineStore('channel', () => {
       remainingPlaceholderCount: channels.value.filter(isPlaceholderChannel).length,
       durationMs: Date.now() - startedAt,
     })
-    await pruneUnresolvedPlaceholderChannels(uid)
+    // 远端签名/网络失败时不要清占位，否则 97 等包号不对时会把频道整表清空。
+    if (options?.pruneUnresolved !== false) {
+      await pruneUnresolvedPlaceholderChannels(uid)
+    }
   }
 
   async function pruneUnresolvedPlaceholderChannels(uid = activeUid, reason = 'placeholder-unresolved') {
     if (!uid) return
     const unresolvedIds = channels.value
-      .filter((item) => isPlaceholderChannel(item))
+      .filter((item) => {
+        if (!isPlaceholderChannel(item)) return false
+        const id = String(item.id || item.channelId || '').trim()
+        if (!id || isChannelRemoved(id, uid)) return false
+        // 详情请求失败（签名错误/网络错误）时保留，避免误删。
+        return getChannelDetailStatus(id) !== 'error'
+      })
       .map((item) => String(item.id || item.channelId || '').trim())
-      .filter((id) => id && !isChannelRemoved(id, uid))
+      .filter(Boolean)
     if (unresolvedIds.length === 0) return
     channelDiag('prune unresolved placeholder channels', {
       uid,
@@ -611,12 +621,13 @@ export const useChannelStore = defineStore('channel', () => {
         seed?.conversationChannels || [],
         seed?.localChannels || [],
       ), uid)
-      // 对齐旧 im 通讯录 channelList：远端成功时以成员列表为准，不把会话里残留的占位 ID 混进通讯录。
+      // 对齐旧 ocs：远端列表 + 本地/会话合并展示；远端空时保留本地，避免通讯录整段空白。
       const trustedSeedChannels = seedChannels.filter((item) => {
         const id = String(item.id || item.channelId || '')
-        if (!id || isPlaceholderChannel(item)) return false
+        if (!id || !isValidChannelId(id)) return false
         if (apiIds.has(id)) return true
-        return item.memberType !== null && Number(item.memberType) > 0
+        // API 成功但本页未带回该频道时，仍保留本地已有名称的条目；纯占位留给 hydrate 补齐。
+        return !isPlaceholderChannel(item)
       })
       const nextChannels = filterRemovedChannels(mergeChannelsById(
         trustedSeedChannels,
@@ -634,13 +645,14 @@ export const useChannelStore = defineStore('channel', () => {
         durationMs: Date.now() - startedAt,
       })
       if (nextChannels.length > 0) {
-        channels.value = nextChannels
-        await hydratePlaceholderChannels(uid)
+        channels.value = nextChannels.filter((item) => isChannelVisibleInAddressBook(item, uid))
+        // 补齐名称时不要因详情失败把列表清掉（对齐 ocs 通讯录只依赖 channelList）。
+        await hydratePlaceholderChannels(uid, { pruneUnresolved: false })
         channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
         await saveChannelsToLocal(uid, channels.value)
       } else if (trustedSeedChannels.length > 0) {
-        channels.value = trustedSeedChannels
-        await hydratePlaceholderChannels(uid)
+        channels.value = trustedSeedChannels.filter((item) => isChannelVisibleInAddressBook(item, uid))
+        await hydratePlaceholderChannels(uid, { pruneUnresolved: false })
         channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
       }
       return
@@ -654,8 +666,11 @@ export const useChannelStore = defineStore('channel', () => {
 
     if (mergedChannels.length > 0) {
       channels.value = mergedChannels
-      await hydratePlaceholderChannels(uid)
-      channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
+      await hydratePlaceholderChannels(uid, { pruneUnresolved: false })
+      channels.value = channels.value.filter((item) => {
+        const id = String(item.id || item.channelId || '').trim()
+        return !!id && isValidChannelId(id) && !isChannelRemoved(id, uid)
+      })
       await saveChannelsToLocal(uid, channels.value)
       channelDiag('API failed, using merged fallback', {
         count: mergedChannels.length,
@@ -668,15 +683,21 @@ export const useChannelStore = defineStore('channel', () => {
     // 如果远端频道列表没返回数据，至少保住会话里已经出现过的频道，不让通讯录区域完全空白。
     const fallbackChannels = seed?.conversationChannels || (await loadChannelsFromConversationCache(uid))
     channels.value = filterRemovedChannels(fallbackChannels, uid)
-    await hydratePlaceholderChannels(uid)
-    channels.value = channels.value.filter((item) => isChannelVisibleInAddressBook(item, uid))
+    await hydratePlaceholderChannels(uid, { pruneUnresolved: false })
+    channels.value = channels.value.filter((item) => {
+      // API 失败时仍展示会话兜底频道（哪怕暂时只有 ID），避免 97 等签名异常时整页空白。
+      const id = String(item.id || item.channelId || '').trim()
+      return !!id && isValidChannelId(id) && !isChannelRemoved(id, uid)
+    })
     channelDiag('API empty, using conversation fallback', {
       count: channels.value.length,
       placeholderCount: channels.value.filter(isPlaceholderChannel).length,
       durationMs: Date.now() - startedAt,
+      apiSucceeded,
     })
     console.warn(
-      '[ChannelStore] channel api empty, fallback from conversations',
+      '[ChannelStore] channel api failed or empty, fallback from conversations',
+      { apiSucceeded, collected: allChannels.length },
     )
   }
 

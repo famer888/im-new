@@ -178,8 +178,10 @@ function normalizeHttpBaseUrl(value: string): string {
 }
 
 function channelDiag(message: string, data?: Record<string, unknown>) {
-  void message
-  void data
+  // 频道网关请求失败时输出，便于核对 45/55/97 签名与域名。
+  if (message.includes('fail') || message.includes('exhaust') || message.includes('401')) {
+    console.warn(`[ChannelAPI] ${message}`, data || {})
+  }
 }
 
 function getOpenChatBaseCandidates(): string[] {

@@ -7,7 +7,7 @@ import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
 import { getQrCodeUrl, getIsLogin, getUserInfo } from '@/api/imBase'
 import { API_CONFIG, getBaseUrl, isLoginOnlyBaseUrl } from '@/api/config'
-import { getDeviceConfig, refreshDeviceSysMacFromNative } from '@/api/request'
+import { getDeviceConfig, mergeDeviceConfigExtras, refreshDeviceSysMacFromNative } from '@/api/request'
 import { getAllDomains, getOrderedDomainUrls, initDomainPoolFromApi, initDomainPoolFromOss, markDomainError } from '@/utils/domainPool'
 import { getOrCreateInstallCode } from '@/utils/installCode'
 import { WebLoginStatus } from '@/proto/generated'
@@ -87,8 +87,9 @@ const currentBaseUrl = computed(() => {
 const showOverlay = computed(() => qrCodeUrlError.value || isOutTime.value || isLoading.value)
 const scanStatusText = computed(() => {
   if (loginPollErrorMessage.value) return loginPollErrorMessage.value
-  if (isScanCancelled.value) return t('扫码已取消，正在刷新二维码')
-  if (isScanned.value) return t('请在手机上确认登录')
+  // 文案 key 与 locales 对齐（旧 im：用户已扫码请在手机确认 / 用户已取消扫码）
+  if (isScanCancelled.value) return t('用户已取消扫码')
+  if (isScanned.value) return t('用户已扫码请在手机确认')
   return ''
 })
 const overlayText = computed(() => {
@@ -610,17 +611,21 @@ async function handleIsLoginGet() {
       hasSessionUrl: !!res?.urls?.session,
     })
 
+    // 对齐旧 im / 全项目约定：errCode 0 与 200 都算成功；1023 为业务软状态。
+    // 之前把 0 当成失败，连续两次就会误刷二维码，手机确认后 PC 永远进不去。
     const errCode = Number(res?.commonResult?.errCode ?? 200)
     const errMsg = String(res?.commonResult?.errMsg || '').trim()
     const loginStatus = res?.loginStatus
     const isConfirming = loginStatus === WebLoginStatus.SCANNED
       || loginStatus === WebLoginStatus.ALREADY_LOGIN
+    const isSoftOk = errCode === 200 || errCode === 0 || errCode === 1023 || isConfirming
 
-    if (errCode !== 200 && errCode !== 1023 && !isConfirming) {
+    if (!isSoftOk) {
       loginPollErrorCount.value += 1
       loginPollErrorMessage.value = errMsg || t('登录失败，请重试')
       qrDiag('isLogin poll rejected by server', { errCode, errMsg })
-      if (loginPollErrorCount.value >= 2) {
+      // 对齐旧 im：轮询阶段不以业务 errCode 强刷二维码；仅明确失败多轮后才提示并换码。
+      if (loginPollErrorCount.value >= 3) {
         emit('login-error', loginPollErrorMessage.value)
         clearTimers()
         qrCodeUrlError.value = false
@@ -643,6 +648,11 @@ async function handleIsLoginGet() {
       loginPollErrorMessage.value = ''
       const loginId = String(res.uid)
       clearTimers()
+      // 对齐旧 im ecode.vue：登录成功后把 urls / uploadFileSize 写入 device-config
+      mergeDeviceConfigExtras({
+        uploadFileSize: Number(res.uploadFileSize || 0),
+        urls: res.urls || undefined,
+      })
       const sessionBaseUrl = getBusinessSessionBaseUrl(resolvedLoginBaseUrl)
       qrDiag('login success emit', {
         uid: loginId,

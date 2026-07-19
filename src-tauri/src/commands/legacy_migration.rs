@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
 use crate::branding::{self, app_brand_id};
@@ -46,15 +46,26 @@ pub struct LegacyMigrationResult {
     pub skipped: bool,
     pub reason: String,
     pub imported_count: usize,
+    /// 仅 temp_cache(abc) 导入视为完整；IndexedDB 启发式可能不全，前端应继续轮询。
+    pub complete: bool,
 }
+
+/// IndexedDB 抽取算法版本；升级后允许对曾半导入账号再扫一次。
+const INDEXEDDB_EXTRACTOR_VERSION: u32 = 7;
 
 #[tauri::command]
 pub async fn try_migrate_legacy_desktop_data(
     app: AppHandle,
-    db: State<'_, DbManager>,
     uid: String,
 ) -> Result<LegacyMigrationResult, String> {
-    migrate_legacy_desktop_data_for_uid(&app, &db, uid.trim())
+    let uid = uid.trim().to_string();
+    let app_for_job = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = app_for_job.state::<DbManager>();
+        migrate_legacy_desktop_data_for_uid(&app_for_job, db.inner(), &uid)
+    })
+    .await
+    .map_err(|e| format!("legacy migration join error: {e}"))?
 }
 
 pub fn migrate_legacy_desktop_data_for_uid(
@@ -74,6 +85,7 @@ pub fn migrate_legacy_desktop_data_for_uid(
             skipped: true,
             reason: "uid is empty".to_string(),
             imported_count: 0,
+            complete: false,
         });
     }
 
@@ -85,25 +97,29 @@ pub fn migrate_legacy_desktop_data_for_uid(
             skipped: true,
             reason: "legacy migration is desktop-only".to_string(),
             imported_count: 0,
+            complete: false,
         });
     }
 
     let brand_id = app_brand_id(app);
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
-    if should_skip_migration(&app_data_dir, db, &uid)? {
+    // 只有 abc（temp_cache）完整导入后才彻底跳过。
+    // IndexedDB 启发式可能漏消息，之后还要继续尝试吃到 abc 补全。
+    if has_complete_temp_cache_migration(&app_data_dir, &uid)? {
         return Ok(LegacyMigrationResult {
             attempted: false,
             migrated: false,
             skipped: true,
             reason: "already migrated".to_string(),
             imported_count: 0,
+            complete: true,
         });
     }
 
     db.get_or_create(&uid).map_err(|e| e.to_string())?;
 
-    let candidates = legacy_cache_candidates(&uid, brand_id);
+    let candidates = legacy_cache_candidates(&uid, brand_id, &app_data_dir);
     let tried_paths = candidates
         .iter()
         .map(|item| format!("{}:{:?}", item.source, item.path))
@@ -157,6 +173,7 @@ pub fn migrate_legacy_desktop_data_for_uid(
             skipped: false,
             reason: format!("imported from legacy temp cache ({})", candidate.source),
             imported_count,
+            complete: true,
         });
     }
 
@@ -168,33 +185,54 @@ pub fn migrate_legacy_desktop_data_for_uid(
         tried_paths
     );
 
-    for user_data_path in legacy_indexeddb::legacy_electron_user_data_paths(brand_id) {
-        let (history_obj, row_count) =
+    if should_skip_indexeddb_rescan(&app_data_dir, db, &uid)? {
+        return Ok(LegacyMigrationResult {
+            attempted: true,
+            migrated: false,
+            skipped: true,
+            reason: "indexeddb already imported; waiting for abc".to_string(),
+            imported_count: 0,
+            complete: false,
+        });
+    }
+
+    let backup_root = app_data_dir.join("legacy-electron-backup");
+    let indexeddb_roots = legacy_indexeddb::legacy_electron_user_data_paths_with_backup(
+        brand_id,
+        Some(backup_root.as_path()),
+    );
+    for user_data_path in indexeddb_roots {
+        let (history_obj, import_score) =
             legacy_indexeddb::import_history_from_user_data(&user_data_path, &uid);
-        if history_obj.is_empty() || row_count == 0 {
+        if history_obj.is_empty() || import_score == 0 {
             continue;
         }
 
         let imported_count = db
             .with_connection(&uid, |conn| {
+                cleanup_empty_legacy_placeholders(conn)?;
                 account_transfer::import_history_value(conn, &uid, &history_obj)
             })
             .map_err(|e| e.to_string())?;
 
-        mark_uid_migrated(
-            &app_data_dir,
-            &uid,
-            LegacyMigrationRecord {
-                uid: uid.clone(),
-                migrated_at: chrono::Utc::now().timestamp_millis(),
-                source: format!(
-                    "indexeddb:{}:{}",
-                    brand_id,
-                    user_data_path.to_string_lossy()
-                ),
-                imported_count,
-            },
-        )?;
+        // IndexedDB 可能不全：标记后仍允许后续 abc 补导（见 has_complete_temp_cache_migration）。
+        if imported_count > 0 {
+            mark_uid_migrated(
+                &app_data_dir,
+                &uid,
+                LegacyMigrationRecord {
+                    uid: uid.clone(),
+                    migrated_at: chrono::Utc::now().timestamp_millis(),
+                    source: format!(
+                        "indexeddb:v{}:{}:{}",
+                        INDEXEDDB_EXTRACTOR_VERSION,
+                        brand_id,
+                        user_data_path.to_string_lossy()
+                    ),
+                    imported_count,
+                },
+            )?;
+        }
 
         info!(
             "[legacy-migration] imported uid={} brand={} count={} from indexeddb {:?}",
@@ -203,10 +241,15 @@ pub fn migrate_legacy_desktop_data_for_uid(
 
         return Ok(LegacyMigrationResult {
             attempted: true,
-            migrated: true,
-            skipped: false,
-            reason: "imported from legacy electron indexeddb".to_string(),
+            migrated: imported_count > 0,
+            skipped: imported_count == 0,
+            reason: if imported_count > 0 {
+                "imported from legacy electron indexeddb".to_string()
+            } else {
+                "legacy indexeddb tables found but no messages parsed".to_string()
+            },
             imported_count,
+            complete: false,
         });
     }
 
@@ -216,10 +259,15 @@ pub fn migrate_legacy_desktop_data_for_uid(
         skipped: true,
         reason: last_reason,
         imported_count: 0,
+        complete: false,
     })
 }
 
-fn legacy_cache_candidates(uid: &str, brand_id: &str) -> Vec<LegacyCacheCandidate> {
+fn legacy_cache_candidates(
+    uid: &str,
+    brand_id: &str,
+    app_data_dir: &Path,
+) -> Vec<LegacyCacheCandidate> {
     let mut candidates = Vec::new();
     let mut seen_paths = HashMap::<String, ()>::new();
 
@@ -236,26 +284,41 @@ fn legacy_cache_candidates(uid: &str, brand_id: &str) -> Vec<LegacyCacheCandidat
         });
     };
 
+    let backup_root = app_data_dir.join("legacy-electron-backup");
+    // 安装器备份的 Temp abc 优先（卸载后原 %TEMP% 也可能被清过）。
+    for brand in [brand_id, "55", "45", "97"] {
+        let dir_name = branding::legacy_temp_storage_dir_name(brand);
+        let key = branding::legacy_history_cache_key(brand);
+        push_path(
+            backup_root
+                .join(&dir_name)
+                .join(format!("user-{uid}"))
+                .join("abc"),
+            key,
+            "installer-backup",
+        );
+    }
+    push_path(
+        backup_root
+            .join("68LocalStorage")
+            .join(format!("user-{uid}"))
+            .join("abc"),
+        "6854",
+        "installer-backup-68",
+    );
+
     // 当前渠道优先；同时兼容旧包曾写过的 45/55/68/97 Temp 目录。
     // 解密时会对同一文件再尝试其它常见 key（见 read_legacy_history_from_cache）。
-    push_path(
-        legacy_temp_cache_file(uid, brand_id),
-        branding::legacy_history_cache_key(brand_id),
-        "brand",
-    );
-    if brand_id != "55" {
-        push_path(legacy_temp_cache_file(uid, "55"), "5554", "legacy55");
+    for brand in [brand_id, "55", "45", "97"] {
+        let dir_name = branding::legacy_temp_storage_dir_name(brand);
+        let key = branding::legacy_history_cache_key(brand);
+        let source = if brand == brand_id { "brand" } else { "legacy-scan" };
+        for path in discover_legacy_abc_paths(uid, &dir_name) {
+            push_path(path, key, source);
+        }
     }
-    if brand_id != "45" {
-        push_path(legacy_temp_cache_file(uid, "45"), "4554", "legacy45");
-    }
-    push_path(
-        legacy_temp_cache_file_with_dir(uid, "68LocalStorage"),
-        "6854",
-        "legacy68",
-    );
-    if brand_id != "97" {
-        push_path(legacy_temp_cache_file(uid, "97"), "9754", "legacy97");
+    for path in discover_legacy_abc_paths(uid, "68LocalStorage") {
+        push_path(path, "6854", "legacy68");
     }
 
     candidates
@@ -350,28 +413,52 @@ fn write_migration_store(app_data_dir: &Path, store: &LegacyMigrationStore) -> R
     std::fs::write(path, raw).map_err(|e| e.to_string())
 }
 
-fn is_uid_already_migrated(app_data_dir: &Path, uid: &str) -> Result<bool, String> {
+fn has_complete_temp_cache_migration(app_data_dir: &Path, uid: &str) -> Result<bool, String> {
     let store = read_migration_store(app_data_dir)?;
     let Some(record) = store.records.get(uid) else {
         return Ok(false);
     };
-    // 旧逻辑在频道消息先写入 SQLite 时会误标 migrated，允许重新导入单聊/群聊历史。
-    if record.source == "existing_sqlite" {
-        return Ok(false);
-    }
-    Ok(true)
+    Ok(record.source.starts_with("temp_cache:"))
 }
 
-fn should_skip_migration(app_data_dir: &Path, db: &DbManager, uid: &str) -> Result<bool, String> {
-    if !is_uid_already_migrated(app_data_dir, uid)? {
+fn should_skip_indexeddb_rescan(
+    app_data_dir: &Path,
+    db: &DbManager,
+    uid: &str,
+) -> Result<bool, String> {
+    let store = read_migration_store(app_data_dir)?;
+    let Some(record) = store.records.get(uid) else {
+        return Ok(false);
+    };
+    if record.source.starts_with("temp_cache:") {
+        return Ok(true);
+    }
+    if !record.source.starts_with("indexeddb:") {
         return Ok(false);
     }
-
+    // 抽取算法升级后允许再扫一次，补全此前漏掉的单聊/群聊。
+    let version_prefix = format!("indexeddb:v{INDEXEDDB_EXTRACTOR_VERSION}:");
+    if !record.source.starts_with(&version_prefix) {
+        return Ok(false);
+    }
     let friend_group_count = db
         .with_connection(uid, count_friend_group_messages)
         .map_err(|e| e.to_string())?;
-    // 已迁移但单聊/群聊仍为空时，继续尝试旧 Electron IndexedDB 补导。
+    // 已扫过 IndexedDB 且本地已有单聊/群聊时，跳过昂贵重扫；abc 仍会在函数前半段尝试。
     Ok(friend_group_count > 0)
+}
+
+fn cleanup_empty_legacy_placeholders(conn: &Connection) -> Result<(), crate::db::DbError> {
+    // 旧版 IndexedDB 解析曾把中文 content 剥成空串，留下空气泡；重扫前清掉这类占位。
+    conn.execute(
+        "DELETE FROM messages
+         WHERE (content IS NULL OR trim(content) = '')
+           AND (id LIKE 'legacy_%' OR IFNULL(custom_msg_id, '') LIKE 'legacy_custom_%')
+           AND (conversation_id GLOB '0_*' OR conversation_id GLOB '1_*')",
+        [],
+    )
+    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    Ok(())
 }
 
 fn count_friend_group_messages(conn: &Connection) -> Result<usize, crate::db::DbError> {
@@ -405,6 +492,65 @@ fn legacy_temp_cache_file_with_dir(uid: &str, dir_name: &str) -> PathBuf {
         .join(dir_name)
         .join(format!("user-{uid}"))
         .join("abc")
+}
+
+/// Mac 上 Electron / Tauri 的 TMPDIR 偶发不一致，且 /var/folders 会话目录会轮换。
+/// 额外扫常见临时根，把能找到的 `*/{brand}LocalStorage/user-{uid}/abc` 都纳入候选。
+fn discover_legacy_abc_paths(uid: &str, dir_name: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = HashMap::<String, ()>::new();
+    let mut push = |path: PathBuf| {
+        let key = path.to_string_lossy().to_string();
+        if seen.contains_key(&key) {
+            return;
+        }
+        seen.insert(key, ());
+        paths.push(path);
+    };
+
+    let rel = PathBuf::from(dir_name)
+        .join(format!("user-{uid}"))
+        .join("abc");
+    push(std::env::temp_dir().join(&rel));
+    if let Ok(tmpdir) = std::env::var("TMPDIR") {
+        push(PathBuf::from(tmpdir).join(&rel));
+    }
+    push(PathBuf::from("/tmp").join(&rel));
+
+    #[cfg(target_os = "macos")]
+    {
+        // 扫当前用户可见临时根下已有的 *LocalStorage（深度有限，避免全盘）。
+        for root in [std::env::temp_dir(), PathBuf::from("/tmp")] {
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                if name != dir_name && !name.ends_with("LocalStorage") {
+                    continue;
+                }
+                if name == dir_name {
+                    push(entry.path().join(format!("user-{uid}")).join("abc"));
+                }
+            }
+            // /var/folders/.../T 的父级偶发挂着其它 T 会话；只跟一层 sibling T。
+            if let Some(parent) = root.parent() {
+                if let Ok(siblings) = std::fs::read_dir(parent) {
+                    for sibling in siblings.flatten().take(32) {
+                        let candidate = sibling.path().join(dir_name).join(format!("user-{uid}")).join("abc");
+                        if candidate.is_file() {
+                            push(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    paths
 }
 
 fn normalize_legacy_history_payload(
@@ -462,36 +608,54 @@ mod tests {
 
     #[test]
     fn legacy_cache_candidates_include_cross_brand_temp_dirs() {
-        let candidates = legacy_cache_candidates("123", "45");
+        let app_data = std::env::temp_dir().join(format!(
+            "legacy-mig-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&app_data);
+        let candidates = legacy_cache_candidates("123", "45", &app_data);
         let sources: Vec<_> = candidates.iter().map(|c| c.source).collect();
-        assert_eq!(candidates[0].source, "brand");
-        assert_eq!(candidates[0].cache_key, "4554");
-        assert!(sources.contains(&"legacy55"));
-        assert!(sources.contains(&"legacy68"));
-        assert!(sources.contains(&"legacy97"));
-        assert_eq!(
-            candidates
-                .iter()
-                .find(|c| c.source == "legacy55")
-                .unwrap()
-                .path,
-            std::env::temp_dir()
-                .join("55LocalStorage")
-                .join("user-123")
-                .join("abc")
-        );
+        assert!(sources.contains(&"installer-backup"));
+        assert!(sources.contains(&"brand"));
+        assert!(sources.iter().any(|s| *s == "legacy-scan" || *s == "legacy68"));
+        let brand = candidates
+            .iter()
+            .find(|c| c.source == "brand")
+            .expect("brand candidate");
+        assert_eq!(brand.cache_key, "4554");
+        assert!(candidates.iter().any(|c| {
+            c.cache_key == "5554"
+                && c.path
+                    .to_string_lossy()
+                    .contains("55LocalStorage/user-123/abc")
+        }));
+        assert!(candidates.iter().any(|c| {
+            c.source == "installer-backup"
+                && c.path.ends_with(Path::new("45LocalStorage/user-123/abc"))
+        }));
+        let _ = std::fs::remove_dir_all(&app_data);
     }
 
     #[test]
     fn legacy_cache_candidates_for_97_skip_duplicate_97_dir() {
-        let candidates = legacy_cache_candidates("123", "97");
+        let app_data = std::env::temp_dir().join(format!(
+            "legacy-mig-test-97-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&app_data);
+        let candidates = legacy_cache_candidates("123", "97", &app_data);
         let sources: Vec<_> = candidates.iter().map(|c| c.source).collect();
-        assert_eq!(candidates[0].source, "brand");
-        assert_eq!(candidates[0].cache_key, "9754");
-        assert!(sources.contains(&"legacy55"));
-        assert!(sources.contains(&"legacy45"));
-        assert!(sources.contains(&"legacy68"));
-        assert!(!sources.contains(&"legacy97"));
+        assert!(sources.contains(&"installer-backup"));
+        assert!(sources.contains(&"brand"));
+        let brand = candidates
+            .iter()
+            .find(|c| c.source == "brand")
+            .expect("brand candidate");
+        assert_eq!(brand.cache_key, "9754");
+        assert!(candidates.iter().any(|c| c.cache_key == "5554"));
+        assert!(candidates.iter().any(|c| c.cache_key == "4554"));
+        assert!(candidates.iter().any(|c| c.cache_key == "6854"));
+        let _ = std::fs::remove_dir_all(&app_data);
     }
 
     #[test]

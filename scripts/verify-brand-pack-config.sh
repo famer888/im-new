@@ -7,17 +7,25 @@ OCS_DIR="${OCS_DIR:-$(cd "$ROOT_DIR/../ocs" && pwd)}"
 
 expected_secret_name() {
   case "$1" in
-    45) echo da4beccf359c72236b0a5b3baf58bed6 ;;
-    55) echo 9da979df2a2bd9bc6cea0ebdc98fde2e ;;
-    97) echo 26b2e2f2308cd4b80f222d3df669d4df ;;
+    45) echo 27283795908588a8b2e751f4241f562b ;;
+    55) echo 2e4632b94cf15b90cb02d40742186d69 ;;
+    97) echo 28b41fd6e4226b9e768ffcfc5a482966 ;;
   esac
 }
 
 expected_secret_key() {
   case "$1" in
-    45) echo 473551ace50e9d94 ;;
-    55) echo d170deacb66075a0 ;;
-    97) echo ee2068510cf3f273 ;;
+    45) echo d9950fe6bbc4c6a9 ;;
+    55) echo 52e61b2052ae35c7 ;;
+    97) echo 9a7979a586830fbf ;;
+  esac
+}
+
+expected_package_code() {
+  case "$1" in
+    45) echo 4520 ;;
+    55) echo 5520 ;;
+    97) echo 7100 ;;
   esac
 }
 
@@ -80,6 +88,8 @@ for brand in 45 55 97; do
 
   echo "  OK   secrets preset in build-release-brand.sh"
   echo "       SECRET_NAME=$(expected_secret_name "$brand")"
+  echo "       PACKAGE_CODE=$(expected_package_code "$brand")"
+  echo "       OPEN_CHAT_APP_VER=171 (ocs 1.7.1 密钥登记，勿跟包版本 172)"
   echo "  OK   Windows legacy Electron GUID=$(expected_electron_nsis_guid "$brand")"
   echo ""
 done

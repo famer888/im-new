@@ -23,12 +23,27 @@ const authStore = useAuthStore()
 const settingStore = useSettingStore()
 const { locale } = useI18n()
 
+function isTauri(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+/** 登录窗首屏就要能挂二维码；不能等 async restore 后再判定 label。 */
+function resolveIsLoginWindow(): boolean {
+  if (!isTauri()) return true
+  try {
+    return getCurrentWindow().label === 'login'
+  } catch {
+    // 多开登录进程若暂读不到 label，偏登录窗展示，避免空白壳。
+    return true
+  }
+}
+
 const showNetworkConfig = ref(false)
 const showFileImport = ref(false)
 const isLoading = ref(false)
 const isRestoring = ref(true)
 const isMac = ref(false)
-const isLoginWindow = ref(!isTauri())
+const isLoginWindow = ref(resolveIsLoginWindow())
 const extraDomains = ref<string[]>([])
 const networkBenchmarkDomains = ref<string[]>(getCachedNetworkBenchmarkDomains())
 const qrLoginKey = ref(0)
@@ -37,10 +52,6 @@ const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('error')
 const LOGIN_RESTORE_STEP_TIMEOUT_MS = 10000
 let networkBenchmarkPreloadPromise: Promise<string[]> | null = null
-
-function isTauri(): boolean {
-  return !!(window as any).__TAURI_INTERNALS__
-}
 
 function loginDiag(message: string, data?: Record<string, unknown>) {
   if (!import.meta.env.DEV) return
@@ -89,33 +100,48 @@ async function withRestoreTimeout<T>(label: string, task: Promise<T>): Promise<T
 onMounted(async () => {
   isMac.value = navigator.platform.toLowerCase().includes('mac')
   void startNetworkBenchmarkPreload()
+
+  // 多开第二条登录进程时，settings/invoke 可能抢锁超时。
+  // 必须先判定窗口 label：否则 catch 后 isLoginWindow 仍为 false，Mac 登录壳空白无二维码。
+  if (isTauri()) {
+    try {
+      isLoginWindow.value = getCurrentWindow().label === 'login'
+    } catch (error) {
+      // 读 label 失败时偏登录窗展示二维码，避免托盘「打开新窗口」空白。
+      isLoginWindow.value = true
+      loginDiag('window label read failed, assume login window', {
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  } else {
+    isLoginWindow.value = true
+  }
+
   loginDiag('mounted', {
     isTauri: isTauri(),
     route: route.fullPath,
     autoLogin: route.query.autoLogin,
+    isLoginWindow: isLoginWindow.value,
   })
+
   try {
     await withRestoreTimeout('load settings', settingStore.loadSettings())
     locale.value = settingStore.settings.language
     loginDiag('settings loaded', { language: settingStore.settings.language })
 
-    if (isTauri()) {
-      isLoginWindow.value = getCurrentWindow().label === 'login'
-      loginDiag('window label resolved', { isLoginWindow: isLoginWindow.value })
-      if (!isLoginWindow.value) {
-        await withRestoreTimeout(
-          'init session for main window',
-          authStore.initSession(PROCESS_LOCAL_INIT_SESSION_OPTIONS),
-        )
-        if (authStore.uid) {
-          loginDiag('main window session restored, route home', { uid: authStore.uid })
-          await router.replace('/home')
-        } else {
-          loginDiag('main window has no session, show login window')
-          await withRestoreTimeout('show login window', invoke('show_login_window'))
-        }
-        return
+    if (isTauri() && !isLoginWindow.value) {
+      await withRestoreTimeout(
+        'init session for main window',
+        authStore.initSession(PROCESS_LOCAL_INIT_SESSION_OPTIONS),
+      )
+      if (authStore.uid) {
+        loginDiag('main window session restored, route home', { uid: authStore.uid })
+        await router.replace('/home')
+      } else {
+        loginDiag('main window has no session, show login window')
+        await withRestoreTimeout('show login window', invoke('show_login_window'))
       }
+      return
     }
 
     const autoLoginAllowed = route.query.autoLogin !== '0'
@@ -157,10 +183,22 @@ onMounted(async () => {
     console.warn('[auth] restore previous session failed:', error)
     loginDiag('restore failed, show QR login', {
       message: error instanceof Error ? error.message : String(error),
+      isLoginWindow: isLoginWindow.value,
     })
   } finally {
+    // 对齐旧 im：登录页应尽快露出二维码，restore 失败/超时也不能挡住。
+    if (isTauri() && isLoginWindow.value === false) {
+      try {
+        isLoginWindow.value = getCurrentWindow().label === 'login'
+      } catch {
+        isLoginWindow.value = true
+      }
+    }
     isRestoring.value = false
-    loginDiag('restore finished', { isRestoring: isRestoring.value })
+    loginDiag('restore finished', {
+      isRestoring: isRestoring.value,
+      isLoginWindow: isLoginWindow.value,
+    })
   }
 })
 
@@ -245,11 +283,11 @@ function startWindowDrag(e: MouseEvent) {
       @valid-domain-list="handleValidDomainList"
       @close="showNetworkConfig = false"
     />
-    <!-- 对齐老 im：网络检测只是覆盖层，返回时不能卸载并重建二维码登录组件。 -->
+    <!-- 对齐老 im：登录窗尽快挂二维码；restore 只挡自动登录，不再用 isRestoring 把整块 QR 卸掉。 -->
     <QRCodeLogin
-      v-if="isLoginWindow && !isRestoring"
+      v-if="isLoginWindow"
       :key="qrLoginKey"
-      :loading="isLoading"
+      :loading="isLoading || isRestoring"
       :extra-domains="extraDomains"
       @login-success="handleLoginSuccess"
       @login-error="handleLoginError"

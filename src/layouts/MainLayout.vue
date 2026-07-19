@@ -727,16 +727,22 @@ onMounted(async () => {
           initDiag('legacy desktop migration imported history', {
             importedCount: migrationResult.importedCount,
             reason: migrationResult.reason,
+            complete: migrationResult.complete,
           })
-        } else if (!migrationResult?.skipped || migrationResult.reason !== 'already migrated') {
-          // 旧包被踢下线后才会导出 abc 缓存，登录初始化时通常还没生成。
-          // 后台有限次轮询补迁移，导入成功后清缓存并刷新会话列表（不阻塞进入主页）。
+        }
+        // IndexedDB 半导入也要继续后台轮询等 abc 补全；只有 abc 完整导入或已标记完成才停。
+        const migrationComplete =
+          migrationResult?.complete === true ||
+          migrationResult?.reason === 'already migrated' ||
+          /temp cache/i.test(migrationResult?.reason || '')
+        if (!migrationComplete) {
           void runLegacyDesktopMigrationWithRetry(authStore.uid, {
             onImported: async (result) => {
               messageStore.clearAllMessageCaches()
               initDiag('legacy desktop migration late import', {
                 importedCount: result.importedCount,
                 reason: result.reason,
+                complete: result.complete,
               })
               try {
                 await chatStore.loadConversations(authStore.uid)

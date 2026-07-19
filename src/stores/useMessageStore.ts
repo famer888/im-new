@@ -23,6 +23,7 @@ import {
 } from '@/utils/e2ee'
 import { API_CONFIG } from '@/api/config'
 import { getDeviceConfig, getPlatformSysModel } from '@/api/request'
+import { getRuntimePlatform } from '@/utils/runtimePlatform'
 import { isProdSafeDomain } from '@/utils/domainSafety'
 import {
   getChannelHistoryMessages,
@@ -213,6 +214,15 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
   if (!aesKey) aesKey = API_CONFIG.aesKey
   installCode = installCode || getOrCreateInstallCode()
   const device = getDeviceConfig()
+  // WS 登录 sysModel 必须和旧 im 一致（MAC/WINDOWS），否则同账号跨端踢下线会踢错平台。
+  let sysModel = getPlatformSysModel()
+  try {
+    const runtimePlatform = await getRuntimePlatform()
+    if (runtimePlatform === 'macos') sysModel = 'MAC'
+    else if (runtimePlatform === 'windows') sysModel = 'WINDOWS'
+  } catch {
+    // 原生平台探测失败时沿用 getPlatformSysModel 兜底。
+  }
 
   return {
     wsUrl: normalizeWsUrl(wsUrl),
@@ -226,7 +236,7 @@ async function resolveWsConnectConfig(): Promise<WsConnectConfig> {
     plat: API_CONFIG.plat,
     language: API_CONFIG.language,
     sysMac: device.sysMac,
-    sysModel: getPlatformSysModel(),
+    sysModel,
   }
 }
 

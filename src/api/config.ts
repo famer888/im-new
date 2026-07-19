@@ -61,7 +61,21 @@ function normalizeBrandId(input?: string): '45' | '55' | '97' {
   if (value === '45' || value === '55' || value === '97') return value
   const matched = value.match(/^(45|55|97)(?:-im)?$/i)
   if (matched) return matched[1] as '45' | '55' | '97'
-  return '97'
+  // 对齐旧 ocs：未注入品牌时默认 55（二维码域名 55chat.com / packageCode 5520）
+  return '55'
+}
+
+/** 对齐旧 ocs getSignHeader：45→4520、55→5520、97→7100 */
+export function getBrandPackageCode(brandId?: string): number {
+  switch (normalizeBrandId(brandId)) {
+    case '45':
+      return 4520
+    case '97':
+      return 7100
+    case '55':
+    default:
+      return 5520
+  }
 }
 
 export function getBrandDisplayName(input?: string): string {
@@ -74,8 +88,8 @@ const OFFICIAL_URL = String(import.meta.env.VITE_APP_OFFICIAL_URL || `${BRAND_ID
 const LEGACY_API_BASE_URL_KEY = 'api-base-url'
 const API_BASE_URL_KEY = `${LEGACY_API_BASE_URL_KEY}:${ENV_NAME}:${BRAND_ID}`
 
-/** 对齐老 im 55.1.7.0：请求签名与 clientInfo 默认 packageCode 为 5520 */
-export const OPEN_CHAT_PACKAGE_CODE = 5520
+/** 默认 packageCode（可被 VITE_APP_PACKAGE_CODE 覆盖）；频道网关与 webbiz 共用品牌包号 */
+export const OPEN_CHAT_PACKAGE_CODE = getBrandPackageCode(BRAND_ID)
 
 function parseOpenChatAppVer(): number | undefined {
   const raw = String(import.meta.env.VITE_APP_OPEN_CHAT_APP_VER || '').trim()
@@ -91,11 +105,11 @@ export const API_CONFIG = {
   secretName: import.meta.env.VITE_APP_SECRET_NAME || 'eb2c844e110be53a0b008a9766877aea',
   secretKey: import.meta.env.VITE_APP_SECRET_KEY || '1004969fe92844eb',
   appVer: Number(import.meta.env.VITE_APP_VERSION_CODE || 168),
-  /** 频道网关单独 appVer，须与 SECRET_* 在服务端登记一致；未配置则与 appVer 相同 */
-  openChatAppVer: parseOpenChatAppVer(),
-  /** 对齐旧 im：默认 packageCode 为 5520，避免登录态与频道网关按不同包号签名。 */
+  /** 频道网关单独 appVer，须与 SECRET_* 在服务端登记一致（ocs 1.7.1 密钥对应 171）。缺省固定 171，勿回落到业务包 172。 */
+  openChatAppVer: parseOpenChatAppVer() ?? 171,
+  /** 对齐旧 im：webbiz / OpenChat 共用品牌 packageCode（45=4520, 55=5520, 97=7100）。 */
   packageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || OPEN_CHAT_PACKAGE_CODE),
-  openChatPackageCode: OPEN_CHAT_PACKAGE_CODE,
+  openChatPackageCode: Number(import.meta.env.VITE_APP_PACKAGE_CODE || OPEN_CHAT_PACKAGE_CODE),
   language: Number(import.meta.env.VITE_APP_LANGUAGE || 2),
   plat: Number(import.meta.env.VITE_APP_PLATFORM || 4),
   rawDomainUrl: RAW_DOMAIN_URL,

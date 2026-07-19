@@ -56,17 +56,49 @@ pub async fn connect_ws(
         );
     }
     // 10001 LoginReq 的 clientInfo 必须和 HTTP 登录头保持一致，否则线上 WS 可能连上但不回消息 ACK。
+    // sysModel 再按编译目标校正一次：前端若只靠 WebView UA，Mac 上可能误传 WINDOWS，导致踢不下 Mac 旧包。
     let default_client_info = WsLoginClientInfo::default();
+    let mut resolved_sys_model = sys_model
+        .unwrap_or(default_client_info.sys_model.clone())
+        .trim()
+        .to_string();
+    #[cfg(target_os = "macos")]
+    {
+        if resolved_sys_model.is_empty()
+            || resolved_sys_model.eq_ignore_ascii_case("windows")
+            || resolved_sys_model.eq_ignore_ascii_case("win")
+            || resolved_sys_model.eq_ignore_ascii_case("pc")
+        {
+            tracing::warn!(
+                target: "ws",
+                "connect_ws override sys_model from {:?} to MAC",
+                resolved_sys_model
+            );
+            resolved_sys_model = "MAC".to_string();
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if resolved_sys_model.is_empty()
+            || resolved_sys_model.eq_ignore_ascii_case("mac")
+            || resolved_sys_model.eq_ignore_ascii_case("macos")
+            || resolved_sys_model.eq_ignore_ascii_case("darwin")
+        {
+            tracing::warn!(
+                target: "ws",
+                "connect_ws override sys_model from {:?} to WINDOWS",
+                resolved_sys_model
+            );
+            resolved_sys_model = "WINDOWS".to_string();
+        }
+    }
     let login_client_info = WsLoginClientInfo {
         app_ver: app_ver.unwrap_or(default_client_info.app_ver),
         package_code: package_code.unwrap_or(default_client_info.package_code),
         plat: plat.unwrap_or(default_client_info.plat),
         language: language.unwrap_or(default_client_info.language),
         sys_mac: sys_mac.unwrap_or_default().trim().to_string(),
-        sys_model: sys_model
-            .unwrap_or(default_client_info.sys_model)
-            .trim()
-            .to_string(),
+        sys_model: resolved_sys_model,
     };
     ws_mgr
         .connect(

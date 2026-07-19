@@ -369,16 +369,12 @@ pub async fn login(
             return Err(err.to_string());
         }
 
-        if let Err(err) = crate::commands::legacy_migration::migrate_legacy_desktop_data_for_uid(
-            &app,
-            &db,
-            uid,
-        ) {
-            warn!(
-                "[legacy-migration] login-time migration failed uid={}: {}",
-                uid, err
-            );
-        }
+        // 登录阶段不做遗留库重扫描：IndexedDB 启发式很吃内存，会在切主窗口前把进程打崩。
+        // 主界面会 await runLegacyDesktopMigration，在进会话列表前完成 abc/IndexedDB 导入。
+        info!(
+            "[legacy-migration] skip login-time migration uid={}; MainLayout will migrate before load",
+            uid
+        );
     }
 
     win_mgr.switch_to_main(&app).map_err(|e| e.to_string())?;

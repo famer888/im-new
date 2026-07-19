@@ -5,7 +5,6 @@
 import { aesEncrypt, aesDecrypt, aesEncryptString } from '@/utils/crypto'
 import {
   API_CONFIG,
-  OPEN_CHAT_PACKAGE_CODE,
   getBaseUrl,
   getRawBaseUrl,
   isLoginOnlyBaseUrl,
@@ -23,8 +22,15 @@ function generateMacAddress(): string {
   ).join('')
 }
 
+function resolvePackNameForSysMac(): string {
+  // 对齐旧 im getMacAddress：前缀为 VUE_APP_PACKNAME（如 55-im），不是裸 brandId。
+  return String(
+    import.meta.env.VITE_APP_PACKNAME || `${API_CONFIG.brandId || '55'}-im`,
+  ).trim() || '55-im'
+}
+
 function generateLegacyStyleSysMac(): string {
-  const packageName = String(import.meta.env.VITE_APP_PACKNAME || API_CONFIG.brandId || '97').trim() || '97'
+  const packageName = resolvePackNameForSysMac()
   const hex = Array.from({ length: 6 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0'))
   return `${packageName}-${hex.join(':')}`
 }
@@ -35,7 +41,10 @@ function shouldMigrateLegacyDeviceConfig(config: { sysModel?: string; sysMac?: s
   const sysMac = String(config.sysMac || '').trim()
   if (!sysModel || !sysMac) return true
   // 对齐旧 im：sysMac 应为 “packname-xx:xx:xx:xx:xx:xx” 形态；早期随机串会导致扫码登录确认态无法完成。
-  return !sysMac.includes('-') || !sysMac.includes(':')
+  if (!sysMac.includes('-') || !sysMac.includes(':')) return true
+  const pack = resolvePackNameForSysMac()
+  // 开发态补齐品牌后，旧的 97-xxx 缓存不能继续用于 55 扫码配对。
+  return !sysMac.startsWith(`${pack}-`)
 }
 
 let cachedDeviceConfig: { sysModel: string; sysMac: string } | null = null
@@ -45,15 +54,18 @@ export async function refreshDeviceSysMacFromNative(): Promise<void> {
 
   try {
     const { invoke } = await import('@tauri-apps/api/core')
-    const packName = String(import.meta.env.VITE_APP_PACKNAME || `${API_CONFIG.brandId}-im`).trim()
+    const packName = resolvePackNameForSysMac()
     const sysMac = String(await invoke<string>('get_device_sys_mac', { packName: packName })).trim()
     if (!sysMac.includes('-') || !sysMac.includes(':')) return
 
     let sysModel = ''
+    let extras: Record<string, unknown> = {}
     const stored = localStorage.getItem('device-config')
     if (stored) {
       try {
-        sysModel = String(JSON.parse(stored)?.sysModel || '').trim()
+        const parsed = JSON.parse(stored) || {}
+        sysModel = String(parsed?.sysModel || '').trim()
+        extras = parsed
       } catch { /* ignore */ }
     }
     if (!sysModel) {
@@ -63,10 +75,34 @@ export async function refreshDeviceSysMacFromNative(): Promise<void> {
     }
 
     cachedDeviceConfig = { sysModel, sysMac }
-    localStorage.setItem('device-config', JSON.stringify(cachedDeviceConfig))
+    localStorage.setItem('device-config', JSON.stringify({ ...extras, sysModel, sysMac }))
   } catch {
     // 读取网卡失败时继续走本地缓存/随机 sysMac。
   }
+}
+
+/** 对齐旧 im fnConfigRU：登录成功后合并 urls / uploadFileSize 等到 device-config。 */
+export function mergeDeviceConfigExtras(info: Record<string, unknown>) {
+  const device = getDeviceConfig()
+  let stored: Record<string, unknown> = { ...device }
+  try {
+    const raw = localStorage.getItem('device-config')
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') {
+        stored = { ...parsed }
+      }
+    }
+  } catch { /* ignore */ }
+
+  const next = {
+    ...stored,
+    ...info,
+    sysModel: device.sysModel,
+    sysMac: device.sysMac,
+  }
+  cachedDeviceConfig = { sysModel: device.sysModel, sysMac: device.sysMac }
+  localStorage.setItem('device-config', JSON.stringify(next))
 }
 
 export function getDeviceConfig() {
@@ -462,19 +498,43 @@ async function fetchWithWebBizFallback(
 
 /**
  * 与老 im fnClientInfoGet 的平台语义对齐：
- * - sysModel 为平台名字符串（"MAC"/"WINDOWS"），不是设备指纹！服务端扫码配对靠它识别 PC 客户端
+ * - sysModel 为平台名字符串（"MAC"/"WINDOWS"），不是设备指纹！服务端靠它区分同账号 PC 端并踢下线
  * - 常规 protobuf clientInfo 里不带 version；header/domain JSON 场景单独补 version
  * - plat 固定 WIN=4（老 im 硬编码 4）
+ *
+ * 注意：Tauri WebView 的 userAgent 不一定带 Macintosh，仅靠 UA 会在 Mac 上误报 WINDOWS，
+ * 导致登录重构包时踢的是 Windows 旧包、Mac 旧包仍在线。优先用原生平台缓存。
  */
 export function getPlatformSysModel(): string {
-  const ua = (navigator.userAgent || '').toLowerCase()
-  if (ua.includes('mac')) return 'MAC'
+  const cached = String((window as any).__OCS_RUNTIME_PLATFORM__ || '')
+    .trim()
+    .toLowerCase()
+  if (cached === 'macos' || cached === 'darwin' || cached === 'mac') return 'MAC'
+  if (cached === 'windows' || cached === 'win32' || cached === 'win') return 'WINDOWS'
+
+  const platform = String(navigator.platform || '').toLowerCase()
+  const ua = String(navigator.userAgent || '').toLowerCase()
+  const haystack = `${platform} ${ua}`
+  if (
+    haystack.includes('mac')
+    || haystack.includes('darwin')
+    || platform === 'macintel'
+    || platform === 'macppc'
+    || platform === 'mac68k'
+  ) {
+    return 'MAC'
+  }
   return 'WINDOWS'
 }
 
 export function getHeaderClientVersion(appVer: number): string {
   const versionName = String(import.meta.env.VITE_APP_VERSION_NAME || '').trim()
   if (versionName) return versionName
+  return formatAppVerAsVersionName(appVer)
+}
+
+/** 把 171 / 172 这类 appVer 还原成 1.7.1 / 1.7.2，对齐旧 ocs fnClientInfoGet。 */
+export function formatAppVerAsVersionName(appVer: number | string): string {
   const text = String(appVer || '').trim()
   if (text.length >= 3 && /^\d+$/.test(text)) {
     return `${text[0]}.${text[1]}.${text.slice(2)}`
@@ -500,9 +560,15 @@ function getSignClientInfo(
   withSessionId = true,
   packageCode = API_CONFIG.packageCode,
   appVer = API_CONFIG.appVer,
+  versionName?: string,
 ) {
   const device = getDeviceConfig()
-  const version = getHeaderClientVersion(appVer)
+  // OpenChat 可能仍用旧包登记的 appVer（如 171），version 必须与之对应，不能硬套当前 1.7.2。
+  const version =
+    versionName
+    || (Number(appVer) === Number(API_CONFIG.appVer)
+      ? getHeaderClientVersion(appVer)
+      : formatAppVerAsVersionName(appVer))
   return {
     sessionId: withSessionId ? getSessionIdFromStorage() : '',
     // 对齐老 im：签名头里的 clientInfo 走字符串 appVer，并带上 version 字段。
@@ -520,6 +586,7 @@ export function getSignedApiHeaders(options?: {
   withSessionId?: boolean
   packageCode?: number
   appVer?: number
+  versionName?: string
   includeMetaHeaders?: boolean
 }): Record<string, string> {
   const packageCode = options?.packageCode ?? API_CONFIG.packageCode
@@ -528,6 +595,7 @@ export function getSignedApiHeaders(options?: {
     options?.withSessionId ?? true,
     packageCode,
     appVer,
+    options?.versionName,
   )
   const clientStr = JSON.stringify(client)
   const timestamp = Date.now()
@@ -548,18 +616,22 @@ export function getSignedApiHeaders(options?: {
 }
 
 /**
- * OpenChat（test-gateway）频道/群相关接口签名：
- * - packageCode 5520
- * - 与普通接口共用 5520；真正区分的是 SECRET_* 与 openChatAppVer
+ * OpenChat（频道网关）签名，严格对齐旧 ocs `getSignHeader` / `fnClientInfoGet`：
+ * - 只发 X-one / X-ten / X-ten-origin（不附带 X-App-Version 等元数据头）
+ * - packageCode 按品牌（45=4520 / 55=5520 / 97=7100）
+ * - appVer 使用 openChatAppVer（默认 171，与 1.7.1 密钥登记一致；不能盲目跟 1.7.2 的 172）
+ * - version 对齐 ocs：`${version} ${buildTime}`，buildTime 空时仍带尾部空格（如 `"1.7.1 "`）
  */
 export function getOpenChatSignedApiHeaders(options?: {
   withSessionId?: boolean
 }): Record<string, string> {
-  const appVer = API_CONFIG.openChatAppVer ?? API_CONFIG.appVer
+  const appVer = API_CONFIG.openChatAppVer ?? 171
   return getSignedApiHeaders({
     withSessionId: options?.withSessionId,
-    packageCode: OPEN_CHAT_PACKAGE_CODE,
+    packageCode: API_CONFIG.openChatPackageCode,
     appVer,
+    versionName: `${formatAppVerAsVersionName(appVer)} `,
+    includeMetaHeaders: false,
   })
 }
 

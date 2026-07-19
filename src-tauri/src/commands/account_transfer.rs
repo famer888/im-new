@@ -662,14 +662,17 @@ fn legacy_message_to_current(
     };
 
     let content = value_to_string(obj.get("content"))
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.trim().is_empty())
         .or_else(|| {
             obj.get("Content").and_then(|v| match v {
                 Value::String(s) if !s.trim().is_empty() && s.trim() != "{}" => Some(s.clone()),
                 Value::Object(_) | Value::Array(_) => Some(v.to_string()),
                 _ => None,
             })
-        });
+        })
+        .filter(|v| !v.trim().is_empty());
+    // 空正文的历史消息入库只会显示空气泡，直接跳过。
+    let content = content?;
 
     Some(models::Message {
         id,
@@ -681,7 +684,7 @@ fn legacy_message_to_current(
         conversation_id: conversation_id.to_string(),
         sender_id,
         msg_type,
-        content,
+        content: Some(content),
         send_time,
         status,
         read_status,

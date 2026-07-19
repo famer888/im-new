@@ -102,7 +102,8 @@ async function bootstrap() {
     env: import.meta.env.VITE_APP_ENV,
     brand: import.meta.env.VITE_APP_BRAND_ID || import.meta.env.VITE_APP_PACKNAME,
   })
-  void logRuntimePlatform('app-start')
+  // 先解析原生平台，保证后续 HTTP/WS clientInfo.sysModel 在 Mac 上不会误报 WINDOWS。
+  await logRuntimePlatform('app-start')
   const initialLocale = await resolveInitialLocale()
   bootDiag('initial locale resolved', { initialLocale })
   const i18n = createI18n({

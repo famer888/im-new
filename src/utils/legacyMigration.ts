@@ -4,6 +4,8 @@ export interface LegacyMigrationResult {
   skipped: boolean
   reason: string
   importedCount: number
+  /** 仅 abc/temp_cache 完整导入为 true；IndexedDB 半导入为 false，需继续轮询补全。 */
+  complete?: boolean
 }
 
 function isTauri(): boolean {
@@ -52,9 +54,9 @@ export interface LegacyMigrationRetryOptions {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**
- * 覆盖安装后旧包（Electron）只有在被踢下线/登出时才会把 Dexie 数据导出成 `abc` 缓存文件。
- * 新包登录初始化时该文件往往还不存在，所以首次迁移失败后需要有限次轮询：
- * 一旦旧包完成导出，就自动补迁移并回调刷新 UI。多次导入是幂等的（INSERT OR REPLACE）。
+ * 覆盖安装后旧包（Electron）主要靠首页 30s 定时 cacheDB 写出 Temp `abc`；
+ * 踢下线/登出的自动导出在旧首页基本未接通。新包安装时会先备份再卸旧包。
+ * 登录后首次迁移若还未拿到可用缓存，会有限次轮询；多次导入幂等（INSERT OR REPLACE）。
  */
 export async function runLegacyDesktopMigrationWithRetry(
   uid: string,
@@ -64,15 +66,20 @@ export async function runLegacyDesktopMigrationWithRetry(
   if (!normalizedUid || !isTauri()) return null
 
   const intervalMs = Math.max(1000, options.intervalMs ?? 3000)
-  const maxWaitMs = Math.max(intervalMs, options.maxWaitMs ?? 60000)
+  // IndexedDB 可能先半导入；多等一会儿以便旧包 30s 定时写出 abc 后再补全。
+  const maxWaitMs = Math.max(intervalMs, options.maxWaitMs ?? 120000)
 
   const first = await runLegacyDesktopMigration(normalizedUid)
   if (first?.migrated) {
     await options.onImported?.(first)
-    return first
+    // IndexedDB 启发式可能不全，只有 abc 完整导入才结束；否则继续轮询等补全。
+    if (first.complete || /temp cache/i.test(first.reason)) {
+      return first
+    }
   }
 
-  // 已迁移且本地已有单聊/群聊数据时，Rust 端会返回 already migrated，无需继续轮询。
+  // 已通过 abc 完整迁移时，Rust 端会返回 already migrated，无需继续轮询。
+  // IndexedDB 半导入会返回 waiting for abc，继续轮询以便补全。
   if (first?.skipped && first.reason === 'already migrated') {
     return first
   }
@@ -85,7 +92,11 @@ export async function runLegacyDesktopMigrationWithRetry(
     last = result
     if (result?.migrated) {
       await options.onImported?.(result)
-      return result
+      if (result.complete || /temp cache/i.test(result.reason)) {
+        return result
+      }
+      // IndexedDB 再导入后继续等 abc
+      continue
     }
     if (result?.skipped && result.reason === 'already migrated') {
       return result

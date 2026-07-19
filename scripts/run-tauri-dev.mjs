@@ -10,24 +10,31 @@ const rootDir = path.resolve(__dirname, '..')
 
 const PROD_DEFAULT_BRAND_ID = '55'
 
+// OpenChat SECRET_* 必须与旧 ocs 各品牌 1.7.1 分支一致，且与 packageCode / openChatAppVer=171 成对。
 const BRAND_PRESETS = {
   45: {
     packname: '45-im',
     officialUrl: '45chat.com',
-    secretName: 'da4beccf359c72236b0a5b3baf58bed6',
-    secretKey: '473551ace50e9d94',
+    packageCode: 4520,
+    openChatAppVer: 171,
+    secretName: '27283795908588a8b2e751f4241f562b',
+    secretKey: 'd9950fe6bbc4c6a9',
   },
   55: {
     packname: '55-im',
     officialUrl: '55chat.com',
-    secretName: '9da979df2a2bd9bc6cea0ebdc98fde2e',
-    secretKey: 'd170deacb66075a0',
+    packageCode: 5520,
+    openChatAppVer: 171,
+    secretName: '2e4632b94cf15b90cb02d40742186d69',
+    secretKey: '52e61b2052ae35c7',
   },
   97: {
     packname: '97-im',
     officialUrl: '97chat.com',
-    secretName: '26b2e2f2308cd4b80f222d3df669d4df',
-    secretKey: 'ee2068510cf3f273',
+    packageCode: 7100,
+    openChatAppVer: 171,
+    secretName: '28b41fd6e4226b9e768ffcfc5a482966',
+    secretKey: '9a7979a586830fbf',
   },
 }
 
@@ -61,6 +68,8 @@ function buildBrandViteEnv(brandId) {
     VITE_APP_BRAND_ID: brandId,
     VITE_APP_PACKNAME: preset.packname,
     VITE_APP_OFFICIAL_URL: preset.officialUrl,
+    VITE_APP_PACKAGE_CODE: String(preset.packageCode),
+    VITE_APP_OPEN_CHAT_APP_VER: String(preset.openChatAppVer ?? 171),
     VITE_APP_SECRET_NAME: preset.secretName,
     VITE_APP_SECRET_KEY: preset.secretKey,
   }

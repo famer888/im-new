@@ -49,6 +49,68 @@ latest_file() {
   ls -t "${matches[@]}" | head -n 1
 }
 
+# 对齐旧 ocs（electron-builder）：即使没有 Apple 开发者证书，也会做完整 adhoc 整包签名
+# （Sealed Resources + 绑定 Info.plist）。Tauri 若跳过签 bundle，只剩 linker-signed，
+# macOS 双击校验失败会直接杀掉进程，看起来像“意外退出”，其实不是业务崩溃。
+adhoc_sign_macos_app() {
+  local app_path="$1"
+  local executable_name=""
+  local macos_dir="$app_path/Contents/MacOS"
+  local entitlements="$ROOT_DIR/src-tauri/entitlements.mac.plist"
+  local sign_args=(--force --deep --sign -)
+
+  if [[ ! -d "$app_path" ]]; then
+    echo "Cannot sign missing app bundle: $app_path" >&2
+    return 1
+  fi
+
+  executable_name="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app_path/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -n "$executable_name" && -d "$macos_dir" ]]; then
+    # 清理历史残留二进制（例如改 mainBinaryName 前留下的 ocs-chat），避免签名/启动混乱。
+    for stale in "$macos_dir"/*; do
+      [[ -f "$stale" ]] || continue
+      [[ "$(basename "$stale")" == "$executable_name" ]] && continue
+      rm -f "$stale"
+    done
+  fi
+
+  # 先清掉不完整签名，再按旧项目风格重签：完整 adhoc（不强制 hardened runtime，
+  # 与本机可正常打开的 OCS Chat 55.app 一致）。
+  codesign --remove-signature "$app_path" >/dev/null 2>&1 || true
+  if [[ -n "$executable_name" && -f "$macos_dir/$executable_name" ]]; then
+    codesign --remove-signature "$macos_dir/$executable_name" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -f "$entitlements" ]]; then
+    sign_args+=(--entitlements "$entitlements")
+  fi
+
+  codesign "${sign_args[@]}" "$app_path"
+  codesign --verify --deep --strict "$app_path"
+  echo "Adhoc signed macOS app (ocs-style): $app_path"
+}
+
+recreate_dmg_from_app() {
+  local app_path="$1"
+  local dmg_out="$2"
+  local stage vol_name
+
+  stage="$(mktemp -d /tmp/ocs-chat-dmg-XXXXXX)"
+  vol_name="$(basename "$app_path" .app)"
+  cp -R "$app_path" "$stage/"
+  ln -s /Applications "$stage/Applications"
+  rm -f "$dmg_out"
+  hdiutil create \
+    -volname "$vol_name" \
+    -srcfolder "$stage" \
+    -ov \
+    -format UDZO \
+    "$dmg_out" >/dev/null
+  chmod 644 "$dmg_out"
+  rm -rf "$stage"
+  echo "Recreated DMG from signed app: $dmg_out"
+}
+
 require_node
 
 cd "$ROOT_DIR"
@@ -93,6 +155,7 @@ fi
 # pkgbuild 会保留 app bundle 内的文件权限；资源文件如果是 700，安装后会变成 root 私有，
 # Launchpad/Finder 就读不到图标，所以打包前统一补齐普通用户可读/可进入权限。
 chmod -R u+rwX,go+rX "$APP_PATH"
+adhoc_sign_macos_app "$APP_PATH"
 
 ARCH_LABEL="${TAURI_TARGET:-$(uname -m)}"
 PKG_STAGE_ROOT="/tmp/ocs-chat-pkg-root"
@@ -106,6 +169,7 @@ case "$TAURI_BUILD_MODE" in
 esac
 
 PKG_OUTPUT_PATH="$RELEASE_DIST_DIR/${APP_NAME}${PKG_ENV_SUFFIX}_${VERSION}_${ARCH_LABEL}.pkg"
+DMG_OUTPUT_PATH="$RELEASE_DIST_DIR/${APP_NAME}${PKG_ENV_SUFFIX}_${VERSION}_${ARCH_LABEL}.dmg"
 
 rm -rf "$PKG_STAGE_ROOT" "$PKG_COMPONENT_PLIST"
 mkdir -p "$PKG_STAGE_ROOT/Applications"
@@ -124,11 +188,17 @@ pkgbuild \
 chmod 644 "$PKG_OUTPUT_PATH"
 
 if [[ "$COPY_APP_BUNDLE" == "1" ]]; then
+  rm -rf "$RELEASE_DIST_DIR/$APP_NAME.app"
   ditto "$APP_PATH" "$RELEASE_DIST_DIR/$APP_NAME.app"
 fi
 
-if [[ "$COPY_DMG" == "1" && -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
-  cp -f "$DMG_PATH" "$RELEASE_DIST_DIR/"
+if [[ "$COPY_DMG" == "1" ]]; then
+  # Tauri 生成的 dmg 可能仍是签名前快照；用已签名 app 重打，避免安装后双击闪退。
+  recreate_dmg_from_app "$APP_PATH" "$DMG_OUTPUT_PATH"
+  if [[ -n "$DMG_PATH" && -f "$DMG_PATH" ]]; then
+    # 清理 tauri 原始 dmg，避免 release-dist 里留下未签名版本。
+    rm -f "$RELEASE_DIST_DIR/$(basename "$DMG_PATH")"
+  fi
 fi
 
 echo "macOS artifacts copied to: $RELEASE_DIST_DIR"
