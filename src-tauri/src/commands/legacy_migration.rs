@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
@@ -36,6 +37,8 @@ struct LegacyMigrationRecord {
     migrated_at: i64,
     source: String,
     imported_count: usize,
+    #[serde(default)]
+    source_fingerprints: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,9 +107,11 @@ pub fn migrate_legacy_desktop_data_for_uid(
     let brand_id = app_brand_id(app);
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
-    // 只有 abc（temp_cache）完整导入后才彻底跳过。
-    // IndexedDB 启发式可能漏消息，之后还要继续尝试吃到 abc 补全。
-    if has_complete_temp_cache_migration(&app_data_dir, &uid)? {
+    let candidates = legacy_cache_candidates(&uid, brand_id, &app_data_dir);
+
+    // abc 完整导入后只在源文件未变时跳过。用户回到旧版继续收发消息后，
+    // 下次启动重构版必须再做一次幂等增量导入。
+    if has_unchanged_complete_temp_cache_migration(&app_data_dir, &uid, &candidates)? {
         return Ok(LegacyMigrationResult {
             attempted: false,
             migrated: false,
@@ -119,14 +124,31 @@ pub fn migrate_legacy_desktop_data_for_uid(
 
     db.get_or_create(&uid).map_err(|e| e.to_string())?;
 
-    let candidates = legacy_cache_candidates(&uid, brand_id, &app_data_dir);
     let tried_paths = candidates
         .iter()
         .map(|item| format!("{}:{:?}", item.source, item.path))
         .collect::<Vec<_>>()
         .join(", ");
+    let previous_fingerprints = migration_source_fingerprints(&app_data_dir, &uid)?;
+    let mut source_fingerprints = previous_fingerprints.clone();
+    let mut processed_fingerprints = HashSet::new();
+    let mut imported_sources = Vec::new();
+    let mut total_imported_count = 0usize;
     let mut last_reason = "legacy cache not found".to_string();
-    for candidate in candidates {
+    for candidate in &candidates {
+        let Some(fingerprint) = legacy_cache_fingerprint(&candidate.path)? else {
+            continue;
+        };
+        let path_key = candidate.path.to_string_lossy().to_string();
+        if previous_fingerprints.get(&path_key) == Some(&fingerprint) {
+            continue;
+        }
+        // 安装器备份与还原后的原路径通常是同一份 abc，同次只解密/导入一次。
+        if !processed_fingerprints.insert(fingerprint.clone()) {
+            source_fingerprints.insert(path_key, fingerprint);
+            continue;
+        }
+
         let Some((payload_uid, history_obj)) = read_legacy_history_from_cache(&candidate)? else {
             continue;
         };
@@ -150,29 +172,38 @@ pub fn migrate_legacy_desktop_data_for_uid(
                 account_transfer::import_history_value(conn, &uid, &history_obj)
             })
             .map_err(|e| e.to_string())?;
+        total_imported_count = total_imported_count.saturating_add(imported_count);
+        source_fingerprints.insert(path_key, fingerprint);
+        imported_sources.push(candidate.source);
+    }
 
+    if !imported_sources.is_empty() {
+        imported_sources.sort_unstable();
+        imported_sources.dedup();
+        let sources = imported_sources.join("+");
         mark_uid_migrated(
             &app_data_dir,
             &uid,
             LegacyMigrationRecord {
                 uid: uid.clone(),
                 migrated_at: chrono::Utc::now().timestamp_millis(),
-                source: format!("temp_cache:{}:{}", brand_id, candidate.source),
-                imported_count,
+                source: format!("temp_cache:{}:{}", brand_id, sources),
+                imported_count: total_imported_count,
+                source_fingerprints,
             },
         )?;
 
         info!(
-            "[legacy-migration] imported uid={} brand={} count={} source={} from {:?}",
-            uid, brand_id, imported_count, candidate.source, candidate.path
+            "[legacy-migration] imported uid={} brand={} count={} sources={}",
+            uid, brand_id, total_imported_count, sources
         );
 
         return Ok(LegacyMigrationResult {
             attempted: true,
             migrated: true,
             skipped: false,
-            reason: format!("imported from legacy temp cache ({})", candidate.source),
-            imported_count,
+            reason: format!("imported from legacy temp cache ({sources})"),
+            imported_count: total_imported_count,
             complete: true,
         });
     }
@@ -230,6 +261,7 @@ pub fn migrate_legacy_desktop_data_for_uid(
                         user_data_path.to_string_lossy()
                     ),
                     imported_count,
+                    source_fingerprints: HashMap::new(),
                 },
             )?;
         }
@@ -413,12 +445,50 @@ fn write_migration_store(app_data_dir: &Path, store: &LegacyMigrationStore) -> R
     std::fs::write(path, raw).map_err(|e| e.to_string())
 }
 
-fn has_complete_temp_cache_migration(app_data_dir: &Path, uid: &str) -> Result<bool, String> {
+fn migration_source_fingerprints(
+    app_data_dir: &Path,
+    uid: &str,
+) -> Result<HashMap<String, String>, String> {
     let store = read_migration_store(app_data_dir)?;
     let Some(record) = store.records.get(uid) else {
-        return Ok(false);
+        return Ok(HashMap::new());
     };
-    Ok(record.source.starts_with("temp_cache:"))
+    if !record.source.starts_with("temp_cache:") {
+        return Ok(HashMap::new());
+    }
+    Ok(record.source_fingerprints.clone())
+}
+
+fn legacy_cache_fingerprint(path: &Path) -> Result<Option<String>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("failed to fingerprint legacy cache {:?}: {}", path, e))?;
+    Ok(Some(format!("{:x}", Sha256::digest(bytes))))
+}
+
+fn has_unchanged_complete_temp_cache_migration(
+    app_data_dir: &Path,
+    uid: &str,
+    candidates: &[LegacyCacheCandidate],
+) -> Result<bool, String> {
+    let source_fingerprints = migration_source_fingerprints(app_data_dir, uid)?;
+    // 旧版完成记录没有指纹：升级后必须补扫一次，不能永久跳过。
+    if source_fingerprints.is_empty() {
+        return Ok(false);
+    }
+
+    for candidate in candidates {
+        let Some(current) = legacy_cache_fingerprint(&candidate.path)? else {
+            continue;
+        };
+        let path_key = candidate.path.to_string_lossy();
+        if source_fingerprints.get(path_key.as_ref()) != Some(&current) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn should_skip_indexeddb_rescan(
@@ -743,5 +813,97 @@ mod tests {
                 .join("abc")
         );
         assert_eq!(branding::legacy_history_cache_key("55"), "5554");
+    }
+
+    #[test]
+    fn completed_temp_cache_migration_is_invalidated_when_source_changes() {
+        let app_data = std::env::temp_dir().join(format!(
+            "legacy-mig-fingerprint-test-{}",
+            std::process::id()
+        ));
+        let cache_path = app_data.join("55LocalStorage/user-123/abc");
+        std::fs::create_dir_all(cache_path.parent().expect("cache parent"))
+            .expect("create cache parent");
+        std::fs::write(&cache_path, b"first cache revision").expect("write first cache");
+
+        let candidate = LegacyCacheCandidate {
+            path: cache_path.clone(),
+            cache_key: "5554",
+            source: "brand",
+        };
+        let fingerprint = legacy_cache_fingerprint(&cache_path)
+            .expect("fingerprint cache")
+            .expect("cache exists");
+        mark_uid_migrated(
+            &app_data,
+            "123",
+            LegacyMigrationRecord {
+                uid: "123".to_string(),
+                migrated_at: 1,
+                source: "temp_cache:55:brand".to_string(),
+                imported_count: 2,
+                source_fingerprints: HashMap::from([(
+                    cache_path.to_string_lossy().to_string(),
+                    fingerprint,
+                )]),
+            },
+        )
+        .expect("mark migrated");
+
+        assert!(has_unchanged_complete_temp_cache_migration(
+            &app_data,
+            "123",
+            std::slice::from_ref(&candidate),
+        )
+        .expect("unchanged migration state"));
+
+        std::fs::write(&cache_path, b"second cache revision with new messages")
+            .expect("write changed cache");
+        assert!(
+            !has_unchanged_complete_temp_cache_migration(&app_data, "123", &[candidate],)
+                .expect("changed migration state")
+        );
+
+        let _ = std::fs::remove_dir_all(&app_data);
+    }
+
+    #[test]
+    fn legacy_completion_record_without_fingerprints_is_rescanned_once() {
+        let app_data = std::env::temp_dir().join(format!(
+            "legacy-mig-old-record-test-{}",
+            std::process::id()
+        ));
+        let cache_path = app_data.join("55LocalStorage/user-123/abc");
+        std::fs::create_dir_all(cache_path.parent().expect("cache parent"))
+            .expect("create cache parent");
+        std::fs::write(&cache_path, b"cache written after the old migration marker")
+            .expect("write cache");
+        std::fs::create_dir_all(&app_data).expect("create app data");
+        std::fs::write(
+            migration_store_path(&app_data),
+            r#"{
+              "records": {
+                "123": {
+                  "uid": "123",
+                  "migratedAt": 1,
+                  "source": "temp_cache:55:brand",
+                  "importedCount": 2
+                }
+              }
+            }"#,
+        )
+        .expect("write old migration marker");
+
+        let candidate = LegacyCacheCandidate {
+            path: cache_path,
+            cache_key: "5554",
+            source: "brand",
+        };
+        assert!(
+            !has_unchanged_complete_temp_cache_migration(&app_data, "123", &[candidate],)
+                .expect("old marker state")
+        );
+
+        let _ = std::fs::remove_dir_all(&app_data);
     }
 }

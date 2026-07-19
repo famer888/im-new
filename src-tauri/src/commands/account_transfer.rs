@@ -841,6 +841,8 @@ mod tests {
 
         let imported = import_history_value(&conn, uid, history_obj).expect("import history");
         assert_eq!(imported, 2);
+        let repeated = import_history_value(&conn, uid, history_obj).expect("repeat import");
+        assert_eq!(repeated, 2);
 
         let private_count: i64 = conn
             .query_row(
