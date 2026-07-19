@@ -677,9 +677,13 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function recallMessage(uid: string, messageId: string) {
+  async function recallMessage(uid: string, messageId: string, conversationId?: string) {
     if (!isTauri()) return
-    await tauriInvoke('recall_message', { uid, messageId })
+    await tauriInvoke('recall_message', {
+      uid,
+      messageId,
+      conversationId: conversationId || null,
+    })
   }
 
   async function deleteConversation(uid: string, conversationId: string) {

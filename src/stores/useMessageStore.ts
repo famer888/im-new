@@ -3157,7 +3157,11 @@ export const useMessageStore = defineStore('message', () => {
     if (failedId) {
       deleteMessage(message.conversationId, failedId)
       if (isTauri()) {
-        tauriInvoke('delete_message', { uid, messageId: failedId }).catch((err) => {
+        tauriInvoke('delete_message', {
+          uid,
+          messageId: failedId,
+          conversationId: message.conversationId,
+        }).catch((err) => {
           console.warn('[msg] delete failed message before resend failed:', err)
         })
       }
@@ -3877,11 +3881,13 @@ export const useMessageStore = defineStore('message', () => {
     await tauriInvoke('delete_message', {
       uid: authStore.uid,
       messageId,
+      conversationId,
     })
   }
 
-  async function deleteMessageLocalById(messageId: string) {
-    deleteMessageFromAllCaches(messageId)
+  async function deleteMessageLocalById(messageId: string, conversationId?: string) {
+    if (conversationId) deleteMessage(conversationId, messageId)
+    else deleteMessageFromAllCaches(messageId)
     if (!isTauri()) return
 
     const authStore = useAuthStore()
@@ -3890,6 +3896,7 @@ export const useMessageStore = defineStore('message', () => {
     await tauriInvoke('delete_message', {
       uid: authStore.uid,
       messageId,
+      conversationId: conversationId || null,
     })
   }
 

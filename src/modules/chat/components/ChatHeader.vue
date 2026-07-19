@@ -122,7 +122,7 @@ async function handleBatchDeleteForAll() {
   if (!convId || !authStore.uid) return
   for (const item of uiStore.selectedMessageItems) {
     messageStore.deleteMessage(convId, item.id)
-    chatStore.recallMessage(authStore.uid, item.id).catch((error) => {
+    chatStore.recallMessage(authStore.uid, item.id, convId).catch((error) => {
       console.warn('[message-selection] remote delete failed:', error)
     })
   }

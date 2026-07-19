@@ -560,25 +560,20 @@ fn normalize_legacy_history_payload(
         .as_object()
         .ok_or_else(|| "legacy payload must be an object".to_string())?;
 
-    let uid = payload_obj
+    let explicit_uid = payload_obj
         .get("uid")
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim()
         .to_string();
-    if uid.is_empty() {
-        return Err("legacy payload uid is missing".to_string());
-    }
 
     let history_value = payload_obj
         .get("history")
         .ok_or_else(|| "legacy payload history is missing".to_string())?;
 
-    if let Some(history_obj) = history_value.as_object() {
-        return Ok((uid, history_obj.clone()));
-    }
-
-    if let Some(items) = history_value.as_array() {
+    let history_obj = if let Some(history_obj) = history_value.as_object() {
+        history_obj.clone()
+    } else if let Some(items) = history_value.as_array() {
         let mut history_obj = Map::new();
         for item in items {
             let Some(item_obj) = item.as_object() else {
@@ -595,10 +590,41 @@ fn normalize_legacy_history_payload(
             }
             history_obj.insert(name.trim().to_string(), list.clone());
         }
-        return Ok((uid, history_obj));
-    }
+        history_obj
+    } else {
+        return Err("legacy payload history has unsupported format".to_string());
+    };
 
-    Err("legacy payload history has unsupported format".to_string())
+    // 官网 Electron 包的 cacheDB.js 有些版本只写 `{ history }`，
+    // uid 仍在 `<uid>-message.man...` 等 object-store 名中。
+    let uid = if explicit_uid.is_empty() {
+        infer_uid_from_legacy_history(&history_obj)
+            .ok_or_else(|| "legacy payload uid is missing".to_string())?
+    } else {
+        explicit_uid
+    };
+
+    Ok((uid, history_obj))
+}
+
+fn infer_uid_from_legacy_history(history: &Map<String, Value>) -> Option<String> {
+    const TABLE_MARKERS: [&str; 3] = [
+        "-message.man",
+        "-groupMessage.man",
+        "-channelMessage.man",
+    ];
+
+    history.keys().find_map(|table_name| {
+        TABLE_MARKERS.iter().find_map(|marker| {
+            let (uid, _) = table_name.split_once(marker)?;
+            let uid = uid.trim();
+            if !uid.is_empty() && uid.chars().all(|ch| ch.is_ascii_digit()) {
+                Some(uid.to_string())
+            } else {
+                None
+            }
+        })
+    })
 }
 
 #[cfg(test)]
@@ -682,6 +708,22 @@ mod tests {
         let (uid, history) = normalize_legacy_history_payload(&payload).unwrap();
         assert_eq!(uid, "10001");
         assert!(history.contains_key("10001-message.man200"));
+    }
+
+    #[test]
+    fn normalize_history_payload_infers_uid_from_legacy_table_name() {
+        // 旧 Electron cacheDB.js 实际写出的 abc 可能只有 history，没有 uid。
+        // 账号 id 仍然稳定地编码在每个历史表名前缀中。
+        let payload = json!({
+            "history": [
+                { "name": "10001-message.man200", "list": [{ "sendTime": 1 }] },
+                { "name": "10001-groupMessage.man300", "list": [{ "sendTime": 2 }] }
+            ]
+        });
+
+        let (uid, history) = normalize_legacy_history_payload(&payload).unwrap();
+        assert_eq!(uid, "10001");
+        assert_eq!(history.len(), 2);
     }
 
     #[test]

@@ -3107,7 +3107,7 @@ async function handleContextMenuSelect(key: string) {
       }
       case 'delete_everyone':
         if (convId) messageStore.deleteMessage(convId, msgId)
-        chatStore.recallMessage(authStore.uid, msgId).catch((error) => {
+        chatStore.recallMessage(authStore.uid, msgId, convId || undefined).catch((error) => {
           console.warn('[message-menu] remote delete failed:', error)
         })
         break

@@ -3635,39 +3635,67 @@ pub async fn apply_channel_read_receipts(
     .map_err(|e| e.to_string())
 }
 
+fn mark_message_deleted(
+    conn: &rusqlite::Connection,
+    message_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<Option<(String, String)>, crate::db::DbError> {
+    let requested_conversation = conversation_id.filter(|value| !value.trim().is_empty());
+    let row = if let Some(conversation_id) = requested_conversation {
+        conn.query_row(
+            "SELECT id, conversation_id
+             FROM messages
+             WHERE conversation_id = ?1
+               AND (id = ?2 OR COALESCE(custom_msg_id, '') = ?2)
+             LIMIT 1",
+            rusqlite::params![conversation_id, message_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+    } else {
+        // 兼容旧调用方；新代码都应传 conversation_id，因为服务端消息 id
+        // 只在会话内唯一。
+        conn.query_row(
+            "SELECT id, conversation_id
+             FROM messages
+             WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1
+             LIMIT 1",
+            rusqlite::params![message_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+    }
+    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+
+    let Some((db_msg_id, resolved_conversation_id)) = row else {
+        return Ok(None);
+    };
+
+    conn.execute(
+        "UPDATE messages
+         SET is_deleted = 1
+         WHERE conversation_id = ?1
+           AND (id = ?2 OR COALESCE(custom_msg_id, '') = ?2)",
+        rusqlite::params![resolved_conversation_id, message_id],
+    )
+    .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
+    queries::refresh_conversation_summary(conn, &resolved_conversation_id)?;
+
+    Ok(Some((db_msg_id, resolved_conversation_id)))
+}
+
 #[tauri::command]
 pub async fn delete_message(
     app: AppHandle,
     db: State<'_, DbManager>,
     uid: String,
     message_id: String,
+    conversation_id: Option<String>,
 ) -> Result<(), String> {
     let conversation_id = db
         .with_connection(&uid, |conn| {
-            let conversation_id = conn
-                .query_row(
-                    "SELECT conversation_id
-                     FROM messages
-                     WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1
-                     LIMIT 1",
-                    rusqlite::params![message_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-
-            conn.execute(
-                "UPDATE messages
-                 SET is_deleted = 1
-                 WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1",
-                rusqlite::params![message_id],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-            if let Some(conv_id) = conversation_id.as_deref() {
-                // 删除消息后把会话摘要回退到最新的未删除消息，供左侧列表即时刷新。
-                queries::refresh_conversation_summary(conn, conv_id)?;
-            }
-            Ok(conversation_id)
+            mark_message_deleted(conn, &message_id, conversation_id.as_deref())
+                .map(|row| row.map(|(_, conversation_id)| conversation_id))
         })
         .map_err(|e| e.to_string())?;
 
@@ -3777,36 +3805,18 @@ pub async fn recall_message(
     ws_mgr: State<'_, crate::ws::WsManager>,
     uid: String,
     message_id: String,
+    conversation_id: Option<String>,
 ) -> Result<(), String> {
     let (db_msg_id, conversation_id) = db
         .with_connection(&uid, |conn| {
-            let row = conn
-                .query_row(
-                    "SELECT id, conversation_id
-                 FROM messages
-                 WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1
-                 LIMIT 1",
-                    rusqlite::params![message_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()
-                .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-
-            let Some((db_msg_id, conversation_id)) = row else {
+            let Some((db_msg_id, conversation_id)) =
+                mark_message_deleted(conn, &message_id, conversation_id.as_deref())?
+            else {
                 return Err(crate::db::DbError::SqliteError(format!(
                     "message not found: {}",
                     message_id
                 )));
             };
-
-            conn.execute(
-                "UPDATE messages
-             SET is_deleted = 1
-             WHERE id = ?1 OR COALESCE(custom_msg_id, '') = ?1",
-                rusqlite::params![message_id],
-            )
-            .map_err(|e| crate::db::DbError::SqliteError(e.to_string()))?;
-            queries::refresh_conversation_summary(conn, &conversation_id)?;
             Ok((db_msg_id, conversation_id))
         })
         .map_err(|e| e.to_string())?;
@@ -4004,6 +4014,51 @@ pub async fn clear_all_local_chat_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleting_duplicate_server_id_only_affects_requested_conversation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrations::run_migrations(&conn).unwrap();
+        for conversation_id in ["0_20001", "1_30001"] {
+            queries::insert_message(
+                &conn,
+                &models::Message {
+                    id: "1".to_string(),
+                    custom_msg_id: None,
+                    conversation_id: conversation_id.to_string(),
+                    sender_id: "1001".to_string(),
+                    msg_type: 0,
+                    content: Some(format!("message in {conversation_id}")),
+                    send_time: 1,
+                    status: 1,
+                    read_status: 0,
+                    version: 0,
+                    is_deleted: false,
+                    extra: None,
+                },
+            )
+            .unwrap();
+        }
+
+        mark_message_deleted(&conn, "1", Some("0_20001")).unwrap();
+
+        let private_deleted: i32 = conn
+            .query_row(
+                "SELECT is_deleted FROM messages WHERE conversation_id = '0_20001' AND id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let group_deleted: i32 = conn
+            .query_row(
+                "SELECT is_deleted FROM messages WHERE conversation_id = '1_30001' AND id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(private_deleted, 1);
+        assert_eq!(group_deleted, 0);
+    }
 
     fn notification_message(extra: serde_json::Value) -> models::Message {
         models::Message {

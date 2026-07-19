@@ -1210,7 +1210,11 @@ export async function setupTauriListeners() {
     if (!uid) return
 
     import('@tauri-apps/api/core')
-      .then(({ invoke }) => invoke('delete_message', { uid, messageId: timer.messageId }))
+      .then(({ invoke }) => invoke('delete_message', {
+        uid,
+        messageId: timer.messageId,
+        conversationId: timer.conversationId,
+      }))
       .catch((err) => {
         console.warn('[read-burn] delete_message failed:', err)
       })
@@ -2451,7 +2455,7 @@ export async function setupTauriListeners() {
     }
     const messageId = String(event.payload?.messageId || '')
     if (!messageId || messageId === '-1') return
-    messageStore.deleteMessageLocalById(messageId).catch((error) => {
+    messageStore.deleteMessageLocalById(messageId, conversationId).catch((error) => {
       console.warn('[msg:recall] delete local failed:', error)
     })
   })

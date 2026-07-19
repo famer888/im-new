@@ -7,10 +7,13 @@ tauri_windows_prepend_homebrew_llvm_path() {
     return 0
   fi
   local p
-  for p in /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin; do
+  for p in \
+    /opt/homebrew/bin \
+    /usr/local/bin \
+    /opt/homebrew/opt/llvm/bin \
+    /usr/local/opt/llvm/bin; do
     if [[ -d "$p" ]]; then
       export PATH="$p:$PATH"
-      return 0
     fi
   done
 }
