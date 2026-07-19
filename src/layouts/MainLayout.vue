@@ -57,6 +57,7 @@ import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeReso
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import { runLegacyDesktopMigration, runLegacyDesktopMigrationWithRetry } from '@/utils/legacyMigration'
+import { refreshAfterLegacyImport } from '@/utils/legacyImportRefresh'
 import { isCurrentChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 
 import { API_CONFIG } from '@/api/config'
@@ -738,16 +739,22 @@ onMounted(async () => {
         if (!migrationComplete) {
           void runLegacyDesktopMigrationWithRetry(authStore.uid, {
             onImported: async (result) => {
-              messageStore.clearAllMessageCaches()
               initDiag('legacy desktop migration late import', {
                 importedCount: result.importedCount,
                 reason: result.reason,
                 complete: result.complete,
               })
               try {
-                await chatStore.loadConversations(authStore.uid)
+                await refreshAfterLegacyImport({
+                  currentConversationId: chatStore.currentConversationId,
+                  clearMessageCaches: () => messageStore.clearAllMessageCaches(),
+                  reloadConversations: () => chatStore.loadConversations(authStore.uid),
+                  reloadMessages: (conversationId) => (
+                    messageStore.loadMessages(authStore.uid, conversationId, true)
+                  ),
+                })
               } catch (err) {
-                console.warn('[legacy-migration] reload conversations after late import failed', err)
+                console.warn('[legacy-migration] reload after late import failed', err)
               }
             },
           })
