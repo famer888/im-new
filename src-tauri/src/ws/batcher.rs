@@ -345,6 +345,23 @@ fn is_channel_create_event(event_type: i32, channel_operate_type: Option<i32>) -
     event_type == 1 && channel_operate_type == Some(0)
 }
 
+fn channel_member_type_update(
+    event_type: i32,
+    subscriber_operate_type: Option<i32>,
+    subscriber_role: Option<i32>,
+) -> Option<i32> {
+    // 协议 SubscriberRole 为 OWNER=0 / ADMIN=1 / NONE=2；前端 memberType 为 1 / 2 / 3。
+    if event_type != 2 || !matches!(subscriber_operate_type, Some(0 | 1)) {
+        return None;
+    }
+    match subscriber_role {
+        Some(0) => Some(1),
+        Some(1) => Some(2),
+        Some(2) => Some(3),
+        _ => None,
+    }
+}
+
 fn channel_removed_reason(
     event_type: i32,
     subscriber_operate_type: Option<i32>,
@@ -509,6 +526,17 @@ mod private_decode_tests {
         assert!(!is_channel_create_event(2, Some(0)));
         assert!(!is_channel_create_event(1, Some(1)));
         assert!(!is_channel_create_event(1, None));
+    }
+
+    #[test]
+    fn channel_privilege_update_should_map_admin_role_to_frontend_member_type() {
+        assert_eq!(channel_member_type_update(2, Some(1), Some(1)), Some(2));
+    }
+
+    #[test]
+    fn channel_privilege_update_should_restore_subscriber_member_type() {
+        assert_eq!(channel_member_type_update(2, Some(1), Some(2)), Some(3));
+        assert_eq!(channel_member_type_update(1, Some(1), Some(1)), None);
     }
 
     fn group_remove_event(actor_uid: i64, removed_uid: i64) -> imweb::GroupReqEventMsgDto {
@@ -2538,6 +2566,20 @@ impl MessageBatcher {
                 }
             }
 
+            if let Some(member_type) = channel_member_type_update(
+                event.event_type,
+                subscriber_info.map(|item| item.operate_type),
+                subscriber_info.map(|item| item.role),
+            ) {
+                let _ = self.app_handle.emit(
+                    "channel:member-type",
+                    serde_json::json!({
+                        "channelId": event.channel_id.to_string(),
+                        "memberType": member_type,
+                    }),
+                );
+            }
+
             if let Some(reason) = channel_removed_reason(
                 event.event_type,
                 subscriber_info.map(|item| item.operate_type),
@@ -2674,7 +2716,11 @@ impl MessageBatcher {
                     "icon": channel_info.map(|item| item.icon.clone()).unwrap_or_default(),
                     "eventType": event.event_type,
                     "subscriberOperateType": subscriber_info.map(|item| item.operate_type).unwrap_or_default(),
-                    "memberType": subscriber_info.map(|item| item.role).unwrap_or(9),
+                    "memberType": channel_member_type_update(
+                        event.event_type,
+                        subscriber_info.map(|item| item.operate_type),
+                        subscriber_info.map(|item| item.role),
+                    ).unwrap_or(9),
                 }),
             });
         }

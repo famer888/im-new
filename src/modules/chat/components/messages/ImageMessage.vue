@@ -12,6 +12,7 @@ import { getMediaWindowBounds } from '@/utils/mediaWindowSize'
 import { isLocalLikePath, isRemoteUrl, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import { isChannelContentSaveRestricted } from '@/utils/channelContentLimit'
 import { eventBus } from '@/utils/eventBus'
+import { getImageAutoRetryDelay } from '@/utils/imageLoadRetry'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -33,13 +34,15 @@ const naturalImageWidth = ref(0)
 const naturalImageHeight = ref(0)
 const dynamicImageHeadKeyFallbackStarted = ref(false)
 const invalidLocalCacheRedownloadStarted = ref(false)
-const imgErrorDownloadRetryStarted = ref(false)
 const thumbnailDownloadFallbackUsed = ref(false)
 const downloadInFlight = ref(false)
 const imageRenderKey = ref(0)
 let releaseDownloadSlot: (() => void) | null = null
 let downloadToken = 0
 let activeDownloadSignature = ''
+let imageAutoRetryTimer: ReturnType<typeof setTimeout> | null = null
+let imageAutoRetryAttempt = 0
+let imageAutoRetrySignature = ''
 let materializeToken = 0
 let plainRemoteCacheToken = 0
 let stopDownloadEvents: Array<() => void> = []
@@ -574,6 +577,7 @@ function applyCachedImageIfAvailable(): boolean {
     cachedSrcHead: shortLogValue(cached!.src),
     cachedLocalPathHead: shortLogValue(cached!.localFilePath),
   })
+  clearImageAutoRetry()
   activeSrc.value = cached!.src
   localFilePath.value = cached!.localFilePath
   loadError.value = false
@@ -591,6 +595,7 @@ function applyStoredLocalImagePath(): boolean {
   if (!isTrustedPersistedLocalPath(path)) return false
   const displaySrc = toDisplayImageSrc(path)
   if (!displaySrc) return false
+  clearImageAutoRetry()
   localFilePath.value = path
   activeSrc.value = displaySrc
   loadError.value = false
@@ -630,6 +635,64 @@ function buildDownloadSignature(preferThumbnail = false): string {
     attachmentKey.value,
     preferThumbnail ? 'thumb' : 'full',
   ].join('|')
+}
+
+function clearImageAutoRetry(resetAttempt = true) {
+  if (imageAutoRetryTimer !== null) {
+    clearTimeout(imageAutoRetryTimer)
+    imageAutoRetryTimer = null
+  }
+  if (!resetAttempt) return
+  imageAutoRetryAttempt = 0
+  imageAutoRetrySignature = ''
+}
+
+function scheduleImageAutoRetry(
+  failure: Record<string, unknown> = {},
+  options: { preferThumbnail?: boolean } = {},
+): boolean {
+  const canResolveKey = Boolean(
+    fileKey.value
+    || attachmentKey.value
+    || (Number(props.message.msgType) === 9 && dynamicImageHeadKeyFallbackStarted.value),
+  )
+  if (!downloadUrl.value || !canResolveKey) return false
+
+  const signature = buildDownloadSignature(Boolean(options.preferThumbnail))
+  if (signature !== imageAutoRetrySignature) {
+    clearImageAutoRetry()
+    imageAutoRetrySignature = signature
+  }
+  if (imageAutoRetryTimer !== null) return true
+
+  const delay = getImageAutoRetryDelay(imageAutoRetryAttempt, {
+    sendTime: Number(props.message.sendTime || 0),
+    httpStatusCode: Number(failure.httpStatusCode ?? failure.http_status_code ?? 0) || null,
+    expired: failure.expired === true || String(failure.expired || '').toLowerCase() === 'true',
+    reason: String(failure.reason || ''),
+  })
+  if (delay === null) return false
+
+  imageAutoRetryAttempt += 1
+  activeSrc.value = ''
+  loadError.value = false
+  isLoaded.value = false
+  finishDownloadAttempt()
+  channelImageLog('schedule automatic retry', {
+    attempt: imageAutoRetryAttempt,
+    delay,
+    httpStatusCode: failure.httpStatusCode ?? failure.http_status_code ?? null,
+    reason: failure.reason ?? '',
+  }, 'warn')
+  imageAutoRetryTimer = setTimeout(() => {
+    imageAutoRetryTimer = null
+    if (isDecryptPending.value || downloadInFlight.value) return
+    void downloadAndDecryptImage({
+      ignoreCache: true,
+      preferThumbnail: options.preferThumbnail,
+    })
+  }, delay)
+  return true
 }
 
 async function holdDownloadSlot(): Promise<boolean> {
@@ -762,6 +825,7 @@ function clearPersistedImageLocalPath() {
 }
 
 function resetImageDisplayState() {
+  clearImageAutoRetry()
   isLoaded.value = false
   loadError.value = false
   activeSrc.value = ''
@@ -885,6 +949,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
 }, { immediate: true })
 
 function handleLoad() {
+  clearImageAutoRetry()
   naturalImageWidth.value = imageElRef.value?.naturalWidth || 0
   naturalImageHeight.value = imageElRef.value?.naturalHeight || 0
   isLoaded.value = true
@@ -1033,19 +1098,7 @@ async function handleError() {
   if (await retryStaleImageRestoreBeforeFail()) return
   const originalUrl = imageData.value.url
   if (!fileKey.value && !attachmentKey.value && retryDynamicImageWithHeadKey('img-error')) return
-  if (
-    !imgErrorDownloadRetryStarted.value
-    && (fileKey.value || attachmentKey.value)
-    && resolveDownloadTargetUrl()
-  ) {
-    // 对齐旧 im image-error：img 解码失败后再走一次下载解密，避免多图并发时偶发失败直接定格。
-    imgErrorDownloadRetryStarted.value = true
-    activeSrc.value = ''
-    loadError.value = false
-    isLoaded.value = false
-    await downloadAndDecryptImage({ ignoreCache: true })
-    return
-  }
+  if (scheduleImageAutoRetry()) return
   if (!fileKey.value && !attachmentKey.value && originalUrl && activeSrc.value !== originalUrl) {
     channelImageLog('img error: fallback to original url', {
       activeSrcHead: shortLogValue(activeSrc.value),
@@ -1089,12 +1142,13 @@ function retryImageDisplayAfterRestore() {
   )
   if (!loadError.value && activeSrc.value) return
   if (!loadError.value && !canRetryDownload) return
+  const wasFailed = loadError.value
+  clearImageAutoRetry()
   loadError.value = false
-  imgErrorDownloadRetryStarted.value = false
   invalidLocalCacheRedownloadStarted.value = false
   if (tryRestoreKnownImageDisplay()) return
   if (canRetryDownload) {
-    void downloadAndDecryptImage({ ignoreCache: loadError.value })
+    void downloadAndDecryptImage({ ignoreCache: wasFailed })
   }
 }
 
@@ -1414,6 +1468,7 @@ function finishDownloadAttempt() {
 }
 
 async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferThumbnail?: boolean } = {}) {
+  clearImageAutoRetry(false)
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (isDecryptPending.value) return
   if (!options.ignoreCache && tryRestoreKnownImageDisplay()) return
@@ -1442,6 +1497,10 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       attachmentKeyLen: attachmentKey.value.length,
     }, 'warn')
     if (url && retryDynamicImageWithHeadKey('missing-key')) return
+    if (scheduleImageAutoRetry({ reason: 'missing-key' }, options)) {
+      emit('transfer-attempt', { started: false })
+      return
+    }
     loadError.value = true
     isLoaded.value = true
     emit('transfer-attempt', { started: false })
@@ -1477,6 +1536,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
         savePathHead: shortLogValue(savePath),
         cachedSrcHead: shortLogValue(cachedSrc),
       })
+      clearImageAutoRetry()
       activeSrc.value = cachedSrc
       loadError.value = false
       isLoaded.value = true
@@ -1525,6 +1585,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
         srcHead: shortLogValue(src),
         hasDataUrl: Boolean(event.payload.dataUrl || event.payload.data_url),
       })
+      clearImageAutoRetry()
       loadError.value = false
       activeSrc.value = src
       isLoaded.value = true
@@ -1570,13 +1631,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
         finishDownloadAttempt()
         return
       }
-      if (!imgErrorDownloadRetryStarted.value) {
-        imgErrorDownloadRetryStarted.value = true
-        activeSrc.value = ''
-        loadError.value = false
-        isLoaded.value = false
-        finishDownloadAttempt()
-        void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: options.preferThumbnail })
+      if (scheduleImageAutoRetry(payload, options)) {
         return
       }
       loadError.value = true
@@ -1625,13 +1680,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       finishDownloadAttempt()
       return
     }
-    if (!imgErrorDownloadRetryStarted.value) {
-      imgErrorDownloadRetryStarted.value = true
-      activeSrc.value = ''
-      loadError.value = false
-      isLoaded.value = false
-      finishDownloadAttempt()
-      void downloadAndDecryptImage({ ignoreCache: true, preferThumbnail: options.preferThumbnail })
+    if (scheduleImageAutoRetry({ reason: 'download-invoke-failed' }, options)) {
       return
     }
     loadError.value = true
@@ -2056,6 +2105,7 @@ onBeforeUnmount(() => {
   nativeDragStartPoint = null
   nativeDragStarted = false
   cleanupNativeImageDragListeners()
+  clearImageAutoRetry()
   cleanupDownloadEvents()
   cleanupPlainRemoteCacheEvents()
 })

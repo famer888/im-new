@@ -1473,6 +1473,17 @@ export async function setupTauriListeners() {
     logChannelContentLimitDebug(channelId, 'ws-channel-content-limit', event.payload || {})
   })
 
+  listen<{ channelId?: string; memberType?: number }>('channel:member-type', (event) => {
+    const authStore = useAuthStore()
+    const channelStore = useChannelStore()
+    const channelId = String(event.payload?.channelId || '').trim()
+    const memberType = getFiniteChannelMemberType(event.payload?.memberType)
+    if (!channelId || memberType === null || memberType < 1 || memberType > 3) return
+    channelStore.patchChannel(channelId, {
+      memberType,
+    }, { uid: String(authStore.uid || '') })
+  })
+
   listen<ForceLogoutPayload>('auth:force-logout', async (event) => {
     if (forceLogoutHandling) return
     forceLogoutHandling = true
