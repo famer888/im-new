@@ -79,7 +79,7 @@ function toBool(value: unknown): boolean {
 
 const showAtList = ref(false)
 const atKeyword = ref('')
-const atListRef = ref<{ handleKeyboard: (key: string) => void } | null>(null)
+const atListRef = ref<{ handleKeyboard: (key: string) => boolean } | null>(null)
 const suppressNextEnterKeyup = ref(false)
 const showCreateLink = ref(false)
 const showScheduleDeletion = ref(false)
@@ -1190,10 +1190,16 @@ function handleKeydown(e: KeyboardEvent) {
     showAtList.value
     && ['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)
   ) {
-    e.preventDefault()
-    if (e.key === 'Enter') suppressNextEnterKeyup.value = true
-    atListRef.value?.handleKeyboard(e.key)
-    return
+    const handled = atListRef.value?.handleKeyboard(e.key) === true
+    if (handled) {
+      e.preventDefault()
+      if (e.key === 'Enter') suppressNextEnterKeyup.value = true
+      return
+    }
+    // 复制好友 68 号会带一个结尾空格；删掉空格后会重新进入 @ 搜索。
+    // 搜索无候选时不能继续拦截 Enter，否则文本无法发送。
+    showAtList.value = false
+    atKeyword.value = ''
   }
   if (e.key === 'Enter' && !e.isComposing) {
     const mode = settingStore.settings.sendShortcutKey

@@ -3,6 +3,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useContactStore } from '@/stores/useContactStore'
 import { useGroupStore, type GroupMember } from '@/stores/useGroupStore'
+import { shouldCaptureAtListKeyboard } from '@/utils/atListKeyboard'
 import TextAvatar from '@/components/TextAvatar.vue'
 
 const props = defineProps<{
@@ -103,26 +104,28 @@ async function scrollActiveIntoView() {
   item?.scrollIntoView({ block: 'nearest' })
 }
 
-function handleKeyboard(key: string) {
-  if (!props.visible) return
+function handleKeyboard(key: string): boolean {
+  if (!props.visible || !shouldCaptureAtListKeyboard(key, selectableMembers.value.length)) return false
   const maxIndex = selectableMembers.value.length - 1
-  if (maxIndex < 0) return
 
   if (key === 'ArrowUp') {
     activeIndex.value = Math.max(0, activeIndex.value - 1)
     void scrollActiveIntoView()
-    return
+    return true
   }
 
   if (key === 'ArrowDown') {
     activeIndex.value = Math.min(maxIndex, activeIndex.value + 1)
     void scrollActiveIntoView()
-    return
+    return true
   }
 
   if (key === 'Enter') {
     handleSelect(selectableMembers.value[activeIndex.value])
+    return true
   }
+
+  return false
 }
 
 defineExpose({ handleKeyboard })
