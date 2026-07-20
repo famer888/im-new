@@ -303,6 +303,9 @@ if [[ "$PLATFORM" == "win" ]]; then
   ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" (mkdir "%APPDATA%\\otc-pc-chat" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" "%APPDATA%\\otc-pc-chat" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
   ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" (mkdir "%APPDATA%\\${APP_NAME}" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" "%APPDATA%\\${APP_NAME}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
   ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" (mkdir "%TEMP%\\${LEGACY_TEMP_DIR}" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" "%TEMP%\\${LEGACY_TEMP_DIR}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+
+  ; Tauri 在此钩子前已执行 SetOutPath；更改 INSTDIR 后必须同步 NSIS 的实际解压目录。
+  SetOutPath \$INSTDIR
 !macroend
 EOF
     echo "Windows build: legacy Electron migrate hook -> $NSIS_HOOK_REL"
