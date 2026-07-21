@@ -13,6 +13,9 @@ const FRONTEND_ICON_TARGETS = [
 export function applyDevBrandAssets(rootDir, brandId) {
   const iconSourceDir = path.join(rootDir, 'resources', `icons_${brandId}`)
   const appIconSource = path.join(iconSourceDir, 'icon.png')
+  const brandLogoSource = path.join(iconSourceDir, 'logo.png')
+  // 应用内展示优先 logo.png；桌面/安装包仍走 icon.png（45 可分离桌面与站内图）。
+  const inappIconSource = fs.existsSync(brandLogoSource) ? brandLogoSource : appIconSource
   const trayIconSource = path.join(iconSourceDir, '24x24.png')
   const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), `ocs-dev-brand-${brandId}-`))
   const backedUp = []
@@ -29,7 +32,7 @@ export function applyDevBrandAssets(rootDir, brandId) {
     const backupPath = path.join(backupDir, relPath)
     fs.mkdirSync(path.dirname(backupPath), { recursive: true })
     fs.copyFileSync(target, backupPath)
-    fs.copyFileSync(appIconSource, target)
+    fs.copyFileSync(inappIconSource, target)
     backedUp.push({ target, backupPath })
   }
 

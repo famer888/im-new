@@ -7,7 +7,13 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tracing::info;
+use std::thread;
+use std::time::Duration;
+use tracing::{info, warn};
+
+/// 覆盖安装 / 多窗口 / 迁移导入时，SQLite 可能短暂 busy；等待后重试而不是立刻失败。
+const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+const DB_OPEN_MAX_ATTEMPTS: u32 = 8;
 
 pub struct DbManager {
     app_data_dir: PathBuf,
@@ -32,12 +38,7 @@ impl DbManager {
         }
 
         let db_path = self.app_data_dir.join(format!("{}.db", uid));
-        let conn = Connection::open(&db_path).map_err(|e| DbError::SqliteError(e.to_string()))?;
-
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=10000; PRAGMA temp_store=MEMORY;")
-            .map_err(|e| DbError::SqliteError(e.to_string()))?;
-
-        migrations::run_migrations(&conn)?;
+        let conn = open_configured_connection(&db_path)?;
         conns.insert(uid.to_string(), Mutex::new(conn));
         info!("Database initialized for user: {}", uid);
         Ok(())
@@ -84,6 +85,63 @@ impl DbManager {
     }
 }
 
+fn is_sqlite_busy_message(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("database is locked")
+        || lower.contains("database is busy")
+        || lower.contains("sqlite_busy")
+        || lower.contains("locked")
+}
+
+fn open_configured_connection(db_path: &Path) -> Result<Connection, DbError> {
+    let mut last_err: Option<DbError> = None;
+
+    for attempt in 1..=DB_OPEN_MAX_ATTEMPTS {
+        match try_open_configured_connection(db_path) {
+            Ok(conn) => return Ok(conn),
+            Err(err) => {
+                let busy = match &err {
+                    DbError::SqliteError(msg) => is_sqlite_busy_message(msg),
+                    _ => false,
+                };
+                if !busy || attempt == DB_OPEN_MAX_ATTEMPTS {
+                    return Err(err);
+                }
+                warn!(
+                    "[db] open busy path={:?} attempt={}/{}, retrying: {}",
+                    db_path, attempt, DB_OPEN_MAX_ATTEMPTS, err
+                );
+                last_err = Some(err);
+                thread::sleep(Duration::from_millis(40 * u64::from(attempt)));
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        DbError::SqliteError("database is locked".to_string())
+    }))
+}
+
+fn try_open_configured_connection(db_path: &Path) -> Result<Connection, DbError> {
+    let conn = Connection::open(db_path).map_err(|e| DbError::SqliteError(e.to_string()))?;
+
+    // 必须先于迁移 / WAL 切换设置，否则 BEGIN IMMEDIATE 会立刻 SQLITE_BUSY。
+    conn.busy_timeout(DB_BUSY_TIMEOUT)
+        .map_err(|e| DbError::SqliteError(e.to_string()))?;
+
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA cache_size=10000;
+         PRAGMA temp_store=MEMORY;
+         PRAGMA busy_timeout=30000;",
+    )
+    .map_err(|e| DbError::SqliteError(e.to_string()))?;
+
+    migrations::run_migrations(&conn)?;
+    Ok(conn)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     #[error("SQLite error: {0}")]
@@ -102,5 +160,31 @@ impl serde::Serialize for DbError {
         S: serde::Serializer,
     {
         serializer.serialize_str(&self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn open_configured_connection_sets_busy_timeout() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("ocs-db-busy-{stamp}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("user.db");
+
+        let conn = open_configured_connection(&path).expect("open db");
+        let timeout: i64 = conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .expect("read busy_timeout");
+        assert!(timeout >= 30000, "busy_timeout={timeout}");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

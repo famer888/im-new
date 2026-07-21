@@ -211,6 +211,7 @@ pub fn run() {
             commands::window::show_notification_window,
             commands::window::close_notification_windows,
             commands::window::get_notification_payload,
+            commands::window::claim_notification_reply,
             commands::window::reveal_notification_window,
             commands::window::resize_notification_window,
             commands::window::toggle_side_bar,

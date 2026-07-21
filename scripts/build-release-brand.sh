@@ -184,7 +184,10 @@ restore_branded_sources() {
 }
 
 apply_branded_sources() {
+  # 桌面/安装包图标用 icon.png；应用内展示优先用 logo.png（45 桌面与站内 logo 可分离）。
   local app_icon_source="$ICON_SOURCE_DIR/icon.png"
+  local brand_logo_source="$ICON_SOURCE_DIR/logo.png"
+  local inapp_icon_source="$app_icon_source"
   local tray_icon_source="$ICON_SOURCE_DIR/24x24.png"
   local target
   local app_icon_targets=(
@@ -200,6 +203,10 @@ apply_branded_sources() {
     exit 1
   fi
 
+  if [[ -f "$brand_logo_source" ]]; then
+    inapp_icon_source="$brand_logo_source"
+  fi
+
   if [[ ! -f "$tray_icon_source" ]]; then
     tray_icon_source="$ICON_PNG"
   fi
@@ -210,7 +217,7 @@ apply_branded_sources() {
       exit 1
     fi
     backup_source_file "$target"
-    cp -f "$app_icon_source" "$target"
+    cp -f "$inapp_icon_source" "$target"
   done
 
   target="$ROOT_DIR/src-tauri/icons/tray.png"

@@ -298,7 +298,7 @@ const archiveUnreadTotal = computed(() =>
 const displayList = computed(() =>
   uiStore.chatArchiveListShow
     ? archivedConversations.value
-    : ensureGroupNotificationVisible(normalConversations.value),
+    : sortByDisplayTime(ensureGroupNotificationVisible(normalConversations.value)),
 )
 
 const archiveEntryVisible = computed(() =>
@@ -525,7 +525,25 @@ function getDisplayTime(conv: Conversation): number {
   if (loaded.length === 0) return conv.lastMsgTime
 
   const latest = getLoadedLatestVisibleMessage(conv)
-  return latest ? Number(latest.sendTime || 0) : 0
+  // 当前会话已加载但暂无可见消息时，退回 lastMsgTime，避免误判为 0 沉底。
+  return latest ? Number(latest.sendTime || 0) : conv.lastMsgTime
+}
+
+/**
+ * 会话列表按「行上实际显示的时间」倒序，保证看到的时间与排列顺序一致。
+ * 非当前会话 getDisplayTime === lastMsgTime，顺序与 store 一致；只有当前会话
+ * 会按其最新可见消息时间归位（修复 lastMsgTime 被隐藏类型消息顶新导致的错序）。
+ */
+function sortByDisplayTime(list: Conversation[]): Conversation[] {
+  return [...list].sort((a, b) => {
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
+    const timeDelta = getDisplayTime(b) - getDisplayTime(a)
+    if (timeDelta !== 0) return timeDelta
+    const aIsGroupNotification = a.type === ConversationType.Group && a.targetId === GROUP_NOTIFICATION_TARGET_ID
+    const bIsGroupNotification = b.type === ConversationType.Group && b.targetId === GROUP_NOTIFICATION_TARGET_ID
+    if (aIsGroupNotification !== bIsGroupNotification) return aIsGroupNotification ? 1 : -1
+    return 0
+  })
 }
 
 /** 与 im 会话列表 `&.online` 绿点一致：单聊好友在线且允许展示时显示 */

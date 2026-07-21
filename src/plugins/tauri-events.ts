@@ -1405,6 +1405,29 @@ export async function setupTauriListeners() {
       if (!conversationId || !content) throw new Error('invalid notification reply')
       if (!consumeNotificationReplyRequest(requestId, conversationId, content)) return
 
+      // 多开时主窗/会话独立窗/隐藏登录窗都可能收到该事件，各自 JS 去重表独立。
+      // 再经 Rust 进程级去重兜底，保证同一 requestId 一个进程只真正发送一次。
+      if (requestId) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          const claimed = await invoke<boolean>('claim_notification_reply', { requestId })
+          if (!claimed) {
+            notificationReplyDebug('duplicate requestId ignored by process-global claim', {
+              requestId,
+              conversationId,
+              contentLength: content.length,
+            }, 'warn')
+            return
+          }
+        } catch (claimError) {
+          // 去重命令异常时不阻塞发送，退回仅前端本地去重。
+          notificationReplyDebug('claim_notification_reply failed, falling back to local dedup', {
+            requestId,
+            error: String(claimError),
+          }, 'warn')
+        }
+      }
+
       const authStore = useAuthStore()
       const uid = String(authStore.uid || '').trim()
       if (!uid) throw new Error('missing uid')

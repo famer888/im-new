@@ -1383,6 +1383,11 @@ async function handleLinkClick(event: MouseEvent, segment: LinkLikeSegment) {
     white-space: pre-wrap;
     letter-spacing: 0.5px;
     font-size: 14px;
+    // 强制 LTR 基准方向并左对齐：粘贴正文里若混入不可见的双向(bidi)控制符/RTL 字符，
+    // 会把整段书写方向翻成 RTL 导致气泡内文字右对齐。本产品只支持 LTR 语言，这里统一兜住。
+    direction: ltr;
+    text-align: left;
+    unicode-bidi: isolate;
     // App 根节点默认禁用选择；消息正文需要恢复旧 im 的拖选复制能力。
     user-select: text;
     -webkit-user-select: text;

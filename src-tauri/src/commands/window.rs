@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
 use tauri::State;
@@ -9,9 +10,44 @@ use crate::window::{self, NotificationData, WindowManager};
 const SIDEBAR_WIDTH: u32 = 256;
 const MIN_WINDOW_WIDTH: u32 = 400;
 
+/// 通知回复去重保留时长（毫秒）。多开时同一 requestId 只允许被消费一次。
+const NOTIFICATION_REPLY_CLAIM_TTL_MS: i64 = 60_000;
+
 fn sidebar_open_type() -> &'static Mutex<String> {
     static SIDEBAR_OPEN_TYPE: OnceLock<Mutex<String>> = OnceLock::new();
     SIDEBAR_OPEN_TYPE.get_or_init(|| Mutex::new(String::from("none")))
+}
+
+fn notification_reply_claims() -> &'static Mutex<HashMap<String, i64>> {
+    static CLAIMS: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+    CLAIMS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 进程级通知回复去重：同一 requestId 首次调用返回 true，其余返回 false。
+///
+/// 多开时主窗、会话独立窗（chat_*）、隐藏登录窗都会注册 `notification:reply:v3`
+/// 监听，各窗口的 JS 去重表相互独立，可能各发一条。这里用进程内共享状态兜底，
+/// 保证同一条回复在一个进程里只真正发送一次。
+#[tauri::command]
+pub async fn claim_notification_reply(request_id: String) -> Result<bool, String> {
+    let request_id = request_id.trim().to_string();
+    if request_id.is_empty() {
+        // 无 requestId 时不做进程级去重，交回前端本地去重处理。
+        return Ok(true);
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut claims = notification_reply_claims()
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    claims.retain(|_, created_at| now - *created_at <= NOTIFICATION_REPLY_CLAIM_TTL_MS);
+
+    if claims.contains_key(&request_id) {
+        return Ok(false);
+    }
+    claims.insert(request_id, now);
+    Ok(true)
 }
 
 #[tauri::command]
