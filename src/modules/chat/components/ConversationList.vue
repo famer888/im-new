@@ -26,6 +26,7 @@ import {
   getGroupNoticeGroupId,
   parseGroupNoticeExtraObject,
   replaceGroupNoticeUidPlaceholders,
+  stripSystemNoticeHighlightMarkers,
 } from '@/utils/groupNoticeDisplay'
 import { normalizeGroupNoticeText, translateGroupNoticeText } from '@/utils/groupNoticeI18n'
 import { isGroupIntroNoticeMessage } from '@/utils/groupIntroNotice'
@@ -586,7 +587,8 @@ function normalizeDigestPlainText(value: string): string {
 }
 
 function formatDigestText(digest: string): string {
-  const raw = normalizeDigestPlainText(digest.trim())
+  // 对齐旧 im 会话列表：摘要不需要高亮，直接去掉 `!@#` 协议串。
+  const raw = normalizeDigestPlainText(stripSystemNoticeHighlightMarkers(digest.trim()))
   if (!raw) return ''
   // 对齐旧 im：msgType 17 的多图正文是 image/video/gif 片段协议，列表摘要固定显示“多图”。
   if (/(?:^|\|\|\||\|\|)(?:image|video|gif):/i.test(raw)) return `[${t('多图')}]`

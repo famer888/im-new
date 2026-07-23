@@ -6,6 +6,7 @@ import {
   getGroupNoticeActorId,
   getGroupNoticeGroupId,
   parseGroupNoticeExtraObject,
+  stripSystemNoticeHighlightMarkers,
 } from '@/utils/groupNoticeDisplay'
 import {
   rememberGroupMemberDisplayName,
@@ -95,6 +96,35 @@ function extractInvitePrefix(text: string): string {
   const index = text.indexOf('邀请')
   if (index <= 0) return ''
   return text.slice(0, index).trim()
+}
+
+/**
+ * 对齐旧 im system-notification.vue：从原文解析 `!@#群主名!@#` 高亮段。
+ * 允许正文前有零宽字符，避免 startsWith 失效后整段带着协议串展示。
+ */
+function parseHighlightMarkerParts(content: string): { prefix: string; rest: string } | null {
+  const normalized = String(content || '').replace(/^[\u200B-\u200D\uFEFF]+/, '')
+  if (!normalized.includes('!@#')) return null
+  if (normalized.startsWith('!@#')) {
+    const endIndex = normalized.lastIndexOf('!@#')
+    if (endIndex > 0) {
+      return {
+        prefix: normalized.slice(3, endIndex),
+        rest: normalized.slice(endIndex + 3),
+      }
+    }
+  }
+  const match = normalized.match(/!@#([\S\s]*?)!@#([\S\s]*)/)
+  if (match) {
+    return {
+      prefix: match[1] || '',
+      rest: `${normalized.slice(0, match.index || 0)}${match[2] || ''}`,
+    }
+  }
+  return {
+    prefix: '',
+    rest: stripSystemNoticeHighlightMarkers(normalized),
+  }
 }
 
 function getNumericValue(value: unknown): number | null {
@@ -196,6 +226,9 @@ export function formatSystemNotificationDisplayParts(
       .some((value) => value === normalizedName)
   }
 
+  // 高亮标记必须基于原始正文解析：后续 format 会剥掉 `!@#`，否则群主高亮会丢。
+  const rawHighlight = parseHighlightMarkerParts(String(message.content || ''))
+
   let content = formatSystemNotificationText(message, {
     currentUid,
     actorRole,
@@ -209,32 +242,30 @@ export function formatSystemNotificationDisplayParts(
   ) {
     content = content.replace(PURE_UID_RE, (uid) => resolveUidDisplay(uid))
   }
+  content = stripSystemNoticeHighlightMarkers(content)
   if (!content) return { prefix: '', text: '', highlightPrefix: false }
 
-  if (!content.startsWith('!@#')) {
-    const translatedText = translateNoticeText(content, options.t)
-    const invitePrefix = translatedText.includes('加入群聊') ? extractInvitePrefix(translatedText) : ''
-    if (invitePrefix && isGroupOwnerDisplayName(invitePrefix)) {
-      return {
-        prefix: invitePrefix,
-        text: translatedText.slice(invitePrefix.length),
-        highlightPrefix: true,
-      }
+  const translatedText = translateNoticeText(content, options.t)
+  const markerPrefix = String(rawHighlight?.prefix || '').trim()
+
+  // 有 `!@#` 标记时对齐旧 im：始终拆出邀请人；正文若已被本地备注重写则回退到普通邀请前缀逻辑。
+  if (markerPrefix && translatedText.startsWith(markerPrefix)) {
+    return {
+      prefix: markerPrefix,
+      text: translatedText.slice(markerPrefix.length),
+      highlightPrefix: isGroupOwnerDisplayName(markerPrefix),
     }
-    return { prefix: '', text: translatedText, highlightPrefix: false }
   }
 
-  const endIndex = content.lastIndexOf('!@#')
-  if (endIndex <= 0) {
-    return { prefix: '', text: translateNoticeText(content, options.t), highlightPrefix: false }
+  const invitePrefix = translatedText.includes('加入群聊') ? extractInvitePrefix(translatedText) : ''
+  if (invitePrefix && isGroupOwnerDisplayName(invitePrefix)) {
+    return {
+      prefix: invitePrefix,
+      text: translatedText.slice(invitePrefix.length),
+      highlightPrefix: true,
+    }
   }
-
-  const prefix = content.slice(3, endIndex)
-  return {
-    prefix,
-    text: translateNoticeText(content.slice(endIndex + 3), options.t),
-    highlightPrefix: isGroupOwnerDisplayName(prefix),
-  }
+  return { prefix: '', text: translatedText, highlightPrefix: false }
 }
 
 export function formatSystemNotificationPlainText(

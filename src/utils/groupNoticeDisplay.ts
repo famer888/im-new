@@ -10,6 +10,20 @@ interface FormatOptions {
 }
 
 const UID_PLACEHOLDER_GROUP_RE = /#\{uids:([^}]+)\}/g
+/** 旧 im 用 `!@#昵称!@#` 标记群主邀请人高亮；展示前必须剥掉，否则会露出协议串。 */
+const SYSTEM_NOTICE_HIGHLIGHT_RE = /!@#([\S\s]*?)!@#/g
+
+/**
+ * 对齐旧 im `chats/index.vue#handleContent` / `notification-app.js`：
+ * 去掉群系统消息里的高亮标记，只保留可读昵称。
+ */
+export function stripSystemNoticeHighlightMarkers(content: string): string {
+  const raw = String(content || '').replace(/[\u200B-\u200D\uFEFF]/g, '')
+  if (!raw.includes('!@#')) return raw
+  return raw
+    .replace(SYSTEM_NOTICE_HIGHLIGHT_RE, '$1')
+    .replaceAll('!@#', '')
+}
 
 /** 替换群通知里的 `#{uids:...}` 为可读昵称 */
 export function replaceGroupNoticeUidPlaceholders(
@@ -27,8 +41,9 @@ export function replaceGroupNoticeUidPlaceholders(
 }
 
 function finalizeGroupNoticeDisplay(text: string, options: FormatOptions): string {
-  if (!options.resolveUidPlaceholder) return text
-  return replaceGroupNoticeUidPlaceholders(text, options.resolveUidPlaceholder)
+  const stripped = stripSystemNoticeHighlightMarkers(text)
+  if (!options.resolveUidPlaceholder) return stripped
+  return replaceGroupNoticeUidPlaceholders(stripped, options.resolveUidPlaceholder)
 }
 
 interface NoticePerson {
@@ -153,7 +168,7 @@ export function getGroupNoticeGroupId(rawExtra: unknown): string {
 function extractRawInviteActor(raw: string): string {
   const index = raw.indexOf('邀请')
   if (index <= 0) return ''
-  return raw.slice(0, index).trim()
+  return stripSystemNoticeHighlightMarkers(raw.slice(0, index)).trim()
 }
 
 function stripActorRolePrefix(actor: string): string {
@@ -200,9 +215,35 @@ function formatActorDisplayName(
   const name = stripActorRolePrefix(actor)
   if (!name) return ''
   const actorId = getExtraUserId(extra, 'fromUid', 'sendUid') || getUserId(extra.fromUser)
-  if (actorId && actorId === currentUid && getActorRole(extra, actorRole) === 0) return '你'
+  // 对齐旧 im：自己发出的邀请固定显示“你”，不依赖群角色是否已同步。
+  if (actorId && currentUid && actorId === currentUid) return '你'
+  void actorRole
   // 邀请入群文案保持稳定，不拼接“群员/管理员”角色前缀，避免异步角色数据导致动态切换。
   return name
+}
+
+function formatSelfInviteNotice(targetText: string): string {
+  const targets = String(targetText || '')
+    .trim()
+    // 自己是邀请人时，旧文案里可能误带“邀请你,”；展示时去掉这份“你”。
+    .replace(/^你\s*[,，]\s*/, '')
+    .replace(/^你\s+/, '')
+    .trim()
+  if (!targets || targets === '你') return '你邀请加入群聊'
+  // 对齐旧 im / App：`你邀请 A,B,C 加入群聊`
+  return `你邀请 ${targets} 加入群聊`.replace(/\s+/g, ' ').trim()
+}
+
+function rewriteInviteNoticeAsSelf(raw: string): string {
+  const stripped = stripSystemNoticeHighlightMarkers(raw).trim()
+  if (!stripped) return '你邀请加入群聊'
+  if (/^你\s*邀请/.test(stripped)) {
+    return formatSelfInviteNotice(
+      stripped.replace(/^你\s*邀请\s*/, '').replace(/\s*加入群聊\s*$/, ''),
+    )
+  }
+  const rest = stripped.replace(/^.*?邀请\s*/, '').trim()
+  return formatSelfInviteNotice(rest.replace(/\s*加入群聊\s*$/, ''))
 }
 
 function getRejectActorId(extra: ExtraObject): string {
@@ -446,7 +487,14 @@ export function formatGroupNoticeDisplayText(
   // 入群验证通过后的群内提示只展示本次事件携带的邀请对象；
   // 不再用当前群成员列表补全，避免把既有成员误拼成“被邀请加入”的名单。
   const targets = explicitTargets
-  if (!targets.length) return fin(raw)
+  if (!targets.length) {
+    const actorIdOnly = getExtraUserId(extra, 'fromUid', 'sendUid') || getUserId(extra.fromUser)
+    // 自己创群/邀请但成员列表尚未带齐时，仍按 App/旧 im 显示“你邀请 …”。
+    if (currentUid && actorIdOnly && actorIdOnly === currentUid) {
+      return fin(rewriteInviteNoticeAsSelf(raw))
+    }
+    return fin(raw)
+  }
 
   const resolvedTargets = targets.map((target) => {
     if (!options.resolveUidPlaceholder || !target.id) return target
@@ -465,12 +513,21 @@ export function formatGroupNoticeDisplayText(
   ) {
     actorDisplayName = options.resolveUidPlaceholder(actorId) || actorDisplayName
   }
+  // 自己邀请时目标文案里不应再出现“你”（旧 im 会把 loginId 从被邀请名单排除）。
+  const displayTargets = (actorId && currentUid && actorId === currentUid)
+    ? resolvedTargets.filter((target) => !(target.id && target.id === currentUid))
+    : resolvedTargets
+  const targetText = formatLegacyInviteTargetText(displayTargets, currentUid)
+
+  if (actorId && currentUid && actorId === currentUid) {
+    return fin(formatSelfInviteNotice(targetText))
+  }
+
   const rawActor = extractRawInviteActor(raw)
-  if (rawHasAllTargets(raw, resolvedTargets) && rawActor && rawActor !== '你' && rawActor === actorDisplayName) {
+  if (rawHasAllTargets(raw, displayTargets) && rawActor && rawActor !== '你' && rawActor === actorDisplayName) {
     return fin(raw)
   }
 
-  const targetText = formatLegacyInviteTargetText(resolvedTargets, currentUid)
   const actorText = actorDisplayName
     ? `${actorDisplayName} 邀请`
     : '邀请'
