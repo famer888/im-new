@@ -502,7 +502,6 @@ onMounted(() => {
   const uid = String(authStore.uid || '')
   contactStore.loadNewFriendReqTotal(uid)
   if (uid) {
-    void contactStore.refreshNewFriendReqTotal(uid)
     void Promise.allSettled([
       contactStore.loadContacts(uid),
       groupStore.loadGroups(uid),

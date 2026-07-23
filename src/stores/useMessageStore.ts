@@ -2064,6 +2064,135 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
+  /** 群聊 pending 占位重试：对齐私聊/频道，密钥就绪后把「等待密钥同步」换回明文并落库。 */
+  async function retryDecryptPendingGroupMessages(uid: string, messages: Message[]) {
+    if (!isTauri() || !uid || messages.length === 0) return messages
+
+    const pendingGroupIds = Array.from(new Set(
+      messages
+        .filter((message) => {
+          if (!String(message.conversationId || '').startsWith('1_')) return false
+          const extra = parseExtraObject(message.extra)
+          return Boolean(extra?.decryptPending && (extra?.cipherHex || Array.isArray(extra?.cipherCandidates)))
+        })
+        .map((message) => {
+          const extra = parseExtraObject(message.extra)
+          const conversationId = String(message.conversationId || '')
+          return String(extra?.groupId || conversationId.split('_')[1] || '')
+        })
+        .filter((groupId) => !!groupId),
+    ))
+    for (const groupId of pendingGroupIds) {
+      try {
+        await ensureGroupRelKey(uid, groupId)
+      } catch (error) {
+        console.warn('[e2ee] ensureGroupRelKey on loadMessages failed', {
+          groupId,
+          err: String(error),
+        })
+      }
+    }
+
+    const persisted: Message[] = []
+    for (const message of messages) {
+      const conversationId = String(message.conversationId || '')
+      if (!conversationId.startsWith('1_')) continue
+
+      const extra = parseExtraObject(message.extra) || {}
+      const cipherHex = String(extra.cipherHex || '')
+      if (!extra.decryptPending || !cipherHex) continue
+      const groupId = String(extra.groupId || conversationId.split('_')[1] || '')
+      if (!groupId) continue
+
+      const tryDecrypt = async () => tauriInvoke<string>('decrypt_group_incoming', {
+        groupId,
+        ciphertextHex: cipherHex,
+        msgType: Number(message.msgType || 0),
+      })
+
+      try {
+        let plain = ''
+        try {
+          plain = await tryDecrypt()
+        } catch {
+          await refreshGroupRelKey(uid, groupId)
+          plain = await tryDecrypt()
+        }
+        const nextExtra = {
+          ...extra,
+          decryptPending: false,
+          cipherHex,
+        } as Record<string, unknown>
+        message.content = plain
+        message.extra = stringifyExtra(nextExtra)
+        persisted.push(message)
+      } catch (error) {
+        console.warn('[e2ee] retry pending group decrypt failed', {
+          conversationId,
+          groupId,
+          messageId: message.id,
+          err: String(error),
+        })
+      }
+    }
+
+    if (persisted.length > 0) {
+      await tauriInvoke('upsert_incoming_messages', {
+        uid,
+        messages: persisted.map((message) => ({
+          id: message.id,
+          customMsgId: message.customMsgId,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          msgType: message.msgType,
+          content: message.content,
+          sendTime: message.sendTime,
+          status: message.status,
+          readStatus: message.readStatus,
+          version: message.version,
+          isDeleted: message.isDeleted,
+          extra: parseExtraObject(message.extra),
+        })),
+      }).catch((error) => {
+        console.warn('[e2ee] persist retried group messages failed', {
+          uid,
+          count: persisted.length,
+          err: String(error),
+        })
+      })
+    }
+
+    return messages.map((message) => ({ ...message }))
+  }
+
+  async function retryDecryptPendingGroupConversations(uid: string, conversationIds?: string[]) {
+    if (!isTauri() || !uid) return
+    const targets = (conversationIds && conversationIds.length > 0
+      ? conversationIds
+      : Array.from(messageMap.value.keys()))
+      .map((id) => String(id || ''))
+      .filter((id, index, list) => id.startsWith('1_') && list.indexOf(id) === index)
+
+    for (const conversationId of targets) {
+      const current = messageMap.value.get(conversationId)
+      if (!current || current.length === 0) continue
+      const hasPending = current.some((message) => {
+        const extra = parseExtraObject(message.extra)
+        return Boolean(extra?.decryptPending)
+      })
+      if (!hasPending) continue
+
+      const before = current.map((message) => `${message.id}:${message.content}:${message.extra}`).join('\n')
+      await retryDecryptPendingGroupMessages(uid, current)
+      const after = current.map((message) => `${message.id}:${message.content}:${message.extra}`).join('\n')
+      if (after !== before) {
+        messageMap.value.set(conversationId, [...current])
+        const latest = current[current.length - 1]
+        if (latest) syncConversationSummary(conversationId, latest)
+      }
+    }
+  }
+
   function getLatestChannelMsgId(resp: unknown): number {
     const rows = (resp as { data?: Array<{ msgType?: number | string; latestMsgId?: number | string }> })?.data
     if (!Array.isArray(rows)) return 0
@@ -2533,7 +2662,9 @@ export const useMessageStore = defineStore('message', () => {
       if (hasDecryptPending) {
         const retryPendingMessages = getChannelIdFromConversationId(conversationId)
           ? retryDecryptPendingChannelMessages(uid, normalizedBase)
-          : retryDecryptPendingPrivateMessages(uid, normalizedBase)
+          : conversationId.startsWith('1_')
+            ? retryDecryptPendingGroupMessages(uid, normalizedBase)
+            : retryDecryptPendingPrivateMessages(uid, normalizedBase)
         void retryPendingMessages
           .then((resolved) => {
             patchDecryptedMessagesInPlace(conversationId, resolved)
@@ -2617,7 +2748,9 @@ export const useMessageStore = defineStore('message', () => {
       if (hasDecryptPending) {
         const retryPendingMessages = getChannelIdFromConversationId(conversationId)
           ? retryDecryptPendingChannelMessages(uid, normalizedBase)
-          : retryDecryptPendingPrivateMessages(uid, normalizedBase)
+          : conversationId.startsWith('1_')
+            ? retryDecryptPendingGroupMessages(uid, normalizedBase)
+            : retryDecryptPendingPrivateMessages(uid, normalizedBase)
         void retryPendingMessages
           .then((resolved) => {
             patchDecryptedMessagesInPlace(conversationId, resolved)
@@ -3991,6 +4124,7 @@ export const useMessageStore = defineStore('message', () => {
     loadMessages,
     loadOlderMessages,
     retryDecryptPendingPrivateConversations,
+    retryDecryptPendingGroupConversations,
     sendMessage,
     resendMessage,
     appendMessage,

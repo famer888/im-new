@@ -292,6 +292,14 @@ if [[ "$PLATFORM" == "win" ]]; then
 !define LEGACY_BACKUP_ROOT "\$APPDATA\\${PKG_IDENTIFIER}\\legacy-electron-backup"
 $(if [[ -n "$NSIS_UNINSTALL_ICON" ]]; then printf '!define MUI_UNICON "%s"\n' "$NSIS_UNINSTALL_ICON"; fi)
 
+; 静默执行外部命令，避免 ExecWait "cmd /c ..." 弹出可见黑框（安装时多窗口闪烁）。
+!macro LEGACY_SILENT_ROBOCOPY SRC DST
+  \${If} \${FileExists} "\${SRC}\\*.*"
+    CreateDirectory "\${DST}"
+    ExecShellWait "open" "\$SYSDIR\\cmd.exe" '/c robocopy "\${SRC}" "\${DST}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul' SW_HIDE
+  \${EndIf}
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   ReadRegStr \$R0 HKCU "Software\\\${LEGACY_ELECTRON_GUID}" "InstallLocation"
   \${If} \$R0 != ""
@@ -306,20 +314,21 @@ $(if [[ -n "$NSIS_UNINSTALL_ICON" ]]; then printf '!define MUI_UNICON "%s"\n' "$
   \${EndIf}
 
   CreateDirectory "\${LEGACY_BACKUP_ROOT}"
-  ; robocopy 退出码 0-7 都算成功，不要因此中断安装。
-  ExecWait 'cmd /c if exist "%APPDATA%\\otc-pc-chat" (mkdir "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" 2>nul & robocopy "%APPDATA%\\otc-pc-chat" "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
-  ExecWait 'cmd /c if exist "%APPDATA%\\${APP_NAME}" (mkdir "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" 2>nul & robocopy "%APPDATA%\\${APP_NAME}" "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
-  ExecWait 'cmd /c if exist "%TEMP%\\${LEGACY_TEMP_DIR}" (mkdir "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" 2>nul & robocopy "%TEMP%\\${LEGACY_TEMP_DIR}" "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+  ; robocopy 退出码 0-7 都算成功；目录不存在则跳过，不再空跑 cmd。
+  !insertmacro LEGACY_SILENT_ROBOCOPY "\$APPDATA\\otc-pc-chat" "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat"
+  !insertmacro LEGACY_SILENT_ROBOCOPY "\$APPDATA\\${APP_NAME}" "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}"
+  !insertmacro LEGACY_SILENT_ROBOCOPY "\$TEMP\\${LEGACY_TEMP_DIR}" "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}"
 
   ReadRegStr \$R1 HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\\${LEGACY_ELECTRON_GUID}" "UninstallString"
   \${If} \$R1 != ""
+    ; UninstallString 常自带参数，直接 ExecWait 最稳；/S 静默，多数情况不会出完整卸载向导。
     ExecWait '\$R1 /S' \$R2
   \${EndIf}
 
   ; 卸载清掉 AppData 后还原旧聊天数据，迁移逻辑才能继续按原路径找到。
-  ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" (mkdir "%APPDATA%\\otc-pc-chat" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" "%APPDATA%\\otc-pc-chat" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
-  ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" (mkdir "%APPDATA%\\${APP_NAME}" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" "%APPDATA%\\${APP_NAME}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
-  ExecWait 'cmd /c if exist "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" (mkdir "%TEMP%\\${LEGACY_TEMP_DIR}" 2>nul & robocopy "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" "%TEMP%\\${LEGACY_TEMP_DIR}" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul)' \$R8
+  !insertmacro LEGACY_SILENT_ROBOCOPY "\${LEGACY_BACKUP_ROOT}\\otc-pc-chat" "\$APPDATA\\otc-pc-chat"
+  !insertmacro LEGACY_SILENT_ROBOCOPY "\${LEGACY_BACKUP_ROOT}\\${APP_NAME}" "\$APPDATA\\${APP_NAME}"
+  !insertmacro LEGACY_SILENT_ROBOCOPY "\${LEGACY_BACKUP_ROOT}\\${LEGACY_TEMP_DIR}" "\$TEMP\\${LEGACY_TEMP_DIR}"
 
   ; Tauri 在此钩子前已执行 SetOutPath；更改 INSTDIR 后必须同步 NSIS 的实际解压目录。
   SetOutPath \$INSTDIR

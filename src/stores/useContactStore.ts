@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getContactsApplyList, getContactsDetail, getContactsList } from '@/api/imBase'
+import { getContactsDetail, getContactsList } from '@/api/imBase'
 import { isOfficialAccountTargetId, OFFICIAL_ACCOUNT_NAME } from '@/stores/useChatStore'
 import { normalizeFriendIdentify } from '@/utils/friendIdentify'
 import { DEFAULT_READ_BURN_SECONDS } from '@/utils/readBurn'
@@ -87,16 +87,13 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
+  /**
+   * 对齐旧 im：好友未读红点只来自本地缓存 + WS 20302(friendReqNum)，
+   * 打开「新的好友」后清零并持久化；不能用申请列表 unRecordList.length 回填，
+   * 否则切回通讯录会把已读红点再次顶出来。
+   */
   async function refreshNewFriendReqTotal(uid?: string) {
-    try {
-      const resp = await getContactsApplyList({ version: 0 })
-      const total = Array.isArray((resp as any)?.unRecordList)
-        ? (resp as any).unRecordList.length
-        : 0
-      setNewFriendReqTotal(total, uid)
-    } catch (e) {
-      console.warn('[ContactStore] refresh new friend request total failed:', e)
-    }
+    loadNewFriendReqTotal(String(uid || ''))
   }
 
   async function loadContacts(uid: string, options?: { fallbackToApi?: boolean; refreshRemote?: boolean }) {

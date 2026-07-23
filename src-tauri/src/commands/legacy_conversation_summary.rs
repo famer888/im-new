@@ -205,6 +205,25 @@ pub fn apply(
     uid: &str,
     storage_dirs: &[PathBuf],
 ) -> Result<LegacySummaryStats, DbError> {
+    apply_with_options(conn, uid, storage_dirs, true)
+}
+
+/// 仅合并时间/置顶（MAX），不回写未读。用于消息半导入后把被 refresh 压矮的时间抬回来，
+/// 且不会把用户在重构版已清掉的红点再顶回去。
+pub fn remerge_times_and_pins(
+    conn: &Connection,
+    uid: &str,
+    storage_dirs: &[PathBuf],
+) -> Result<LegacySummaryStats, DbError> {
+    apply_with_options(conn, uid, storage_dirs, false)
+}
+
+fn apply_with_options(
+    conn: &Connection,
+    uid: &str,
+    storage_dirs: &[PathBuf],
+    include_unread: bool,
+) -> Result<LegacySummaryStats, DbError> {
     let mut chat_acc: HashMap<String, (String, ConvSummary)> = HashMap::new();
     let mut unread_acc: HashMap<String, i64> = HashMap::new();
 
@@ -221,8 +240,10 @@ pub fn apply(
         if let Some(data) = read_store_data(dir, &format!("{uid}MessageChannelList")) {
             collect_chat_list(&mut chat_acc, &data, 2);
         }
-        if let Some(data) = read_store_data(dir, &format!("{uid}-unread")) {
-            collect_unread(&mut unread_acc, &data);
+        if include_unread {
+            if let Some(data) = read_store_data(dir, &format!("{uid}-unread")) {
+                collect_unread(&mut unread_acc, &data);
+            }
         }
     }
 
@@ -256,22 +277,24 @@ pub fn apply(
         stats.conversations_touched += 1;
     }
 
-    for (conv_id, count) in &unread_acc {
-        // 仅回填“已存在”的会话未读（由 chat list 或消息导入创建），避免生成无用伪会话。
-        let updated = conn
-            .execute(
-                "UPDATE conversations SET unread_count = ?2 WHERE id = ?1",
-                params![conv_id, *count],
-            )
-            .map_err(|e| DbError::SqliteError(e.to_string()))?;
-        if updated > 0 {
-            stats.unread_applied += 1;
+    if include_unread {
+        for (conv_id, count) in &unread_acc {
+            // 仅回填“已存在”的会话未读（由 chat list 或消息导入创建），避免生成无用伪会话。
+            let updated = conn
+                .execute(
+                    "UPDATE conversations SET unread_count = ?2 WHERE id = ?1",
+                    params![conv_id, *count],
+                )
+                .map_err(|e| DbError::SqliteError(e.to_string()))?;
+            if updated > 0 {
+                stats.unread_applied += 1;
+            }
         }
     }
 
     info!(
-        "[legacy-migration] restored conversation summary uid={} conv_time_pin={} unread={}",
-        uid, stats.conversations_touched, stats.unread_applied
+        "[legacy-migration] restored conversation summary uid={} conv_time_pin={} unread={} include_unread={}",
+        uid, stats.conversations_touched, stats.unread_applied, include_unread
     );
 
     Ok(stats)

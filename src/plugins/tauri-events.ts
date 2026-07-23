@@ -1649,7 +1649,11 @@ export async function setupTauriListeners() {
       const pendingGroupIds = Array.from(
         new Set(
           filtered
-            .filter((m: any) => Boolean(m?.extra?.decryptPending))
+            .filter((m: any) => {
+              if (!Boolean(m?.extra?.decryptPending)) return false
+              const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
+              return convId.startsWith('1_')
+            })
             .map((m: any) => {
               const convId = String(m?.conversationId ?? m?.conversation_id ?? '')
               return String(m?.extra?.groupId || convId.split('_')[1] || '')

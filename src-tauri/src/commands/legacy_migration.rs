@@ -203,6 +203,8 @@ pub fn migrate_legacy_desktop_data_for_uid(
             uid, brand_id, total_imported_count, sources
         );
 
+        remerge_legacy_summary_times_after_import(db, &uid, brand_id, &app_data_dir);
+
         return Ok(LegacyMigrationResult {
             attempted: true,
             migrated: true,
@@ -275,6 +277,10 @@ pub fn migrate_legacy_desktop_data_for_uid(
             "[legacy-migration] imported uid={} brand={} count={} from indexeddb {:?}",
             uid, brand_id, imported_count, user_data_path
         );
+
+        if imported_count > 0 {
+            remerge_legacy_summary_times_after_import(db, &uid, brand_id, &app_data_dir);
+        }
 
         return Ok(LegacyMigrationResult {
             attempted: true,
@@ -432,7 +438,29 @@ fn migration_store_path(app_data_dir: &Path) -> PathBuf {
 }
 
 fn legacy_summary_marker_path(app_data_dir: &Path, uid: &str) -> PathBuf {
+    // v2：修复“先摘要后半导入消息把 last_msg_time 压矮”后，允许对已写过 v1 标记的账号再补一次时间/置顶。
+    app_data_dir.join(format!("legacy_summary_restored_v2_{uid}.json"))
+}
+
+fn legacy_summary_marker_v1_path(app_data_dir: &Path, uid: &str) -> PathBuf {
     app_data_dir.join(format!("legacy_summary_restored_{uid}.json"))
+}
+
+/// 消息导入后把旧包会话时间/置顶再 MAX 合并一次。
+/// IndexedDB/abc 导入会 `refresh_conversation_summary`，半量旧消息可能把摘要时间压矮，必须再抬回来。
+fn remerge_legacy_summary_times_after_import(
+    db: &DbManager,
+    uid: &str,
+    brand_id: &str,
+    app_data_dir: &Path,
+) {
+    let dirs = legacy_conversation_summary::legacy_storage_dirs(brand_id, app_data_dir);
+    if !legacy_conversation_summary::has_summary_files(&dirs, uid) {
+        return;
+    }
+    let _ = db.with_connection(uid, |conn| {
+        legacy_conversation_summary::remerge_times_and_pins(conn, uid, &dirs)
+    });
 }
 
 /// 独立于消息导入，一次性把旧包会话摘要（最后消息时间/置顶/未读）恢复到本地会话表。
@@ -454,18 +482,28 @@ fn restore_legacy_summary_once(db: &DbManager, uid: &str, brand_id: &str, app_da
         return;
     }
 
+    // v1 已恢复过的账号只补时间/置顶，不再回写未读，避免把已读红点顶回来。
+    let had_v1 = legacy_summary_marker_v1_path(app_data_dir, uid).is_file();
+    let include_unread = !had_v1;
+
     let stats = db
         .with_connection(uid, |conn| {
-            legacy_conversation_summary::apply(conn, uid, &dirs)
+            if include_unread {
+                legacy_conversation_summary::apply(conn, uid, &dirs)
+            } else {
+                legacy_conversation_summary::remerge_times_and_pins(conn, uid, &dirs)
+            }
         })
         .unwrap_or_default();
 
-    if stats.conversations_touched > 0 || stats.unread_applied > 0 {
+    if stats.conversations_touched > 0 || stats.unread_applied > 0 || had_v1 {
         let payload = serde_json::json!({
             "uid": uid,
             "restored_at": chrono::Utc::now().timestamp_millis(),
             "conversations_touched": stats.conversations_touched,
             "unread_applied": stats.unread_applied,
+            "include_unread": include_unread,
+            "upgraded_from_v1": had_v1,
         });
         if let Ok(bytes) = serde_json::to_vec(&payload) {
             let _ = std::fs::write(&marker, bytes);

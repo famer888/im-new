@@ -64,13 +64,11 @@ pub fn get_conversations(
                     ) THEN c.last_msg_id
                     ELSE NULL
                 END AS last_msg_id,
+                -- 可见消息时间与会话表摘要取较大值：IndexedDB 半导入后本地消息可能偏旧，
+                -- 不能把 electron-store 回填的 last_msg_time 打成 0（否则列表无时间、排序沉底）。
                 CASE
-                    WHEN lm.id IS NOT NULL THEN lm.send_time
-                    WHEN NOT EXISTS (
-                        SELECT 1 FROM messages m
-                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                    ) THEN COALESCE(NULLIF(c.last_msg_time, 0), 0)
-                    ELSE 0
+                    WHEN lm.id IS NOT NULL THEN max(lm.send_time, COALESCE(c.last_msg_time, 0))
+                    ELSE COALESCE(NULLIF(c.last_msg_time, 0), NULLIF(c.updated_at, 0), 0)
                 END AS last_msg_time,
                 CASE
                     WHEN lm.id IS NOT NULL AND (c.last_msg_id = lm.id OR c.last_msg_time = lm.send_time) THEN
@@ -108,12 +106,12 @@ pub fn get_conversations(
                 c.is_archived,
                 c.draft,
                 CASE
-                    WHEN lm.id IS NOT NULL THEN lm.send_time
-                    WHEN NOT EXISTS (
-                        SELECT 1 FROM messages m
-                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                    ) THEN c.updated_at
-                    ELSE 0
+                    WHEN lm.id IS NOT NULL THEN max(
+                        lm.send_time,
+                        COALESCE(c.last_msg_time, 0),
+                        COALESCE(c.updated_at, 0)
+                    )
+                    ELSE COALESCE(NULLIF(c.updated_at, 0), NULLIF(c.last_msg_time, 0), 0)
                 END AS updated_at
              FROM conversations c
              LEFT JOIN messages lm ON lm.rowid = (
@@ -175,13 +173,11 @@ pub fn get_conversation_by_id(
                     ) THEN c.last_msg_id
                     ELSE NULL
                 END AS last_msg_id,
+                -- 可见消息时间与会话表摘要取较大值：IndexedDB 半导入后本地消息可能偏旧，
+                -- 不能把 electron-store 回填的 last_msg_time 打成 0（否则列表无时间、排序沉底）。
                 CASE
-                    WHEN lm.id IS NOT NULL THEN lm.send_time
-                    WHEN NOT EXISTS (
-                        SELECT 1 FROM messages m
-                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                    ) THEN COALESCE(NULLIF(c.last_msg_time, 0), 0)
-                    ELSE 0
+                    WHEN lm.id IS NOT NULL THEN max(lm.send_time, COALESCE(c.last_msg_time, 0))
+                    ELSE COALESCE(NULLIF(c.last_msg_time, 0), NULLIF(c.updated_at, 0), 0)
                 END AS last_msg_time,
                 CASE
                     WHEN lm.id IS NOT NULL AND (c.last_msg_id = lm.id OR c.last_msg_time = lm.send_time) THEN
@@ -219,12 +215,12 @@ pub fn get_conversation_by_id(
                 c.is_archived,
                 c.draft,
                 CASE
-                    WHEN lm.id IS NOT NULL THEN lm.send_time
-                    WHEN NOT EXISTS (
-                        SELECT 1 FROM messages m
-                        WHERE m.conversation_id = c.id AND m.is_deleted = 0
-                    ) THEN c.updated_at
-                    ELSE 0
+                    WHEN lm.id IS NOT NULL THEN max(
+                        lm.send_time,
+                        COALESCE(c.last_msg_time, 0),
+                        COALESCE(c.updated_at, 0)
+                    )
+                    ELSE COALESCE(NULLIF(c.updated_at, 0), NULLIF(c.last_msg_time, 0), 0)
                 END AS updated_at
              FROM conversations c
              LEFT JOIN messages lm ON lm.rowid = (

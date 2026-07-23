@@ -53,7 +53,7 @@ import { ConversationType, MessageType } from '@/types'
 import { useMessageStore } from '@/stores/useMessageStore'
 import { eventBus } from '@/utils/eventBus'
 import { writeClipboardText } from '@/utils/clipboard'
-import { ensureChannelRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeResolvedFileKey } from '@/utils/e2ee'
+import { ensureChannelRelKey, ensureFriendRelKey, ensureGroupRelKey, ensureOwnKeyPair, normalizeResolvedFileKey } from '@/utils/e2ee'
 import { getOssDownloadCandidates } from '@/utils/ossDownload'
 import { isLocalLikePath, toDisplaySrc, toFsPath } from '@/utils/resourcePath'
 import { runLegacyDesktopMigration, runLegacyDesktopMigrationWithRetry } from '@/utils/legacyMigration'
@@ -719,12 +719,41 @@ onMounted(async () => {
       setFirstInitProgress(0, 0)
 
       if ((window as any).__TAURI_INTERNALS__) {
+        const earlyUid = String(authStore.uid || '').trim()
+        const earlySessionId = String(authStore.session?.sessionId || '').trim()
+
+        // 对齐旧 ocs：加密检测（自身密钥）必须在连 WS 之前完成。
+        // 否则 early WS 收包时 Rust 无私钥 → 落库「等待密钥同步」，发送也会红感叹号。
+        if (earlyUid) {
+          setInitText(t('加密检测'))
+          try {
+            await traceInitStep('ensure own key pair before ws', () => ensureOwnKeyPair(earlyUid), {
+              rethrow: false,
+            })
+          } catch (err) {
+            console.warn('[e2ee] ensureOwnKeyPair before early ws failed:', err)
+          }
+        }
+
+        // 自身密钥就绪后再连 WS；迁移仍可并行，避免同步期间完全收不到新消息。
+        const earlyWsConnectPromise = (async () => {
+          if (!earlyUid || !earlySessionId) return
+          try {
+            await messageStore.ensureWsConnected()
+            initDiag('early ws connect ready during legacy migration')
+          } catch (err) {
+            console.warn('[ws] early connect during migration failed:', err)
+          }
+        })()
+
         const migrationResult = await traceInitStep(
           'legacy desktop migration',
           () => runLegacyDesktopMigration(authStore.uid),
         )
         if (migrationResult?.migrated) {
-          messageStore.clearAllMessageCaches()
+          // 提前连上的 WS 可能已把实时消息写入内存；整表清缓存会把它们抹掉，
+          // 启动阶段尚未打开具体会话时只依赖后续 loadConversations 读库即可。
+          // 后台补导仍走 refreshAfterLegacyImport 的定点清缓存。
           initDiag('legacy desktop migration imported history', {
             importedCount: migrationResult.importedCount,
             reason: migrationResult.reason,
@@ -759,6 +788,8 @@ onMounted(async () => {
             },
           })
         }
+        // 迁移结束后若提前连接仍在进行，继续等；后面 ensureWsConnected 会复用同一任务。
+        void earlyWsConnectPromise
       }
 
       // 头像/昵称刷新只是启动增强信息，线上 /user/userInfo 慢时不能阻塞本地数据加载和进入主页。
@@ -845,8 +876,7 @@ onMounted(async () => {
             try {
               setInitText(t('加密检测'))
 
-              // 对齐老 im：启动页只阻塞自身密钥初始化；联系人 relKey 在 WS 连接后由 tauri-events
-              // 后台预热，避免联系人多时长时间停留在“加密检测”。
+              // 幂等兜底：early 路径已注入则很快返回；失败也不永久挡主界面。
               await traceOptionalInitStep('ensure own key pair', () => ensureOwnKeyPair(uid))
             } catch {
               // key prewarm best effort; do not block WS connect forever
@@ -856,6 +886,44 @@ onMounted(async () => {
           if (sessionId && uid) {
             // 启动恢复登录时 authStore 可能还没有 wsUrl/aesKey；复用发送前连接逻辑从域名池恢复 WS。
             await traceOptionalInitStep('connect ws', () => messageStore.ensureWsConnected())
+            // early WS 可能在会话列表为空时已 connected，导致 ws:status 预热空跑且不再触发。
+            // 数据就绪后补一轮 relKey 预热，并重试已落库的「等待密钥同步」占位。
+            void (async () => {
+              try {
+                const groupIds = chatStore.conversations
+                  .filter((c) => c.type === 1 && /^\d+$/.test(String(c.targetId || '')))
+                  .map((c) => String(c.targetId))
+                const channelIds = chatStore.conversations
+                  .filter((c) => c.type === 2 && /^\d+$/.test(String(c.targetId || '')))
+                  .map((c) => String(c.targetId))
+                const friendIds = Array.from(new Set([
+                  ...chatStore.conversations
+                    .filter((c) => c.type === 0 && /^\d+$/.test(String(c.targetId || '')))
+                    .map((c) => String(c.targetId)),
+                  ...contactStore.contacts
+                    .map((c) => String(c.id || ''))
+                    .filter((id) => /^\d+$/.test(id)),
+                ]))
+                for (const gid of groupIds) {
+                  await ensureGroupRelKey(uid, gid).catch(() => {})
+                }
+                for (const cid of channelIds) {
+                  await ensureChannelRelKey(uid, cid).catch(() => {})
+                }
+                for (const fid of friendIds) {
+                  await ensureFriendRelKey(uid, fid).catch(() => {})
+                }
+                await messageStore.retryDecryptPendingPrivateConversations(uid)
+                await messageStore.retryDecryptPendingGroupConversations(uid)
+                initDiag('post-connect key warmup and pending decrypt done', {
+                  groupCount: groupIds.length,
+                  channelCount: channelIds.length,
+                  friendCount: friendIds.length,
+                })
+              } catch (err) {
+                console.warn('[e2ee] post-connect warmup/retry failed:', err)
+              }
+            })()
           } else if (uid) {
             networkStore.setWsStatus('disconnected')
             // 10001 必须带登录 session；缺失时跳过 WS，避免空 session 重连导致消息只显示本地气泡。

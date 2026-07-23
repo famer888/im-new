@@ -310,7 +310,8 @@ function selectContact(contact: ContactItem) {
 onMounted(() => {
   const uid = String(authStore.uid || '')
   if (uid) {
-    void contactStore.refreshNewFriendReqTotal(uid)
+    // 只读本地已读状态；未读增量由 WS friend:req-num 写入，勿用待处理列表长度覆盖。
+    contactStore.loadNewFriendReqTotal(uid)
 
     if (contactStore.contacts.length === 0) {
       void contactStore.loadContacts(uid, { refreshRemote: false })
