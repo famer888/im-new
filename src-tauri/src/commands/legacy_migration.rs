@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::branding::{self, app_brand_id};
 use crate::commands::account_transfer;
+use crate::commands::legacy_conversation_summary;
 use crate::commands::legacy_indexeddb;
 use crate::crypto::aes;
 use crate::db::DbManager;
@@ -106,6 +107,10 @@ pub fn migrate_legacy_desktop_data_for_uid(
 
     let brand_id = app_brand_id(app);
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+
+    // 会话摘要（最后消息时间/置顶/未读）恢复独立于消息导入：即使消息此前已迁移完成
+    // 或本次走“已迁移”跳过分支，也要对老用户补一次，修复排序错乱与未读全 0。
+    restore_legacy_summary_once(db, &uid, brand_id, &app_data_dir);
 
     let candidates = legacy_cache_candidates(&uid, brand_id, &app_data_dir);
 
@@ -424,6 +429,48 @@ fn read_legacy_history_from_cache(
 
 fn migration_store_path(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("legacy_migration.json")
+}
+
+fn legacy_summary_marker_path(app_data_dir: &Path, uid: &str) -> PathBuf {
+    app_data_dir.join(format!("legacy_summary_restored_{uid}.json"))
+}
+
+/// 独立于消息导入，一次性把旧包会话摘要（最后消息时间/置顶/未读）恢复到本地会话表。
+///
+/// 已应用过（标记文件存在）则跳过，避免把用户此后在重构版里已读掉的红点顶回来；
+/// 无任何相关缓存文件时不打开 DB、不写标记，留待 abc 备份就绪后的下次启动再试。
+fn restore_legacy_summary_once(db: &DbManager, uid: &str, brand_id: &str, app_data_dir: &Path) {
+    let marker = legacy_summary_marker_path(app_data_dir, uid);
+    if marker.is_file() {
+        return;
+    }
+
+    let dirs = legacy_conversation_summary::legacy_storage_dirs(brand_id, app_data_dir);
+    if !legacy_conversation_summary::has_summary_files(&dirs, uid) {
+        return;
+    }
+
+    if db.get_or_create(uid).is_err() {
+        return;
+    }
+
+    let stats = db
+        .with_connection(uid, |conn| {
+            legacy_conversation_summary::apply(conn, uid, &dirs)
+        })
+        .unwrap_or_default();
+
+    if stats.conversations_touched > 0 || stats.unread_applied > 0 {
+        let payload = serde_json::json!({
+            "uid": uid,
+            "restored_at": chrono::Utc::now().timestamp_millis(),
+            "conversations_touched": stats.conversations_touched,
+            "unread_applied": stats.unread_applied,
+        });
+        if let Ok(bytes) = serde_json::to_vec(&payload) {
+            let _ = std::fs::write(&marker, bytes);
+        }
+    }
 }
 
 fn read_migration_store(app_data_dir: &Path) -> Result<LegacyMigrationStore, String> {

@@ -71,8 +71,10 @@ pub fn run() {
             // Create the login window eagerly so packaged builds land on a stable first screen.
             {
                 let disable_auto_login = std::env::args().any(|arg| arg == "--disable-auto-login");
+                // 仅“多开新窗口”进程会带 --disable-auto-login；用 multi=1 精确标记多开，
+                // 让登录二维码窗默认不显示上一次登录账号昵称（退出登录场景不受影响）。
                 let login_url = if disable_auto_login {
-                    "/#/login?autoLogin=0"
+                    "/#/login?autoLogin=0&multi=1"
                 } else {
                     "/#/login"
                 };

@@ -6,6 +6,7 @@ pub mod contacts;
 pub mod domain;
 pub mod file;
 pub mod groups;
+pub mod legacy_conversation_summary;
 pub mod legacy_indexeddb;
 pub mod legacy_migration;
 pub mod log_upload;

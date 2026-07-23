@@ -1000,9 +1000,16 @@ export async function ensureFriendRelKey(
   })
 
   if (!forceRefresh) {
-    const cacheHit = await tauriInvoke<boolean>('has_friend_rel_key', { friendId: fid })
-    if (cacheHit) {
-      e2eeDebugLog('[e2ee] ensureFriendRelKey: rust cache hit', { fid })
+    // 单聊媒体的附件 fileKey 分别用好友 web/app relKey 加密进 webContent/appContent。
+    // 只要缺一端，发送时对应 content 就不会构造：缺 web → PC(web) 接收方拿不到 fileKey，
+    // 缺 app → 手机(app) 接收方拿不到 fileKey，导致图片/文件解密失败（文字仍走顶层明文正常）。
+    // 因此这里必须确认两端 relKey 都已缓存才短路；任一缺失都走完整派生补齐。
+    const [hasWebKey, hasAppKey] = await Promise.all([
+      tauriInvoke<boolean>('has_friend_rel_key', { friendId: fid, source: 'web' }).catch(() => false),
+      tauriInvoke<boolean>('has_friend_rel_key', { friendId: fid, source: 'app' }).catch(() => false),
+    ])
+    if (hasWebKey && hasAppKey) {
+      e2eeDebugLog('[e2ee] ensureFriendRelKey: rust cache hit (both ends)', { fid })
       e2eeDiag('ensure friend rel key cache hit', {
         friendId: fid,
         totalDurationMs: Date.now() - startedAt,

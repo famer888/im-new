@@ -1,10 +1,11 @@
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit};
 use aes::{Aes128, Aes256};
 
 type Aes128EcbEnc = ecb::Encryptor<Aes128>;
 type Aes128EcbDec = ecb::Decryptor<Aes128>;
 type Aes256EcbEnc = ecb::Encryptor<Aes256>;
 type Aes256EcbDec = ecb::Decryptor<Aes256>;
+type Aes256CbcDec = cbc::Decryptor<Aes256>;
 
 use super::CryptoError;
 
@@ -163,6 +164,69 @@ pub fn decrypt_ecb_256_hex(hex_ciphertext: &str, key: &[u8]) -> Result<String, C
         hex::decode(hex_ciphertext).map_err(|e| CryptoError::AesError(e.to_string()))?;
     let decrypted = decrypt_ecb_256(&ciphertext, key)?;
     String::from_utf8(decrypted).map_err(|e| CryptoError::AesError(e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// AES-256-CBC + PBKDF2  (legacy Electron `electron-store` / `conf` v5 caches)
+//
+// 旧桌面端用 electron-store(^4，依赖 conf ^5) 持久化会话列表与未读缓存。
+// conf v5 加密格式：文件 = [16 字节随机 IV][b':'][AES-256-CBC 密文]，
+// 其中 key = PBKDF2-HMAC-SHA512(encryptionKey, salt = IV.toString('utf8'),
+// rounds = 10000, dkLen = 32)。迁移旧安装包数据时需按此格式解密。
+// ---------------------------------------------------------------------------
+
+/// PBKDF2-HMAC-SHA512 派生密钥。
+pub fn pbkdf2_hmac_sha512(password: &[u8], salt: &[u8], rounds: u32, dk_len: usize) -> Vec<u8> {
+    let mut out = vec![0u8; dk_len];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha512>(password, salt, rounds, &mut out);
+    out
+}
+
+/// AES-256-CBC 解密并去除 PKCS7 填充。key 必须为 32 字节，iv 为 16 字节。
+pub fn decrypt_cbc_256(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if key.len() != 32 {
+        return Err(CryptoError::AesError("CBC-256 key must be 32 bytes".into()));
+    }
+    if iv.len() != BLOCK_SIZE {
+        return Err(CryptoError::AesError("CBC IV must be 16 bytes".into()));
+    }
+    if ciphertext.is_empty() || ciphertext.len() % BLOCK_SIZE != 0 {
+        return Err(CryptoError::AesError("Invalid CBC ciphertext length".into()));
+    }
+
+    // cbc::Decryptor 内部维护链式状态并自动 XOR 前一密文块，
+    // 因此必须顺序复用同一实例（不能 clone，否则状态被重置），也不再手动 XOR。
+    let mut dec = Aes256CbcDec::new_from_slices(key, iv)
+        .map_err(|e| CryptoError::AesError(e.to_string()))?;
+
+    let mut buf = ciphertext.to_vec();
+    for chunk in buf.chunks_mut(BLOCK_SIZE) {
+        let block = aes::Block::from_mut_slice(chunk);
+        dec.decrypt_block_mut(block);
+    }
+
+    pkcs7_unpad(&buf)
+}
+
+/// 解密 electron-store(conf v5) 加密文件的原始字节，返回明文（通常是 JSON）。
+///
+/// 仅支持 conf v5 的 IV 格式（`[iv:16][b':'][cbc密文]`）；旧到无 IV 的
+/// `createDecipher` 格式不在此支持范围（该 IM 出货版本始终以 IV 格式写入）。
+pub fn decrypt_electron_store(raw: &[u8], encryption_key: &str) -> Result<Vec<u8>, CryptoError> {
+    // conf 判定：第 17 字节（下标 16）为 ':' 时是 IV 格式。
+    if raw.len() <= 17 || raw[BLOCK_SIZE] != b':' {
+        return Err(CryptoError::AesError(
+            "unsupported electron-store format (no IV marker)".into(),
+        ));
+    }
+    let iv = &raw[..BLOCK_SIZE];
+    let ciphertext = &raw[BLOCK_SIZE + 1..];
+
+    // 关键：conf 用 `IV.toString()`（默认 utf8）作为 PBKDF2 的 salt，
+    // 非法 UTF-8 字节会被替换成 U+FFFD，Rust 用 from_utf8_lossy 复现同样行为。
+    let salt = String::from_utf8_lossy(iv).into_owned();
+    let key = pbkdf2_hmac_sha512(encryption_key.as_bytes(), salt.as_bytes(), 10_000, 32);
+    decrypt_cbc_256(ciphertext, &key, iv)
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +572,31 @@ mod tests {
             encrypt_ecb_256(pt, key).unwrap(),
             "AES-128 and AES-256 must produce different ciphertext"
         );
+    }
+
+    // -- electron-store / conf v5 decrypt ------------------------------------
+
+    #[test]
+    fn electron_store_decrypt_matches_conf_vector() {
+        // 由 Node crypto 按 conf v5 完全相同算法生成（IV = 16 × 0x07）：
+        //   plaintext = {"data":{"unread":{"9527friend":{"count":3,"time":1700000000000}}}}
+        //   key       = ocs_storage_encryption_key_randomized
+        let hex = "070707070707070707070707070707073a0bba4605f172aea121f391b2ca98b6\
+                   010f164e48ca00fbd2bf5dd647461e629346c4fe374095604814f566c0898c37\
+                   ac0c225805ec47807df0e1280204977ea02ef9dc735ec589df3b3513f0067ca22a";
+        let raw = hex::decode(hex).unwrap();
+        let plaintext =
+            decrypt_electron_store(&raw, "ocs_storage_encryption_key_randomized").unwrap();
+        assert_eq!(
+            String::from_utf8(plaintext).unwrap(),
+            r#"{"data":{"unread":{"9527friend":{"count":3,"time":1700000000000}}}}"#
+        );
+    }
+
+    #[test]
+    fn electron_store_decrypt_rejects_non_iv_format() {
+        let raw = vec![0u8; 32];
+        assert!(decrypt_electron_store(&raw, "k").is_err());
     }
 
     // -- Message encryption --------------------------------------------------

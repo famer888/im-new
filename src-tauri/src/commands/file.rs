@@ -1869,6 +1869,40 @@ fn oss_rfc1123_date() -> String {
         .to_string()
 }
 
+/// 还原 OSS 对象名用于 V1 签名的 CanonicalizedResource。
+/// url.path() 会把中文等非 ASCII、空格等字符百分号编码（如「的替身」→ %E7%9A%84...），
+/// 而 OSS 服务端按【解码后】的对象名计算签名；此处必须解码回原名，否则含中文/空格的
+/// 文件名会因签名不一致被拒（HTTP 403）。对齐旧包 ali-oss SDK 的签名行为。
+fn oss_canonical_object_key(url_path: &str, fallback_object_key: &str) -> String {
+    let object_path = url_path.trim_start_matches('/');
+    if object_path.is_empty() {
+        return fallback_object_key.trim_start_matches('/').to_string();
+    }
+    percent_decode_path(object_path)
+}
+
+/// 仅对 %XX 序列做百分号解码后按 UTF-8 还原；非法/不完整序列原样保留。
+/// 保留 '/' 等路径分隔符，得到的即服务端解码后的对象名。
+fn percent_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn sniff_image_mime(bytes: &[u8]) -> &'static str {
     if bytes.len() >= 8
         && bytes[0] == 0x89
@@ -2168,13 +2202,13 @@ async fn put_oss_local_file_stream(
     };
     let url =
         url::Url::parse(&request_url).map_err(|e| format!("invalid oss upload url: {}", e))?;
-    let object_path = url.path().trim_start_matches('/');
-    let object_key = if object_path.is_empty() {
-        object_key.trim_start_matches('/')
-    } else {
-        object_path
-    };
-    let canonical_resource = format!("/{}/{}", bucket.trim(), object_key);
+    // OSS V1 签名用【解码后】的对象名；url.path() 会把中文等非 ASCII 百分号编码，
+    // 直接签名会与服务端按解码名算出的签名不符导致 403（含中文/空格的文件名）。
+    let canonical_resource = format!(
+        "/{}/{}",
+        bucket.trim(),
+        oss_canonical_object_key(url.path(), &object_key)
+    );
     let canonical_headers = format!(
         "x-oss-date:{}\nx-oss-security-token:{}\n",
         oss_date, security_token
@@ -2322,13 +2356,13 @@ async fn put_oss_plain_local_file_stream(
     };
     let url =
         url::Url::parse(&request_url).map_err(|e| format!("invalid oss upload url: {}", e))?;
-    let object_path = url.path().trim_start_matches('/');
-    let object_key = if object_path.is_empty() {
-        object_key.trim_start_matches('/')
-    } else {
-        object_path
-    };
-    let canonical_resource = format!("/{}/{}", bucket.trim(), object_key);
+    // OSS V1 签名用【解码后】的对象名；url.path() 会把中文等非 ASCII 百分号编码，
+    // 直接签名会与服务端按解码名算出的签名不符导致 403（含中文/空格的文件名）。
+    let canonical_resource = format!(
+        "/{}/{}",
+        bucket.trim(),
+        oss_canonical_object_key(url.path(), &object_key)
+    );
     let canonical_headers = format!(
         "x-oss-date:{}\nx-oss-security-token:{}\n",
         oss_date, security_token
@@ -2421,13 +2455,13 @@ async fn put_oss_bytes(
     };
     let url =
         url::Url::parse(&request_url).map_err(|e| format!("invalid oss upload url: {}", e))?;
-    let object_path = url.path().trim_start_matches('/');
-    let object_key = if object_path.is_empty() {
-        object_key.trim_start_matches('/')
-    } else {
-        object_path
-    };
-    let canonical_resource = format!("/{}/{}", bucket.trim(), object_key);
+    // OSS V1 签名用【解码后】的对象名；url.path() 会把中文等非 ASCII 百分号编码，
+    // 直接签名会与服务端按解码名算出的签名不符导致 403（含中文/空格的文件名）。
+    let canonical_resource = format!(
+        "/{}/{}",
+        bucket.trim(),
+        oss_canonical_object_key(url.path(), &object_key)
+    );
     let canonical_headers = format!(
         "x-oss-date:{}\nx-oss-security-token:{}\n",
         oss_date, security_token
@@ -3702,6 +3736,28 @@ mod tests {
                 "https://b.example.com/file.png".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn oss_canonical_object_key_decodes_non_ascii_path() {
+        // 含中文的对象名：url.path() 已被百分号编码，签名必须还原成解码后的原名。
+        let encoded = "/v2/chat/2026/uuid.jpg%E7%9A%84%E6%9B%BF%E8%BA%AB_%E5%89%AF%E6%9C%AC";
+        assert_eq!(
+            oss_canonical_object_key(encoded, "ignored"),
+            "v2/chat/2026/uuid.jpg的替身_副本"
+        );
+        // 空格编码 %20 还原为空格，保留 '/' 分隔符。
+        assert_eq!(
+            oss_canonical_object_key("/dir/a%20b.png", "ignored"),
+            "dir/a b.png"
+        );
+        // 纯 ASCII 对象名解码后不变，行为与旧逻辑一致。
+        assert_eq!(
+            oss_canonical_object_key("/v2/chat/uuid.png", "ignored"),
+            "v2/chat/uuid.png"
+        );
+        // path 为空时回退到传入的对象名。
+        assert_eq!(oss_canonical_object_key("/", "fallback/key.png"), "fallback/key.png");
     }
 
     #[test]

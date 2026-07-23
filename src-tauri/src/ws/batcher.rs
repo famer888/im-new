@@ -1967,6 +1967,15 @@ impl MessageBatcher {
                     push_content_with!(web, i64::from(web.version), "web");
                 }
             }
+            // 发送端若只有好友 app relKey（缺 web relKey），可能只发出 appContent。
+            // PC(web) 接收端此时必须回退解析 appContent，才能拿到其中加密的附件 fileKey；
+            // 否则图片/文件只能显示顶层明文里的 URL，却因缺 fileKey 而无法解密下载。
+            if let Some(app) = &om.app_content {
+                push_content_with!(app, ver, "app");
+                if app.version > 0 {
+                    push_content_with!(app, i64::from(app.version), "app");
+                }
+            }
         }
         // Fallback for old/unencrypted messages that might still use `content`
         if !om.content.is_empty() {

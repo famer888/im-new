@@ -289,6 +289,7 @@ function startWindowDrag(e: MouseEvent) {
       :key="qrLoginKey"
       :loading="isLoading || isRestoring"
       :extra-domains="extraDomains"
+      :hide-last-login="route.query.multi === '1'"
       @login-success="handleLoginSuccess"
       @login-error="handleLoginError"
       @show-network="handleShowNetwork"

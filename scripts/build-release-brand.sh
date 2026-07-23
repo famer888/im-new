@@ -278,9 +278,19 @@ if [[ "$PLATFORM" == "win" ]]; then
     # 旧 Electron NSIS 开了 deleteAppDataOnUninstall：静默卸载会清掉 %APPDATA%\55-im 等聊天库。
     # 覆盖安装前先备份 IndexedDB / Temp abc，卸载后再还原，供新包登录迁移继续读到历史。
     LEGACY_TEMP_DIR="${BRAND_ID}LocalStorage"
+    # CLI 2.11 模板把卸载图标拆成 uninstallerIcon，但当前 tauri-build(2.5.x) 校验尚不认识该字段。
+    # hooks 在 MUI_UNICON 定义之前被 include，这里直接写品牌 ico，避免升级 Rust crate。
+    NSIS_UNINSTALL_ICON=""
+    for candidate in "$ICON_TARGET_DIR/installer.ico" "$ICON_TARGET_DIR/icon.ico"; do
+      if [[ -f "$candidate" ]]; then
+        NSIS_UNINSTALL_ICON="$candidate"
+        break
+      fi
+    done
     cat > "$NSIS_HOOK_FILE" <<EOF
 !define LEGACY_ELECTRON_GUID "${ELECTRON_NSI_GUID}"
 !define LEGACY_BACKUP_ROOT "\$APPDATA\\${PKG_IDENTIFIER}\\legacy-electron-backup"
+$(if [[ -n "$NSIS_UNINSTALL_ICON" ]]; then printf '!define MUI_UNICON "%s"\n' "$NSIS_UNINSTALL_ICON"; fi)
 
 !macro NSIS_HOOK_PREINSTALL
   ReadRegStr \$R0 HKCU "Software\\\${LEGACY_ELECTRON_GUID}" "InstallLocation"
@@ -344,6 +354,8 @@ node -e '
     const nsis = {
       compression: "zlib",
       installerIcon: nsisIcon,
+      // 卸载 logo 不写 uninstallerIcon：当前 tauri-build 2.5.x 会因未知字段直接失败。
+      // 品牌卸载图标改由 installerHooks 顶部的 MUI_UNICON 注入（见上方 .nsh 生成逻辑）。
       installMode: "currentUser",
     };
     if (nsisHookRel) {

@@ -448,6 +448,23 @@ function shouldRemoveLocalGroupForEvent(extra: any, currentUid: string): boolean
   return Boolean(currentUid && affectedMemberId && affectedMemberId === currentUid)
 }
 
+/**
+ * 当前用户是否为该群群主（role 0 / ownerId 命中）。
+ * ownerId 优先；未知时退回本地成员角色。两者都拿不到时按“非群主”处理，
+ * 与旧 im group.js case 7 一致：无法确认自己是群主时不展示他人退群提示。
+ */
+function isCurrentUserGroupOwner(
+  groupStore: ReturnType<typeof useGroupStore>,
+  groupId: string,
+  currentUid: string,
+): boolean {
+  if (!currentUid) return false
+  const ownerId = String(groupStore.getGroup(groupId)?.ownerId ?? '').trim()
+  if (ownerId) return ownerId === currentUid
+  const me = groupStore.getMembers(groupId).find((member) => member.userId === currentUid)
+  return me ? Number(me.role) === 0 : false
+}
+
 function getGroupEventReceiptPayload(extra: any): { groupId: number; msgType: number; msgIds: number[] } | null {
   const source = String(extra?.source || '')
   if (source !== 'group-event' && source !== 'group-update-event') return null
@@ -2105,6 +2122,11 @@ export async function setupTauriListeners() {
         enrichGroupEventRemovedMemberNames(groupStore, contactStore, groupId, extra)
         patchGroupRemoveNoticeMessage(m, currentUid, groupId)
         applyGroupEventMemberPatch(groupStore, groupId, extra)
+        // 对齐旧 im group.js case 7：他人主动退群仅通知群主，管理员/普通成员不展示
+        // “XX退出群聊”系统消息（成员数已在上面静默更新）。自己退群走上面的删群分支。
+        if (groupReqType === 7 && !isCurrentUserGroupOwner(groupStore, groupId, currentUid)) {
+          locallyConsumedGroupRemovalMessageKeys.add(getBatchMessageKey(m))
+        }
         if (shouldRemoveGroupEventMembers(extra)) {
           const afterPatchCount = groupStore.getMembers(groupId).length
           const patchedGroup = groupStore.getGroup(groupId)

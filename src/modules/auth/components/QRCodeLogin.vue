@@ -15,6 +15,8 @@ import { WebLoginStatus } from '@/proto/generated'
 const props = defineProps<{
   loading?: boolean
   extraDomains?: string[]
+  // 多开新窗口登录时为 true：不显示上一次登录账号昵称/头像，默认为空。
+  hideLastLogin?: boolean
 }>()
 
 const { t } = useI18n()
@@ -726,8 +728,11 @@ onMounted(async () => {
   })
   await refreshDeviceSysMacFromNative()
   getDeviceConfig()
-  loadLastLoginInfo()
-  refreshLastLoginAvatar()
+  // 多开新窗口登录默认不带上一次账号信息（昵称/头像留空，只显示默认 logo）。
+  if (!props.hideLastLogin) {
+    loadLastLoginInfo()
+    refreshLastLoginAvatar()
+  }
 
   // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。
   refreshDomainList(props.extraDomains || [])

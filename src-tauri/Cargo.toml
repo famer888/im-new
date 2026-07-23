@@ -30,7 +30,9 @@ prost = "0.13"
 rusqlite = { version = "0.32", features = ["bundled"] }
 aes = "0.8"
 ecb = "0.1"
+cbc = "0.1"
 pkcs7 = "0.4"
+pbkdf2 = { version = "0.12", default-features = false }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 rsa = "0.9"
 sha2 = "0.10"

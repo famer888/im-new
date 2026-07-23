@@ -1323,10 +1323,15 @@ pub fn has_friend_rel_key(
     version: Option<i64>,
     source: Option<String>,
 ) -> bool {
-    if let (Some(v), Some(s)) = (version, source.as_deref()) {
-        return crypto.get_friend_key(&friend_id, v, s).is_some();
+    match (version, source.as_deref()) {
+        // 精确 (version, source)：判断该端指定版本 relKey 是否已缓存。
+        (Some(v), Some(s)) => crypto.get_friend_key(&friend_id, v, s).is_some(),
+        // 仅 source：判断该端是否已有任意版本 relKey（供发送前确认 web/app 两端各自就绪）。
+        (None, Some(s)) if s == "web" || s == "app" => {
+            crypto.get_latest_friend_key(&friend_id, s).is_some()
+        }
+        _ => crypto.has_any_friend_key(&friend_id),
     }
-    crypto.has_any_friend_key(&friend_id)
 }
 
 #[tauri::command]
