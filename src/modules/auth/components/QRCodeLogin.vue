@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getLastUsedUidHint } from '@/utils/windowSessionScope'
 import QrcodeVue from 'qrcode.vue'
 import defaultLogo from '@/assets/images/logo/logo.png'
 import freshIcon from '@/assets/images/login/fresh-icon.png'
@@ -18,6 +17,22 @@ const props = defineProps<{
   // 多开新窗口登录时为 true：不显示上一次登录账号昵称/头像，默认为空。
   hideLastLogin?: boolean
 }>()
+
+function isTauriRuntime(): boolean {
+  return !!(window as any).__TAURI_INTERNALS__
+}
+
+/** 对齐 URL / route：多开登录窗带 multi=1，昵称默认空。 */
+function shouldHideLastLoginByLocation(): boolean {
+  if (props.hideLastLogin) return true
+  try {
+    const hash = String(window.location.hash || '')
+    const search = String(window.location.search || '')
+    return /(?:[?&#]|^)multi=1(?:&|$)/.test(hash) || /(?:[?&]|^)multi=1(?:&|$)/.test(search)
+  } catch {
+    return false
+  }
+}
 
 const { t } = useI18n()
 
@@ -303,26 +318,53 @@ function retryNextDomain(): boolean {
   return true
 }
 
-function loadLastLoginInfo() {
+/**
+ * 对齐旧 im `ecode.vue`：
+ * - 产品只展示「最后一个登录账户」；
+ * - 若该账户已在其它窗口登录（旧：sourceId 在 source-id-list），则不展示昵称/头像，默认为空。
+ * 多开新窗口（multi=1 / hideLastLogin）同样保持空。
+ */
+async function loadLastLoginInfo() {
+  lastLoginInfo.value = {}
+  lastAvatarLoadError.value = false
+
+  if (shouldHideLastLoginByLocation()) return
+
   try {
-    const stored = localStorage.getItem('login-account-list')
-    if (stored) {
-      const list = JSON.parse(stored)
-      if (Array.isArray(list) && list.length > 0) {
-        const preferred = getLastUsedUidHint()
-          ? list.find((item: any) => String(item?.id || '').trim() === getLastUsedUidHint())
-          : null
-        const last = preferred || list[list.length - 1] || {}
-        lastLoginInfo.value = {
-          ...last,
-          name: String(last.name || last.nickname || last.nickName || last.id || ''),
-          icon: String(last.icon || last.avatar || last.pic || last.headUrl || ''),
-        }
-        lastAvatarLoadError.value = false
-      }
+    if (isTauriRuntime()) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      // 对齐旧 im source-id-list：已有其它进程登录时，新开二维码不带上一个账号昵称。
+      const hasForeignActiveLogin = await invoke<boolean>('has_foreign_active_login').catch(() => false)
+      if (hasForeignActiveLogin) return
     }
-  } catch { /* ignore */ }
+
+    const stored = localStorage.getItem('login-account-list')
+    if (!stored) return
+    const list = JSON.parse(stored)
+    if (!Array.isArray(list) || list.length === 0) return
+
+    // 对齐旧 im：取列表最后一个账户，不用共享 CURRENT_UID 提示（多开会误指到已登录窗账号）。
+    const last = list[list.length - 1] || {}
+    lastLoginInfo.value = {
+      ...last,
+      name: String(last.name || last.nickname || last.nickName || ''),
+      icon: String(last.icon || last.avatar || last.pic || last.headUrl || ''),
+    }
+    lastAvatarLoadError.value = false
+  } catch {
+    lastLoginInfo.value = {}
+  }
 }
+
+watch(
+  () => props.hideLastLogin,
+  (hide) => {
+    if (hide) {
+      lastLoginInfo.value = {}
+      lastAvatarLoadError.value = false
+    }
+  },
+)
 
 async function refreshLastLoginAvatar() {
   const id = Number(lastLoginInfo.value.id || 0)
@@ -728,10 +770,10 @@ onMounted(async () => {
   })
   await refreshDeviceSysMacFromNative()
   getDeviceConfig()
-  // 多开新窗口登录默认不带上一次账号信息（昵称/头像留空，只显示默认 logo）。
-  if (!props.hideLastLogin) {
-    loadLastLoginInfo()
-    refreshLastLoginAvatar()
+  // 多开新窗口 / 已有登录窗占用时：昵称默认为空（对齐旧 im ecode.vue）。
+  await loadLastLoginInfo()
+  if (lastLoginInfo.value.name || lastLoginInfo.value.id) {
+    void refreshLastLoginAvatar()
   }
 
   // 登录前准备域名池：先用 OSS/预埋域名，再尝试从动态域名 API 补全。

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -52,6 +52,17 @@ const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('error')
 const LOGIN_RESTORE_STEP_TIMEOUT_MS = 10000
 let networkBenchmarkPreloadPromise: Promise<string[]> | null = null
+
+/** 多开登录窗：route 或 hash 带 multi=1 时隐藏上一账号昵称。 */
+const hideLastLogin = computed(() => {
+  const multi = route.query.multi
+  if (multi === '1' || multi === 1 || (Array.isArray(multi) && multi.includes('1'))) return true
+  try {
+    return /(?:[?&#]|^)multi=1(?:&|$)/.test(String(window.location.hash || ''))
+  } catch {
+    return false
+  }
+})
 
 function loginDiag(message: string, data?: Record<string, unknown>) {
   if (!import.meta.env.DEV) return
@@ -289,7 +300,7 @@ function startWindowDrag(e: MouseEvent) {
       :key="qrLoginKey"
       :loading="isLoading || isRestoring"
       :extra-domains="extraDomains"
-      :hide-last-login="route.query.multi === '1'"
+      :hide-last-login="hideLastLogin"
       @login-success="handleLoginSuccess"
       @login-error="handleLoginError"
       @show-network="handleShowNetwork"
