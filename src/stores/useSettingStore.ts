@@ -13,7 +13,12 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args)
 }
 
-const FRIEND_VERIFY_PRIVACY_MASK = 4096
+/**
+ * 对齐 App `NewsSettingType.SettingTypeAddFriendVerify`：
+ * `1 << 5`（32）。业务语义：位为 1=需要验证（开），0=不需要（关）。
+ * 注意：旧 PC 误用 4096（1<<12，展示号码），会导致与 App 开关状态对不上。
+ */
+const FRIEND_VERIFY_PRIVACY_MASK = 1 << 5
 
 /** 前端使用 camelCase；Rust / settings.json 为 snake_case */
 export interface AppSettings {
@@ -31,8 +36,8 @@ export interface AppSettings {
   /** `Enter` 或 `Ctrl+Enter` */
   sendShortcutKey: string
   /**
-   * 与 im：加我为朋友时需要验证。
-   * 本地只是缓存；是否真正需要验证以服务端 `privacy & 4096` 为准。
+   * 加我为朋友时需要验证。
+   * 本地只是缓存；是否真正开启以服务端 `privacy & (1<<5)` 为准。
    */
   friendVerifyRequired: boolean
 }
@@ -115,18 +120,39 @@ function getCurrentUid(): number | null {
   return Number.isFinite(uid) && uid > 0 ? uid : null
 }
 
+function toPrivacyNumber(privacy: unknown): number {
+  const value = typeof privacy === 'number' ? privacy : Number(privacy)
+  return Number.isFinite(value) ? (value | 0) : 0
+}
+
+/** `(privacy & mask) > 0` → 加好友验证已开启 */
 function isFriendVerifyRequiredFromPrivacy(privacy: unknown, fallback: boolean): boolean {
   const value = typeof privacy === 'number' ? privacy : Number(privacy)
   if (!Number.isFinite(value)) return fallback
-  return (value & FRIEND_VERIFY_PRIVACY_MASK) === FRIEND_VERIFY_PRIVACY_MASK
+  return (value & FRIEND_VERIFY_PRIVACY_MASK) > 0
+}
+
+/** 只改好友验证位，保留其它 privacy 位（对齐 App SettingsKit） */
+function buildFriendVerifyPrivacyValue(currentPrivacy: number, enabled: boolean): number {
+  const privacy = toPrivacyNumber(currentPrivacy)
+  return enabled
+    ? (privacy | FRIEND_VERIFY_PRIVACY_MASK)
+    : (privacy & ~FRIEND_VERIFY_PRIVACY_MASK)
+}
+
+async function fetchCurrentPrivacy(uid: number): Promise<number> {
+  const resp = await getUserInfo({ uid })
+  assertCommonResultOk(resp, 'load privacy failed')
+  return toPrivacyNumber((resp as any)?.privacy)
 }
 
 /**
- * 对齐旧 im privacy.vue：开启发 privacy=4096，关闭发 privacy=0（旧项目为 ""）。
- * 不做按位合并，与旧端提交语义一致。
+ * 对齐 App：先读最新 privacy，再按位开启/关闭 `SettingTypeAddFriendVerify`，
+ * 避免整字段覆盖冲掉其它端设置。
  */
-async function syncFriendVerifyPrivacyToServer(_uid: number, enabled: boolean) {
-  const privacy = enabled ? FRIEND_VERIFY_PRIVACY_MASK : 0
+async function syncFriendVerifyPrivacyToServer(uid: number, enabled: boolean) {
+  const currentPrivacy = await fetchCurrentPrivacy(uid)
+  const privacy = buildFriendVerifyPrivacyValue(currentPrivacy, enabled)
   const resp = await updateUserInfo({
     userParam: { privacy },
     ops: [proto.UserOperator.PRIVACY],
@@ -170,17 +196,16 @@ export const useSettingStore = defineStore('setting', () => {
   }
 
   /**
-   * 从服务端 privacy 拉取「加我为朋友时需要验证」真实状态。
-   * 本地默认 true 时，若从未成功提交过 4096，服务端可能仍是关闭；必须以远端为准纠正 UI。
+   * 从服务端 privacy 拉取「加我为朋友时需要验证」真实状态（`1 << 5`）。
+   * 显示以远端为准，避免本地默认/旧错误位值（4096）与 App 不一致。
    */
   async function syncFriendVerifyFromServer(base: AppSettings): Promise<AppSettings> {
     const uid = getCurrentUid()
     if (!uid) return base
 
     try {
-      const resp = await getUserInfo({ uid })
-      assertCommonResultOk(resp, 'load friend verify required failed')
-      const friendVerifyRequired = isFriendVerifyRequiredFromPrivacy((resp as any)?.privacy, false)
+      const privacy = await fetchCurrentPrivacy(uid)
+      const friendVerifyRequired = isFriendVerifyRequiredFromPrivacy(privacy, false)
       if (friendVerifyRequired === base.friendVerifyRequired) return base
 
       const syncedSettings = { ...base, friendVerifyRequired }

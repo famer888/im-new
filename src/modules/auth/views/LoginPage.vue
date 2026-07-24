@@ -56,7 +56,7 @@ let networkBenchmarkPreloadPromise: Promise<string[]> | null = null
 /** 多开登录窗：route 或 hash 带 multi=1 时隐藏上一账号昵称。 */
 const hideLastLogin = computed(() => {
   const multi = route.query.multi
-  if (multi === '1' || multi === 1 || (Array.isArray(multi) && multi.includes('1'))) return true
+  if (multi === '1' || (Array.isArray(multi) && multi.includes('1'))) return true
   try {
     return /(?:[?&#]|^)multi=1(?:&|$)/.test(String(window.location.hash || ''))
   } catch {
