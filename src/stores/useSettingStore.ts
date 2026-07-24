@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { updateUserInfo } from '@/api/imBase'
+import { getUserInfo, updateUserInfo } from '@/api/imBase'
 import { proto } from '@/api/request'
 import { useAuthStore } from '@/stores/useAuthStore'
 
@@ -30,7 +30,10 @@ export interface AppSettings {
   keepHistoryOnLogout: boolean
   /** `Enter` 或 `Ctrl+Enter` */
   sendShortcutKey: string
-  /** 与 im：加我为朋友时需要验证；本地只缓存，实际以后端 privacy 为准 */
+  /**
+   * 与 im：加我为朋友时需要验证。
+   * 本地只是缓存；是否真正需要验证以服务端 `privacy & 4096` 为准。
+   */
   friendVerifyRequired: boolean
 }
 
@@ -112,9 +115,15 @@ function getCurrentUid(): number | null {
   return Number.isFinite(uid) && uid > 0 ? uid : null
 }
 
+function isFriendVerifyRequiredFromPrivacy(privacy: unknown, fallback: boolean): boolean {
+  const value = typeof privacy === 'number' ? privacy : Number(privacy)
+  if (!Number.isFinite(value)) return fallback
+  return (value & FRIEND_VERIFY_PRIVACY_MASK) === FRIEND_VERIFY_PRIVACY_MASK
+}
+
 /**
  * 对齐旧 im privacy.vue：开启发 privacy=4096，关闭发 privacy=0（旧项目为 ""）。
- * 不先拉远端 privacy 做按位合并，避免关后再开时服务端未正确恢复验证位。
+ * 不做按位合并，与旧端提交语义一致。
  */
 async function syncFriendVerifyPrivacyToServer(_uid: number, enabled: boolean) {
   const privacy = enabled ? FRIEND_VERIFY_PRIVACY_MASK : 0
@@ -160,10 +169,46 @@ export const useSettingStore = defineStore('setting', () => {
     return settingsWriteGeneration !== generation
   }
 
-  async function loadSettings(_options?: { syncRemote?: boolean }) {
+  /**
+   * 从服务端 privacy 拉取「加我为朋友时需要验证」真实状态。
+   * 本地默认 true 时，若从未成功提交过 4096，服务端可能仍是关闭；必须以远端为准纠正 UI。
+   */
+  async function syncFriendVerifyFromServer(base: AppSettings): Promise<AppSettings> {
+    const uid = getCurrentUid()
+    if (!uid) return base
+
+    try {
+      const resp = await getUserInfo({ uid })
+      assertCommonResultOk(resp, 'load friend verify required failed')
+      const friendVerifyRequired = isFriendVerifyRequiredFromPrivacy((resp as any)?.privacy, false)
+      if (friendVerifyRequired === base.friendVerifyRequired) return base
+
+      const syncedSettings = { ...base, friendVerifyRequired }
+      await saveLocalSettings(syncedSettings)
+      return syncedSettings
+    } catch (error) {
+      console.warn('[setting] sync friend verify from server failed:', error)
+      return base
+    }
+  }
+
+  async function refreshFriendVerifyFromServer() {
+    const loadGeneration = settingsWriteGeneration
+    const next = await syncFriendVerifyFromServer({ ...settings.value })
+    if (hasSettingsWriteSince(loadGeneration)) return
+    if (next.friendVerifyRequired === settings.value.friendVerifyRequired) return
+    settings.value = { ...settings.value, friendVerifyRequired: next.friendVerifyRequired }
+  }
+
+  async function loadSettings(options?: { syncRemote?: boolean }) {
+    const syncRemote = options?.syncRemote ?? true
     const loadGeneration = settingsWriteGeneration
     try {
-      const nextSettings = await readLocalSettings()
+      let nextSettings = await readLocalSettings()
+
+      if (syncRemote) {
+        nextSettings = await syncFriendVerifyFromServer(nextSettings)
+      }
 
       if (hasSettingsWriteSince(loadGeneration)) return
 
@@ -184,9 +229,10 @@ export const useSettingStore = defineStore('setting', () => {
     if (partial.friendVerifyRequired !== undefined) {
       settingsWriteGeneration += 1
       const uid = getCurrentUid()
-      if (uid) {
-        await syncFriendVerifyPrivacyToServer(uid, partial.friendVerifyRequired)
+      if (!uid) {
+        throw new Error('未登录，无法更新好友验证设置')
       }
+      await syncFriendVerifyPrivacyToServer(uid, partial.friendVerifyRequired)
     }
 
     settings.value = updated
@@ -209,5 +255,11 @@ export const useSettingStore = defineStore('setting', () => {
     document.documentElement.style.fontSize = `${size}px`
   }
 
-  return { settings, loaded, loadSettings, updateSettings }
+  return {
+    settings,
+    loaded,
+    loadSettings,
+    updateSettings,
+    refreshFriendVerifyFromServer,
+  }
 })

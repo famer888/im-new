@@ -326,6 +326,13 @@ watch(
   min-width: 100px !important;
   min-height: 100px !important;
   border-radius: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+:deep(.image-message .image-wrapper.is-error .image-error) {
+  inset: 0 !important;
+  border-radius: 0 !important;
 }
 
 :deep(.image-message .image-wrapper img),
@@ -334,5 +341,20 @@ watch(
   height: 100% !important;
   object-fit: cover !important;
   border-radius: 0 !important;
+}
+
+:deep(.image-message .image-error-content) {
+  gap: 6px !important;
+  padding: 4px !important;
+}
+
+:deep(.image-message .image-error-icon) {
+  width: 22px !important;
+  height: 22px !important;
+}
+
+:deep(.image-message .image-error-text) {
+  font-size: 11px !important;
+  max-width: 88px !important;
 }
 </style>

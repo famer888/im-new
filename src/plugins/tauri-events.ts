@@ -1494,7 +1494,10 @@ export async function setupTauriListeners() {
   listen<{ total: number }>('friend:req-num', (event) => {
     const authStore = useAuthStore()
     const contactStore = useContactStore()
-    contactStore.setNewFriendReqTotal(Number(event.payload?.total || 0), String(authStore.uid || ''))
+    // 对齐旧 im 20302：更新红点，并通知「新的好友」页刷新申请列表。
+    contactStore.setNewFriendReqTotal(Number(event.payload?.total || 0), String(authStore.uid || ''), {
+      fromPush: true,
+    })
   })
 
   listen<ChannelRemovedPayload>('channel:removed', async (event) => {

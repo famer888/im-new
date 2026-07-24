@@ -53,6 +53,8 @@ export const useContactStore = defineStore('contact', () => {
   const contacts = ref<Contact[]>([])
   const searchResults = ref<Contact[]>([])
   const newFriendReqTotal = ref(0)
+  /** 对齐旧 im `newFriendReq`：WS 20302 到达时递增，供「新的好友」页刷新申请列表 */
+  const friendReqSignal = ref(0)
   const loading = ref(false)
   const loadedDetailIds = new Set<string>()
   const detailRequestMap = new Map<string, Promise<void>>()
@@ -76,9 +78,12 @@ export const useContactStore = defineStore('contact', () => {
     }
   }
 
-  function setNewFriendReqTotal(total: number, uid?: string) {
+  function setNewFriendReqTotal(total: number, uid?: string, options?: { fromPush?: boolean }) {
     const nextTotal = Math.max(0, Number(total || 0))
     newFriendReqTotal.value = nextTotal
+    if (options?.fromPush) {
+      friendReqSignal.value += 1
+    }
     if (!uid) return
     try {
       localStorage.setItem(getNewFriendReqTotalCacheKey(uid), String(nextTotal))
@@ -468,6 +473,7 @@ export const useContactStore = defineStore('contact', () => {
     contacts,
     searchResults,
     newFriendReqTotal,
+    friendReqSignal,
     loading,
     loadNewFriendReqTotal,
     setNewFriendReqTotal,

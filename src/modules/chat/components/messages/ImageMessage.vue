@@ -67,6 +67,10 @@ type LocalFilePayload = {
 
 const IMAGE_DISPLAY_CACHE_MAX = 800
 const imageDisplayCache = new Map<string, ImageDisplayCacheEntry>()
+/** 已确认加载失败的图片：切会话/聚焦/重挂载时不再自动重下，避免频道失败图反复转圈。 */
+const IMAGE_LOAD_FAILURE_CACHE_MAX = 800
+type ImageLoadFailureStatus = 'downloadError' | 'decryptionError'
+const imageLoadFailureCache = new Map<string, ImageLoadFailureStatus>()
 
 function getCachedImage(key: string) {
   const entry = imageDisplayCache.get(key)
@@ -80,6 +84,7 @@ function setCachedImage(key: string, entry: Omit<ImageDisplayCacheEntry, 'cached
   if (!key || !entry.src || entry.src.startsWith('blob:')) return
   // 需解密的图片不能把远端缩略图地址单独缓存，否则切回会话后会误判为已加载。
   if (isRemoteImageSrc(entry.src) && !isTrustedPersistedLocalPath(entry.localFilePath)) return
+  clearCachedImageLoadFailure(key)
   imageDisplayCache.delete(key)
   imageDisplayCache.set(key, {
     ...entry,
@@ -95,6 +100,70 @@ function setCachedImage(key: string, entry: Omit<ImageDisplayCacheEntry, 'cached
 function deleteCachedImage(key: string) {
   if (!key) return
   imageDisplayCache.delete(key)
+}
+
+function hasCachedImageLoadFailure(key: string): boolean {
+  return Boolean(key) && imageLoadFailureCache.has(key)
+}
+
+function getCachedImageLoadFailure(key: string): ImageLoadFailureStatus | null {
+  if (!key) return null
+  return imageLoadFailureCache.get(key) || null
+}
+
+function markCachedImageLoadFailure(key: string, status: ImageLoadFailureStatus = 'downloadError') {
+  if (!key) return
+  imageLoadFailureCache.delete(key)
+  imageLoadFailureCache.set(key, status)
+  while (imageLoadFailureCache.size > IMAGE_LOAD_FAILURE_CACHE_MAX) {
+    const oldestKey = imageLoadFailureCache.keys().next().value
+    if (!oldestKey) break
+    imageLoadFailureCache.delete(oldestKey)
+  }
+}
+
+function clearCachedImageLoadFailure(key: string) {
+  if (!key) return
+  imageLoadFailureCache.delete(key)
+}
+
+function readImageLoadFailureForMessage(
+  message: Pick<Message, 'conversationId' | 'id' | 'customMsgId' | 'sendTime'>,
+): ImageLoadFailureStatus | null {
+  const stableKey = buildImageCacheKey(message)
+  const direct = getCachedImageLoadFailure(stableKey)
+  if (direct) return direct
+  const idParts = [message.id, message.customMsgId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  for (const id of idParts) {
+    const legacyKey = `${String(message.conversationId || '')}|${id}|${String(message.sendTime || '')}`
+    const legacy = getCachedImageLoadFailure(legacyKey)
+    if (legacy) return legacy
+  }
+  return null
+}
+
+/** 对齐旧 im Overlay：downloadError→图片已过期；decryptionError→解密/无法加载。 */
+function classifyImageLoadFailure(
+  reason: string,
+  failure: Record<string, unknown> = {},
+): ImageLoadFailureStatus {
+  const normalizedReason = String(reason || failure.reason || '').toLowerCase()
+  const expired = failure.expired === true
+    || String(failure.expired || '').toLowerCase() === 'true'
+    || normalizedReason === 'url_dated_expired'
+    || normalizedReason.includes('expired')
+  if (expired) return 'downloadError'
+  if (
+    normalizedReason.includes('decrypt')
+    || normalizedReason.includes('decryption')
+    || normalizedReason.includes('cipher')
+  ) {
+    return 'decryptionError'
+  }
+  // 旧 im 下载失败统一落 downloadError，文案为「图片已过期」。
+  return 'downloadError'
 }
 
 function buildImageCacheKey(message: Pick<Message, 'conversationId' | 'id' | 'customMsgId' | 'sendTime'>): string {
@@ -226,8 +295,10 @@ function readInitialImageDisplay(message: Message): ImageDisplayCacheEntry | nul
 }
 
 const initialImageDisplay = readInitialImageDisplay(props.message)
-const isLoaded = ref(Boolean(initialImageDisplay?.src))
-const loadError = ref(false)
+const initialLoadFailure = initialImageDisplay ? null : readImageLoadFailureForMessage(props.message)
+const isLoaded = ref(Boolean(initialImageDisplay?.src) || Boolean(initialLoadFailure))
+const loadError = ref(Boolean(initialLoadFailure))
+const loadErrorStatus = ref<ImageLoadFailureStatus | null>(initialLoadFailure)
 const activeSrc = ref(initialImageDisplay?.src || '')
 const localFilePath = ref(initialImageDisplay?.localFilePath || '')
 
@@ -241,6 +312,7 @@ function cacheActiveLocalPreview(markLoaded = false) {
   })
   if (markLoaded) {
     loadError.value = false
+    loadErrorStatus.value = null
     isLoaded.value = true
   }
 }
@@ -468,7 +540,8 @@ const showImageLoading = computed(() => {
 const showImageOverlay = computed(() => !loadError.value && showImageLoading.value)
 const canOpenPreview = computed(() => Boolean(previewSrc.value) && isLoaded.value && !loadError.value && !showImageOverlay.value)
 const imageBoxStyle = computed(() => {
-  if (!activeSrc.value) {
+  // 对齐旧 im `.content`：无图/失败时固定 120×150，避免按原图比例撑成大方块。
+  if (loadError.value || !activeSrc.value) {
     return {
       width: '120px',
       height: '150px',
@@ -846,6 +919,16 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
 
   if (tryRestoreKnownImageDisplay()) return
 
+  // 已失败图片：切会话重挂载时保持失败态，不要再次进入下载蒙层。
+  if (hasCachedImageLoadFailure(imageCacheKey.value)) {
+    activeSrc.value = ''
+    loadError.value = true
+    loadErrorStatus.value = getCachedImageLoadFailure(imageCacheKey.value) || 'downloadError'
+    isLoaded.value = true
+    return
+  }
+  if (loadError.value) return
+
   const willDownload = (fileKey.value || attachmentKey.value)
     && downloadUrl.value
     && !shouldUseLocalPreview.value
@@ -913,8 +996,7 @@ watch([thumbnailUrl, downloadUrl, localSourcePath, localPreviewSrc, fileKey, att
   }
   if (!thumbnailUrl.value && !imageData.value.url && !fileKey.value && !attachmentKey.value) {
     channelImageLog('load error: missing url and keys', {}, 'warn')
-    loadError.value = true
-    isLoaded.value = true
+    markImageLoadFailed('missing-url-and-keys')
     return
   }
   if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
@@ -1130,26 +1212,23 @@ async function handleError() {
     hasAttachmentKey: Boolean(attachmentKey.value),
     attachmentKeyLen: attachmentKey.value.length,
   }, 'error')
-  loadError.value = true
-  isLoaded.value = true
+  markImageLoadFailed('img-error')
 }
 
 function retryImageDisplayAfterRestore() {
   if (document.hidden) return
   if (downloadInFlight.value) return
+  // 已确认失败的频道/历史图：窗口聚焦或切回前台时不再自动重下。
+  if (loadError.value || hasCachedImageLoadFailure(imageCacheKey.value)) return
   const canRetryDownload = Boolean(
     (fileKey.value || attachmentKey.value) && downloadUrl.value,
   )
-  if (!loadError.value && activeSrc.value) return
-  if (!loadError.value && !canRetryDownload) return
-  const wasFailed = loadError.value
+  if (activeSrc.value) return
+  if (!canRetryDownload) return
   clearImageAutoRetry()
-  loadError.value = false
   invalidLocalCacheRedownloadStarted.value = false
   if (tryRestoreKnownImageDisplay()) return
-  if (canRetryDownload) {
-    void downloadAndDecryptImage({ ignoreCache: wasFailed })
-  }
+  void downloadAndDecryptImage()
 }
 
 async function openPreview() {
@@ -1467,10 +1546,69 @@ function finishDownloadAttempt() {
   activeDownloadSignature = ''
 }
 
+function markImageLoadFailed(
+  reason = '',
+  failure: Record<string, unknown> = {},
+) {
+  const status = classifyImageLoadFailure(reason, failure)
+  clearImageAutoRetry()
+  activeSrc.value = ''
+  localFilePath.value = ''
+  loadError.value = true
+  loadErrorStatus.value = status
+  isLoaded.value = true
+  finishDownloadAttempt()
+  markCachedImageLoadFailure(imageCacheKey.value, status)
+  channelImageLog('mark permanent load failure', {
+    reason,
+    status,
+    expired: failure.expired ?? null,
+    httpStatusCode: failure.httpStatusCode ?? failure.http_status_code ?? null,
+  }, 'warn')
+}
+
+function clearImageLoadFailureState() {
+  clearCachedImageLoadFailure(imageCacheKey.value)
+  loadError.value = false
+  loadErrorStatus.value = null
+}
+
+const imageErrorText = computed(() => {
+  if (loadErrorStatus.value === 'decryptionError') return t('图片文件解密失败')
+  // 对齐旧 im Overlay downloadError →「图片已过期」
+  return t('图片文件已过期')
+})
+
+const isExpiredImageError = computed(() => loadErrorStatus.value !== 'decryptionError')
+
+/** 过期图不再自动/手动连点重下；解密失败仍允许手动点一次重试。 */
+function handleManualRetryAfterFailure() {
+  if (!loadError.value) return
+  if (isExpiredImageError.value) return
+  clearImageLoadFailureState()
+  invalidLocalCacheRedownloadStarted.value = false
+  thumbnailDownloadFallbackUsed.value = false
+  dynamicImageHeadKeyFallbackStarted.value = false
+  isLoaded.value = false
+  activeSrc.value = ''
+  if (tryRestoreKnownImageDisplay()) return
+  if ((fileKey.value || attachmentKey.value) && downloadUrl.value) {
+    void downloadAndDecryptImage({ ignoreCache: true })
+    return
+  }
+  markImageLoadFailed('manual-retry-unavailable')
+}
+
 async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferThumbnail?: boolean } = {}) {
   clearImageAutoRetry(false)
   if (isOwnSingleImageUploadPlaceholder.value) return
   if (isDecryptPending.value) return
+  if (!options.ignoreCache && hasCachedImageLoadFailure(imageCacheKey.value)) {
+    loadError.value = true
+    loadErrorStatus.value = getCachedImageLoadFailure(imageCacheKey.value) || 'downloadError'
+    isLoaded.value = true
+    return
+  }
   if (!options.ignoreCache && tryRestoreKnownImageDisplay()) return
   if (shouldBlockDownloadForActiveRemoteSrc()) return
   const url = resolveDownloadTargetUrl({ preferThumbnail: options.preferThumbnail })
@@ -1501,8 +1639,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       emit('transfer-attempt', { started: false })
       return
     }
-    loadError.value = true
-    isLoaded.value = true
+    markImageLoadFailed('missing-key')
     emit('transfer-attempt', { started: false })
     return
   }
@@ -1575,9 +1712,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
           savePathHead: shortLogValue(savePath),
           hasDataUrl: Boolean(event.payload.dataUrl || event.payload.data_url),
         }, 'error')
-        loadError.value = true
-        isLoaded.value = true
-        finishDownloadAttempt()
+        markImageLoadFailed('download-done-empty-src')
         return
       }
       channelImageLog('download done', {
@@ -1634,9 +1769,7 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
       if (scheduleImageAutoRetry(payload, options)) {
         return
       }
-      loadError.value = true
-      isLoaded.value = true
-      finishDownloadAttempt()
+      markImageLoadFailed(String(payload.reason || 'download-error'), payload)
     })
     stopDownloadEvents = [unlistenDone, unlistenError]
 
@@ -1683,10 +1816,8 @@ async function downloadAndDecryptImage(options: { ignoreCache?: boolean; preferT
     if (scheduleImageAutoRetry({ reason: 'download-invoke-failed' }, options)) {
       return
     }
-    loadError.value = true
-    isLoaded.value = true
+    markImageLoadFailed('download-invoke-failed')
     releaseHeldDownloadSlot()
-    finishDownloadAttempt()
   }
 }
 
@@ -2115,7 +2246,10 @@ onBeforeUnmount(() => {
   <div class="image-message">
     <div
       class="image-wrapper"
-      :class="{ 'is-preview-ready': canOpenPreview }"
+      :class="{
+        'is-preview-ready': canOpenPreview,
+        'is-error': loadError,
+      }"
       :style="imageBoxStyle"
       @mousedown.left="handleNativeDragMouseDown"
       @click="handleImageWrapperClick"
@@ -2163,7 +2297,43 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <div v-if="loadError" class="image-error">图片加载失败</div>
+      <div
+        v-if="loadError"
+        class="image-error"
+        :class="{ 'is-expired': isExpiredImageError, 'can-retry': !isExpiredImageError }"
+        :role="isExpiredImageError ? undefined : 'button'"
+        :tabindex="isExpiredImageError ? undefined : 0"
+        @click.stop="handleManualRetryAfterFailure"
+        @keydown.enter.prevent="handleManualRetryAfterFailure"
+      >
+        <div class="image-error-content">
+          <svg
+            v-if="isExpiredImageError"
+            class="image-error-icon"
+            width="28"
+            height="28"
+            viewBox="0 0 23 23"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path d="M11.5 0C17.8513 5.15406e-07 23 5.14873 23 11.5C23 17.8513 17.8513 23 11.5 23C5.14873 23 5.15422e-07 17.8513 0 11.5C0 5.14873 5.14873 0 11.5 0ZM11.3057 16.9385C10.825 16.9387 10.4346 17.3288 10.4346 17.8096C10.4347 18.2902 10.8251 18.6795 11.3057 18.6797C11.7863 18.6795 12.1756 18.2902 12.1758 17.8096C12.1758 17.3288 11.7864 16.9387 11.3057 16.9385ZM11.3047 4.5C10.5839 4.50042 9.99923 5.08479 9.99902 5.80566L10.4346 14.5127L10.4385 14.6025C10.4833 15.0412 10.8543 15.3835 11.3047 15.3838C11.7553 15.3838 12.126 15.0413 12.1709 14.6025L12.1758 14.5127L12.6113 5.80566C12.6111 5.08453 12.0259 4.5 11.3047 4.5Z" fill="#979797"/>
+          </svg>
+          <svg
+            v-else
+            class="image-error-icon image-error-icon-decrypt"
+            width="34"
+            height="25"
+            viewBox="0 0 28 21"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path d="M27.6255 1.02656C27.3697 0.75341 27.016 0.59281 26.642 0.579958L15.9353 0.163452L15.1244 1.93098L16.2391 5.25602L14.2235 9.03852L15.0449 12.0836L17.0777 14.6964L20.0255 12.0052C20.164 11.8797 20.3463 11.8137 20.533 11.8214C20.6255 11.8248 20.7164 11.8464 20.8005 11.885C20.8846 11.9236 20.9602 11.9785 21.023 12.0465L24.8128 16.0985C24.907 16.1998 24.9691 16.3267 24.9912 16.4632C25.0133 16.5998 24.9945 16.7398 24.9371 16.8657C24.8775 16.9915 24.7823 17.097 24.6633 17.1692C24.5442 17.2414 24.4066 17.277 24.2675 17.2717L13.8818 16.8702L13.3638 18.3403L13.9266 19.6668L25.8653 20.1242C26.2394 20.1385 26.6041 20.0049 26.8803 19.7522C27.0166 19.6284 27.1267 19.4787 27.2044 19.3118C27.282 19.1449 27.3256 18.9642 27.3325 18.7802L27.9986 2.03003C28.0069 1.84642 27.9782 1.66302 27.9142 1.49074C27.8501 1.31847 27.7521 1.16085 27.6258 1.02726L27.6255 1.02656ZM19.9534 8.70812C19.5404 8.68703 19.143 8.54429 18.811 8.29785C18.4789 8.05141 18.2272 7.71229 18.0875 7.32315C17.9477 6.934 17.9262 6.51222 18.0256 6.11086C18.1249 5.70951 18.3408 5.3465 18.646 5.06752C18.9512 4.78854 19.332 4.60605 19.7407 4.543C20.1493 4.47995 20.5675 4.53917 20.9425 4.71319C21.3176 4.88722 21.6328 5.16828 21.8486 5.52102C22.0643 5.87376 22.1709 6.28242 22.1549 6.69559C22.1428 6.9724 22.0762 7.2441 21.959 7.49514C21.8418 7.74618 21.6761 7.97162 21.4716 8.15856C21.2671 8.3455 21.0278 8.49027 20.7673 8.58457C20.5067 8.67887 20.2302 8.72086 19.9534 8.70812ZM12.2568 18.3637L12.6155 16.8223L4.18322 17.3952C4.04404 17.4054 3.90494 17.3744 3.78334 17.3059C3.66175 17.2374 3.56307 17.1345 3.49966 17.0102C3.43774 16.8863 3.4142 16.7468 3.43203 16.6094C3.44986 16.4721 3.50826 16.3432 3.59976 16.2392L9.84734 9.14808C9.9124 9.07507 9.99178 9.01624 10.0805 8.97522C10.1693 8.9342 10.2656 8.91189 10.3633 8.90965C10.4611 8.90742 10.5583 8.92532 10.6488 8.96224C10.7394 8.99917 10.8213 9.05432 10.8897 9.12427L12.9813 11.2803L12.08 8.98042L13.6673 5.01382L12.2046 1.83753L12.815 0L1.31493 0.784361C1.13073 0.795577 0.950563 0.843099 0.784796 0.924193C0.619029 1.00529 0.47093 1.11835 0.349016 1.25689C0.227102 1.39542 0.133779 1.5567 0.0744157 1.73143C0.0150519 1.90616 -0.00918178 2.0909 0.00310836 2.27503L1.16967 19.0014C1.18196 19.1845 1.23074 19.3633 1.31314 19.5273C1.39555 19.6913 1.50992 19.8371 1.64953 19.9562C1.93393 20.1989 2.30161 20.3213 2.6747 20.2975L12.9431 19.5975L12.2561 18.3626L12.2568 18.3637Z" fill="#999999"/>
+          </svg>
+          <span class="image-error-text">{{ imageErrorText }}</span>
+        </div>
+      </div>
       <div v-if="isVideo" class="play-icon">▶</div>
     </div>
 
@@ -2200,9 +2370,19 @@ onBeforeUnmount(() => {
     cursor: default;
     min-height: 150px;
     background: transparent;
+    box-sizing: border-box;
 
     &.is-preview-ready {
       cursor: pointer;
+    }
+
+    // 对齐旧 im `.content`：白底 4px 内边距 + 圆角框，灰底过期态叠在里面。
+    &.is-error {
+      background: #fff;
+      padding: 4px;
+      border-radius: 10px;
+      min-width: 120px;
+      min-height: 150px;
     }
 
     img {
@@ -2301,15 +2481,48 @@ onBeforeUnmount(() => {
   }
 
   .image-error {
-    width: 100%;
-    height: 100%;
+    position: absolute;
+    inset: 4px;
+    z-index: 2;
     background: #b8babf;
-    border-radius: 5px;
-    color: #999;
-    font-size: 13px;
+    border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
+    cursor: default;
+    box-sizing: border-box;
+
+    &.can-retry {
+      cursor: pointer;
+    }
+  }
+
+  .image-error-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+  }
+
+  .image-error-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+  }
+
+  .image-error-icon-decrypt {
+    width: 34px;
+    height: 25px;
+  }
+
+  .image-error-text {
+    color: #818181;
+    font-size: 12px;
+    text-align: center;
+    line-height: 1.4;
+    max-width: 100px;
+    word-break: break-all;
   }
 
   .play-icon {

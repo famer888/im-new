@@ -12,8 +12,13 @@ const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'success' | 'error'>('success')
 
-onMounted(() => {
-  if (!settingStore.loaded) void settingStore.loadSettings()
+onMounted(async () => {
+  if (!settingStore.loaded) {
+    await settingStore.loadSettings({ syncRemote: true })
+  } else {
+    // 打开隐私页时再拉一次服务端 privacy，避免本地默认 true 但服务端未开验证。
+    await settingStore.refreshFriendVerifyFromServer()
+  }
 })
 
 function showToast(message: string, type: 'success' | 'error' = 'success') {

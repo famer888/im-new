@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TextAvatar from '@/components/TextAvatar.vue'
 import FriendVerifyDetail from './FriendVerifyDetail.vue'
@@ -40,8 +40,21 @@ const pendingRequests = computed(() => requests.value.filter((req) => req.status
 const recentRequests = computed(() => requests.value.filter((req) => req.status !== 'pending'))
 
 onMounted(() => {
+  // 对齐旧 im：打开「新的好友」清零红点；列表仍从 contactsApplyList 拉取。
   contactStore.setNewFriendReqTotal(0, String(authStore.uid || ''))
   loadApplyList()
+})
+
+// 对齐旧 im `newFriendReq`：页内收到新申请推送时刷新列表。
+const stopWatchFriendReq = watch(
+  () => contactStore.friendReqSignal,
+  () => {
+    void loadApplyList()
+  },
+)
+
+onUnmounted(() => {
+  stopWatchFriendReq()
 })
 
 async function loadApplyList() {
