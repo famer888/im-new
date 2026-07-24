@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
 import { useMessageStore, type Message } from '@/stores/useMessageStore'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -15,6 +16,7 @@ const props = defineProps<{
   message: Message
 }>()
 
+const { t } = useI18n()
 const authStore = useAuthStore()
 const messageStore = useMessageStore()
 const isLoaded = ref(false)
@@ -251,10 +253,19 @@ const showLoading = computed(() =>
   !loadError.value &&
   Boolean(videoData.value.thumbUrl),
 )
+/** 对齐旧 im Overlay：downloadError →「视频已过期」 */
+const videoErrorText = computed(() => t('视频文件已过期'))
 const videoBoxStyle = computed(() => {
   const width = videoData.value.width
   const height = videoData.value.height
   const ratio = width > 0 && height > 0 ? width / height : 1
+  // 过期态固定约 120×150，与旧 Overlay / 图片过期占位接近。
+  if (loadError.value) {
+    return {
+      width: '120px',
+      height: '150px',
+    }
+  }
   const boxWidth = Math.min(400, Math.max(1, Math.round(150 * ratio)))
   return {
     width: `${boxWidth}px`,
@@ -1366,6 +1377,8 @@ function handleVideoClick(event: MouseEvent) {
     suppressNextClick = false
     return
   }
+  // 对齐旧 im：过期态不打开播放，只展示「视频已过期」。
+  if (loadError.value) return
   void handleOpenVideo()
 }
 
@@ -1374,6 +1387,7 @@ async function handleOpenVideo() {
     videoStreamLog('open click ignored because opening')
     return
   }
+  if (loadError.value) return
   const url = videoData.value.url
   const localSource = localVideoSourcePath.value
   if (!url && !localSource && !localVideoPath.value) {
@@ -1475,6 +1489,10 @@ async function handleOpenVideo() {
     videoStreamLog('open failed', {
       message: error instanceof Error ? error.message : String(error || ''),
     }, 'error')
+    // 对齐旧 im：下载失败按过期态展示「视频已过期」。
+    loadError.value = true
+    isLoaded.value = true
+    eventBus.emit('show-toast', { message: videoErrorText.value })
   } finally {
     videoStreamLog('open finished')
     videoOpening.value = false
@@ -1556,7 +1574,7 @@ onBeforeUnmount(() => {
     @focusin="preloadEncryptedVideoStream"
   >
     <div class="video-content" :style="videoBoxStyle">
-      <div class="video-frame" :class="{ 'no-cover': !isLoaded || loadError || showLoading }">
+      <div class="video-frame" :class="{ 'no-cover': !isLoaded || loadError || showLoading, 'is-error': loadError }">
         <img
           v-if="activeThumbSrc && !loadError"
           ref="thumbElRef"
@@ -1568,10 +1586,26 @@ onBeforeUnmount(() => {
           @error="handleError"
         />
         <div v-if="showLoading" class="video-loading"></div>
-        <div v-if="loadError" class="video-placeholder"></div>
+        <div v-if="loadError" class="video-error" aria-live="polite">
+          <div class="video-error-content">
+            <svg
+              class="video-error-icon"
+              width="28"
+              height="28"
+              viewBox="0 0 23 23"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path d="M11.5 0C17.8513 5.15406e-07 23 5.14873 23 11.5C23 17.8513 17.8513 23 11.5 23C5.14873 23 5.15422e-07 17.8513 0 11.5C0 5.14873 5.14873 0 11.5 0ZM11.3057 16.9385C10.825 16.9387 10.4346 17.3288 10.4346 17.8096C10.4347 18.2902 10.8251 18.6795 11.3057 18.6797C11.7863 18.6795 12.1756 18.2902 12.1758 17.8096C12.1758 17.3288 11.7864 16.9387 11.3057 16.9385ZM11.3047 4.5C10.5839 4.50042 9.99923 5.08479 9.99902 5.80566L10.4346 14.5127L10.4385 14.6025C10.4833 15.0412 10.8543 15.3835 11.3047 15.3838C11.7553 15.3838 12.126 15.0413 12.1709 14.6025L12.1758 14.5127L12.6113 5.80566C12.6111 5.08453 12.0259 4.5 11.3047 4.5Z" fill="#979797"/>
+            </svg>
+            <span class="video-error-text">{{ videoErrorText }}</span>
+          </div>
+        </div>
         <div
+          v-if="!loadError"
           class="center-control"
-          :class="{ opening: videoOpening, 'has-progress': hasVideoOpenProgress, 'no-cover': !isLoaded || loadError || showLoading }"
+          :class="{ opening: videoOpening, 'has-progress': hasVideoOpenProgress, 'no-cover': !isLoaded || showLoading }"
           aria-hidden="true"
         >
           <div class="progress-ring">
@@ -1605,7 +1639,7 @@ onBeforeUnmount(() => {
         <div v-if="videoOpening && hasVideoOpenProgress" class="video-progress-bar" aria-hidden="true">
           <div class="video-progress-fill" :style="{ width: `${videoOpenProgressPercent}%` }"></div>
         </div>
-      </div> 
+      </div>
     </div>
 
     <Teleport to="body">
@@ -1744,6 +1778,11 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 
+  &.is-error {
+    background: #fff;
+    box-sizing: border-box;
+  }
+
   img {
     width: 100%;
     height: 100%;
@@ -1759,10 +1798,40 @@ onBeforeUnmount(() => {
   }
 }
 
-.video-placeholder {
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(135deg, #b7bbc1, #8f949b);
+.video-error {
+  position: absolute;
+  inset: 4px;
+  z-index: 15;
+  background: #b8babf;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  box-sizing: border-box;
+}
+
+.video-error-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.video-error-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+}
+
+.video-error-text {
+  color: #818181;
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.4;
+  max-width: 100px;
+  word-break: break-all;
 }
 
 .video-loading {
